@@ -32,14 +32,10 @@ public:
     bool family(Source source) {
         std::scoped_lock lock{mutex_};
         if (!source || !advance(source.generation)) return false;
-        // A draw serial is the source-lifetime key. When the producer advances,
-        // discard every older unsubmitted candidate, including an executed
-        // atlas whose resource has since been reused for a newer draw. Submitted
-        // sources remain owned until explicit fence retirement.
-        for (auto& slot : slots_) {
-            if (slot.source && slot.source.generation == source.generation &&
-                slot.source.serial < source.serial && !slot.submitted) slot = {};
-        }
+        // A newer family can be queued while an older RHI command still owns
+        // the atlas. Preserve the old executed candidate until the newer draw
+        // actually executes; execution below is the point at which reuse can
+        // invalidate the earlier contents.
         for (auto& slot : slots_) {
             if (slot.source && slot.source.same_owner(source)) return false;
         }
@@ -85,6 +81,19 @@ public:
         if (!slot || !slot->tail_hooked || slot->command != command || !thread || slot->executed) return false;
         slot->thread = thread;
         slot->executed = true;
+        // A later execution to the same source target proves that its contents
+        // have replaced every older unsubmitted image in that atlas. Retire
+        // those candidates only now, not when the game thread merely queues a
+        // newer family. Submitted sources retain their command-slot owner until
+        // explicit retirement.
+        for (auto& older : slots_) {
+            if (&older != slot && older.source &&
+                older.source.generation == source.generation &&
+                older.source.serial < source.serial &&
+                older.source.target == source.target && !older.submitted) {
+                older = {};
+            }
+        }
         return true;
     }
 

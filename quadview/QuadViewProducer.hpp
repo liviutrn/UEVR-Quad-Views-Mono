@@ -26,8 +26,7 @@ struct KeyHash {
 struct ViewRecord {
     uintptr_t view{}, state{};
     Rect rect{};
-    // Fingerprint for diagnostics. It does not establish equality with the
-    // projection frozen by the OpenXR pose transaction.
+    // Exact matrix fingerprint captured from FSceneViewInitOptions.
     uint64_t projection_hash{};
     bool valid{};
 };
@@ -44,16 +43,28 @@ struct Snapshot {
     uintptr_t family{}, scene{}, target{};
     Layout layout{};
     std::array<ViewRecord, 4> views{};
+    std::array<uint64_t, 4> expected_projection_hashes{};
+    std::array<std::array<double, 16>, 4> projections{};
     std::array<CameraPose, 2> context_cameras{};
     uint8_t constructor_mask{};
+    uint8_t expected_projection_mask{};
+    uint8_t projection_matrix_mask{};
     uint8_t camera_mask{};
     bool family_valid{};
     uint64_t hook_rect_calls{}, hook_projection_calls{};
 
     bool histories_complete() const {
-        if (!family_valid || constructor_mask != 0x0f || camera_mask != 0x03) return false;
+        if (!family_valid || constructor_mask != 0x0f || expected_projection_mask != 0x0f ||
+            projection_matrix_mask != 0x0f || camera_mask != 0x03) return false;
         for (uint32_t i = 0; i != 4; ++i) {
-            if (!views[i].valid || views[i].state == 0 || views[i].projection_hash == 0) return false;
+            if (!views[i].valid || views[i].state == 0 || views[i].projection_hash == 0 ||
+                views[i].projection_hash != expected_projection_hashes[i]) return false;
+            bool nonzero = false;
+            for (double value : projections[i]) {
+                if (!std::isfinite(value)) return false;
+                nonzero = nonzero || std::abs(value) > 1.0e-12;
+            }
+            if (!nonzero) return false;
             for (uint32_t j = i + 1; j != 4; ++j) {
                 if (views[i].state == views[j].state) return false;
             }
@@ -77,7 +88,7 @@ struct Snapshot {
 class Producer {
 public:
     bool begin(Key key, uint64_t engine_frame, uintptr_t target, uintptr_t scene, Layout layout) {
-        if (key.generation == 0 || key.draw_serial == 0 || !target || !scene ||
+        if (key.generation == 0 || key.draw_serial == 0 ||
             !layout.eye_width || !layout.eye_height || layout.atlas_width != layout.eye_width * 2) return false;
         std::scoped_lock lock{mutex_};
         // View constructors run synchronously with viewport drawing. A failed,
@@ -111,12 +122,22 @@ public:
         return true;
     }
 
-    bool projection_call(Key key, int32_t index) {
+    bool projection_call(Key key, int32_t index, uint64_t expected_projection_hash,
+                         const std::array<double, 16>& projection) {
         std::scoped_lock lock{mutex_};
         auto* snapshot = find_pending(key);
-        if (snapshot == nullptr) return false;
-        if (!valid_view_index(index)) return false;
+        if (snapshot == nullptr || !valid_view_index(index) || expected_projection_hash == 0) return false;
+        bool nonzero = false;
+        for (double value : projection) {
+            if (!std::isfinite(value)) return false;
+            nonzero = nonzero || std::abs(value) > 1.0e-12;
+        }
+        if (!nonzero) return false;
         ++snapshot->hook_projection_calls;
+        snapshot->expected_projection_hashes[static_cast<size_t>(index)] = expected_projection_hash;
+        snapshot->expected_projection_mask |= static_cast<uint8_t>(1u << index);
+        snapshot->projections[static_cast<size_t>(index)] = projection;
+        snapshot->projection_matrix_mask |= static_cast<uint8_t>(1u << index);
         return true;
     }
 
@@ -146,9 +167,13 @@ public:
                      uintptr_t view, uintptr_t state, Rect rect, uint64_t projection_hash) {
         std::scoped_lock lock{mutex_};
         auto* snapshot = find_pending(key);
-        if (snapshot == nullptr || !family || scene != snapshot->scene || target != snapshot->target || !view || !state || !projection_hash) return false;
+        if (snapshot == nullptr || !family || !scene || !target || !view || !state || !projection_hash ||
+            (snapshot->scene != 0 && scene != snapshot->scene) ||
+            (snapshot->target != 0 && target != snapshot->target)) return false;
         const auto index = view_index_for_rect(snapshot->layout, rect);
         if (!index) return false;
+        if ((snapshot->expected_projection_mask & static_cast<uint8_t>(1u << *index)) == 0 ||
+            snapshot->expected_projection_hashes[*index] != projection_hash) return false;
         if (snapshot->family != 0 && snapshot->family != family) return false;
         if ((snapshot->constructor_mask & static_cast<uint8_t>(1u << *index)) != 0) return false;
         for (uint32_t i = 0; i != 4; ++i) {
@@ -156,16 +181,19 @@ public:
             if (snapshot->views[i].state == state || snapshot->views[i].view == view) return false;
         }
         snapshot->family = family;
+        snapshot->scene = scene;
+        snapshot->target = target;
         snapshot->views[*index] = {view, state, rect, projection_hash, true};
         snapshot->constructor_mask |= static_cast<uint8_t>(1u << *index);
         return true;
     }
 
-    bool main_family(Key key, uintptr_t family, uintptr_t scene, uintptr_t target,
+    bool main_family(Key key, uint64_t engine_frame, uintptr_t family, uintptr_t scene, uintptr_t target,
                      const std::array<uintptr_t, 4>& views) {
         std::scoped_lock lock{mutex_};
         auto* snapshot = find_pending(key);
-        if (snapshot == nullptr || family == 0 || family != snapshot->family || scene != snapshot->scene || target != snapshot->target) return false;
+        if (snapshot == nullptr || family == 0 || family != snapshot->family || scene != snapshot->scene || target != snapshot->target ||
+            (snapshot->engine_frame != 0 && engine_frame != 0 && snapshot->engine_frame != engine_frame)) return false;
         std::array<bool, 4> matched{};
         for (const auto view : views) {
             if (!view) return false;
@@ -180,6 +208,7 @@ public:
             if (!found) return false;
         }
         for (bool found : matched) if (!found) return false;
+        snapshot->engine_frame = engine_frame;
         snapshot->family_valid = true;
         if (!snapshot->camera_complete() || !snapshot->histories_complete()) return false;
         completed_.emplace(key, std::make_shared<const Snapshot>(*snapshot));

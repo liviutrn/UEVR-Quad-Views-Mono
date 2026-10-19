@@ -11,7 +11,14 @@ endif()
 enable_testing()
 add_test(NAME quadview-geometry-history-transaction COMMAND QuadViewProducerTests)
 if(WIN32)
-  add_executable(QuadViewShaderWarpTests QuadViewShaderWarpTest.cpp)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/QuadViewShaderBytecode.hpp"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.py"
+      "${CMAKE_CURRENT_BINARY_DIR}/QuadViewShaderBytecode.hpp"
+    DEPENDS embed_shader.py QuadViewComposite.hlsl)
+  add_executable(QuadViewShaderWarpTests QuadViewShaderWarpTest.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/QuadViewShaderBytecode.hpp")
+  target_include_directories(QuadViewShaderWarpTests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
   target_link_libraries(QuadViewShaderWarpTests PRIVATE d3d12 dxgi d3dcompiler)
   add_test(NAME quadview-stereo-shader-warp
     COMMAND QuadViewShaderWarpTests "${CMAKE_CURRENT_SOURCE_DIR}/QuadViewComposite.hlsl")

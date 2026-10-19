@@ -5,6 +5,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include "QuadViewGeometry.hpp"
+#include "QuadViewD3D12.hpp"
 #include <array>
 #include <climits>
 #include <cmath>
@@ -222,6 +223,9 @@ int main(int argc, char** argv) try {
     pipeline_description.SampleDesc.Count = 1;
     ComPtr<ID3D12PipelineState> pipeline;
     require(device->CreateGraphicsPipelineState(&pipeline_description, IID_PPV_ARGS(&pipeline)), "CreateGraphicsPipelineState");
+    uevr::quadview::dx12::Compositor production;
+    if (!production.prewarm(device.Get(), atlas_description.Format, atlas_description.Format))
+        throw std::runtime_error(production.error());
     ComPtr<ID3D12Fence> fence;
     require(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "CreateFence");
     struct Event {
@@ -238,8 +242,9 @@ int main(int argc, char** argv) try {
         constants.rectangles[i][3] = rect.height;
     }
 
-    for (unsigned mode = 0; mode < 3; ++mode) {
-        if (mode != 0) {
+    for (unsigned pass = 0; pass < 6; ++pass) {
+        const unsigned mode = pass % 3;
+        if (pass != 0) {
             require(allocator->Reset(), "Reset allocator");
             require(commands->Reset(allocator.Get(), nullptr), "Reset commands");
             transition(commands.Get(), output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -260,7 +265,18 @@ int main(int argc, char** argv) try {
         commands->RSSetScissorRects(1, &scissor);
         commands->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        commands->DrawInstanced(3, 1, 0, 0);
+        std::weak_ptr<unsigned> packet_lifetime;
+        if (pass < 3) {
+            commands->DrawInstanced(3, 1, 0, 0);
+        } else {
+            auto owner = std::make_shared<unsigned>(pass);
+            packet_lifetime = owner;
+            if (!production.record(commands.Get(), atlas.Get(), output.Get(), *layout, 0.f, mode,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET, owner))
+                throw std::runtime_error(production.error());
+            owner.reset();
+            if (packet_lifetime.expired()) throw std::runtime_error("Production compositor lost packet before slot retirement");
+        }
         transition(commands.Get(), output.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION readback_location{};
         readback_location.pResource = readback.Get();
@@ -273,8 +289,8 @@ int main(int argc, char** argv) try {
         require(commands->Close(), "Close commands");
         ID3D12CommandList* lists[]{commands.Get()};
         queue->ExecuteCommandLists(1, lists);
-        require(queue->Signal(fence.Get(), mode + 1), "Signal fence");
-        require(fence->SetEventOnCompletion(mode + 1, event.value), "SetEventOnCompletion");
+        require(queue->Signal(fence.Get(), pass + 1), "Signal fence");
+        require(fence->SetEventOnCompletion(pass + 1, event.value), "SetEventOnCompletion");
         if (WaitForSingleObject(event.value, 10000) != WAIT_OBJECT_0)
             throw std::runtime_error("WARP execution timed out");
         D3D12_RANGE read_range{0, static_cast<SIZE_T>(byte_count)};
@@ -293,8 +309,13 @@ int main(int argc, char** argv) try {
         }
         D3D12_RANGE no_write{0, 0};
         readback->Unmap(0, &no_write);
+        if (pass >= 3) {
+            if (packet_lifetime.expired()) throw std::runtime_error("Production packet owner disappeared before explicit retirement");
+            production.on_slot_retired();
+            if (!packet_lifetime.expired()) throw std::runtime_error("Production packet owner leaked after retirement");
+        }
     }
-    std::cout << "QuadView WARP: stereo isolation, off-center ROI, 1:1 focus gradients, atlas clamping and debug views passed.\n";
+    std::cout << "QuadView WARP: shader and production compositor stereo isolation, off-center ROI, 1:1 focus gradients, atlas clamping, debug views and fence-slot ownership passed.\n";
     return 0;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

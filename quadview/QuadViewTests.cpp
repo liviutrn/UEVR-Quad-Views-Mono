@@ -69,15 +69,16 @@ int main() {
     assert(!producer.snapshot(abandoned)); // Incomplete draw is retired by the next Draw.
     std::array<uintptr_t, 4> views{0x1000, 0x2000, 0x3000, 0x4000};
     std::array<uintptr_t, 4> states{0x11, 0x22, 0x33, 0x44};
+    for (uint32_t i = 0; i != 4; ++i)
+        assert(producer.projection_call(key, static_cast<int32_t>(i), 0xabc0 + i));
     assert(producer.camera(key, 0, CameraPose{{1.0, 2.0, 3.0}, {-0.032, 0.0, 0.0}, true}));
     assert(producer.camera(key, 1, CameraPose{{1.0, 2.0, 3.0}, {0.032, 0.0, 0.0}, true}));
     for (uint32_t i = 0; i != 4; ++i) {
         assert(producer.rectangle_call(key, static_cast<int32_t>(i)));
-        assert(producer.projection_call(key, static_cast<int32_t>(i)));
         assert(producer.constructed(key, 0x300, 0x200, 0x100,
             views[i], states[i], layout->views[i], 0xabc0 + i));
     }
-    assert(producer.main_family(key, 0x300, 0x200, 0x100, views));
+    assert(producer.main_family(key, 91, 0x300, 0x200, 0x100, views));
     auto snapshot = producer.snapshot(key);
     assert(snapshot && snapshot->histories_complete());
     assert(snapshot->hook_rect_calls == 4 && snapshot->hook_projection_calls == 4);
@@ -117,22 +118,26 @@ int main() {
     assert(packet->valid()); // A render-slot reference survives producer-ledger retirement.
     const Key duplicate_key{7, 14};
     assert(producer.begin(duplicate_key, 93, 0x100, 0x200, *layout));
+    for (uint32_t i = 0; i != 4; ++i)
+        assert(producer.projection_call(duplicate_key, static_cast<int32_t>(i), 0xabc0 + i));
     states[3] = states[2];
     for (uint32_t i = 0; i != 4; ++i) {
         const auto accepted = producer.constructed(duplicate_key, 0x300, 0x200, 0x100,
             views[i], states[i], layout->views[i], 0xabc0 + i);
         assert(accepted == (i < 3));
     }
-    assert(!producer.main_family(duplicate_key, 0x300, 0x200, 0x100, views));
+    assert(!producer.main_family(duplicate_key, 93, 0x300, 0x200, 0x100, views));
 
     const Key mixed_family{7, 15};
     assert(producer.begin(mixed_family, 94, 0x100, 0x200, *layout));
+    for (uint32_t i = 0; i != 4; ++i)
+        assert(producer.projection_call(mixed_family, static_cast<int32_t>(i), 0xabc0 + i));
     for (uint32_t i = 0; i != 4; ++i) {
         const auto accepted = producer.constructed(mixed_family, i == 3 ? 0x301 : 0x300, 0x200, 0x100,
             views[i], static_cast<uintptr_t>(0x50 + i), layout->views[i], 0xabc0 + i);
         assert(accepted == (i < 3));
     }
-    assert(!producer.main_family(mixed_family, 0x300, 0x200, 0x100, views));
+    assert(!producer.main_family(mixed_family, 94, 0x300, 0x200, 0x100, views));
     producer.retire_generation(7);
     assert(!producer.snapshot(Key{7, 13}) && !producer.snapshot(duplicate_key));
     assert(producer.begin(Key{8, 1}, 95, 0x100, 0x200, *layout));
@@ -177,6 +182,27 @@ int main() {
     assert(!delivery.select(8, 123));
     assert(delivery.retire(8, 21));
     assert(delivery.retire(8, 22));
+
+    // Render-ahead may queue a newer family before its RHI command executes.
+    // Keep the older completed image eligible until actual atlas overwrite.
+    const auto token3 = std::make_shared<const SourceToken>(SourceToken{31, 2});
+    const Delivery<SourceToken>::Source source3{token3, 8, 31, 97, 2, 0x302, 0x100, 0x200};
+    assert(delivery.family(source3));
+    assert(delivery.render(8, 97, 0x302, 0x100, 0x200));
+    assert(delivery.tail_hooked(source3, 0x702));
+    assert(delivery.executed(source3, 0x702, 123));
+    const auto token4 = std::make_shared<const SourceToken>(SourceToken{32, 3});
+    const Delivery<SourceToken>::Source source4{token4, 8, 32, 98, 3, 0x303, 0x100, 0x200};
+    assert(delivery.family(source4));
+    const auto held_while_render_ahead = delivery.select(8, 123);
+    assert(held_while_render_ahead && held_while_render_ahead->same_owner(source3));
+    assert(delivery.render(8, 98, 0x303, 0x100, 0x200));
+    assert(delivery.tail_hooked(source4, 0x703));
+    assert(delivery.executed(source4, 0x703, 123));
+    const auto selected_after_new_execution = delivery.select(8, 123);
+    assert(selected_after_new_execution && selected_after_new_execution->same_owner(source4));
+    assert(!delivery.select(8, 456));
+    delivery.retire(8, 32);
 
     std::cout << "QuadView geometry, crop, eye mapping, histories, frame ownership, RHI execution, and pose-token contracts passed.\n";
 }
