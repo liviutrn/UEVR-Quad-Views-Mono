@@ -14,26 +14,11 @@ This release preserves the **original v182 binaries unchanged**.
 - **Stable frame and gaze handling:** v182 resolved previously observed flicker, stutter, gaze jumps and image trembling on the tested PSVR2 setup.
 - **Joey UEVR integration:** D3D12 composition, Native Stereo Fix-backed source rendering, dedicated DuoView rendering mode **ID 6**, and OpenXR output.
 
-### Performance potential
+### Performance
 
-The main objective is **better image clarity per unit of GPU work**, particularly at **high VR render resolutions in GPU-bound scenes** where the CPU/game thread is not the limiting factor.
+In high-resolution **S.T.A.L.K.E.R. 2** comparisons, DuoView achieved **up to 29% higher FPS than normal Native Stereo** and **up to 11% higher FPS than normal Mono**, while reducing GPU utilization by **up to 31% versus either mode**.
 
-For example, a **50% × 50% fovea at 1× density plus 0.20× linear-resolution periphery** has a nominal source-view pixel budget of **29% of one full-resolution monoscopic frame** (25% focus + 4% context). This is a *theoretical pixel count*, not an equivalent reduction in total GPU time: full-size intermediate textures, Unreal rendering passes, lighting, upscaling and composition still cost performance.
-
-### Measured comparisons with normal Mono and Native Stereo
-
-In **S.T.A.L.K.E.R. 2**, development builds were compared at matched output resolution and screen percentage on an **RTX 5070**, with **motion smoothing forced** and a **40 FPS ceiling**:
-
-| Build | Resolution | Screen percentage | Normal Mono | DuoView | Normal Native Stereo |
-| --- | --- | ---: | --- | --- | --- |
-| v24 | 4060 × 3584 | 50% | 95% GPU / 38 FPS | **66% GPU / 40 FPS** | — |
-| v168 | 3136 × 2768 | 100% | 97% GPU / 36 FPS | **72% GPU / 40 FPS** | — |
-| v168 | 3136 × 2768 | 50% | 74% GPU / 40 FPS | **67% GPU / 40 FPS** | 97% GPU / 31 FPS |
-
-- **Versus Mono:** DuoView used **30.5% less GPU** at 4060 × 3584 (95% → 66%), and **25.8% less** at 3136 × 2768 / 100% screen percentage (97% → 72%). Observed FPS increased by **5.3%** (38 → 40) and **11.1%** (36 → 40), respectively.
-- **Versus Native Stereo:** At 3136 × 2768 / 50% screen percentage, DuoView used **30.9% less GPU** (97% → 67%) and achieved **29.0% higher FPS** (31 → 40). At that setting it also used **9.5% less GPU than normal Mono** (74% → 67%) while both modes reached 40 FPS.
-
-“Less GPU” means a **relative reduction in the reported GPU-utilization percentage**, not a measured equal reduction in GPU frame time. Screen percentage is a render-scale setting, **not foveal crop size**. The 40 FPS limit and motion smoothing constrain interpretation of the FPS numbers. These are **v24/v168 development measurements, not v182 benchmarks**, and results vary with GPU load, scene, CPU/game-thread bottlenecks and renderer overhead.
+These results were observed on an **RTX 5070** in earlier v24/v168 builds with motion smoothing and a 40 FPS ceiling; the greatest benefits are expected when the GPU, rather than the CPU, limits performance, and results are not guaranteed for v182 or other setups.
 
 ### Important distinction
 
