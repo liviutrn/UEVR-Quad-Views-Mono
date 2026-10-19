@@ -29,3 +29,19 @@ This run does not compile or inject the production UEVR backend. Portable
 delivery code may change after this checkpoint and must be retested. The
 test does not establish engine raster completion, correct STALKER 2
 histories, headset fluidity, shading parity, or GPU performance gains.
+
+## Production compositor checkpoint
+
+- Commit: `2ee62694f26999fedf7e1e50803008bf75e49d4c`.
+- [Windows Actions run 39296237939](https://github.com/liviutrn/UEVR-Quad-Views-Mono/actions/runs/39296237939): passed.
+- Offline FXC compilation and DXBC embedding: passed.
+- Portable producer/delivery/projection contracts: passed.
+- Actual `QuadViewD3D12.hpp` compositor compiled and executed through WARP.
+- Six GPU cases checked the standalone shader and production compositor
+  against identical full-image expectations. Production packet ownership
+  survived recording/execution and released only at explicit slot retirement.
+
+This checkpoint includes production compositor validation, but not the
+injected Unreal/OpenXR adapters. The preceding CI attempt captured portable
+headers during an interface edit and failed compilation; the completed
+checkpoint above supersedes that intermediate snapshot.

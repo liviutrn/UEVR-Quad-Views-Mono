@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include <d3dcompiler.h>
 #include <wrl/client.h>
 #include "QuadViewGeometry.hpp"
 #include "QuadViewShaderBytecode.hpp"
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <utility>
 
 namespace uevr::quadview::dx12 {
 

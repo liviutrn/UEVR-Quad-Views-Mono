@@ -1,6 +1,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <d3d12.h>
+#include <d3d12sdklayers.h>
 #include <d3dcompiler.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
@@ -86,12 +87,18 @@ int main(int argc, char** argv) try {
     constexpr uint32_t W = 32, H = 32, AW = 64;
     const auto layout = uevr::quadview::make_layout(W, H, .5f, .5f, .25f, 1.f, .375f, .5f);
     if (!layout) throw std::runtime_error("Invalid test layout");
+    ComPtr<ID3D12Debug> debug_layer;
+    const bool debug_enabled = SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_layer)));
+    if (debug_enabled) debug_layer->EnableDebugLayer();
+    else std::cout << "D3D12 debug layer unavailable; pixel checks remain active.\n";
     ComPtr<IDXGIFactory4> factory;
     require(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "CreateDXGIFactory1");
     ComPtr<IDXGIAdapter> adapter;
     require(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter)), "EnumWarpAdapter");
     ComPtr<ID3D12Device> device;
     require(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)), "D3D12CreateDevice");
+    ComPtr<ID3D12InfoQueue> info_queue;
+    if (debug_enabled) require(device.As(&info_queue), "Query debug info queue");
     D3D12_COMMAND_QUEUE_DESC queue_description{};
     queue_description.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     ComPtr<ID3D12CommandQueue> queue;
@@ -102,7 +109,7 @@ int main(int argc, char** argv) try {
     require(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr,
         IID_PPV_ARGS(&commands)), "CreateCommandList");
 
-    auto atlas = resource(device.Get(), texture(AW, H, D3D12_RESOURCE_FLAG_NONE),
+    auto atlas = resource(device.Get(), texture(AW, H, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
         D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
     auto output = resource(device.Get(), texture(AW, H, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
         D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -242,6 +249,7 @@ int main(int argc, char** argv) try {
         constants.rectangles[i][3] = rect.height;
     }
 
+    D3D12_RESOURCE_STATES atlas_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     for (unsigned pass = 0; pass < 6; ++pass) {
         const unsigned mode = pass % 3;
         if (pass != 0) {
@@ -266,18 +274,32 @@ int main(int argc, char** argv) try {
         commands->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         std::weak_ptr<unsigned> packet_lifetime;
+        D3D12_RESOURCE_STATES output_state = D3D12_RESOURCE_STATE_RENDER_TARGET;
         if (pass < 3) {
             commands->DrawInstanced(3, 1, 0, 0);
         } else {
             auto owner = std::make_shared<unsigned>(pass);
             packet_lifetime = owner;
+            const auto expected_source_state = pass == 3 ? D3D12_RESOURCE_STATE_RENDER_TARGET :
+                pass == 4 ? D3D12_RESOURCE_STATE_COMMON : D3D12_RESOURCE_STATE_GENERIC_READ;
+            transition(commands.Get(), atlas.Get(), atlas_state, expected_source_state);
+            atlas_state = expected_source_state;
+            if (pass == 4) {
+                transition(commands.Get(), output.Get(), output_state, D3D12_RESOURCE_STATE_COPY_DEST);
+                output_state = D3D12_RESOURCE_STATE_COPY_DEST;
+            }
+            auto overlapping = *layout;
+            overlapping.views[2] = overlapping.views[0];
+            if (production.record(commands.Get(), atlas.Get(), output.Get(), overlapping, 0.f, mode,
+                atlas_state, output_state, owner))
+                throw std::runtime_error("Production compositor accepted overlapping atlas regions");
             if (!production.record(commands.Get(), atlas.Get(), output.Get(), *layout, 0.f, mode,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET, owner))
+                atlas_state, output_state, owner))
                 throw std::runtime_error(production.error());
             owner.reset();
             if (packet_lifetime.expired()) throw std::runtime_error("Production compositor lost packet before slot retirement");
         }
-        transition(commands.Get(), output.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        transition(commands.Get(), output.Get(), output_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION readback_location{};
         readback_location.pResource = readback.Get();
         readback_location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
@@ -293,6 +315,19 @@ int main(int argc, char** argv) try {
         require(fence->SetEventOnCompletion(pass + 1, event.value), "SetEventOnCompletion");
         if (WaitForSingleObject(event.value, 10000) != WAIT_OBJECT_0)
             throw std::runtime_error("WARP execution timed out");
+        if (info_queue) {
+            const auto message_count = info_queue->GetNumStoredMessagesAllowedByRetrievalFilter();
+            for (UINT64 index = 0; index < message_count; ++index) {
+                SIZE_T size{};
+                require(info_queue->GetMessage(index, nullptr, &size), "Read debug message size");
+                auto storage = std::make_unique<uint8_t[]>(size);
+                auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.get());
+                require(info_queue->GetMessage(index, message, &size), "Read debug message");
+                if (message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR)
+                    throw std::runtime_error(std::string("D3D12 validation: ") + message->pDescription);
+            }
+            info_queue->ClearStoredMessages();
+        }
         D3D12_RANGE read_range{0, static_cast<SIZE_T>(byte_count)};
         require(readback->Map(0, &read_range, &mapped), "Map readback");
         for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < AW; ++x) {
