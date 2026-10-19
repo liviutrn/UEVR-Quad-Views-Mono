@@ -57,7 +57,7 @@ The dedicated rendering option is **DuoView (rendering mode ID 6)**. This is dis
 
 Under favorable high-resolution, GPU-bound conditions, DuoView could deliver **up to 50% higher FPS than standard Mono** and **up to 85% higher FPS than Native Stereo**.
 
-These estimates are based on RTX 5070 development measurements using a basic **50% × 50% foveal crop**, **0.20× peripheral resolution**, and **eye tracking enabled**; they extrapolate uncapped FPS rather than representing directly measured or guaranteed gains.
+Estimates are derived from **S.T.A.L.K.E.R. 2** testing on an **RTX 5070** at **3136 × 2768** and **4060 × 3584**, using **DLSS Performance**, a **50% × 50% eye-tracked foveal crop**, and **0.20× peripheral resolution**; the FPS gains are extrapolated from GPU utilization under a 40 FPS cap, not directly measured uncapped results.
 
 ## Compatibility and requirements
 
