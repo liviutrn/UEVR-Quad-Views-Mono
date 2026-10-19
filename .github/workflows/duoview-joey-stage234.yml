@@ -1,6 +1,9 @@
-name: UEVR Quad Views Mono Build182 Reproduction
+name: UEVR Quad Views Mono v182 Fovea Glamarye Build
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
+  push:
+    branches:
+      - feature/v182-fovea-glamayre-fused
   workflow_dispatch:
 permissions:
   contents: read
