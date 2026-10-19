@@ -41,7 +41,7 @@ float FocusWeight(float2 uv) {
     return edge * edge * (3.0 - 2.0 * edge);
 }
 
-float4 PSMain(VertexOut input) : SV_TARGET0 {
+float4 CompositePixel(VertexOut input) {
     const uint eye = min((uint)input.position.x / EyeAndAtlas.x, 1u);
     const float2 eyeUv = float2(input.position.x - eye * EyeAndAtlas.x,
                                input.position.y) / float2(EyeAndAtlas.xy);
@@ -64,4 +64,18 @@ float4 PSMain(VertexOut input) : SV_TARGET0 {
     const float2 focusUv = (eyeUv - CropUv.xy) / (CropUv.zw - CropUv.xy);
     const float4 focus = SourceAtlas.SampleLevel(LinearClamp, AtlasUv(focusRect, focusUv), 0.0);
     return debugMode == 2 ? focus : lerp(context, focus, weight);
+}
+
+// Preserve the baseline copy's color encoding when a typed UNORM atlas is
+// drawn into an sRGB runtime texture. The RTV performs the inverse encoding.
+float4 PSMain(VertexOut input) : SV_TARGET0 {
+    float4 color = CompositePixel(input);
+    if (Options.z > 0.5) {
+        const float3 low = color.rgb / 12.92;
+        const float3 high = pow(max((color.rgb + 0.055) / 1.055, 0.0), 2.4);
+        color.rgb = float3(color.r <= 0.04045 ? low.r : high.r,
+                           color.g <= 0.04045 ? low.g : high.g,
+                           color.b <= 0.04045 ? low.b : high.b);
+    }
+    return color;
 }

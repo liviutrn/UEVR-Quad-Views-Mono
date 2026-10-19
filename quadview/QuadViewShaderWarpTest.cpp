@@ -83,7 +83,8 @@ static Color source_color(unsigned view, unsigned x, unsigned y) {
 }
 
 int main(int argc, char** argv) try {
-    if (argc != 2) throw std::runtime_error("Pass QuadViewComposite.hlsl path");
+    if (argc != 2 && argc != 3) throw std::runtime_error("Pass QuadViewComposite.hlsl path and optional --srgb");
+    const bool srgb_output = argc == 3;
     constexpr uint32_t W = 32, H = 32, AW = 64;
     const auto layout = uevr::quadview::make_layout(W, H, .5f, .5f, .25f, 1.f, .375f, .5f);
     if (!layout) throw std::runtime_error("Invalid test layout");
@@ -111,7 +112,9 @@ int main(int argc, char** argv) try {
 
     auto atlas = resource(device.Get(), texture(AW, H, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
         D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
-    auto output = resource(device.Get(), texture(AW, H, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+    auto output_description = texture(AW, H, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    if (srgb_output) output_description.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    auto output = resource(device.Get(), output_description,
         D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_RENDER_TARGET);
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
     uint64_t byte_count{};
@@ -226,12 +229,12 @@ int main(int argc, char** argv) try {
     pipeline_description.SampleMask = UINT_MAX;
     pipeline_description.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     pipeline_description.NumRenderTargets = 1;
-    pipeline_description.RTVFormats[0] = atlas_description.Format;
+    pipeline_description.RTVFormats[0] = output_description.Format;
     pipeline_description.SampleDesc.Count = 1;
     ComPtr<ID3D12PipelineState> pipeline;
     require(device->CreateGraphicsPipelineState(&pipeline_description, IID_PPV_ARGS(&pipeline)), "CreateGraphicsPipelineState");
     uevr::quadview::dx12::Compositor production;
-    if (!production.prewarm(device.Get(), atlas_description.Format, atlas_description.Format))
+    if (!production.prewarm(device.Get(), atlas_description.Format, output_description.Format))
         throw std::runtime_error(production.error());
     ComPtr<ID3D12Fence> fence;
     require(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "CreateFence");
@@ -241,6 +244,7 @@ int main(int argc, char** argv) try {
     } event;
     if (!event.value) throw std::runtime_error("CreateEventW failed");
     Constants constants{{W, H, AW, H}, {}, {.125f, .25f, .625f, .75f}, {0, 0, 0, 0}};
+    constants.options[2] = srgb_output ? 1.f : 0.f;
     for (unsigned i = 0; i < 4; ++i) {
         const auto& rect = layout->views[i];
         constants.rectangles[i][0] = rect.x;

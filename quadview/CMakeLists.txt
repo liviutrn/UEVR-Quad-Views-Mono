@@ -27,5 +27,7 @@ if(WIN32)
   target_link_libraries(QuadViewShaderWarpTests PRIVATE d3d12 dxgi d3dcompiler)
   add_test(NAME quadview-stereo-shader-warp
     COMMAND QuadViewShaderWarpTests "${CMAKE_CURRENT_SOURCE_DIR}/QuadViewComposite.hlsl")
-  set_tests_properties(quadview-stereo-shader-warp PROPERTIES TIMEOUT 60)
+  add_test(NAME quadview-stereo-srgb-warp
+    COMMAND QuadViewShaderWarpTests "${CMAKE_CURRENT_SOURCE_DIR}/QuadViewComposite.hlsl" --srgb)
+  set_tests_properties(quadview-stereo-shader-warp quadview-stereo-srgb-warp PROPERTIES TIMEOUT 60)
 endif()

@@ -179,6 +179,11 @@ public:
         constants.crop[0] = layout.focus_crop.u0; constants.crop[1] = layout.focus_crop.v0;
         constants.crop[2] = layout.focus_crop.u1; constants.crop[3] = layout.focus_crop.v1;
         constants.options[0] = feather; constants.options[1] = static_cast<float>(debug_mode);
+        const bool output_srgb = output_format_ == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
+                                 output_format_ == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        const bool encoded_unorm = source_format_ == DXGI_FORMAT_B8G8R8A8_UNORM ||
+                                   source_format_ == DXGI_FORMAT_R8G8B8A8_UNORM;
+        constants.options[2] = output_srgb && encoded_unorm ? 1.f : 0.f;
         std::memcpy(mapped_, &constants, sizeof(constants));
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format = source_format_;
