@@ -10,6 +10,17 @@
 
 static bool near(double a, double b) { return std::abs(a - b) < 1e-6; }
 
+static std::array<double, 16> projection_for_test(uint32_t index) {
+    // A finite, non-degenerate projection payload. Hashes stand in for the
+    // exact constructor fingerprint in this portable producer contract test.
+    std::array<double, 16> projection{};
+    projection[0] = 1.0 + index * 0.01;
+    projection[5] = 1.0;
+    projection[10] = 1.0;
+    projection[15] = 1.0;
+    return projection;
+}
+
 int main() {
     using namespace uevr::quadview;
     const auto layout = make_layout(1800, 1920);
@@ -70,7 +81,7 @@ int main() {
     std::array<uintptr_t, 4> views{0x1000, 0x2000, 0x3000, 0x4000};
     std::array<uintptr_t, 4> states{0x11, 0x22, 0x33, 0x44};
     for (uint32_t i = 0; i != 4; ++i)
-        assert(producer.projection_call(key, static_cast<int32_t>(i), 0xabc0 + i));
+        assert(producer.projection_call(key, static_cast<int32_t>(i), 0xabc0 + i, projection_for_test(i)));
     assert(producer.camera(key, 0, CameraPose{{1.0, 2.0, 3.0}, {-0.032, 0.0, 0.0}, true}));
     assert(producer.camera(key, 1, CameraPose{{1.0, 2.0, 3.0}, {0.032, 0.0, 0.0}, true}));
     for (uint32_t i = 0; i != 4; ++i) {
@@ -119,7 +130,7 @@ int main() {
     const Key duplicate_key{7, 14};
     assert(producer.begin(duplicate_key, 93, 0x100, 0x200, *layout));
     for (uint32_t i = 0; i != 4; ++i)
-        assert(producer.projection_call(duplicate_key, static_cast<int32_t>(i), 0xabc0 + i));
+        assert(producer.projection_call(duplicate_key, static_cast<int32_t>(i), 0xabc0 + i, projection_for_test(i)));
     states[3] = states[2];
     for (uint32_t i = 0; i != 4; ++i) {
         const auto accepted = producer.constructed(duplicate_key, 0x300, 0x200, 0x100,
@@ -131,7 +142,7 @@ int main() {
     const Key mixed_family{7, 15};
     assert(producer.begin(mixed_family, 94, 0x100, 0x200, *layout));
     for (uint32_t i = 0; i != 4; ++i)
-        assert(producer.projection_call(mixed_family, static_cast<int32_t>(i), 0xabc0 + i));
+        assert(producer.projection_call(mixed_family, static_cast<int32_t>(i), 0xabc0 + i, projection_for_test(i)));
     for (uint32_t i = 0; i != 4; ++i) {
         const auto accepted = producer.constructed(mixed_family, i == 3 ? 0x301 : 0x300, 0x200, 0x100,
             views[i], static_cast<uintptr_t>(0x50 + i), layout->views[i], 0xabc0 + i);
