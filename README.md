@@ -1,68 +1,144 @@
 # UEVR Quad Views Mono
 
-This repository preserves the user-tested Build182 release of a monoscopic
-foveated rendering path for STALKER 2 through UEVR, DX12, OpenXR, and PSVR2
-Toolkit gaze input.
+**Eye-tracked foveated rendering for Unreal Engine VR, built on Joey's UEVR.**
 
-Despite the project name, this is **not** four-view stereo or OpenXR quad
-views. DuoView combines a high-density foveal source and a lower-density
-peripheral source into one full-field monoscopic image, then sends that same
-image to both OpenXR eye regions. Both Unreal source views share one camera.
+UEVR Quad Views Mono is an experimental rendering extension that prioritizes image quality where you are looking and reduces rendering resolution in peripheral vision. It combines a detailed, gaze-positioned **foveal view** with a lower-resolution **full-field peripheral view**, then composites both into a single image for VR display.
 
-## Build182 status
+The goal is **higher effective resolution and better GPU efficiency** in demanding Unreal Engine games, particularly at high SteamVR render resolutions where pixel and shader workload — rather than CPU performance — is the bottleneck.
 
-Build182 is the exact package from the original Build182 Actions run, published
-here without rebuilding or repacking. On the tested setup, the user confirmed
-that it resolved recurring stutter, flicker, gaze jumping, and trembling.
-That confirms the user's hardware acceptance for this build; it does not
-establish a numerical missed-frame rate or guarantee behavior on other systems.
+**Current release:** [v182](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v182) · **Current game integration:** S.T.A.L.K.E.R. 2 (DX12 / OpenXR) · **Eye tracking:** PlayStation VR2 Toolkit
 
-The package targets STALKER 2 running DX12 with OpenXR. The DuoView path uses
-PSVR2 Toolkit's CAPI for gaze when available. Build notes and setup details are
-inside the package's `READ_FIRST.txt`.
+> **Current architecture: DuoView Mono, not native stereo quad views.** Version 182 renders two differently detailed Unreal Engine views from a shared monoscopic camera, blends them and presents the same resulting image to both eyes. It does **not** yet render four independent left/right focus-and-context views, implement an OpenXR quad-views extension, or provide binocular stereo depth. The project name reflects its quad-view-inspired rendering approach and direction.
 
-## Download and install
+## How it works
 
-Download `UEVR-Quad-Views-Mono-v182.zip` from the [v182 release](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v182).
-Extract it to a separate folder and follow the included `READ_FIRST.txt`.
-Keep an existing working UEVR installation untouched while testing this build.
+Traditional VR rendering often spends substantial GPU time shading pixels in both eyes, including areas where the user is not looking. DuoView instead allocates detail unevenly within a common full-field monoscopic projection:
 
-The release also includes `UEVR-Quad-Views-Mono-v182-actions-artifact.zip`,
-the byte-for-byte GitHub Actions artifact archive from the original build. It
-contains the original installable package and its original SHA-256 sidecar.
-Check release attachments with [`SHA256SUMS`](SHA256SUMS).
+1. **Foveal view:** a high-density, cropped Unreal Engine view following the user's gaze (or a fixed center).
+2. **Peripheral view:** a full-field Unreal Engine view rendered at a lower spatial resolution.
+3. **Composition:** the two current-frame sources are aligned using their shared camera/projection and joined with a configurable feathered transition.
+4. **VR output:** UEVR's OpenXR path submits the final monoscopic image to both headset eyes.
 
-## Source and reproducibility
+```text
+                 Unreal Engine / UEVR
+                   shared Mono pose
+                          |
+               +----------+----------+
+               |                     |
+        Foveal scene view     Peripheral scene view
+       high-detail crop        low-resolution context
+               |                     |
+               +----------+----------+
+                          |
+                 D3D12 compositor
+             gaze alignment + feather
+                          |
+               Full-field Mono frame
+                          |
+                  OpenXR / SteamVR
+                   left eye = right eye
+```
 
-The [`build-182` branch](https://github.com/liviutrn/UEVR-Quad-Views-Mono/tree/build-182) preserves the selected source
-files from `liviutrn/OpenNR` commit
-[`67c6e1ec5b931d2922e0ef5d253b8e9bef7a1a80`](https://github.com/liviutrn/OpenNR/commit/67c6e1ec5b931d2922e0ef5d253b8e9bef7a1a80).
-The `duoview/` source tree is unchanged from that commit and can be checked
-with `python scripts/verify_baseline.py`.
+Unlike a simple post-processing blur or a headset-side foveation mask, DuoView works with **two Unreal scene views** and composes their rendered results. The implementation uses Joey's Native Stereo Fix rendering infrastructure to obtain compatible source views while retaining the Mono delivery path.
 
-The single retained workflow, [duoview-joey-stage234.yml](.github/workflows/duoview-joey-stage234.yml),
-reconstructs and verifies the pinned backend, applies the guarded DuoView
-changes, runs the CPU and Windows WARP test suites, and packages the injector.
-It needs the `UEVR_SOURCE_TOKEN` Actions secret (or the legacy `PAT_TOKEN`)
-with access to the pinned `joeyhodge/UESDK` source.
+## Features
 
-Pinned source revisions and the original run, artifact digest, source hashes,
-and verification history are in [`PROVENANCE.json`](PROVENANCE.json). Historical
-handoff and review documents under `duoview/` describe earlier work states;
-this README and `PROVENANCE.json` are authoritative for Build182. The workflow
-is manual so importing this repository does not silently start another build.
-Future Actions run numbers restart in the new repository and do not identify
-the original Build182 run.
+- **Eye-tracked foveation** using the [PlayStation VR2 Toolkit](https://github.com/BnuuySolutions/PSVR2Toolkit) CAPI, with a fixed-center option.
+- **Adjustable focus area:** foveal crop width and height, foveal pixel density, peripheral resolution scale and transition feathering.
+- **Gaze placement controls:** position offsets, crop stabilization, quantization and handling of transient invalid gaze samples.
+- **D3D12 scene composition** of a high-detail focus view and low-detail full-field context.
+- **Shared camera pose and frame-aligned composition** to keep focus and peripheral images spatially consistent.
+- **Native Stereo Fix-backed source rendering** in the dedicated DuoView pipeline, while retaining conventional UEVR rendering modes separately.
+- **OpenXR output through UEVR**, including SteamVR-based PC VR setups.
 
-The user's tested setup showed the reported stability fixes. Very high
-resolution behavior and VRAM headroom were not characterized; a final crash in
-one high-resolution run had no evidence establishing an out-of-memory cause.
-One observed UI field rejection (`0x4000`) remains a known limitation. The
-reproducible-build workflow does not claim headset validation beyond the user's
-Build182 confirmation or a GPU performance gain.
+The dedicated rendering option is **DuoView (rendering mode ID 6)**. This is distinct from Joey's standard Mono and Native Stereo modes.
 
-## License and attribution
+## Performance: where the gains come from
 
-The included source is distributed under the GNU GPL v3; see [`COPYING`](COPYING)
-and [`NOTICE.md`](NOTICE.md). UEVR, UESDK, and third-party components retain
-their own names, licenses, and notices.
+Foveated rendering aims to avoid shading the entire view at maximum density. For the configured *source-view pixel budget*, a useful approximation relative to one full-resolution monoscopic frame is:
+
+```text
+relative pixels ≈ (fovea width × fovea height × density²)
+                + (peripheral scale²)
+```
+
+Here width and height are fractions of the full field of view, while density and peripheral scale are linear resolution multipliers.
+
+**Example: 50% × 50% fovea, 1.0× foveal density, 0.20× periphery**
+
+| Source | Approximate full-frame pixel equivalent |
+| --- | ---: |
+| High-density focus (0.50 × 0.50) | 25% |
+| Low-density context (0.20 × 0.20) | 4% |
+| **Combined nominal source-view budget** | **29%** |
+| Conventional full-resolution Mono (reference) | 100% |
+| Conventional full-resolution stereo, two eyes (reference) | 200% |
+
+This illustrates the **potential pixel-work reduction**, not a measured 71–85.5% reduction in total GPU time. Unreal's rendering passes, Lumen and lighting, upscaling, full-size intermediate textures, compositing, memory transfers, frame synchronization and engine overhead still cost GPU time. The current Native Stereo Fix-backed pipeline also retains some full-sized render resources.
+
+**The largest real-world gains are expected at higher render resolutions in GPU-bound scenes**, especially where rasterization/pixel shading is a significant part of frame cost and the CPU/game thread can keep the GPU supplied with work. At low resolutions, in CPU-limited scenes, or when fixed-cost engine passes dominate, improvements can shrink or disappear.
+
+As an illustration from development on an RTX 5070 at approximately 3144 × 2500 output resolution, an earlier DuoView configuration (50% focus, 0.20× periphery) sustained the setup's 40 FPS cap at roughly 75% GPU utilization; conventional Native Stereo ran at around 34 FPS with the GPU close to fully utilized. These are setup-specific observations from development builds, **not a controlled v182 benchmark or a guaranteed speedup**. A capped 40 FPS reading also means remaining GPU headroom cannot be converted directly into a measured maximum FPS.
+
+The optimization target is to improve **clarity per unit of GPU work**, not merely maximize the difference between theoretical rendered-pixel counts.
+
+## Compatibility and requirements
+
+Version 182 is based on the following stack:
+
+- **Windows PC** with a DirectX 12-capable GPU
+- **S.T.A.L.K.E.R. 2** using the DX12 renderer
+- **UEVR** with the Joey-derived DuoView modifications
+- **OpenXR runtime**, including SteamVR on the tested PC VR configuration
+- **Optional PSVR2 eye tracking** via PlayStation VR2 Toolkit for gaze-driven focus; fixed-center foveation does not require gaze input
+
+Other Unreal Engine titles, headset configurations, rendering APIs and UEVR versions are not established as compatible with v182. This is an independent experimental fork, not an official UEVR feature.
+
+### Image quality and limitations
+
+DuoView's current output is **monoscopic**: both eyes receive the same composed image. It retains headset tracking and a full-field VR presentation, but lacks the true binocular disparity of native stereo. The transition between detail levels can also expose differences in temporal effects, lighting, reflections or peripheral shading depending on the game.
+
+Foveal area, density and peripheral scale trade visual quality against rendering cost. Increasing foveal density or peripheral resolution can quickly increase workload and memory pressure, especially at very high SteamVR resolutions. Performance depends on the game, scene, GPU, frame cap, upscaler and runtime settings.
+
+## Download and use
+
+**[Download the latest published build — v182](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v182)**
+
+1. Download **`UEVR-Quad-Views-Mono-v182.zip`** from the release assets.
+2. Extract it into a separate directory rather than overwriting a known-good UEVR setup.
+3. Follow the included **`READ_FIRST.txt`** for the packaged build's actual installation and mode-selection instructions.
+4. Select the dedicated **DuoView / ID 6** rendering mode and tune the fovea, periphery and gaze options to suit your headset and performance target.
+
+The original v182 binary package is preserved without modification. For archive integrity and exact build identification, see [`SHA256SUMS`](SHA256SUMS) and [`PROVENANCE.json`](PROVENANCE.json).
+
+## Source code and development
+
+This repository carries the **DuoView implementation and integration patches**, alongside a reproducible build workflow based on pinned upstream UEVR components.
+
+- [`duoview/`](duoview/) — foveal/peripheral layout, gaze handling, frame-state contracts, D3D12 composition shaders and Joey integration patches.
+- [`.github/workflows/duoview-joey-stage234.yml`](.github/workflows/duoview-joey-stage234.yml) — manually triggered Windows build of the pinned backend, frontend and DuoView extension.
+- [`build-182` branch](https://github.com/liviutrn/UEVR-Quad-Views-Mono/tree/build-182) — preserved v182 source baseline.
+- [`PROVENANCE.json`](PROVENANCE.json) — exact upstream revisions and published binary provenance.
+
+Building requires authorized access to the pinned **`joeyhodge/UESDK`** dependency, supplied to GitHub Actions through the `UEVR_SOURCE_TOKEN` repository secret (or supported legacy `PAT_TOKEN`). That restricted dependency is not bundled in this repository.
+
+### Upstream projects and credits
+
+UEVR Quad Views Mono builds on work from the following projects and authors:
+
+| Project | Contribution |
+| --- | --- |
+| [**UEVR — praydog**](https://github.com/praydog/UEVR) | Original Unreal Engine VR injector and ecosystem. |
+| [**Joey's UEVR fork**](https://github.com/joeyhodge/UEVR) | Backend, Mono rendering path and Native Stereo Fix infrastructure used by DuoView. |
+| [**Joey's UEVR frontend**](https://github.com/joeyhodge/uevr-frontend) | Frontend basis and rendering-mode integration. |
+| [**joeyhodge/UESDK**](https://github.com/joeyhodge/UESDK) | Unreal Engine SDK dependency used by the pinned backend (access restricted). |
+| [**PlayStation VR2 Toolkit — BnuuySolutions**](https://github.com/BnuuySolutions/PSVR2Toolkit) | PlayStation VR2 eye-tracking interface and calibration support. |
+| [**OpenNR**](https://github.com/liviutrn/OpenNR) | Development repository containing the v182 DuoView source baseline. |
+
+The v182 implementation is pinned to [OpenNR commit `67c6e1e`](https://github.com/liviutrn/OpenNR/commit/67c6e1ec5b931d2922e0ef5d253b8e9bef7a1a80); the exact Joey backend, SDK and frontend commits are documented in [`NOTICE.md`](NOTICE.md) and [`PROVENANCE.json`](PROVENANCE.json).
+
+## License
+
+Source files are provided under the **GNU GPL v3** as documented in [`COPYING`](COPYING) and [`NOTICE.md`](NOTICE.md). Upstream components retain their respective licensing and attribution requirements. PlayStation VR2 Toolkit has its own usage terms, including restrictions on commercial use of its eye-tracking data.
+
+This is an independent community project, **not affiliated with or endorsed by** praydog, Joey, BnuuySolutions, Sony, Epic Games, GSC Game World or the maintainers of the referenced software.
