@@ -53,48 +53,11 @@ Unlike a simple post-processing blur or a headset-side foveation mask, DuoView w
 
 The dedicated rendering option is **DuoView (rendering mode ID 6)**. This is distinct from Joey's standard Mono and Native Stereo modes.
 
-## Performance: where the gains come from
+## Performance
 
-Foveated rendering aims to avoid shading the entire view at maximum density. For the configured *source-view pixel budget*, a useful approximation relative to one full-resolution monoscopic frame is:
+In high-resolution **S.T.A.L.K.E.R. 2** comparisons, DuoView achieved **up to 29% higher FPS than normal Native Stereo** and **up to 11% higher FPS than normal Mono**, while reducing GPU utilization by **up to 31% versus either mode**.
 
-```text
-relative pixels ≈ (fovea width × fovea height × density²)
-                + (peripheral scale²)
-```
-
-Here width and height are fractions of the full field of view, while density and peripheral scale are linear resolution multipliers.
-
-**Example: 50% × 50% fovea, 1.0× foveal density, 0.20× periphery**
-
-| Source | Approximate full-frame pixel equivalent |
-| --- | ---: |
-| High-density focus (0.50 × 0.50) | 25% |
-| Low-density context (0.20 × 0.20) | 4% |
-| **Combined nominal source-view budget** | **29%** |
-| Conventional full-resolution Mono (reference) | 100% |
-| Conventional full-resolution stereo, two eyes (reference) | 200% |
-
-This illustrates the **potential pixel-work reduction**, not a measured 71–85.5% reduction in total GPU time. Unreal's rendering passes, Lumen and lighting, upscaling, full-size intermediate textures, compositing, memory transfers, frame synchronization and engine overhead still cost GPU time. The current Native Stereo Fix-backed pipeline also retains some full-sized render resources.
-
-**The largest real-world gains are expected at higher render resolutions in GPU-bound scenes**, especially where rasterization/pixel shading is a significant part of frame cost and the CPU/game thread can keep the GPU supplied with work. At low resolutions, in CPU-limited scenes, or when fixed-cost engine passes dominate, improvements can shrink or disappear.
-
-### Measured GPU savings vs Mono and Native Stereo
-
-The following **S.T.A.L.K.E.R. 2** comparisons were recorded on an **RTX 5070**, with **motion smoothing forced** and a **40 FPS ceiling**. The SteamVR output resolution and screen-percentage setting were matched between the rendering modes in each row.
-
-| Build | Output resolution | Screen percentage | Normal Mono | DuoView Mono | Normal Native Stereo | DuoView GPU usage vs Mono |
-| --- | --- | ---: | --- | --- | --- | ---: |
-| v24 | 4060 × 3584 | 50% | 95% GPU · 38 FPS | **66% GPU · 40 FPS** | — | **30.5% lower** |
-| v168 | 3136 × 2768 | 100% | 97% GPU · 36 FPS | **72% GPU · 40 FPS** | — | **25.8% lower** |
-| v168 | 3136 × 2768 | 50% | 74% GPU · 40 FPS | **67% GPU · 40 FPS** | 97% GPU · 31 FPS | **9.5% lower** |
-
-**Compared with normal Mono:** At 4060 × 3584, DuoView reduced observed GPU utilization from 95% to 66% (**30.5% less**) while increasing the observed frame rate from 38 to 40 FPS (**5.3% higher**). At 3136 × 2768 and 100% screen percentage, utilization fell from 97% to 72% (**25.8% less**) while FPS rose from 36 to 40 (**11.1% higher**).
-
-**Compared with normal Native Stereo:** At 3136 × 2768 and 50% screen percentage, DuoView used 67% GPU instead of 97% (**30.9% less**) and delivered 40 FPS instead of 31 (**29.0% higher FPS**). At this same setting, normal Mono delivered 40 FPS at 74% GPU, so DuoView achieved the same capped frame rate with **9.5% lower utilization**.
-
-These percentages describe *relative reductions in the observed GPU-utilization readings* (for example, 95% → 66% is 29 percentage points, or a **30.5% relative reduction**). **Screen percentage** refers to the test's render-scale setting, not the size of the foveal crop. The 40 FPS cap limits observable FPS gains; spare GPU capacity must not be presented as a measured uncapped frame rate. These are measurements from the indicated **v24 and v168 development builds**, not new v182 benchmarks or promises of identical results elsewhere. The advantage is most relevant in high-resolution, GPU-bound scenes; CPU or game-thread limits can reduce the benefit.
-
-The optimization target is to improve **clarity per unit of GPU work**, not merely maximize the difference between theoretical rendered-pixel counts.
+These results were observed on an **RTX 5070** in earlier v24/v168 builds with motion smoothing and a 40 FPS ceiling; the greatest benefits are expected when the GPU, rather than the CPU, limits performance, and results are not guaranteed for v182 or other setups.
 
 ## Compatibility and requirements
 
