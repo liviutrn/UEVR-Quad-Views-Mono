@@ -55,9 +55,9 @@ The dedicated rendering option is **DuoView (rendering mode ID 6)**. This is dis
 
 ## Performance
 
-In high-resolution **S.T.A.L.K.E.R. 2** comparisons, DuoView achieved **up to 29% higher FPS than normal Native Stereo** and **up to 11% higher FPS than normal Mono**, while reducing GPU utilization by **up to 31% versus either mode**.
+Under favorable high-resolution, GPU-bound conditions, DuoView could deliver **up to 50% higher FPS than standard Mono** and **up to 85% higher FPS than Native Stereo**.
 
-These results were observed on an **RTX 5070** in earlier v24/v168 builds with motion smoothing and a 40 FPS ceiling; the greatest benefits are expected when the GPU, rather than the CPU, limits performance, and results are not guaranteed for v182 or other setups.
+These are estimated uncapped performance gains derived from RTX 5070 development measurements, rather than directly measured FPS improvements or guaranteed results.
 
 ## Compatibility and requirements
 
