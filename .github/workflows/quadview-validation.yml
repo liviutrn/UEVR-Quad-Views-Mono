@@ -1,0 +1,20 @@
+name: QuadView CPU and shader validation
+on:
+  push:
+    branches: [quadview/validation-182]
+    paths: ['quadview/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contracts-and-warp:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure QuadView contracts and shader tests
+        run: cmake -S quadview -B quadview-build -A x64
+      - name: Build QuadView tests
+        run: cmake --build quadview-build --config Release --parallel 2
+      - name: Run CPU contracts and stereo shader WARP
+        run: ctest --test-dir quadview-build -C Release --output-on-failure --no-tests=error
