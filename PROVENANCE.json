@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "project": "UEVR Quad Views Mono",
+  "release": "v182",
+  "runtime_description": "Monoscopic foveal and peripheral source composition duplicated to both OpenXR eye regions; not four-view stereo or OpenXR quad views.",
+  "source_baseline": {
+    "repository": "liviutrn/OpenNR",
+    "commit": "67c6e1ec5b931d2922e0ef5d253b8e9bef7a1a80",
+    "tree": "dd3f1f6851459eb9a2e62677725fd8b8490fa5ee",
+    "branch": "fix/duoview-render-transaction-20261019",
+    "exported_source": "duoview/** from the exact source commit; verified by BASELINE_SOURCE_SHA256SUMS"
+  },
+  "build_sources": {
+    "backend": {
+      "repository": "joeyhodge/UEVR",
+      "commit": "5ac7edc207866569334175e4ed8a7517971547f6"
+    },
+    "sdk": {
+      "repository": "joeyhodge/UESDK",
+      "commit": "3cffbc82429b6165ceec2714f0f0d9ae48f55596"
+    },
+    "frontend": {
+      "repository": "joeyhodge/uevr-frontend",
+      "commit": "60be4b0f9a646109fd9fdf448bacd41477234091"
+    }
+  },
+  "original_github_actions_artifact": {
+    "repository": "liviutrn/OpenNR",
+    "run_id": 39265628148,
+    "head_sha": "67c6e1ec5b931d2922e0ef5d253b8e9bef7a1a80",
+    "artifact_id": 12194800100,
+    "artifact_name": "Joey-DuoView-v22-NativeFix-182",
+    "artifact_size_bytes": 11547265,
+    "artifact_archive_sha256": "dd062a8ec94ce70a3215f0ee54d2ff090e6c467b72ca3a51da51db0b6c4372e4",
+    "artifact_download": "https://github.com/liviutrn/OpenNR/actions/runs/39265628148/artifacts/12194800100",
+    "installable_package_member": "Joey-DuoView-v22-NativeFix-182.zip",
+    "installable_package_original_sha256": "7f5bcc5ef057c7b176296c2be0384d0269cebad39671f04e1a287500cfd4dba3"
+  },
+  "validation": {
+    "windows_full_build_and_tests": "passed in original Build182 workflow; 100k asynchronous delivery tests and sanitizer checks passed",
+    "user_hardware_acceptance": "user confirmed this exact package resolved stutter, flicker, gaze jumping, and trembling on their setup",
+    "missed_frame_rate": "no quantitative 0.001% miss-rate result is established",
+    "headset_performance_claim": "none"
+  },
+  "publication_note": "The v182 release must use the original package bytes and original Actions artifact archive; do not rebuild or repack them."
+}

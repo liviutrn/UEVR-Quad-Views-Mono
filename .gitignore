@@ -1,0 +1,8 @@
+build/
+artifacts/
+duo_tests/
+duo_pinned_tests/
+evidence/
+*.user
+*.suo
+__pycache__/
