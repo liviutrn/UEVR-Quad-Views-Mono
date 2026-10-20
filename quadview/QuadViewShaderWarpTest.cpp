@@ -58,6 +58,9 @@ static ComPtr<ID3D12Resource> resource(ID3D12Device* device, D3D12_RESOURCE_DESC
 
 static void transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* texture,
                        D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+    // D3D12 disallows state-transition barriers with identical before/after states.
+    // Consecutive WARP test passes may deliberately keep the atlas in GENERIC_READ.
+    if (before == after) return;
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = texture;
