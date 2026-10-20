@@ -244,7 +244,7 @@ void D3D12Component::OpenXR::initialize(XrSessionCreateInfo& session_info) {''')
                             const auto frozen=packet->producer;
                             UINT64 timestamp_frequency{};
                             if (frozen->settings.gpu_timing) {
-                                if (const auto hook=g_framework->get_d3d12_hook(); hook) {
+                                if (const auto& hook=g_framework->get_d3d12_hook(); hook) {
                                     if (const auto queue=hook->get_command_queue(); queue)
                                         queue->GetTimestampFrequency(&timestamp_frequency);
                                 }
