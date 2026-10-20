@@ -192,7 +192,17 @@ public:
         // actually executes; execution below is the point at which reuse can
         // invalidate the earlier contents.
         for (auto& slot : slots_) {
-            if (slot.source && slot.source.same_owner(source)) return false;
+            if (!slot.source) continue;
+            if (slot.source.same_owner(source)) return false;
+            // A duplicated GT registration with a different packet/serial but
+            // the same actual UE frame/target/scene would make render() see
+            // two eligible owners and reject both. Refuse the conflicting
+            // source at publication, preserving the first valid owner.
+            if (source.engine_frame_bound && slot.source.engine_frame_bound &&
+                slot.source.generation == source.generation &&
+                slot.source.engine_frame == source.engine_frame &&
+                slot.source.target == source.target &&
+                slot.source.scene == source.scene) return false;
         }
         for (auto& slot : slots_) {
             if (!slot.source) {
