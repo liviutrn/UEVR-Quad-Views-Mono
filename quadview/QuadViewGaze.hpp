@@ -122,22 +122,22 @@ inline std::optional<std::array<Projection,2>> projections_from_fovs(
     if (horizontal_mode<0 || horizontal_mode>2 || vertical_mode<0 || vertical_mode>2) return {};
     auto effective=raw;
     if (horizontal_mode==1) {
-        const float outer=std::max({-raw[0].left,raw[0].right,-raw[1].left,raw[1].right});
+        const float outer=(std::max)({-raw[0].left,raw[0].right,-raw[1].left,raw[1].right});
         effective[0].left=effective[1].left=-outer;
         effective[0].right=effective[1].right=outer;
     } else if (horizontal_mode==2) {
-        const float outer=std::max(-raw[0].left,raw[1].right);
-        const float inner=std::max(raw[0].right,-raw[1].left);
+        const float outer=(std::max)(-raw[0].left,raw[1].right);
+        const float inner=(std::max)(raw[0].right,-raw[1].left);
         effective[0].left=-outer; effective[0].right=inner;
         effective[1].left=-inner; effective[1].right=outer;
     }
     if (vertical_mode==1) {
-        const float half=std::max({raw[0].up,-raw[0].down,raw[1].up,-raw[1].down});
+        const float half=(std::max)({raw[0].up,-raw[0].down,raw[1].up,-raw[1].down});
         effective[0].up=effective[1].up=half;
         effective[0].down=effective[1].down=-half;
     } else if (vertical_mode==2) {
-        const float top=std::max(raw[0].up,raw[1].up);
-        const float bottom=std::max(-raw[0].down,-raw[1].down);
+        const float top=(std::max)(raw[0].up,raw[1].up);
+        const float bottom=(std::max)(-raw[0].down,-raw[1].down);
         effective[0].up=effective[1].up=top;
         effective[0].down=effective[1].down=-bottom;
     }
