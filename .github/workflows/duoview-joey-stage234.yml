@@ -1,6 +1,12 @@
-name: UEVR Quad Views Mono Build182 Reproduction
+name: UEVR Quad Views Mono v182 Fovea Glamarye Build
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
+  push:
+    branches:
+      - feature/v182-fovea-glamayre-fused
+  pull_request:
+    branches:
+      - build-182
   workflow_dispatch:
 permissions:
   contents: read
@@ -188,16 +194,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="Joey-DuoView-v22-NativeFix-${{ github.run_number }}.zip"
+          $zip="UEVR-Quad-Views-Mono-v182-Glamarye-Fovea-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: Joey-DuoView-v22-NativeFix-${{ github.run_number }}
+          name: UEVR-Quad-Views-Mono-v182-Glamarye-Fovea-${{ github.run_number }}
           path: |
-            Joey-DuoView-v22-NativeFix-*.zip
-            Joey-DuoView-v22-NativeFix-*.zip.sha256
+            UEVR-Quad-Views-Mono-v182-Glamarye-Fovea-*.zip
+            UEVR-Quad-Views-Mono-v182-Glamarye-Fovea-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -212,7 +218,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Joey-DuoView-NativeFix-Evidence-${{ github.run_number }}
+          name: UEVR-v182-Glamarye-Fovea-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
