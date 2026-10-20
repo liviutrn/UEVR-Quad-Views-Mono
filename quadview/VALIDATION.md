@@ -124,3 +124,24 @@ owners, generation restart, fresh combined producer/consumer patch
 application, Python syntax, and all 84 preserved Build182 source identities.
 Windows compilation and WARP results are recorded in the replacement run.
 Headset recovery remains unverified until the user retests the new package.
+
+## Corrected ID7 handoff package — Build 9
+
+- [Successful Windows run 39392670320](https://github.com/liviutrn/OpenNR/actions/runs/39392670320).
+- Compiled overlay: OpenNR `b9afba90686673e5c5e2a86cd48383835128201c`.
+- Matching feature source: `73f8c04f3a99e7cd96e3e3e3b98f3d67296fed77`.
+- Full production backend, auxiliary DLLs, and matching frontend compiled.
+- All five QuadView CTests passed: producer/frame binding, 100,000
+  asynchronous transactions, and normal/sRGB/typeless D3D12 WARP output.
+- All four pinned DuoView, six independent DuoView, and 41 original
+  compatibility CTests passed; frontend rendering-ID tests passed.
+- Five source-checkpoint regression tests passed. Final verification checked
+  338 patched source inputs and the unchanged pinned SDK. Generated products
+  retain their separate hashes and generator provenance.
+- [Installable artifact](https://github.com/liviutrn/OpenNR/actions/runs/39392670320/artifacts/12251681557).
+- [Validation evidence](https://github.com/liviutrn/OpenNR/actions/runs/39392670320/artifacts/12250774139).
+
+Build 9 supersedes the Build 8 exact-render-view-pointer fallback. It is a
+headset retest candidate, not an observed in-game success: normal scene
+output, four-view rasterization, stereo alignment, and ten-minute stability
+still require the user's test. Build182/ID6 remains unchanged.
