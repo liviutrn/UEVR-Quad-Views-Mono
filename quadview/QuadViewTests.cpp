@@ -538,17 +538,23 @@ int main() {
     Delivery<SourceToken, 4>::EngineTicket queued{11, 60, 401, 0x601, 0x701, 0x801};
     assert(transition_drain.register_engine_family(queued));
     assert(transition_drain.register_engine_family(queued)); // Duplicate callback is idempotent.
-    // The RenderThread only sees frame/target/scene. Conflicting GT ownership
-    // must be rejected before it could make both sources unresolvable.
-    auto conflicting_engine=queued;
-    conflicting_engine.serial=61;
-    conflicting_engine.family=0x602;
-    assert(!transition_drain.register_engine_family(conflicting_engine));
-    // Rejecting an ambiguous family must still block retirement: it might
-    // have queued commands that the existing owner could not track.
-    assert(transition_drain.engine_tracking_overflowed(11));
-    assert(!transition_drain.engine_commands_retired(11));
     assert(transition_drain.pending_engine_commands(11) == 1);
+    // A conflicting GT family has no unique RenderThread matching key.
+    // Verify it fails closed in an isolated ledger; do not poison the
+    // ordinary successful-drain scenario being tested below.
+    {
+        Delivery<SourceToken, 4> ambiguity;
+        assert(ambiguity.register_engine_family(queued));
+        auto conflicting_engine=queued;
+        conflicting_engine.serial=61;
+        conflicting_engine.family=0x602;
+        assert(!ambiguity.register_engine_family(conflicting_engine));
+        assert(ambiguity.engine_tracking_overflowed(11));
+        assert(!ambiguity.engine_commands_retired(11));
+        assert(ambiguity.pending_engine_commands(11) == 1);
+        ambiguity.retire_generation(11);
+        assert(!ambiguity.engine_tracking_overflowed(11));
+    }
     assert(!transition_drain.engine_commands_retired(11));
     assert(!transition_drain.render_engine_family(11, 400, queued.target, queued.scene));
     const auto delayed_rt = transition_drain.render_engine_family(11, 401, queued.target, queued.scene);
