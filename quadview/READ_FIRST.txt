@@ -1,39 +1,37 @@
-EXPERIMENTAL STEREO QUAD VIEWS — BUILD182 BASE / BUILD32 P0+P1 SNAPSHOT
+UEVR QUAD VIEWS STEREO — BUILD 41 (EXPERIMENTAL)
 
-SOURCE-ONLY RECOVERY ARCHIVE, NOT A TESTABLE WINDOWS RELEASE.
-Build32 rendered real stereo then crashed with an unsymbolized CPU RenderThread access violation.
-The saved P0 checkpoint contains structural view-count and transition-drain guards.
-The unpublished P1 source contains eye tracking, controls, and focus-only sharpening.
-NO P1 Windows build, GPU shader/WARP verification, or headset validation exists.
-Do NOT install this ZIP as a UEVR package or claim the crash is repaired.
+Target: STALKER 2 UE5.5 / DX12 / OpenXR.
+ID7: Quad Views Stereo (Experimental), four engine views and two distinct eyes.
+ID6: preserved monoscopic DuoView baseline.
 
-Initial target: STALKER 2 (UE5.5) / DX12 / OpenXR.
-Mode ID7 = Quad Views Stereo (Experimental).
-Mode ID6 = the original monoscopic DuoView baseline.
+These instructions apply to the compiled Windows package after successful CI.
+The repository source snapshot alone is not installable.
 
-Only after a reviewed Windows CI candidate exists, to test that compiled package:
-1. Extract it to a separate folder and run its included UEVR injector.
-2. Use the known-working Build182 game and SteamVR/OpenXR setup.
-3. Turn off Extreme Compatibility, split-screen, SceneView compatibility,
-   2D Screen, and Stereo Emulation.
-4. Select Quad Views Stereo (Experimental), ID7.
-5. Begin with 50% x 50% fixed-center focus and 20% context resolution.
-6. Check stereo depth, focus alignment, head movement, and frame delivery.
-7. Run a ten-minute gameplay test before treating it as stable.
+Use the complete compiled package, extracted to a new folder. Run its included
+injector using your known-working game and SteamVR/OpenXR setup. Keep your
+working Build 182/39/40 folders available for comparison.
 
-Fixed-center remains an ID7 option. Unverified P1 code also implements
-per-eye PSVR2 eye tracking and fused focus-only sharpening. It composites
-four engine views into ordinary stereo output, without requiring runtime
-Quad Views support. Native Stereo Fix is bypassed; secondary-pass shading
-parity remains an open engineering issue.
+Turn off Extreme Compatibility, split-screen, SceneView compatibility,
+2D Screen, and Stereo Emulation. Select Quad Views Stereo (Experimental), ID7.
 
-Diagnostic 0: blend. 1: context only. 2: focus only. 3: synthetic colors.
-Synthetic colors do not establish that the engine rendered four views.
+First test: gaze OFF, sharpening 0, focus width/height 50%/50%, context 20%.
+Use a known-safe resolution. Check stereo depth, focus alignment, head movement,
+and sustained frame delivery. Then enable gaze and compare sharpening 0/1/2.
+Existing saved settings are respected; these first-test choices are manual.
 
-Delivery diagnostics must progress through Producer, BeginFamily,
-RenderFamily, RHI tail/execution, CopyEnqueued, and Submit. If the image
-is black, preserve the complete log so the first missing stage is visible.
+Build 41 fixes stale atlas/pose selection and an exact-owner drain stall.
+Unknown ownership or terminal tail-hook failure now blocks stale submission
+and reports: "ID7 ownership proof lost; restart game required".
+Restart the game if this appears; do not force-clear a blocked transition.
 
-The full scene-target allocation is retained. Pixel-area reductions do
-not establish a proportional performance improvement. CI test success
-does not establish headset stability or shading parity.
+Test 7 -> 6 -> 0 -> 7 transitions and 30–60 minutes of ordinary gameplay.
+Keep NVIDIA Smooth Motion disabled when comparing frame delivery.
+
+If a problem occurs, preserve the complete UEVR log and any game crash log/dump.
+Useful stages: GTProducer, RenderFamily, RHI, CopyEnqueued, Submit.
+Diagnostic modes: 0 blend, 1 context, 2 focus, 3 synthetic layout colors.
+
+See QUADVIEW_RELEASE_NOTES.md in the package (quadview/RELEASE_NOTES.md in
+the source tree) and BUILD41_REVIEW.md for changes and limits.
+The original RenderThread crash is NOT proven fixed. CI cannot establish
+headset stability, shading parity, or performance gains.

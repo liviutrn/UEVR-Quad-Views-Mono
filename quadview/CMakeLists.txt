@@ -44,6 +44,11 @@ add_executable(QuadViewAsyncTests QuadViewAsyncTests.cpp)
 target_link_libraries(QuadViewAsyncTests PRIVATE Threads::Threads)
 add_test(NAME quadview-asynchronous-delivery COMMAND QuadViewAsyncTests)
 set_tests_properties(quadview-asynchronous-delivery PROPERTIES TIMEOUT 60)
+# An independent target-writer model exercises source-less and reordered tails.
+add_executable(QuadViewWriterModelTests QuadViewWriterModelTests.cpp)
+target_link_libraries(QuadViewWriterModelTests PRIVATE Threads::Threads)
+add_test(NAME quadview-target-writer-model COMMAND QuadViewWriterModelTests)
+set_tests_properties(quadview-target-writer-model PROPERTIES TIMEOUT 60)
 if(WIN32)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/QuadViewShaderBytecode.hpp"

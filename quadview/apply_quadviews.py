@@ -897,7 +897,9 @@ def main() -> None:
         "                frame_count,reinterpret_cast<uintptr_t>(&view_family),reinterpret_cast<uintptr_t>(qv_target),\n"
         "                reinterpret_cast<uintptr_t>(qv_scene)};\n"
         "            if (g_hook->quadview_delivery.register_engine_family(ticket)) qv_engine_ticket=ticket;\n"
-        "            else vr->set_quadview_status(\"Engine render-family ownership ledger is full; mode transition will remain blocked\");\n"
+        "            else if (g_hook->quadview_delivery.engine_tracking_overflowed(qv_key.generation))\n"
+        "                vr->set_quadview_status(\"ID7 ownership proof lost; restart game required\");\n"
+        "            else vr->set_quadview_status(\"Engine render-family ticket could not be validated\");\n"
         "        }\n"
         "        const auto qv_snapshot=vr->quadview_producer().snapshot(qv_key);\n"
         "        const auto qv_pose=vr->quadview_frozen_pose(qv_key);\n"
@@ -982,7 +984,26 @@ def main() -> None:
         "    static inline std::unordered_map<sdk::FRHICommandBase_New*, uint32_t> cmd_frame_counts{};\n"
         "    static inline std::unordered_map<sdk::FRHICommandBase_New*, FFakeStereoRenderingHook::DuoDelivery::Command> duo_command_sources{};\n"
         "    static inline std::unordered_map<sdk::FRHICommandBase_New*, FFakeStereoRenderingHook::QuadViewDelivery::Source> quad_command_sources{};\n"
-        "    static inline std::unordered_map<sdk::FRHICommandBase_New*, FFakeStereoRenderingHook::QuadViewDelivery::EngineTicket> quad_command_engines{};")
+        "    static inline std::unordered_map<sdk::FRHICommandBase_New*, FFakeStereoRenderingHook::QuadViewDelivery::EngineTicket> quad_command_engines{};\n"
+        "    static void mark_quad_engine_tracking_failed(\n"
+        "        const FFakeStereoRenderingHook::QuadViewDelivery::EngineTicket& ticket,\n"
+        "        const char* reason, uintptr_t tail,\n"
+        "        const FFakeStereoRenderingHook::QuadViewDelivery::EngineTicket* prior = nullptr) {\n"
+        "        auto& vr=VR::get();\n"
+        "        if (!ticket || !vr || g_hook == nullptr || ticket.generation != vr->mono_generation() ||\n"
+        "            !g_hook->quadview_delivery.mark_engine_tracking_failed(ticket)) return;\n"
+        "        vr->set_quadview_status(\"ID7 ownership proof lost; restart game required\");\n"
+        "        if (prior) {\n"
+        "            SPDLOG_WARNING_EVERY_N_SEC(2,\n"
+        "                \"[QuadViews][RHI] ownership proof lost reason={} current={}/{}/{} prior={}/{}/{} tail={:x}\",\n"
+        "                reason, ticket.generation, ticket.serial, ticket.engine_frame,\n"
+        "                prior->generation, prior->serial, prior->engine_frame, tail);\n"
+        "        } else {\n"
+        "            SPDLOG_WARNING_EVERY_N_SEC(2,\n"
+        "                \"[QuadViews][RHI] ownership proof lost reason={} current={}/{}/{} prior=unknown tail={:x}\",\n"
+        "                reason, ticket.generation, ticket.serial, ticket.engine_frame, tail);\n"
+        "        }\n"
+        "    }")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "        const auto duo_source = duo_command.owner();",
         "        const auto duo_source = duo_command.owner();\n"
@@ -1006,7 +1027,7 @@ def main() -> None:
         "                if (quad_engine && g_hook != nullptr && quad_engine.generation==vr->mono_generation()) {\n"
         "                    if (!g_hook->quadview_delivery.executed_engine_family(quad_engine,quad_source,\n"
         "                            reinterpret_cast<uintptr_t>(cmd),GetCurrentThreadId()))\n"
-        "                        vr->set_quadview_status(\"Tracked engine family command did not match its RHI owner\");\n"
+        "                        mark_quad_engine_tracking_failed(quad_engine,\"execute_owner_mismatch\",reinterpret_cast<uintptr_t>(cmd));\n"
         "                }")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "        duo_command_sources.erase(cmd);",
@@ -1028,7 +1049,7 @@ def main() -> None:
         "        if (quad_engine) {\n"
         "            const char* root_rejection{};\n"
         "            if (!original_vtables.contains(last_command) && !is_probable_new_rhi_command(last_command, root_rejection)) {\n"
-        "                vr->set_quadview_status(\"Rejected an unsafe main-family RHI command before tail ownership\"); return;\n            }\n"
+        "                mark_quad_engine_tracking_failed(quad_engine,\"unsafe_root\",reinterpret_cast<uintptr_t>(last_command)); return;\n            }\n"
         "            uintptr_t readable_begin{}, readable_end{};\n"
         "            const auto tail=uevr::duoview::command_tail(reinterpret_cast<uintptr_t>(last_command),\n"
         "                [&](uintptr_t at) -> std::optional<uintptr_t> {\n"
@@ -1040,12 +1061,13 @@ def main() -> None:
         "                    }\n"
         "                    return reinterpret_cast<uintptr_t>(reinterpret_cast<sdk::FRHICommandBase_New*>(at)->next);\n"
         "                });\n"
-        "            if (!tail) { vr->set_quadview_status(\"Could not identify the exact main-family RHI command tail\"); return; }\n"
+        "            if (!tail) { mark_quad_engine_tracking_failed(quad_engine,\"tail_unreadable_or_cyclic\",reinterpret_cast<uintptr_t>(last_command)); return; }\n"
         "            last_command=reinterpret_cast<sdk::FRHICommandBase_New*>(*tail);\n"
         "            if (original_vtables.contains(last_command)) {\n"
         "                const auto owner=quad_command_engines.find(last_command);\n"
         "                if (owner == quad_command_engines.end() || !owner->second.same_owner(quad_engine))\n"
-        "                    vr->set_quadview_status(\"RHI command tail is already owned by a different family\");\n"
+        "                    mark_quad_engine_tracking_failed(quad_engine,\"shared_tail\",reinterpret_cast<uintptr_t>(last_command),\n"
+        "                        owner != quad_command_engines.end() ? &owner->second : nullptr);\n"
         "                return;\n            }\n"
         "        }")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
@@ -1055,7 +1077,7 @@ def main() -> None:
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "            if (duo_source) g_hook->duoview_delivery.block(duo_source,\n                reinterpret_cast<uintptr_t>(last_command), GetCurrentThreadId());\n            if (preserve_pending_identity)",
         "            if (duo_source) g_hook->duoview_delivery.block(duo_source,\n                reinterpret_cast<uintptr_t>(last_command), GetCurrentThreadId());\n"
-        "            if (quad_engine) vr->set_quadview_status(\"Tracked engine family command failed RHI tail validation; transition remains blocked\");\n"
+        "            if (quad_engine) mark_quad_engine_tracking_failed(quad_engine,\"tail_validation\",reinterpret_cast<uintptr_t>(last_command));\n"
         "            if (preserve_pending_identity)")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "        if (duo_source) {\n            FFakeStereoRenderingHook::DuoDelivery::Command command{};\n            command.attach(duo_source);\n            duo_command_sources.emplace(last_command, std::move(command));\n            g_hook->duoview_delivery.note(uevr::duoview::DeliveryEvent::hook, duo_source,\n                reinterpret_cast<uintptr_t>(last_command), GetCurrentThreadId());\n        }\n        *(void***)last_command = (void**)new_vtable.data();",
@@ -1063,7 +1085,7 @@ def main() -> None:
         "        if (quad_engine) {\n"
         "            if (!g_hook->quadview_delivery.tail_hooked_engine_family(quad_engine,quad_source,\n"
         "                    reinterpret_cast<uintptr_t>(last_command))) {\n"
-        "                vr->set_quadview_status(\"Could not latch the tracked engine-family RHI tail; transition remains blocked\");\n"
+        "                mark_quad_engine_tracking_failed(quad_engine,\"tail_latch\",reinterpret_cast<uintptr_t>(last_command));\n"
         "                original_vtables.erase(last_command); return;\n            }\n"
         "            quad_command_engines.emplace(last_command,quad_engine);\n"
         "        }\n"
@@ -1139,6 +1161,50 @@ def main() -> None:
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "hook_new_rhi_command((sdk::FRHICommandBase_New*)cmd_list->root, frame_count + compensation, duo_source);",
         "hook_new_rhi_command((sdk::FRHICommandBase_New*)cmd_list->root, frame_count + compensation, duo_source, quad_source, quad_engine);")
+
+    # Poison ownership only when this family reaches a terminal path without a
+    # validated new-RHI tail. The successful Slate enqueue remains pending and
+    # is deliberately not treated as a failure.
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+        "                if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());\n"
+        "                    vr->get_runtime()->enqueue_render_poses(frame_count + compensation);\n"
+        "            }\n"
+        "        });\n"
+        "    };",
+        "                if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());\n"
+        "                    SceneViewExtensionAnalyzer::mark_quad_engine_tracking_failed(quad_engine,\"rhi_root_invalid\",reinterpret_cast<uintptr_t>(cmd_list));\n"
+        "                    vr->get_runtime()->enqueue_render_poses(frame_count + compensation);\n"
+        "            }\n"
+        "        });\n"
+        "    };")
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+        "            if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());\n"
+        "                    vr->get_runtime()->enqueue_render_poses(frame_count + compensation);\n"
+        "        }\n"
+        "    };\n\n    if (is_ue_5_7_or_newer() &&",
+        "            if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());\n"
+        "            SceneViewExtensionAnalyzer::mark_quad_engine_tracking_failed(quad_engine,\"slate_hook_unavailable\",0);\n"
+        "                    vr->get_runtime()->enqueue_render_poses(frame_count + compensation);\n"
+        "        }\n"
+        "    };\n\n    if (is_ue_5_7_or_newer() &&")
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+        "                        SPDLOG_ERROR(\"Failed to find UE5 command list, trying again next frame\");\n"
+        "                        return;",
+        "                        SPDLOG_ERROR(\"Failed to find UE5 command list, trying again next frame\");\n"
+        "                        SceneViewExtensionAnalyzer::mark_quad_engine_tracking_failed(quad_engine,\"ue5_command_list_analysis_failed\",reinterpret_cast<uintptr_t>(cmd_list));\n"
+        "                        return;")
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+        "                if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());\n"
+        "                    SceneViewExtensionAnalyzer::hook_old_rhi_command((sdk::FRHICommandBase_Old*)cmd_list->root, frame_count + compensation);",
+        "                if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());\n"
+        "                SceneViewExtensionAnalyzer::mark_quad_engine_tracking_failed(quad_engine,\"old_rhi_command_base\",reinterpret_cast<uintptr_t>(cmd_list->root));\n"
+        "                    SceneViewExtensionAnalyzer::hook_old_rhi_command((sdk::FRHICommandBase_Old*)cmd_list->root, frame_count + compensation);")
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+        "                    if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());\n"
+        "                    SceneViewExtensionAnalyzer::hook_old_rhi_command((sdk::FRHICommandBase_Old*)l->root, frame_count + compensation);",
+        "                    if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());\n"
+        "                    SceneViewExtensionAnalyzer::mark_quad_engine_tracking_failed(quad_engine,\"old_rhi_command_base\",reinterpret_cast<uintptr_t>(l->root));\n"
+        "                    SceneViewExtensionAnalyzer::hook_old_rhi_command((sdk::FRHICommandBase_Old*)l->root, frame_count + compensation);")
 
     # Frontend ID choices are persisted values. Do not renumber existing rows.
     edit(frontend, "UEVR/RenderingModeOptions.cs",

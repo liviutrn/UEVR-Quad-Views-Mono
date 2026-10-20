@@ -131,6 +131,8 @@ public:
         std::scoped_lock lock{mutex_};
         auto* slot = find_engine(ticket);
         if (!slot || !slot->ticket.tail_hooked || slot->ticket.command != command) return false;
+        invalidate_other_executed_unsubmitted_sources(ticket.generation, ticket.target);
+        retire_unexecuted_source_for_engine_ticket(ticket);
         *slot = {};
         return true;
     }
@@ -151,12 +153,15 @@ public:
         if (producer) {
             producer->thread = thread;
             producer->executed = true;
-            for (auto& older : slots_) {
-                if (&older != producer && older.source && older.executed &&
-                    older.source.generation == source.generation && older.source.serial < source.serial &&
-                    older.source.target == source.target && !older.submitted) older = {};
-            }
         }
+        // Last observed tail-execution order is the writer-provenance signal
+        // used for source selection; compositor slot fences remain separate.
+        // GT serial order is not execution order, so invalidate every other
+        // completed, unsubmitted candidate for this target regardless of
+        // serial. A source-less family may also have written the atlas.
+        invalidate_other_executed_unsubmitted_sources(
+            ticket.generation, ticket.target, producer);
+        if (!producer) retire_unexecuted_source_for_engine_ticket(ticket);
         *engine = {};
         return true;
     }
@@ -184,6 +189,17 @@ public:
     bool engine_tracking_overflowed(uint64_t generation) const {
         std::scoped_lock lock{mutex_};
         return engine_overflow_generation_ == generation;
+    }
+
+    // Call when a terminal hook path cannot prove ownership of this family's
+    // tail. A stale callback cannot poison a newer run: both the generation
+    // and the still-pending ticket must match.
+    bool mark_engine_tracking_failed(const EngineTicket& ticket) {
+        if (!ticket) return false;
+        std::scoped_lock lock{mutex_};
+        if (ticket.generation != generation_ || !find_engine(ticket)) return false;
+        engine_overflow_generation_ = ticket.generation;
+        return true;
     }
 
     // Publish the validated assigned frame and source in one ledger insertion.
@@ -381,19 +397,7 @@ public:
         if (!slot || !slot->tail_hooked || slot->command != command || !thread || slot->executed) return false;
         slot->thread = thread;
         slot->executed = true;
-        // A later execution to the same source target proves that its contents
-        // have replaced every older unsubmitted image in that atlas. Retire
-        // those candidates only now, not when the game thread merely queues a
-        // newer family. Submitted sources retain their command-slot owner until
-        // explicit retirement.
-        for (auto& older : slots_) {
-            if (&older != slot && older.source && older.executed &&
-                older.source.generation == source.generation &&
-                older.source.serial < source.serial &&
-                older.source.target == source.target && !older.submitted) {
-                older = {};
-            }
-        }
+        invalidate_other_executed_unsubmitted_sources(source.generation, source.target, slot);
         return true;
     }
 
@@ -404,6 +408,9 @@ public:
     std::optional<Source> select(uint64_t generation, uint32_t submit_thread) {
         std::scoped_lock lock{mutex_};
         if (!advance(generation) || !submit_thread) return {};
+        // If any engine owner is unknown, no previously executed packet can
+        // prove which pixels remain in the shared atlas.
+        if (engine_overflow_generation_ == generation) return {};
         Slot* match{};
         for (auto& slot : slots_) {
             if (slot.source && slot.source.generation == generation &&
@@ -497,6 +504,27 @@ private:
     const Slot* find(const Source& source) const {
         for (const auto& slot : slots_) if (slot.source && slot.source.same_owner(source)) return &slot;
         return nullptr;
+    }
+    void invalidate_other_executed_unsubmitted_sources(
+        uint64_t generation, uintptr_t target, const Slot* preserve = nullptr) {
+        for (auto& slot : slots_) {
+            if (&slot != preserve && slot.source && slot.source.generation == generation &&
+                slot.source.target == target && slot.executed && !slot.submitted) {
+                slot = {};
+            }
+        }
+    }
+    void retire_unexecuted_source_for_engine_ticket(const EngineTicket& ticket) {
+        for (auto& slot : slots_) {
+            const auto& source = slot.source;
+            if (source && source.engine_frame_bound &&
+                source.generation == ticket.generation && source.serial == ticket.serial &&
+                source.engine_frame == ticket.engine_frame && source.family == ticket.family &&
+                source.target == ticket.target && source.scene == ticket.scene &&
+                !slot.executed && !slot.submitted) {
+                slot = {};
+            }
+        }
     }
     EngineSlot* find_engine(const EngineTicket& ticket) {
         for (auto& slot : engine_slots_) if (slot.ticket && slot.ticket.same_owner(ticket)) return &slot;

@@ -169,7 +169,7 @@ std::optional<OpenXR::PipelineState> OpenXR::capture_duoview_pose(uint32_t frame
         const auto& stereo=vr->get_fake_stereo_hook();
         if (!stereo || !stereo->quadview_delivery.engine_commands_retired(vr->mono_generation())) {
             vr->set_quadview_status(stereo && stereo->quadview_delivery.engine_tracking_overflowed(vr->mono_generation())
-                ? "ID7 engine ownership tracking overflowed; transition remains blocked"
+                ? "ID7 ownership proof lost; restart game required"
                 : "Waiting for tracked ID7 render-thread/RHI owners to execute before transition");
             return false;
         }
@@ -297,7 +297,10 @@ void D3D12Component::OpenXR::initialize(XrSessionCreateInfo& session_info) {''')
                                     source->generation,vr->mono_generation());
                             }
                         } else {
-                            vr->set_quadview_status("Waiting for four distinct main-family views and executed source");
+                            if (stereo && stereo->quadview_delivery.engine_tracking_overflowed(vr->mono_generation()))
+                                vr->set_quadview_status("ID7 ownership proof lost; restart game required");
+                            else
+                                vr->set_quadview_status("Waiting for four distinct main-family views and executed source");
                             SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadView][OutputWaiting] no executed source generation={} thread={}",
                                 vr->mono_generation(),GetCurrentThreadId());
                         }

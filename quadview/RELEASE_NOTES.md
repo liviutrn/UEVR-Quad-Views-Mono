@@ -1,30 +1,16 @@
-# Local ID7 candidate notes
+# Build 41 — ID7 ownership and delivery fixes
 
-This candidate adds stereo ID7 frame-lifecycle guards, per-eye gaze projection,
-the published v186.1 DuoView gaze recovery and crop-stability behavior, quality
-controls, fused focus sharpening, and optional per-slot D3D12 GPU timing. It
-keeps ID6's DuoView source and the v186.1 production helper implementations
-unchanged. The `GLAMARYE_LICENSE.txt` file applies to the fused sharpening
-implementation and ships beside this note.
+Based on Build 40 source `7486fc59890b14673cd50770b0dafeb692576716`.
 
-Portable geometry, producer/history, delivery, and asynchronous tests pass. The
-guarded source overlays applied to the pinned backend and frontend copies.
-Windows shader compilation, Windows backend compilation, and GPU WARP tests
-remain pending for this candidate. No headset test has been run.
+- Invalidate stale, unsubmitted atlas candidates when another tracked family writes the same target, including families without an accepted source.
+- Follow observed RHI-tail execution order when completions arrive out of draw order. Keep the corresponding image and pose together.
+- Retire an unexecuted source after its exact engine ticket completes without a source match. Unrelated pending work and submitted GPU owners remain retained.
+- Stop selecting images after ownership proof is lost through ambiguity, capacity exhaustion, or a terminal hook failure. Stale callbacks cannot poison a newer generation.
+- Report a restart-game status and log conflicting owner/tail identities for diagnosis.
+- Add deterministic regressions and an independent 160,000-completion reference-model test.
 
-The Build32 dump establishes a null indirect write while Unreal traverses
-render-graph resource metadata. It does not establish the specific resource or
-root cause. The nearby UI toggle is temporal correlation only. This candidate
-must not be described as crash-fixed or headset-stable.
+The renderer, per-eye gaze stabilization, fused Glamarye filter, quality defaults, and preserved ID6 source remain unchanged. No new compositor pass is added. Glamarye attribution ships in `GLAMARYE_LICENSE.txt`.
 
-The transition drain covers tracked ID7 engine tickets and command tails. An
-unknown owner, an overflow, or a missing tail deliberately blocks the
-transition. This ledger does not prove that every Unreal render-thread or RHI
-consumer has drained. Native secondary-pass shading is excluded because the
-existing DuoView path changes mono-dependent state and cannot be reused safely
-for true stereo four-view rendering without a separate engine design.
+This is an experimental candidate. The original Build 32 RenderThread crash remains unproven fixed. Observing an RHI tail is not a universal engine flush or a GPU completion fence. Unknown ownership still fails closed; there is no timeout-based forced recovery.
 
-Before use, require the full Windows CI build and a headset retest. Verify
-stereo depth, per-eye focus alignment, gaze-loss recovery, GPU timing output
-when enabled, and a sustained gameplay run. CI success alone does not establish
-headset stability or resolve the dump's unproven root cause.
+Use `READ_FIRST.txt` for the test sequence. See `BUILD41_REVIEW.md` for reproduced faults, verification, and remaining risks. Full Windows compilation, shader/WARP tests, and a real headset retest are required before treating the candidate as validated.

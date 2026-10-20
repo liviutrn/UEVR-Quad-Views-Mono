@@ -15,6 +15,20 @@
 static bool near(double a, double b) { return std::abs(a - b) < 1e-6; }
 
 struct SourceToken { uint64_t serial{}, pose_frame_token{}; };
+using TestDelivery = uevr::quadview::Delivery<SourceToken>;
+
+static bool execute_engine_source(TestDelivery& delivery,
+                                  const TestDelivery::Source& source,
+                                  const TestDelivery::EngineTicket& engine,
+                                  uintptr_t command, uint32_t thread) {
+    const auto engine_rt=delivery.render_engine_family(
+        engine.generation,engine.engine_frame,engine.target,engine.scene);
+    const auto source_rt=delivery.render(source.generation,source.engine_frame,
+        source.family+1,source.target,source.scene);
+    return engine_rt && source_rt &&
+        delivery.tail_hooked_engine_family(*engine_rt,*source_rt,command) &&
+        delivery.executed_engine_family(*engine_rt,*source_rt,command,thread);
+}
 
 static std::array<double, 16> projection_for_test(uint32_t index) {
     // A finite, non-degenerate projection payload. Hashes stand in for the
@@ -565,7 +579,7 @@ int main() {
     assert(!transition_drain.executed_engine_family(*delayed_rt, {}, 0x902, 42));
     assert(!transition_drain.engine_commands_retired(11)); // Missing or delayed tail cannot pass drain.
     assert(transition_drain.executed_engine_family(*delayed_rt, {}, 0x901, 42));
-    assert(transition_drain.engine_commands_retired(11));
+    assert(transition_drain.engine_commands_retired(11)); // Known owners retire normally when no ambiguity was recorded.
 
     Delivery<SourceToken, 2> saturated_drain;
     assert(saturated_drain.register_engine_family({12, 1, 1, 0x101, 0x201, 0x301}));
@@ -588,6 +602,167 @@ int main() {
     assert(!paired_drain.engine_commands_retired(13));
     assert(paired_drain.executed_engine_family(*paired_render,*paired_owner,0xd01,42));
     assert(paired_drain.engine_commands_retired(13));
+
+    // RT/RHI tails can complete families out of GT-serial order. Selection
+    // must follow the last observed tail execution for that target.
+    TestDelivery out_of_order_atlas;
+    TestDelivery::Source older_source{
+        std::make_shared<const SourceToken>(SourceToken{60, 900}),20,60,201,900,
+        0x110,0x101,0x201,{0x11,0x12,0x13,0x14},true};
+    TestDelivery::Source newer_source{
+        std::make_shared<const SourceToken>(SourceToken{61, 901}),20,61,202,901,
+        0x120,0x101,0x201,{0x21,0x22,0x23,0x24},true};
+    TestDelivery::EngineTicket older_engine{20,60,201,0x110,0x101,0x201};
+    TestDelivery::EngineTicket newer_engine{20,61,202,0x120,0x101,0x201};
+    assert(out_of_order_atlas.register_engine_family(older_engine));
+    assert(out_of_order_atlas.register_engine_family(newer_engine));
+    assert(out_of_order_atlas.register_bound(older_source));
+    assert(out_of_order_atlas.register_bound(newer_source));
+    assert(execute_engine_source(out_of_order_atlas,newer_source,newer_engine,0xe02,55));
+    assert(execute_engine_source(out_of_order_atlas,older_source,older_engine,0xe01,55));
+    const auto selected_last_writer=out_of_order_atlas.select(20,55);
+    assert(selected_last_writer && selected_last_writer->same_owner(older_source));
+    assert(!out_of_order_atlas.retire(20,61)); // The overwritten, unsubmitted image was invalidated.
+
+    // A source-less engine tail invalidates unsubmitted candidates for its
+    // target while retaining other targets and submitted GPU-slot owners.
+    TestDelivery source_less_atlas;
+    TestDelivery::Source submitted_source{
+        std::make_shared<const SourceToken>(SourceToken{70, 910}),21,70,301,910,
+        0x210,0x301,0x401,{0x31,0x32,0x33,0x34},true};
+    TestDelivery::Source other_target_source{
+        std::make_shared<const SourceToken>(SourceToken{71, 911}),21,71,302,911,
+        0x220,0x302,0x402,{0x41,0x42,0x43,0x44},true};
+    TestDelivery::Source target_candidate{
+        std::make_shared<const SourceToken>(SourceToken{72, 912}),21,72,303,912,
+        0x230,0x301,0x401,{0x51,0x52,0x53,0x54},true};
+    TestDelivery::EngineTicket submitted_engine{21,70,301,0x210,0x301,0x401};
+    TestDelivery::EngineTicket other_target_engine{21,71,302,0x220,0x302,0x402};
+    TestDelivery::EngineTicket target_candidate_engine{21,72,303,0x230,0x301,0x401};
+    assert(source_less_atlas.register_engine_family(submitted_engine));
+    assert(source_less_atlas.register_engine_family(other_target_engine));
+    assert(source_less_atlas.register_engine_family(target_candidate_engine));
+    assert(source_less_atlas.register_bound(submitted_source));
+    assert(source_less_atlas.register_bound(other_target_source));
+    assert(source_less_atlas.register_bound(target_candidate));
+    assert(execute_engine_source(source_less_atlas,submitted_source,submitted_engine,0xe10,56));
+    assert(source_less_atlas.submitted(submitted_source,0xf10));
+    assert(execute_engine_source(source_less_atlas,other_target_source,other_target_engine,0xe11,56));
+    assert(execute_engine_source(source_less_atlas,target_candidate,target_candidate_engine,0xe12,56));
+    TestDelivery::EngineTicket source_less_engine{21,73,304,0x240,0x301,0x401};
+    assert(source_less_atlas.register_engine_family(source_less_engine));
+    const auto source_less_rt=source_less_atlas.render_engine_family(21,304,0x301,0x401);
+    assert(source_less_rt && source_less_atlas.tail_hooked_engine_family(*source_less_rt,{},0xe13));
+    assert(source_less_atlas.executed_engine_family(*source_less_rt,{},0xe13,56));
+    const auto selected_other_target=source_less_atlas.select(21,56);
+    assert(selected_other_target && selected_other_target->same_owner(other_target_source));
+    assert(!source_less_atlas.retire(21,72)); // Source-less write invalidated this candidate.
+    assert(source_less_atlas.register_engine_family(submitted_engine)); // Same family executes without a matched producer.
+    const auto submitted_rt=source_less_atlas.render_engine_family(21,301,0x301,0x401);
+    assert(submitted_rt && source_less_atlas.tail_hooked_engine_family(*submitted_rt,0xe14));
+    assert(source_less_atlas.executed_engine_family(*submitted_rt,0xe14));
+    assert(source_less_atlas.retire(21,70)); // Submitted source remains owned until explicit retirement.
+    assert(source_less_atlas.retire(21,71)); // A different target was left intact.
+
+    // A verified source-less completion retires only its exact unexecuted
+    // producer. A later queued family remains pending until its own completion.
+    TestDelivery orphan_source_drain;
+    TestDelivery::Source orphan_source{
+        std::make_shared<const SourceToken>(SourceToken{90, 930}),23,90,501,930,
+        0x410,0x701,0x801,{0x71,0x72,0x73,0x74},true};
+    TestDelivery::Source future_source{
+        std::make_shared<const SourceToken>(SourceToken{91, 931}),23,91,502,931,
+        0x420,0x701,0x801,{0x81,0x82,0x83,0x84},true};
+    TestDelivery::EngineTicket orphan_engine{23,90,501,0x410,0x701,0x801};
+    assert(orphan_source_drain.register_engine_family(orphan_engine));
+    assert(orphan_source_drain.register_bound(orphan_source));
+    assert(orphan_source_drain.register_bound(future_source));
+    const auto orphan_rt=orphan_source_drain.render_engine_family(23,501,0x701,0x801);
+    assert(orphan_rt && orphan_source_drain.tail_hooked_engine_family(*orphan_rt,{},0xe30));
+    assert(orphan_source_drain.executed_engine_family(*orphan_rt,{},0xe30,58));
+    assert(!orphan_source_drain.retire(23,90)); // Exact orphan source was retired by its verified engine tail.
+    assert(!orphan_source_drain.engine_commands_retired(23)); // The unrelated later source is still pending.
+    assert(orphan_source_drain.retire(23,91));
+    assert(orphan_source_drain.engine_commands_retired(23));
+
+    // The legacy source-less completion overload applies the same exact-owner
+    // retirement rule and leaves unrelated queued sources intact.
+    TestDelivery orphan_plain_completion;
+    TestDelivery::Source plain_orphan{
+        std::make_shared<const SourceToken>(SourceToken{100, 940}),24,100,601,940,
+        0x510,0x901,0xa01,{0x91,0x92,0x93,0x94},true};
+    TestDelivery::Source plain_future{
+        std::make_shared<const SourceToken>(SourceToken{101, 941}),24,101,602,941,
+        0x520,0x901,0xa01,{0xa1,0xa2,0xa3,0xa4},true};
+    TestDelivery::EngineTicket plain_engine{24,100,601,0x510,0x901,0xa01};
+    assert(orphan_plain_completion.register_engine_family(plain_engine));
+    assert(orphan_plain_completion.register_bound(plain_orphan));
+    assert(orphan_plain_completion.register_bound(plain_future));
+    const auto plain_rt=orphan_plain_completion.render_engine_family(24,601,0x901,0xa01);
+    assert(plain_rt && orphan_plain_completion.tail_hooked_engine_family(*plain_rt,0xe40));
+    assert(orphan_plain_completion.executed_engine_family(*plain_rt,0xe40));
+    assert(!orphan_plain_completion.retire(24,100));
+    assert(orphan_plain_completion.retire(24,101));
+
+    // Ambiguous ownership poisons the full generation. An otherwise valid
+    // source remains in the ledger but cannot be sampled against unknown pixels.
+    TestDelivery poisoned_selection;
+    TestDelivery::Source safe_source{
+        std::make_shared<const SourceToken>(SourceToken{80, 920}),22,80,401,920,
+        0x310,0x501,0x601,{0x61,0x62,0x63,0x64},true};
+    TestDelivery::EngineTicket safe_engine{22,80,401,0x310,0x501,0x601};
+    assert(poisoned_selection.register_engine_family(safe_engine));
+    assert(poisoned_selection.register_bound(safe_source));
+    assert(execute_engine_source(poisoned_selection,safe_source,safe_engine,0xe20,57));
+    assert(poisoned_selection.select(22,57));
+    TestDelivery::EngineTicket colliding_engine{22,81,402,0x320,0x502,0x602};
+    auto ambiguous_engine=colliding_engine;
+    ambiguous_engine.serial=82;
+    ambiguous_engine.family=0x321;
+    assert(poisoned_selection.register_engine_family(colliding_engine));
+    assert(!poisoned_selection.register_engine_family(ambiguous_engine));
+    const auto poisoned_rt=poisoned_selection.render_engine_family(22,402,0x502,0x602);
+    assert(poisoned_rt && poisoned_selection.tail_hooked_engine_family(*poisoned_rt,0xe21));
+    assert(poisoned_selection.executed_engine_family(*poisoned_rt,0xe21));
+    assert(poisoned_selection.engine_tracking_overflowed(22));
+    assert(!poisoned_selection.engine_commands_retired(22));
+    assert(!poisoned_selection.select(22,57));
+    assert(poisoned_selection.retire(22,80)); // Poison blocks use without discarding a live owner.
+
+    // A terminal tail-hook failure poisons only the still-pending ticket in
+    // its current generation. Once poisoned, the retained source is not
+    // selected and transition drain remains fail-closed.
+    TestDelivery terminal_tracking_failure;
+    TestDelivery::Source terminal_source{
+        std::make_shared<const SourceToken>(SourceToken{83, 923}),25,83,403,923,
+        0x330,0x503,0x603,{0x65,0x66,0x67,0x68},true};
+    TestDelivery::EngineTicket terminal_ticket{25,83,403,0x330,0x503,0x603};
+    assert(terminal_tracking_failure.register_engine_family(terminal_ticket));
+    assert(terminal_tracking_failure.register_bound(terminal_source));
+    assert(execute_engine_source(terminal_tracking_failure,terminal_source,terminal_ticket,0xe30,59));
+    TestDelivery::EngineTicket terminal_pending{25,84,404,0x340,0x504,0x604};
+    assert(terminal_tracking_failure.register_engine_family(terminal_pending));
+    assert(terminal_tracking_failure.select(25,59));
+    assert(terminal_tracking_failure.mark_engine_tracking_failed(terminal_pending));
+    assert(terminal_tracking_failure.engine_tracking_overflowed(25));
+    assert(!terminal_tracking_failure.engine_commands_retired(25));
+    assert(!terminal_tracking_failure.select(25,59));
+    assert(terminal_tracking_failure.retire(25,83)); // Poison retains source ownership until explicit retirement.
+
+    // Delayed callbacks from an earlier generation cannot poison the current
+    // generation after advance clears its owners.
+    TestDelivery stale_tracking_failure;
+    TestDelivery::EngineTicket stale_ticket{26,84,404,0x340,0x504,0x604};
+    TestDelivery::EngineTicket current_ticket{27,85,405,0x350,0x505,0x605};
+    assert(stale_tracking_failure.register_engine_family(stale_ticket));
+    assert(stale_tracking_failure.register_engine_family(current_ticket));
+    assert(!stale_tracking_failure.mark_engine_tracking_failed(stale_ticket));
+    assert(!stale_tracking_failure.engine_tracking_overflowed(27));
+    assert(!stale_tracking_failure.engine_commands_retired(27)); // The current ticket remains tracked.
+    const auto current_rt=stale_tracking_failure.render_engine_family(27,405,0x505,0x605);
+    assert(current_rt && stale_tracking_failure.tail_hooked_engine_family(*current_rt,0xe31));
+    assert(stale_tracking_failure.executed_engine_family(*current_rt,0xe31));
+    assert(stale_tracking_failure.engine_commands_retired(27));
 
     // Render-ahead may queue a newer family before its RHI command executes.
     // Keep the older completed image eligible until actual atlas overwrite.

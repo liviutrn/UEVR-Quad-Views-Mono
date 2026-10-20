@@ -188,6 +188,23 @@ class SourceCheckpointTests(unittest.TestCase):
         self.assertIn('quadview_delivery.tail_hooked_engine_family(quad_engine,quad_source,', script)
         self.assertIn('quadview_delivery.executed_engine_family(quad_engine,quad_source,', script)
         self.assertIn('engine_commands_retired(vr->mono_generation())', consumer)
+        self.assertIn('ID7 ownership proof lost; restart game required', consumer)
+        self.assertGreaterEqual(consumer.count('ID7 ownership proof lost; restart game required'), 2)
+
+    def test_terminal_rhi_failures_poison_only_the_live_generation_ticket(self) -> None:
+        delivery = Path(__file__).with_name("QuadViewDelivery.hpp").read_text(encoding="utf-8")
+        script = Path(__file__).with_name("apply_quadviews.py").read_text(encoding="utf-8")
+        self.assertIn('bool mark_engine_tracking_failed(const EngineTicket& ticket)', delivery)
+        self.assertIn('ticket.generation != generation_ || !find_engine(ticket)', delivery)
+        for reason in (
+            'execute_owner_mismatch', 'unsafe_root', 'tail_unreadable_or_cyclic',
+            'shared_tail', 'tail_validation', 'tail_latch', 'rhi_root_invalid',
+            'slate_hook_unavailable', 'ue5_command_list_analysis_failed',
+            'old_rhi_command_base',
+        ):
+            self.assertIn(f'mark_quad_engine_tracking_failed(quad_engine,\\"{reason}\\"', script)
+        self.assertIn('current={}/{}/{} prior={}/{}/{} tail={:x}', script)
+        self.assertIn('validated new-RHI tail. The successful Slate enqueue remains pending', script)
 
     def test_gt_source_is_published_before_outer_render_thread(self) -> None:
         script = Path(__file__).with_name("apply_quadviews.py").read_text(encoding="utf-8")
