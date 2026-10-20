@@ -3,6 +3,9 @@ on:
   push:
     branches:
       - feature/v182-fovea-glamayre-fused
+  pull_request:
+    branches:
+      - build-182
   workflow_dispatch:
 permissions:
   contents: read
