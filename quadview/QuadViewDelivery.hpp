@@ -65,7 +65,13 @@ public:
             if (slot.ticket.generation == ticket.generation &&
                 slot.ticket.engine_frame == ticket.engine_frame &&
                 slot.ticket.target == ticket.target &&
-                slot.ticket.scene == ticket.scene) return false;
+                slot.ticket.scene == ticket.scene) {
+                // An actual second family might still queue GPU work. With
+                // no unique render-thread key we must retain an explicit
+                // unknown-owner marker and forbid premature mode teardown.
+                engine_overflow_generation_ = ticket.generation;
+                return false;
+            }
         }
         for (auto& slot : engine_slots_) {
             if (!slot.ticket) {
