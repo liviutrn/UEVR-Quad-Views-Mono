@@ -544,7 +544,10 @@ int main() {
     conflicting_engine.serial=61;
     conflicting_engine.family=0x602;
     assert(!transition_drain.register_engine_family(conflicting_engine));
-    assert(!transition_drain.engine_tracking_overflowed(11));
+    // Rejecting an ambiguous family must still block retirement: it might
+    // have queued commands that the existing owner could not track.
+    assert(transition_drain.engine_tracking_overflowed(11));
+    assert(!transition_drain.engine_commands_retired(11));
     assert(transition_drain.pending_engine_commands(11) == 1);
     assert(!transition_drain.engine_commands_retired(11));
     assert(!transition_drain.render_engine_family(11, 400, queued.target, queued.scene));
