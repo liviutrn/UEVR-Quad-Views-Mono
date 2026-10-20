@@ -23,6 +23,17 @@ static std::array<double, 16> projection_for_test(uint32_t index) {
 
 int main() {
     using namespace uevr::quadview;
+    // The supported STALKER 2 game must install the BeginRenderViewFamily
+    // callback at injection, even if the active/requested mode is still 0.
+    // Rendering-mode ID7 is usually enabled later through the UI.
+    constexpr auto family_hook_required = [](bool supported_game, bool selected,
+                                              bool requested, bool legacy_need) {
+        return supported_game || selected || requested || legacy_need;
+    };
+    static_assert(family_hook_required(true, false, false, false));
+    static_assert(!family_hook_required(false, false, false, false));
+    static_assert(family_hook_required(false, true, false, false));
+    static_assert(family_hook_required(false, false, true, false));
     const auto layout = make_layout(1800, 1920);
     assert(layout);
     assert(layout->atlas_width == 3600 && layout->atlas_height == 1920);
@@ -181,6 +192,32 @@ int main() {
     assert(delivery.select(8, 123));
     assert(delivery.submitted(source, 0x800));
     assert(!delivery.select(8, 123)); // Duplicate Present cannot resubmit an accepted source.
+
+    // A staged GT observation must precede source registration, which is
+    // itself in the outer renderer hook. The old Build 9 ordering attempted
+    // bind_engine_frame before any source existed and always failed closed.
+    {
+        Delivery<SourceToken> staged;
+        const std::array<uintptr_t,4> ids{0x11,0x22,0x33,0x44};
+        assert(!staged.observe_gt_frame(12,0x100,0x200,0x300,ids,0xffffffffu));
+        assert(staged.observe_gt_frame(12,0x100,0x200,0x300,ids,433));
+        assert(!staged.take_observed_gt_frame(12,0x100,0x200,0x300,{0x11,0x22,0x33,0x55}));
+        const auto assigned = staged.take_observed_gt_frame(12,0x100,0x200,0x300,ids);
+        assert(assigned && *assigned == 433);
+        assert(!staged.take_observed_gt_frame(12,0x100,0x200,0x300,ids));
+        const auto packet=std::make_shared<const SourceToken>(SourceToken{56,3});
+        const Delivery<SourceToken>::Source src{packet,12,56,0xffffffffu,3,0x100,0x200,0x300,ids};
+        assert(staged.family(src));
+        const auto bound=staged.bind_engine_frame(12,56,0x100,0x200,0x300,ids,*assigned);
+        assert(bound && bound->engine_frame_bound && bound->engine_frame==433);
+        assert(staged.render(12,433,0x170,0x200,0x300));
+        // Reused family storage must not inherit the previous consumed ticket.
+        assert(!staged.take_observed_gt_frame(12,0x100,0x200,0x300,ids));
+        assert(staged.observe_gt_frame(12,0x100,0x200,0x300,ids,434));
+        assert(staged.observe_gt_frame(12,0x100,0x200,0x300,{0x11,0x22,0x33,0x66},435));
+        assert(!staged.take_observed_gt_frame(12,0x100,0x200,0x300,ids));
+        assert(staged.take_observed_gt_frame(12,0x100,0x200,0x300,{0x11,0x22,0x33,0x66}) == 435);
+    }
 
     // A newer draw can reuse the same atlas target. Its own pose token and RHI
     // command keep it distinct from the source still being presented.
