@@ -404,7 +404,20 @@ int main() {
         const auto chosen=immediate.render(19,975,0x500,0x200,0x300);
         assert(chosen && chosen->serial==70 && chosen->engine_frame_bound);
         assert(!immediate.register_bound(owner));
-        Delivery<SourceToken>::Source sentinel{packet,19,71,0xffffffffu,5,0x101,0x200,0x300,views};
+        // Even if a different packet/serial is supplied, Unreal can render
+        // only one owner per exact engine-frame/scene/target tuple.
+        const auto conflicting_packet = std::make_shared<const SourceToken>(SourceToken{71, 6});
+        Delivery<SourceToken>::Source conflict{conflicting_packet,19,71,975,6,0x101,0x200,0x300,
+            {0x201,0x202,0x203,0x204}};
+        assert(!immediate.register_bound(conflict));
+        const auto still_unique=immediate.render(19,975,0x502,0x200,0x300);
+        assert(!still_unique); // Already observed one legitimate render; no second claim.
+        // A distinct engine frame remains admissible.
+        conflict.engine_frame=976;
+        assert(immediate.register_bound(conflict));
+        const auto next_frame=immediate.render(19,976,0x503,0x200,0x300);
+        assert(next_frame && next_frame->serial==71);
+        Delivery<SourceToken>::Source sentinel{packet,19,72,0xffffffffu,5,0x101,0x200,0x300,views};
         assert(!immediate.register_bound(sentinel));
     }
 
