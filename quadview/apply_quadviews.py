@@ -105,6 +105,7 @@ def main() -> None:
         "    bool is_using_mono() const { return uevr::mono::is_mono_family(m_rendering_method->value()); }\n"
         "    bool is_using_duoview_mono() const { return m_rendering_method->value() == RenderingMethod::DUOVIEW_MONO; }\n"
         "    bool is_quadview_mode_selected() const { return m_rendering_method->value() == RenderingMethod::QUAD_VIEWS_STEREO; }\n"
+        "    bool is_quadview_supported_title() const;\n"
         "    bool is_quadview_renderer_active() const;\n"
         "    const char* quadview_unavailable_reason() const;\n"
         "    bool is_duoview_renderer_active() const;")
@@ -209,18 +210,27 @@ def main() -> None:
 
     edit(backend, "src/mods/VR.cpp",
         "const char* VR::mono_unavailable_reason() const {",
-        "const char* VR::quadview_unavailable_reason() const {\n"
-        "    if (!is_quadview_mode_selected() && requested_rendering_method() != RenderingMethod::QUAD_VIEWS_STEREO) return nullptr;\n"
-        "    if (!m_is_d3d12 || g_framework == nullptr || !g_framework->is_dx12()) return \"Quad Views requires DX12\";\n"
-        "    const auto runtime = get_runtime();\n"
-        "    if (runtime == nullptr || !runtime->is_openxr()) return \"Quad Views requires OpenXR\";\n"
+        "bool VR::is_quadview_supported_title() const {\n"
+        "    // Hook installation occurs at startup, before ID7 is selected.\n"
+        "    // Cache title support independently of the active rendering mode.\n"
         "    static const bool stalker2_ue55 = [] {\n"
         "        const auto path=utility::get_module_pathw(utility::get_executable());\n"
         "        const auto detected_version=sdk::search_for_version(utility::get_executable()).value_or(L\"0.00\");\n"
         "        const auto file_version=sdk::get_file_version_info();\n"
         "        return path && uevr::games::is_stalker2_ue55_runtime(*path,detected_version,file_version.dwFileVersionMS);\n"
         "    }();\n"
-        "    if (!stalker2_ue55) return \"Quad Views currently supports STALKER 2 UE5.5 only\";\n"
+        "    return stalker2_ue55;\n"
+        "}\n\n"
+        "const char* VR::quadview_unavailable_reason() const {\n"
+        "    if (!is_quadview_mode_selected() && requested_rendering_method() != RenderingMethod::QUAD_VIEWS_STEREO) return nullptr;\n"
+        "    if (!m_is_d3d12 || g_framework == nullptr || !g_framework->is_dx12()) return \"Quad Views requires DX12\";\n"
+        "    const auto runtime = get_runtime();\n"
+        "    if (runtime == nullptr || !runtime->is_openxr()) return \"Quad Views requires OpenXR\";\n"
+        "    if (!is_quadview_supported_title()) return \"Quad Views currently supports STALKER 2 UE5.5 only\";\n"
+        "    // Stay in the previous working rendering mode until the real renderer\n"
+        "    // entry callback has executed. ID7 OpenXR requires a four-view image.\n"
+        "    if (!m_fake_stereo_hook || !m_fake_stereo_hook->quadview_outer_renderer_observed())\n"
+        "        return \"Quad Views warming up: outer renderer interception not observed\";\n"
         "    if (m_extreme_compat_mode->value() || m_splitscreen_compatibility_mode->value() || m_2d_screen_mode->value() ||\n"
         "        m_sceneview_compatibility_mode->value() || m_stereo_emulation_mode) return \"Quad Views requires Extreme Compatibility, split-screen, 2D Screen, SceneView compatibility and Stereo Emulation OFF\";\n"
         "    if (uevr::nascar::is_target()) return \"Quad Views is unavailable for this title's restricted rendering path\";\n"
@@ -324,18 +334,27 @@ def main() -> None:
         "    using QuadViewDelivery = uevr::quadview::Delivery<QuadViewSourcePacket>;\n"
         "    mutable DuoDelivery duoview_delivery{};\n"
         "    mutable QuadViewDelivery quadview_delivery{};")
+    # This accessor must be public: VR's game-thread selection gate queries it.
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+        "    const char* get_splitscreen_compatibility_status_text();",
+        "    const char* get_splitscreen_compatibility_status_text();\n"
+        "    bool quadview_outer_renderer_observed() const {\n"
+        "        return m_render_module_begin_render_viewfamily_observed.load(std::memory_order_acquire);\n"
+        "    }")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
         "        duoview_delivery.retire();",
         "        duoview_delivery.retire();\n        quadview_delivery.retire_all();")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "    if (!vr->is_ghosting_fix_enabled() && !vr->is_splitscreen_compatibility_enabled() && !vr->is_sceneview_compatibility_enabled() && !vr->is_native_stereo_fix_enabled()) {",
         "    if (!vr->is_ghosting_fix_enabled() && !vr->is_splitscreen_compatibility_enabled() && !vr->is_sceneview_compatibility_enabled() && !vr->is_native_stereo_fix_enabled() &&\n"
-        "        !vr->is_quadview_mode_selected() && vr->requested_rendering_method() != VR::RenderingMethod::QUAD_VIEWS_STEREO) {")
+        "        !vr->is_quadview_supported_title() && !vr->is_quadview_mode_selected() &&\n"
+        "        vr->requested_rendering_method() != VR::RenderingMethod::QUAD_VIEWS_STEREO) {")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "    const bool needs_begin_rendering_viewfamilies_hook = uevr::nascar::needs_generic_renderer_hook(\n"
         "        uevr::nascar::is_target(), vr->is_native_stereo_fix_enabled(),\n"
         "        vr->is_dibr_single_view_requested(), vr->is_splitscreen_compatibility_enabled());",
-        "    const bool needs_begin_rendering_viewfamilies_hook = vr->is_quadview_renderer_active() ||\n"
+        "    const bool needs_begin_rendering_viewfamilies_hook = vr->is_quadview_supported_title() ||\n"
+        "        vr->is_quadview_renderer_active() ||\n"
         "        (vr->is_quadview_mode_selected() && !vr->is_mono_transition_pending()) ||\n"
         "        uevr::nascar::needs_generic_renderer_hook(\n"
         "            uevr::nascar::is_target(), vr->is_native_stereo_fix_enabled(),\n"
@@ -344,6 +363,18 @@ def main() -> None:
         "    if (g_hook->m_sceneview_data.inside_post_init_properties) {\n        return 2;\n    }",
         "    if (g_hook->m_sceneview_data.inside_post_init_properties) {\n        return 2;\n    }\n\n"
         "    if (vr->is_quadview_renderer_active()) {\n"
+        "        // Never request four renderer views until the real outer renderer\n"
+        "        // hook has been observed. Constructor-only evidence cannot\n"
+        "        // authorize an extra pair of GPU scene views.\n"
+        "        const bool producer_ready = g_hook->m_has_view_extensions_installed &&\n"
+        "            !!g_hook->m_sceneview_data.constructor_hook;\n"
+        "        const bool renderer_ready = !!g_hook->m_render_module_begin_render_viewfamily_hook &&\n"
+        "            g_hook->m_render_module_begin_render_viewfamily_observed.load(std::memory_order_acquire);\n"
+        "        if (!producer_ready || !renderer_ready) {\n"
+        "            vr->set_quadview_status(\"Waiting for validated scene-view and outer-renderer hooks before requesting four GPU views\");\n"
+        "            SPDLOG_WARNING_EVERY_N_SEC(2, \"[QuadViews][ActivationGate] producer={} outer_renderer={}\", producer_ready, renderer_ready);\n"
+        "            return 2u;\n"
+        "        }\n"
         "        return vr->quadview_begin_frame().has_value() ? 4u : 2u;\n    }")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "    static bool index_starts_from_one = true;\n    const bool medium_one_based_eye_pass = medium_is_current_game();",
@@ -555,7 +586,24 @@ def main() -> None:
         "            reinterpret_cast<uintptr_t>(target), reinterpret_cast<uintptr_t>(scene), view_ids};\n"
         "        if (!g_hook->quadview_delivery.family(std::move(source))) {\n"
         "            reject_quadview_family(\"Could not retain a unique source and pose owner for the main family\"); return;\n        }\n"
-        "        vr->set_quadview_status(\"Four distinct scene histories and the frozen stereo pose are queued for rendering\");\n"
+        "        // GT BeginRenderViewFamily ran first and recorded the actual\n"
+        "        // assigned frame before this outer renderer registered its packet.\n"
+        "        const auto assigned_frame=g_hook->quadview_delivery.take_observed_gt_frame(key.generation,\n"
+        "            reinterpret_cast<uintptr_t>(view_family), reinterpret_cast<uintptr_t>(target),\n"
+        "            reinterpret_cast<uintptr_t>(scene), view_ids);\n"
+        "        const auto bound=assigned_frame ? g_hook->quadview_delivery.bind_engine_frame(\n"
+        "            key.generation,key.draw_serial,reinterpret_cast<uintptr_t>(view_family),\n"
+        "            reinterpret_cast<uintptr_t>(target),reinterpret_cast<uintptr_t>(scene),view_ids,*assigned_frame)\n"
+        "            : std::optional<FFakeStereoRenderingHook::QuadViewDelivery::Source>{};\n"
+        "        if (!bound) {\n"
+        "            vr->set_quadview_status(\"No matching earlier GT frame observation for four-view producer\");\n"
+        "            SPDLOG_WARNING_EVERY_N_SEC(2,\"[QuadViews][Producer] missing GT frame family={:x} serial={} outer_frame={} gt_frame={}\",\n"
+        "                reinterpret_cast<uintptr_t>(view_family),key.draw_serial,engine_frame,assigned_frame.value_or(0xffffffffu));\n"
+        "        } else {\n"
+        "            vr->set_quadview_status(\"Four scene histories bound to an assigned Unreal frame\");\n"
+        "            SPDLOG_INFO_EVERY_N_SEC(2,\"[QuadViews][Producer] bound serial={} outer_frame={} assigned_frame={}\",\n"
+        "                bound->serial,engine_frame,bound->engine_frame);\n"
+        "        }\n"
         "        SPDLOG_INFO_EVERY_N_SEC(2, \"[QuadViews][Producer] main family accepted frame={} family={:x} views={} states={} rects={:x},{:x},{:x},{:x} runtime_frame={}\",\n"
         "            engine_frame, reinterpret_cast<uintptr_t>(view_family), views.count, snapshot->constructor_mask,\n"
         "            snapshot->views[0].state, snapshot->views[1].state, snapshot->views[2].state, snapshot->views[3].state, packet->runtime_frame);\n"
@@ -564,11 +612,9 @@ def main() -> None:
         "    }\n\n"
         "    // Observe Native Fix's original two-view main family before the fix")
 
-    # Bind the queued source at the ISceneViewExtension callback. Unreal has
-    # assigned the actual family frame number here, while this is still the
-    # original game-thread family and its original FSceneView pointers. The
-    # render-thread callback may receive FViewInfo copies, so it must not use
-    # pointer equality to recover this owner.
+    # Stage the GT frame number before the outer renderer creates the packet.
+    # The producer later consumes this one-shot exact-family observation.
+    # Render-thread FViewInfo copies must never be correlated by pointer.
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "    auto views_ptr = view_family.get_views();\n    if (const auto packet = duoview_build_packet; packet && packet->duoview_frame) {",
         "    auto views_ptr = view_family.get_views();\n"
@@ -589,19 +635,24 @@ def main() -> None:
         "                }\n"
         "            }\n"
         "            const auto qv_key=vr->quadview_producer_key();\n"
-        "            const auto qv_bound=qv_views_valid ? g_hook->quadview_delivery.bind_engine_frame(qv_key.generation,\n"
-        "                qv_key.draw_serial, reinterpret_cast<uintptr_t>(&view_family), reinterpret_cast<uintptr_t>(qv_target),\n"
-        "                reinterpret_cast<uintptr_t>(qv_scene), qv_game_view_ids, frame_count)\n"
-        "                : std::optional<FFakeStereoRenderingHook::QuadViewDelivery::Source>{};\n"
-        "            if (qv_bound) {\n"
-        "                SPDLOG_INFO_EVERY_N_SEC(2, \"[QuadViews][BeginFamily] bound serial={} engine_frame={} producer_frame={} family={:x} views={:x},{:x},{:x},{:x}\",\n"
-        "                    qv_bound->serial, qv_bound->engine_frame, qv_bound->packet->producer->engine_frame,\n"
-        "                    qv_bound->family, qv_game_view_ids[0], qv_game_view_ids[1], qv_game_view_ids[2], qv_game_view_ids[3]);\n"
+        "            const bool observed=qv_views_valid && g_hook->quadview_delivery.observe_gt_frame(\n"
+        "                qv_key.generation,reinterpret_cast<uintptr_t>(&view_family),\n"
+        "                reinterpret_cast<uintptr_t>(qv_target),reinterpret_cast<uintptr_t>(qv_scene),\n"
+        "                qv_game_view_ids,frame_count);\n"
+        "            if (observed) {\n"
+        "                SPDLOG_INFO_EVERY_N_SEC(2,\"[QuadViews][BeginFamily] observed frame={} family={:x} views={:x},{:x},{:x},{:x}\",\n"
+        "                    frame_count,reinterpret_cast<uintptr_t>(&view_family),\n"
+        "                    qv_game_view_ids[0],qv_game_view_ids[1],qv_game_view_ids[2],qv_game_view_ids[3]);\n"
         "            } else {\n"
-        "                vr->set_quadview_status(\"Could not bind the queued four-view owner to Unreal's assigned family frame\");\n"
-        "                SPDLOG_WARNING_EVERY_N_SEC(2, \"[QuadViews][BeginFamily] binding rejected serial={} frame={} views_valid={} family={:x}\",\n"
-        "                    qv_key.draw_serial, frame_count, qv_views_valid, reinterpret_cast<uintptr_t>(&view_family));\n"
+        "                vr->set_quadview_status(\"Cannot freeze the exact four-view GT frame before render\");\n"
+        "                SPDLOG_WARNING_EVERY_N_SEC(2,\"[QuadViews][BeginFamily] observation rejected frame={} views_valid={} family={:x}\",\n"
+        "                    frame_count,qv_views_valid,reinterpret_cast<uintptr_t>(&view_family));\n"
         "            }\n"
+        "        }\n"
+        "        else {\n"
+        "            SPDLOG_WARNING_EVERY_N_SEC(2,\"[QuadViews][BeginFamily] skipped frame={} target={:x} expected={:x} scene={:x}\",\n"
+        "                frame_count,reinterpret_cast<uintptr_t>(qv_target),\n"
+        "                reinterpret_cast<uintptr_t>(qv_expected_target),reinterpret_cast<uintptr_t>(qv_scene));\n"
         "        }\n"
         "    }\n"
         "    if (const auto packet = duoview_build_packet; packet && packet->duoview_frame) {")
