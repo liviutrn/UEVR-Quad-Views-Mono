@@ -123,16 +123,25 @@ float4 CompositePixel(VertexOut input) {
         return float4(lerp(contextColor, focusColor, weight), 1.0);
     }
 
-    const float4 context = SourceAtlas.SampleLevel(LinearClamp, AtlasUv(contextRect, eyeUv), 0.0);
-    if (debugMode == 1) return context;
-    const float4 background = debugMode == 2 ? float4(0.04, 0.04, 0.04, 1.0) : context;
-    if (weight <= 0.0) return background;
+    // The context sample is unnecessary under opaque focus. In the default
+    // 50% crop this skips a texture fetch for most focused pixels, including
+    // pixels using the fused Glamarye filter. Keep diagnostics exact.
+    if (debugMode == 1)
+        return SourceAtlas.SampleLevel(LinearClamp, AtlasUv(contextRect, eyeUv), 0.0);
+    if (weight <= 0.0) {
+        if (debugMode == 2) return float4(0.04, 0.04, 0.04, 1.0);
+        return SourceAtlas.SampleLevel(LinearClamp, AtlasUv(contextRect, eyeUv), 0.0);
+    }
 
     const float2 focusUv = (eyeUv - crop.xy) / (crop.zw - crop.xy);
     float4 focus = SourceAtlas.SampleLevel(LinearClamp, AtlasUv(focusRect, focusUv), 0.0);
     [branch] if (Sharpen.x > 0.0)
         focus.rgb = GlamSharpenFocus(focusRect, crop, eyeUv, focus.rgb);
-    float4 output = debugMode == 2 ? focus : lerp(context, focus, weight);
+    float4 output = focus;
+    [branch] if (debugMode != 2 && weight < 1.0) {
+        const float4 context = SourceAtlas.SampleLevel(LinearClamp, AtlasUv(contextRect, eyeUv), 0.0);
+        output = lerp(context, focus, weight);
+    }
     if (Options.w > 0.5) {
         const float2 edgePx = min(eyeUv - crop.xy, crop.zw - eyeUv) * float2(EyeAndAtlas.xy);
         if (min(edgePx.x, edgePx.y) < 1.0) output.rgb = float3(1.0, 0.75, 0.0);
