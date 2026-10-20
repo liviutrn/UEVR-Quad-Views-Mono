@@ -28,6 +28,12 @@ endif()
 enable_testing()
 # Recovery-session property tests; independent of DuoView and restricted SDK headers.
 add_executable(QuadViewResumeContractTests ResumeContractTests.cpp)
+# This test uses assert() for geometric invariants; Release must execute them.
+if(MSVC)
+  target_compile_options(QuadViewResumeContractTests PRIVATE /UNDEBUG)
+else()
+  target_compile_options(QuadViewResumeContractTests PRIVATE -UNDEBUG)
+endif()
 add_test(NAME quadview-settings-layout-properties COMMAND QuadViewResumeContractTests)
 set_tests_properties(quadview-settings-layout-properties PROPERTIES TIMEOUT 60)
 if(QUADVIEW_FULL_PRODUCER_TESTS)
