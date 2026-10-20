@@ -205,6 +205,13 @@ class SourceCheckpointTests(unittest.TestCase):
             self.assertIn(f'mark_quad_engine_tracking_failed(quad_engine,\\"{reason}\\"', script)
         self.assertIn('current={}/{}/{} prior={}/{}/{} tail={:x}', script)
         self.assertIn('validated new-RHI tail. The successful Slate enqueue remains pending', script)
+        menu_start = script.index('const bool quadview_ownership_lost')
+        menu_end = script.index('if (ImGui::TreeNode(', menu_start)
+        menu = script[menu_start:menu_end]
+        self.assertIn('m_fake_stereo_hook->quadview_delivery.engine_tracking_overflowed(mono_generation())', menu)
+        self.assertIn('quadview_ownership_lost ?', menu)
+        self.assertIn('ID7 ownership proof lost; restart game required', menu)
+        self.assertIn('quadview_status()', menu)
 
     def test_gt_source_is_published_before_outer_render_thread(self) -> None:
         script = Path(__file__).with_name("apply_quadviews.py").read_text(encoding="utf-8")
