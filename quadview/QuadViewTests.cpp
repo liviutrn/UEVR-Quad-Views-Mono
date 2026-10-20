@@ -538,6 +538,13 @@ int main() {
     Delivery<SourceToken, 4>::EngineTicket queued{11, 60, 401, 0x601, 0x701, 0x801};
     assert(transition_drain.register_engine_family(queued));
     assert(transition_drain.register_engine_family(queued)); // Duplicate callback is idempotent.
+    // The RenderThread only sees frame/target/scene. Conflicting GT ownership
+    // must be rejected before it could make both sources unresolvable.
+    auto conflicting_engine=queued;
+    conflicting_engine.serial=61;
+    conflicting_engine.family=0x602;
+    assert(!transition_drain.register_engine_family(conflicting_engine));
+    assert(!transition_drain.engine_tracking_overflowed(11));
     assert(transition_drain.pending_engine_commands(11) == 1);
     assert(!transition_drain.engine_commands_retired(11));
     assert(!transition_drain.render_engine_family(11, 400, queued.target, queued.scene));
