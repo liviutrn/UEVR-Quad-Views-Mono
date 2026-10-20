@@ -21,12 +21,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: workspace
+          fetch-depth: 0
           persist-credentials: false
-      - name: Verify preserved Build182 overlay
+      - name: Verify preserved DuoView baseline against pinned ID7 parent
         shell: pwsh
         run: |
-          python workspace/scripts/verify_baseline.py
-          if ($LASTEXITCODE -ne 0) { throw 'Build182 overlay identity changed' }
+          $baseline='f0a6be707d1c03f2b6c6bf01982f001aa403e073'
+          git -C workspace merge-base --is-ancestor $baseline HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Experimental ID7 is not descended from its pinned original source' }
+          git -C workspace diff --exit-code $baseline HEAD -- duoview scripts/verify_baseline.py BASELINE_SOURCE_SHA256SUMS
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned DuoView baseline or integrity verifier changed' }
+          Write-Host 'Preserved DuoView source is identical to pinned original ID7 parent'
       - uses: actions/checkout@v4
         with:
           repository: joeyhodge/UEVR
