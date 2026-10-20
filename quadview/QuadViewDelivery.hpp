@@ -57,7 +57,15 @@ public:
         std::scoped_lock lock{mutex_};
         if (!advance(ticket.generation)) return false;
         for (const auto& slot : engine_slots_) {
-            if (slot.ticket && slot.ticket.same_owner(ticket)) return true;
+            if (!slot.ticket) continue;
+            if (slot.ticket.same_owner(ticket)) return true;
+            // Two distinct GT families with identical RT matching keys cannot
+            // be resolved safely once Unreal copies the family to FViewInfo.
+            // Reject the second registration before any source is published.
+            if (slot.ticket.generation == ticket.generation &&
+                slot.ticket.engine_frame == ticket.engine_frame &&
+                slot.ticket.target == ticket.target &&
+                slot.ticket.scene == ticket.scene) return false;
         }
         for (auto& slot : engine_slots_) {
             if (!slot.ticket) {
