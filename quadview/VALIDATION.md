@@ -59,3 +59,29 @@ checkpoint above supersedes that intermediate snapshot.
 - The GPU test enables the D3D12 debug layer when installed and treats its
   error/corruption messages as test failures. Debug-layer installation is
   optional; full pixel readback checks run in either case.
+
+## Installable experimental ID7 package — Build 5
+
+- [Successful Windows run 39337089437](https://github.com/liviutrn/OpenNR/actions/runs/39337089437).
+- Compiled overlay: OpenNR `4edf095a87956be004bb1b69cc2a1b1c74035c41`.
+- Matching feature source: `c25144fc5af09a51432783b3ba3978de7676561c`.
+- Full backend, auxiliary DLLs, and matching frontend compiled successfully.
+- All five QuadView CTests passed, including asynchronous delivery and real
+  D3D12 WARP output with typed, sRGB, and typeless destination resources.
+- Four pinned DuoView tests, six independent DuoView tests, and all 41
+  original compatibility tests passed. Frontend rendering-ID tests passed.
+- Five source-checkpoint regression tests passed. Final verification checked
+  338 patched source inputs and the unchanged pinned SDK; four generated
+  build products have separate hashes and generator provenance.
+- [Installable artifact](https://github.com/liviutrn/OpenNR/actions/runs/39337089437/artifacts/12227388461).
+- [Validation evidence](https://github.com/liviutrn/OpenNR/actions/runs/39337089437/artifacts/12227493316).
+
+Earlier packaging verification incorrectly treated normal generated files as
+reviewed source inputs; the final checker verifies those products separately.
+Superseded intermediate runs are not the installable checkpoint above.
+
+This is an opt-in STALKER 2 UE5.5 / DX12 / OpenXR prototype. Native Stereo
+Fix is bypassed in ID7; fixed-center focus is used initially. Actual engine
+four-view production, headset alignment, shading, performance, and the
+required ten-minute gameplay acceptance remain to be tested on the user's PC.
+Build182/ID6 remains the preserved baseline.
