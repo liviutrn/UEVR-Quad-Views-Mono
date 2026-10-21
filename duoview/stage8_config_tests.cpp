@@ -12,20 +12,55 @@ int main() {
     d::Settings modified{};
     modified.crop_width=.30f;modified.crop_height=.30f;
     modified.peripheral_scale=.15f;modified.feather_fraction=.04f;
+    modified.sharpen_strength=.4f;
     assert(latch.set_settings(modified));
     // Deliberately alter gaze and size mid-frame: immutable frame's
     // geometry must remain unchanged for both views and DX12 shader.
     auto same=latch.for_frame({5,10},2000,2000,{.9f,.8f});
     assert(same && same->layout.fovea.width==1500);
     assert(near(same->gaze.u,.5f) && same->settings_revision==1);
+    assert(near(same->settings.sharpen_strength,0.f)); // active-frame setting must not change
     auto next=latch.for_frame({5,11},3000,3000,{.9f,.8f});
     assert(next && next->settings_revision==2);
+    assert(near(next->settings.sharpen_strength,.4f));
     assert(next->layout.fovea.width==900);
     assert(next->layout.periphery.width==450);
     assert(near(next->layout.u0,.7f) && near(next->layout.u1,1.f));
     assert(!latch.for_frame({5,10},3000,3000,{.9f,.8f}));
     assert(!latch.for_frame({5,12},3000,3000,{-1.f,.5f}));
     auto invalid=modified;invalid.feather_fraction=2.f;
+    assert(!latch.set_settings(invalid));
+    invalid=modified;invalid.sharpen_strength=3.f;
+    assert(!latch.set_settings(invalid));
+    auto partial=d::reconcile_ui_settings(invalid,modified);
+    assert((partial.rejected & d::reject_sharpen)!=0 && near(partial.settings.sharpen_strength,.4f));
+    // Independent foreground controls must not couple the two Unreal views.
+    d::Settings both=modified;
+    both.foreground_fovea_enabled=true;
+    both.foreground_fovea_factor=2.4f;
+    both.foreground_periphery_enabled=false;
+    both.foreground_periphery_factor=.5f;
+    auto accepted=d::reconcile_ui_settings(both,modified);
+    assert(accepted.rejected==0 && accepted.settings.foreground_fovea_enabled);
+    assert(!accepted.settings.foreground_periphery_enabled && near(accepted.settings.foreground_fovea_factor,2.4f));
+    both.foreground_periphery_enabled=true;
+    both.foreground_periphery_factor=3.f;
+    accepted=d::reconcile_ui_settings(both,modified);
+    assert(accepted.rejected==0 && accepted.settings.foreground_periphery_enabled);
+    assert(near(accepted.settings.foreground_periphery_factor,3.f));
+    both.foreground_periphery_factor=.32f;
+    accepted=d::reconcile_ui_settings(both,modified);
+    assert((accepted.rejected & d::reject_foreground_periphery)!=0);
+    assert((accepted.rejected & d::reject_foreground_fovea)==0);
+    assert(near(accepted.settings.foreground_fovea_factor,2.4f));
+    assert(near(accepted.settings.foreground_periphery_factor,1.f));
+    both.foreground_periphery_factor=.33f;
+    d::ConfigLatch independent_latch;
+    assert(independent_latch.set_settings(both));
+    auto dual=independent_latch.for_frame({1,1},3000,3000,{.5f,.5f});
+    assert(dual && dual->settings.foreground_fovea_enabled && dual->settings.foreground_periphery_enabled);
+    assert(near(dual->settings.foreground_fovea_factor,2.4f) && near(dual->settings.foreground_periphery_factor,.33f));
+    invalid=modified;invalid.sharpen_strength=std::nanf("");
     assert(!latch.set_settings(invalid));
     auto still=latch.for_frame({5,12},3000,3000,{.5f,.5f});
     assert(still && still->settings_revision==2);

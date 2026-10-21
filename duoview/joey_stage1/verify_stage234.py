@@ -10,6 +10,7 @@ EDITED_BACKEND = {
  "src/mods/vr/runtimes/OpenXR.cpp", "src/mods/vr/runtimes/OpenXR.hpp",
  "src/mods/vr/D3D12Component.hpp", "src/mods/vr/D3D12Component.cpp", "tests/MonoRenderingTests.hpp",
  "tests/CadenceReplayTests.cpp",
+ "src/mods/vr/OverlayComponent.hpp", "src/mods/vr/OverlayComponent.cpp",
 }
 ADDED_BACKEND = {
  "src/mods/vr/DuoViewDelivery.hpp",
@@ -17,6 +18,7 @@ ADDED_BACKEND = {
  "src/mods/vr/DuoViewPSVR2Gaze.hpp", "src/mods/vr/DuoViewCropStability.hpp",
  "src/mods/vr/DuoViewFrame.hpp", "src/mods/vr/DuoViewConfig.hpp",
  "src/mods/vr/DuoViewState.hpp", "src/mods/vr/DuoViewD3D12.hpp",
+ "src/mods/vr/DuoViewFirstPerson.hpp",
  "src/mods/vr/DuoViewMonoCopyD3D12.hpp", "src/mods/vr/DuoViewShaderSource.hpp",
 }
 EDITED_FRONTEND = {"UEVR/RenderingModeOptions.cs", "tests/RenderingModes/Program.cs"}
@@ -111,6 +113,23 @@ def main():
   if token not in vr_cpp: raise RuntimeError("General settings validation/status wiring missing: "+token)
  for token in ("m_duo_ui_rejected_mask{0}",):
   if token not in vr_header: raise RuntimeError("General controls audit counter missing: "+token)
+ if "DuoViewFirstPerson.hpp" in hook or "foreground::find_slot" in hook:
+  raise RuntimeError("Unverified first-person view-memory scanning reintroduced")
+ for token in ("update_duoview_game_foreground(engine)", "MPC_FOV",
+               "IsFOVEnabled", "DepthScale", "GetScalarParameterValue",
+               "SetScalarParameterValue", "get_live_objects_by_class_name",
+               "baseline.world_id", "if (!requested && !baseline.active) return"):
+  if token not in vr_cpp:
+   raise RuntimeError("STALKER 2 game material first-person contract missing "+token)
+ if "DuoViewStalker2ForegroundMPC" not in vr_header:
+  raise RuntimeError("Game-owned first-person correction toggle missing")
+ overlay_header=(a.backend/"src/mods/vr/OverlayComponent.hpp").read_text(encoding="utf-8")
+ overlay_cpp=(a.backend/"src/mods/vr/OverlayComponent.cpp").read_text(encoding="utf-8")
+ for token in ("duoview_convergence_enabled()", "UI_DuoView_ConvergenceReference"):
+  if token not in overlay_header: raise RuntimeError("Missing DuoView convergence control "+token)
+ for token in ("half_shift", "XR_EYE_VISIBILITY_LEFT", "XR_EYE_VISIBILITY_RIGHT"):
+  if token not in overlay_cpp: raise RuntimeError("Missing guarded per-eye UI convergence "+token)
+ if "duo_converged" not in (a.backend/"src/mods/vr/D3D12Component.cpp").read_text(encoding="utf-8"): raise RuntimeError("Per-eye UI quads not submitted")
  ui_config=(a.backend/"src/mods/vr/DuoViewConfig.hpp").read_text(encoding="utf-8")
  for token in ("UiReconciled reconcile_ui_settings", "reject_width", "reject_still",
                "out.native_fix_same_pass=requested.native_fix_same_pass",

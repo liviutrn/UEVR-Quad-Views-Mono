@@ -1,6 +1,13 @@
-name: UEVR Quad Views Mono Build182 Reproduction
+name: DuoView v186.1 STALKER 2 Foreground MPC + UI Convergence
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
+  push:
+    branches:
+      - experiment/duoview-fp-hud-convergence-20261021
+      - experiment/duoview-game-foreground-mpc-20261021
+  pull_request:
+    branches:
+      - build-182
   workflow_dispatch:
 permissions:
   contents: read
@@ -144,7 +151,7 @@ jobs:
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
-          DUOVIEW NATIVE STEREO FIX v22 — ORIGINAL PRIMARY + SECONDARY SOURCES, MONO OUTPUT. HEADSET UNVERIFIED.
+          DUOVIEW v186.1 + GAME-WIDE STALKER 2 FOREGROUND FOV EXPERIMENT. HEADSET UNVERIFIED.
           Backend: exact Joey 5ac7edc207866569334175e4ed8a7517971547f6 + guarded DuoView modifications.
           Restricted SDK unchanged: joeyhodge/UESDK 3cffbc82429b6165ceec2714f0f0d9ae48f55596.
           Matching frontend source: 60be4b0f9a646109fd9fdf448bacd41477234091, plus ID 6.
@@ -177,6 +184,7 @@ jobs:
           DXBC shaders are precompiled during CI; per-XR-image PSOs/textures are prewarmed on swapchain setup.
           Changing source formats or unexpected swapchain lifecycle may still cause reconstruction. Monitor frame pacing.
           Experimental: Source/test/CI passing cannot prove exact game GPU producer completion or headset stability.
+          Foreground MPC toggle is OFF by default. When enabled for STALKER 2 ID6 only, native game-thread MaterialParameterCollection MPC_FOV IsFOVEnabled=0 and DepthScale=1 are forced each tick, and restored when leaving ID6 in the same world. Native first-person FSceneView memory scanning is deliberately not used. This may change weapon size/clipping and needs an in-headset test.
           NEVER overwrite 30-minute-proven Build3! Extract this ZIP into a SEPARATE TEST DIRECTORY.
           Built-in gaze freshness/age counters are read from the UI; no smoothing/deadzone forced.
           Stage5 gaze requires installed PSVR2 Toolkit CAPI and still requires headset calibration validation.
@@ -188,16 +196,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="Joey-DuoView-v22-NativeFix-${{ github.run_number }}.zip"
+          $zip="UEVR-Quad-Views-Mono-v1861-HUD-MPC-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: Joey-DuoView-v22-NativeFix-${{ github.run_number }}
+          name: UEVR-Quad-Views-Mono-v1861-HUD-MPC-${{ github.run_number }}
           path: |
-            Joey-DuoView-v22-NativeFix-*.zip
-            Joey-DuoView-v22-NativeFix-*.zip.sha256
+            UEVR-Quad-Views-Mono-v1861-HUD-MPC-*.zip
+            UEVR-Quad-Views-Mono-v1861-HUD-MPC-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -212,7 +220,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Joey-DuoView-NativeFix-Evidence-${{ github.run_number }}
+          name: UEVR-v1861-HUD-MPC-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
