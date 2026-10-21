@@ -21,6 +21,23 @@ The following remain as in Build 40:
 
 Relabel is skipped when source pass, target, scene, four-view slot, or view-family confidence is insufficient. In those cases the image follows Build 40 behavior and logs a diagnostic.
 
+## Additional user observation: left-eye context/focus mismatch
+
+A later headset report says **the left eye alone** has visibly different shading between the low-resolution periphery and central fovea. The overlay's exact view indices are **0 = left context; 1 = right context; 2 = left focus; 3 = right focus**. The current Build 42 relabel touches only slots 1 and 3 (the right-eye SECONDARY constructors). Therefore it **cannot be asserted to fix the left-eye difference directly**, and is an informative first A/B candidate rather than a proven solution.
+
+Both left views already request `PRIMARY` in the original alternating pass scheme. Different Lumen history/resolution/post-processing per source view, or focus-only sharpening, remain plausible. The compositor uses the same atlas sampling and output color encoding logic for both eyes; its existing sharpening filter applies to focus only. This observation argues **against** a global gamma/output darkening change.
+
+### Isolation test using existing controls (zero rendering changes)
+
+- In the same interior, set **Fused focus sharpening strength = 0**.
+- Select existing **Source diagnostic 1 = context only**. Compare the same surface in each eye (do not judge it against focus while this mode is active).
+- Select **Source diagnostic 2 = focus only**, and compare the *same overlapping scene location*, accounting for foveal crop.
+- Return **Source diagnostic 0 = composited view**, then compare left context vs left focus, and right context vs right focus.
+- Run the same comparisons with eye gaze frozen/fixed-center if possible to separate gaze-dependent history updates from view identity.
+- Check whether relabel logs show slot 1/3 applied and whether left slot 0/2 report PRIMARY and the same scene/family.
+
+If context-only already lacks shadows relative to focus-only, the difference originates **before** the compositor blend; do not compensate via compositing gamma. If original source views visually match but only the blended image differs, focus on sampling/sharpening/color handling. It may take runtime capture of Unreal's Lumen, eye exposure, and view-family state to locate a deeper root cause.
+
 ## Logging
 
 Rate-limited `[QuadViews][Lighting42]` entries for each main view slot report original/effective constructor pass, relabel decision (where relevant), scene-state pointer, family, target and scene. These data show whether both right-hand eye views received the constructor adaptation. **Numeric PreExposure, Lumen show-flags, and engine tonemapper internals are not logged:** their version-dependent SDK offsets are not validated; reading them speculatively could cause a crash. Compare the same room under equivalent game exposure settings.
