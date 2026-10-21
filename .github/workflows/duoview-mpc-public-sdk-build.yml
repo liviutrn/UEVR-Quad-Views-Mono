@@ -1,12 +1,6 @@
 name: DuoView MPC TanFOV Windows Public SDK Feasibility Build
 run-name: DuoView MPC TanFOV public-SDK Windows candidate (${{ github.run_number }})
 on:
-  push:
-    branches:
-      - build/duoview-mpc-tanfov-publicsdk-20261021
-  pull_request:
-    branches:
-      - build-182
   workflow_dispatch:
 permissions:
   contents: read
