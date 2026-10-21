@@ -847,6 +847,65 @@ def main() -> None:
         "        return result;\n    }\n\n"
         "    if (!inside_viewport_client_draw || !vr->is_hmd_active()) {\n        return g_hook->m_sceneview_data.constructor_hook.unsafe_call<sdk::FSceneView*>(view, init_options, a3, a4);\n    }")
 
+
+    # Build 42: borrow only Native Stereo Fix's constructor-time PRIMARY shading
+    # identity for the two secondary quad eyes. We do NOT enable its split
+    # renderer, capture allocation, scene-view compatibility, or RHI routing.
+    # The existing four-view family, independent histories and camera/projection
+    # logic remain untouched. As in the validated DuoView path, the original
+    # init-option pass is restored immediately after FSceneView construction.
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+         '''        auto* target = family != nullptr ? family->get_render_target() : nullptr;
+        auto* result = g_hook->m_sceneview_data.constructor_hook.unsafe_call<sdk::FSceneView*>(view, init_options, a3, a4);
+''',
+         '''        auto* target = family != nullptr ? family->get_render_target() : nullptr;
+        // Restrict the relabel to the main atlas and an unambiguous, incremental
+        // four-view sequence. Never mutate the view list, scene state or target.
+        const auto* qv_rtm = g_hook->get_render_target_manager();
+        const auto* qv_existing = family != nullptr ? family->get_views() : nullptr;
+        const auto qv_prior_count = qv_existing != nullptr ? qv_existing->count : UINT32_MAX;
+        const auto qv_original_pass = init_options->get_stereo_pass();
+        const bool qv_lighting_main = qv_rtm != nullptr && family != nullptr && state != nullptr &&
+            scene != nullptr && target != nullptr && target == qv_rtm->get_view_family_render_target() &&
+            qv_existing != nullptr && qv_existing->data != nullptr &&
+            qv_existing->capacity >= 4 && qv_prior_count < 4 &&
+            is_readable_process_range(reinterpret_cast<uintptr_t>(qv_existing->data),
+                                      sizeof(void*) * qv_prior_count);
+        const bool qv_lighting_relabel = qv_lighting_main &&
+            (qv_prior_count == 1 || qv_prior_count == 3) &&
+            qv_original_pass == EStereoscopicPass::eSSP_SECONDARY;
+        if (qv_lighting_relabel) {
+            init_options->set_stereo_pass(EStereoscopicPass::eSSP_PRIMARY);
+        }
+        auto* result = g_hook->m_sceneview_data.constructor_hook.unsafe_call<sdk::FSceneView*>(
+            view, init_options, a3, a4);
+        if (qv_lighting_relabel) {
+            init_options->set_stereo_pass(qv_original_pass);
+        }
+        // Distinct callsites limit logging to one sample per slot every 3s;
+        // the same record is emitted when relabel is NOT safe to apply.
+        if (qv_lighting_main && qv_prior_count == 0)
+            SPDLOG_INFO_EVERY_N_SEC(3, "[QuadViews][Lighting42] slot=0 source_pass={} effective_pass={} primary={} state={:x} family={:x} target={:x} scene={:x}",
+                qv_original_pass, qv_original_pass, qv_original_pass == EStereoscopicPass::eSSP_PRIMARY,
+                reinterpret_cast<uintptr_t>(state), reinterpret_cast<uintptr_t>(family),
+                reinterpret_cast<uintptr_t>(target), reinterpret_cast<uintptr_t>(scene));
+        if (qv_lighting_main && qv_prior_count == 1)
+            SPDLOG_INFO_EVERY_N_SEC(3, "[QuadViews][Lighting42] slot=1 source_pass={} effective_pass={} relabeled={} state={:x} family={:x} target={:x} scene={:x}",
+                qv_original_pass, qv_lighting_relabel ? EStereoscopicPass::eSSP_PRIMARY : qv_original_pass,
+                qv_lighting_relabel, reinterpret_cast<uintptr_t>(state), reinterpret_cast<uintptr_t>(family),
+                reinterpret_cast<uintptr_t>(target), reinterpret_cast<uintptr_t>(scene));
+        if (qv_lighting_main && qv_prior_count == 2)
+            SPDLOG_INFO_EVERY_N_SEC(3, "[QuadViews][Lighting42] slot=2 source_pass={} effective_pass={} primary={} state={:x} family={:x} target={:x} scene={:x}",
+                qv_original_pass, qv_original_pass, qv_original_pass == EStereoscopicPass::eSSP_PRIMARY,
+                reinterpret_cast<uintptr_t>(state), reinterpret_cast<uintptr_t>(family),
+                reinterpret_cast<uintptr_t>(target), reinterpret_cast<uintptr_t>(scene));
+        if (qv_lighting_main && qv_prior_count == 3)
+            SPDLOG_INFO_EVERY_N_SEC(3, "[QuadViews][Lighting42] slot=3 source_pass={} effective_pass={} relabeled={} state={:x} family={:x} target={:x} scene={:x}",
+                qv_original_pass, qv_lighting_relabel ? EStereoscopicPass::eSSP_PRIMARY : qv_original_pass,
+                qv_lighting_relabel, reinterpret_cast<uintptr_t>(state), reinterpret_cast<uintptr_t>(family),
+                reinterpret_cast<uintptr_t>(target), reinterpret_cast<uintptr_t>(scene));
+''')
+
     # QV must observe the normal main family even though Native Fix, DIBR and
     # scene/split compatibility are deliberately disabled. Keep that path
     # isolated from the legacy two-view metadata and zero/one-based heuristics.
