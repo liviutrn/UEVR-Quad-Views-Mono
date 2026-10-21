@@ -92,6 +92,10 @@ public:
             // Remember ownership only after confirming or explicitly writing
             // zero. An initial game-provided zero is also a valid baseline.
             if (*current > .0005f) {
+                // OWNERSHIP MUST BE LATCHED BEFORE the write: ProcessEvent can
+                // change the collection even if readback later fails. Without
+                // this, mode exit could permanently lose the baseline.
+                override_active_=true;
                 if (!invoke(*setter_,0.f)) {
                     status_=Status::function_abi_unavailable; ++rejects_; return false;
                 }
@@ -137,6 +141,7 @@ private:
     sdk::UClass* class_{};
     sdk::UObject* library_{};
     sdk::UObject* collection_{};
+    std::optional<sdk::object_liveness::Identity> collection_identity_{};
     sdk::UObject* controller_{};
     std::optional<sdk::object_liveness::Identity> controller_identity_{};
     std::optional<FunctionLayout> setter_,getter_;
@@ -148,9 +153,24 @@ private:
     mutable std::mutex mutex_{};
 
     bool resolve() {
+        // Unreal may unload/recreate the material collection on world changes.
+        // Never dereference a cached UObject after its FUObjectArray identity
+        // has changed. Retire the old per-world baseline on invalidation.
+        if (collection_identity_ && !sdk::is_current_object(*collection_identity_)) {
+            collection_=nullptr;
+            collection_identity_.reset();
+            baseline_ready_=last_write_ready_=override_active_=false;
+        }
         if (!collection_) {
             collection_=sdk::find_uobject<sdk::UObject>(collection_name,false);
             if (!collection_) { status_=Status::missing_collection; return false; }
+            const auto observation=sdk::observe_uobject(collection_);
+            if (!observation) {
+                collection_=nullptr;
+                status_=Status::missing_collection;
+                return false;
+            }
+            collection_identity_=observation->identity;
         }
         if (!library_) {
             class_=sdk::find_uobject<sdk::UClass>(L"Class /Script/Engine.KismetMaterialLibrary",false);
@@ -223,6 +243,7 @@ private:
     }
     bool prepare(const FunctionLayout& fn,std::array<std::byte,128>& bytes) {
         if (!sdk::UObjectBase::try_resolve_process_event_index() || !controller_ || !collection_ ||
+            !collection_identity_ || !sdk::is_current_object(*collection_identity_) ||
             !controller_identity_ || !sdk::is_current_object(*controller_identity_))
             return false;
         std::memcpy(bytes.data()+fn.world,&controller_,8);
