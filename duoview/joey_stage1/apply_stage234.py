@@ -1081,12 +1081,14 @@ OpenXR::PipelineState OpenXR::get_submit_state() {
     apply_delivery(changed, edit)
     from apply_convergence import apply as apply_convergence
     apply_convergence(changed, edit)
+    from apply_foreground import apply as apply_foreground
+    apply_foreground(changed, edit)
     shutil.copyfile(Path(__file__).with_name("DuoViewDelivery.hpp"), root/"src/mods/vr/DuoViewDelivery.hpp")
 
     # Copy reference modules into exact checked-out Joey tree. No private SDK
     # declarations or altered SDK files.
     for name in ("DuoViewGeometry.hpp","DuoViewGaze.hpp","DuoViewPSVR2Gaze.hpp","DuoViewCropStability.hpp","DuoViewFrame.hpp",
-                 "DuoViewConfig.hpp","DuoViewState.hpp","DuoViewD3D12.hpp",
+                 "DuoViewConfig.hpp","DuoViewState.hpp","DuoViewD3D12.hpp","DuoViewFirstPerson.hpp",
                  "DuoViewMonoCopyD3D12.hpp"):
         target=root/"src/mods/vr"/name
         if target.exists(): raise RuntimeError("Refusing to overwrite prior source: "+str(target))
