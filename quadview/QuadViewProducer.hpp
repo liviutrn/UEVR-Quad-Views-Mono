@@ -64,8 +64,10 @@ struct Snapshot {
     bool family_valid{};
     uint64_t hook_rect_calls{}, hook_projection_calls{};
 
-    bool histories_complete() const {
-        if (!family_valid || constructor_mask != 0x0f || expected_projection_mask != 0x0f ||
+    // Renderer dispatch precedes the engine GT family callback. Construction
+    // can be complete while main_family has not yet authenticated that family.
+    bool construction_complete() const {
+        if (constructor_mask != 0x0f || expected_projection_mask != 0x0f ||
             projection_matrix_mask != 0x0f || camera_mask != 0x03) return false;
         for (uint32_t i = 0; i != 4; ++i) {
             if (!views[i].valid || views[i].state == 0 || views[i].projection_hash == 0 ||
@@ -81,6 +83,10 @@ struct Snapshot {
             }
         }
         return true;
+    }
+
+    bool histories_complete() const {
+        return family_valid && construction_complete();
     }
 
     bool camera_complete() const {

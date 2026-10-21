@@ -1,4 +1,10 @@
-# Build 44 — four-source Native Stereo Fix
+# Build 45 — four-source Native Stereo Fix
+
+Fixes Build 44's native-dispatch bootstrap deadlock: dispatch now validates
+constructed views before the Unreal callback, while output still requires
+callback-authenticated family ownership. Adds a regression for that ordering
+and throttled native-dispatch diagnostics. Build 44 submitted a warmup frame,
+then stopped before invoking the callback that its guard required.
 
 Built from the accepted Build 40 source at `7486fc59890b14673cd50770b0dafeb692576716`.
 

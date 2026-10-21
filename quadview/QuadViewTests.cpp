@@ -317,6 +317,9 @@ int main() {
         assert(producer.constructed(key, 0x300, 0x200, 0x100,
             views[i], states[i], layout->views[i], 0xabc0 + i));
     }
+    const auto constructed_before_family = producer.snapshot(key);
+    assert(constructed_before_family && constructed_before_family->construction_complete());
+    assert(!constructed_before_family->histories_complete()); // family_valid is established only by main_family inside the original engine callback.
     assert(producer.main_family(key, 91, 0x300, 0x200, 0x100, views));
     auto snapshot = producer.snapshot(key);
     assert(snapshot && snapshot->histories_complete());

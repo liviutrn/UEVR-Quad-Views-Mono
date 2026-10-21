@@ -1,11 +1,11 @@
-# Stereo Quad Views — Build 44 Native Stereo Fix
+# Stereo Quad Views — Build 45 Native Stereo Fix
 
 ID7 renders left/right context views at reduced resolution and left/right focus
 views with cropped frusta, then composites a distinct image for each eye.
 It uses ordinary stereo OpenXR submission; runtime quad-view support is not
 required. The supported target is STALKER 2 (UE5.5), DX12, OpenXR.
 
-Build 44 starts from the accepted Build 40 source
+Build 45 starts from the accepted Build 40 source
 `7486fc59890b14673cd50770b0dafeb692576716`. It adapts the Native Stereo Fix's
 independent source construction/rendering and viewport display-gamma behavior
 to four engine-owned targets. The original two-source Native/DuoView renderer
