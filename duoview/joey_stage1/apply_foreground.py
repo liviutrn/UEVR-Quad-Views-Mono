@@ -14,7 +14,7 @@ def apply(changed, edit):
 '''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};''',
 '''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};
     const ModToggle::Ptr m_duo_foreground_fix{ModToggle::create(generate_name("DuoViewFirstPersonFovCorrection"),false)};
-    const ModSlider::Ptr m_duo_foreground_factor{ModSlider::create(generate_name("DuoViewFirstPersonFoveaFactor"),.2f,2.f,.5f)};
+    const ModSlider::Ptr m_duo_foreground_factor{ModSlider::create(generate_name("DuoViewFirstPersonFoveaFactor"),.2f,3.f,1.f)};
     std::atomic<uint64_t> m_duo_foreground_applied{0};
     std::atomic<uint64_t> m_duo_foreground_not_found{0};''')
     edit(header,
@@ -29,14 +29,14 @@ def apply(changed, edit):
     edit(cpp,
 '''                    m_duo_feather->value()=.08f; m_duo_sharpen->value()=1.f; m_duo_gaze->value()=true;''',
 '''                    m_duo_feather->value()=.08f; m_duo_sharpen->value()=1.f; m_duo_gaze->value()=true;
-                    m_duo_foreground_fix->value()=false; m_duo_foreground_factor->value()=.5f;''')
+                    m_duo_foreground_fix->value()=false; m_duo_foreground_factor->value()=1.f;''')
     edit(cpp,
 '''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");''',
 '''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");
                 m_duo_foreground_fix->draw("Match first-person geometry FOV in fovea (EXPERIMENTAL)");
                 if (m_duo_foreground_fix->value()) {
-                    m_duo_foreground_factor->draw("First-person fovea factor (0.5 for 50% crop)");
-                    ImGui::TextWrapped("Only tagged UE5.5 native first-person mesh geometry is adjusted. If STALKER 2 uses independent material-WPO foreground, the option may have no effect; see counters and log. Keep crop W and H equal when testing.");
+                    m_duo_foreground_factor->draw("First-person FOV factor (1 = unchanged)");
+                    ImGui::TextWrapped("Factor 1 = unchanged; below 1 shrinks, above 1 enlarges tagged UE5.5 first-person meshes. Only tagged UE5.5 native first-person mesh geometry is adjusted. If STALKER 2 uses independent material-WPO foreground, the option may have no effect; see counters and log. Keep crop W and H equal when testing.");
                     ImGui::Text("First-person native parameter changed: %llu; unavailable or unsafe: %llu",
                        (unsigned long long)m_duo_foreground_applied.load(),
                        (unsigned long long)m_duo_foreground_not_found.load());
