@@ -13,6 +13,8 @@ def apply(changed, edit):
     edit(header,
 '''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};''',
 '''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};
+    const ModToggle::Ptr m_duo_foreground_fix{ModToggle::create(generate_name("DuoViewStalker2ForegroundMPC"),false)};
+    std::atomic<uint64_t> m_duo_foreground_applied{0}, m_duo_foreground_not_found{0};
     const ModToggle::Ptr m_duo_fg_fovea_on{ModToggle::create(generate_name("DuoViewFirstPersonFoveaEnabled"),false)};
     const ModSlider::Ptr m_duo_fg_fovea_factor{ModSlider::create(generate_name("DuoViewFirstPersonFoveaFactor"),.33f,3.f,1.f)};
     const ModToggle::Ptr m_duo_fg_periphery_on{ModToggle::create(generate_name("DuoViewFirstPersonPeripheryEnabled"),false)};
@@ -22,7 +24,7 @@ def apply(changed, edit):
     edit(header,
 '''            *m_duo_feather, *m_duo_sharpen, *m_duo_gaze,''',
 '''             *m_duo_feather, *m_duo_sharpen, *m_duo_fg_fovea_on, *m_duo_fg_fovea_factor,
-             *m_duo_fg_periphery_on, *m_duo_fg_periphery_factor, *m_duo_gaze,''')
+             *m_duo_fg_periphery_on, *m_duo_fg_periphery_factor, *m_duo_foreground_fix, *m_duo_gaze,''')
     edit(header,
 '''    void note_duoview_gpu_ms(float ms) { m_duo_gpu_ms.store(ms, std::memory_order_relaxed); }''',
 '''    void note_duoview_foreground(bool is_fovea, bool applied) {
@@ -30,12 +32,18 @@ def apply(changed, edit):
                   : (applied ? m_duo_fg_periphery_applied : m_duo_fg_periphery_unavailable))
             .fetch_add(1,std::memory_order_relaxed);
     }
+    void update_duoview_game_foreground(sdk::UGameEngine* engine);
+    void note_duoview_game_foreground(bool applied) {
+        (applied ? m_duo_foreground_applied : m_duo_foreground_not_found)
+            .fetch_add(1,std::memory_order_relaxed);
+    }
     void note_duoview_gpu_ms(float ms) { m_duo_gpu_ms.store(ms, std::memory_order_relaxed); }''')
     edit(cpp,
 '''                    m_duo_feather->value()=.08f; m_duo_sharpen->value()=1.f; m_duo_gaze->value()=true;''',
 '''                    m_duo_feather->value()=.08f; m_duo_sharpen->value()=1.f; m_duo_gaze->value()=true;
                     m_duo_fg_fovea_on->value()=false; m_duo_fg_fovea_factor->value()=1.f;
-                    m_duo_fg_periphery_on->value()=false; m_duo_fg_periphery_factor->value()=1.f;''')
+                    m_duo_fg_periphery_on->value()=false; m_duo_fg_periphery_factor->value()=1.f;
+                    m_duo_foreground_fix->value()=false;''')
     edit(cpp,
 '''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");''',
 '''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");
@@ -71,10 +79,6 @@ def apply(changed, edit):
     # Apply game-owned foreground material collection parameters once per
     # game tick, after the game's own update. Both DuoView render sources see
     # the SAME geometry and WPO; never scan arbitrary FSceneView memory.
-    edit(header,
-'''    void note_duoview_foreground(bool applied) {''',
-'''    void update_duoview_game_foreground(sdk::UGameEngine* engine);
-    void note_duoview_foreground(bool applied) {''')
     edit(cpp,
 '''void VR::on_post_engine_tick(sdk::UGameEngine* engine, float delta) {''',
 r'''void VR::update_duoview_game_foreground(sdk::UGameEngine* engine) {
@@ -105,7 +109,7 @@ r'''void VR::update_duoview_game_foreground(sdk::UGameEngine* engine) {
                  L"Class /Script/Engine.MaterialParameterCollection")) {
             if (object && object->get_name().to_string() == L"MPC_FOV") {
                 if (collection != nullptr) {
-                    note_duoview_foreground(false); // ambiguous asset
+                    note_duoview_game_foreground(false); // ambiguous asset
                     return;
                 }
                 collection = object;
@@ -117,7 +121,7 @@ r'''void VR::update_duoview_game_foreground(sdk::UGameEngine* engine) {
         auto* getter = klass != nullptr ? klass->find_function(L"GetScalarParameterValue") : nullptr;
         auto* setter = klass != nullptr ? klass->find_function(L"SetScalarParameterValue") : nullptr;
         if (!collection || !library || !getter || !setter) {
-            if (requested) note_duoview_foreground(false);
+            if (requested) note_duoview_game_foreground(false);
             return;
         }
         auto read_value = [&](std::wstring_view name, float& value) -> bool {
@@ -155,7 +159,7 @@ r'''void VR::update_duoview_game_foreground(sdk::UGameEngine* engine) {
             float fov{}, depth{};
             if (!read_value(L"IsFOVEnabled", fov) ||
                 !read_value(L"DepthScale", depth)) {
-                note_duoview_foreground(false);
+                note_duoview_game_foreground(false);
                 SPDLOG_WARNING_EVERY_N_SEC(5,
                     "[DuoView][Foreground] MPC_FOV parameters unavailable: no changes made");
                 return;
@@ -169,7 +173,7 @@ r'''void VR::update_duoview_game_foreground(sdk::UGameEngine* engine) {
         // The game can rewrite these per tick; reapply after its update.
         const bool ok = write_value(L"IsFOVEnabled", 0.0f) &&
                         write_value(L"DepthScale", 1.0f);
-        note_duoview_foreground(ok);
+        note_duoview_game_foreground(ok);
         if (!ok)
             SPDLOG_WARNING_EVERY_N_SEC(5,
                 "[DuoView][Foreground] STALKER 2 material override failed; do not infer parity");
