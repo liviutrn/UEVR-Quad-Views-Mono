@@ -18,6 +18,7 @@ ADDED_BACKEND = {
  "src/mods/vr/DuoViewPSVR2Gaze.hpp", "src/mods/vr/DuoViewCropStability.hpp",
  "src/mods/vr/DuoViewFrame.hpp", "src/mods/vr/DuoViewConfig.hpp",
  "src/mods/vr/DuoViewState.hpp", "src/mods/vr/DuoViewD3D12.hpp",
+ "src/mods/vr/DuoViewFirstPerson.hpp",
  "src/mods/vr/DuoViewMonoCopyD3D12.hpp", "src/mods/vr/DuoViewShaderSource.hpp",
 }
 EDITED_FRONTEND = {"UEVR/RenderingModeOptions.cs", "tests/RenderingModes/Program.cs"}
@@ -112,6 +113,13 @@ def main():
   if token not in vr_cpp: raise RuntimeError("General settings validation/status wiring missing: "+token)
  for token in ("m_duo_ui_rejected_mask{0}",):
   if token not in vr_header: raise RuntimeError("General controls audit counter missing: "+token)
+ if "DuoViewFirstPerson.hpp" not in hook or "note_duoview_foreground(adjusted)" not in hook:
+  raise RuntimeError("Guarded first-person source correction missing")
+ if "DuoViewFirstPersonFoveaFactor" not in vr_header or "foreground_fovea_factor" not in vr_cpp:
+  raise RuntimeError("First-person fovea control not wired to producer")
+ foreground_header=(a.backend/"src/mods/vr/DuoViewFirstPerson.hpp").read_text(encoding="utf-8")
+ if "if (only) return {}" not in foreground_header or "correct(std::span" not in foreground_header:
+  raise RuntimeError("No ambiguous-signature fail-safe in foreground correction")
  overlay_header=(a.backend/"src/mods/vr/OverlayComponent.hpp").read_text(encoding="utf-8")
  overlay_cpp=(a.backend/"src/mods/vr/OverlayComponent.cpp").read_text(encoding="utf-8")
  for token in ("duoview_convergence_enabled()", "UI_DuoView_ConvergenceReference"):
