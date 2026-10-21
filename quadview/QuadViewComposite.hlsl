@@ -38,10 +38,12 @@ float2 AtlasUv(uint4 rectangle, float2 uv) {
 
 // Explicit SM5 resource selection keeps each source independent, including sharpening taps.
 float4 ReadSource(uint sourceIndex, float2 uv) {
-    if (sourceIndex == 0u) return ContextLeftSource.SampleLevel(LinearClamp, uv, 0.0);
-    if (sourceIndex == 1u) return ContextRightSource.SampleLevel(LinearClamp, uv, 0.0);
-    if (sourceIndex == 2u) return FocusLeftSource.SampleLevel(LinearClamp, uv, 0.0);
-    return FocusRightSource.SampleLevel(LinearClamp, uv, 0.0);
+    float4 color = float4(0.0, 0.0, 0.0, 1.0);
+    [branch] if (sourceIndex == 0u) color = ContextLeftSource.SampleLevel(LinearClamp, uv, 0.0);
+    else if (sourceIndex == 1u) color = ContextRightSource.SampleLevel(LinearClamp, uv, 0.0);
+    else if (sourceIndex == 2u) color = FocusLeftSource.SampleLevel(LinearClamp, uv, 0.0);
+    else color = FocusRightSource.SampleLevel(LinearClamp, uv, 0.0);
+    return color;
 }
 
 float FocusWeight(float2 uv, float4 crop) {

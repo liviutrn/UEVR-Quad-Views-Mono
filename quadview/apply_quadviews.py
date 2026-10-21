@@ -820,7 +820,7 @@ bool VRRenderTargetManager_Base::ensure_quadview_native_target_set(uint32_t widt
         return false;
     }
 
-    auto* worker=g_hook ? g_hook->get_slate_thread_worker() : nullptr;
+    auto* worker=g_hook ? g_hook->get_slate_thread_worker().get() : nullptr;
     if (!worker) {
         std::scoped_lock lock{quadview_native_target_mutex};
         if (quadview_native_target_build==build) quadview_native_target_build.reset();
