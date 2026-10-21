@@ -154,15 +154,19 @@ private:
             for(int32_t i=0;i<count;i++) {
                 auto* item=objects->get_object(i);
                 auto* object=item?item->get_object():nullptr;
-                if (!object || !sdk::observe_uobject(object)) continue;
+                if (!object) continue;
                 auto* candidate=reinterpret_cast<sdk::UObject*>(object);
-                if (candidate->is_a(klass) && !candidate->is_pending_kill_or_unreachable()) {
-                    const auto observation=sdk::observe_uobject(candidate);
-                    if (!observation) continue;
-                    controller_=candidate;
-                    controller_identity_=observation->identity;
-                    break;
-                }
+                if (!candidate->is_a(klass)) continue;
+                // Never use the Class Default Object as WorldContextObject;
+                // Kismet would resolve a null world and silently no-op.
+                const auto name=candidate->get_name_safe();
+                if (name.starts_with(L"Default__") || name.starts_with(L"REINST_") ||
+                    candidate->is_pending_kill_or_unreachable()) continue;
+                const auto observation=sdk::observe_uobject(candidate);
+                if (!observation) continue;
+                controller_=candidate;
+                controller_identity_=observation->identity;
+                break;
             }
             if (!controller_) { status_=Status::missing_world_context; return false; }
         }
