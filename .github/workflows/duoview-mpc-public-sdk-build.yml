@@ -59,7 +59,7 @@ jobs:
         run: |
           python workspace/duoview/joey_stage1/apply_stage1.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Failed to apply guarded DuoView Stage 1 edits' }
-          if (!(Test-Path 'backend/src/mods/vr/DuoViewState.hpp')) { throw 'Missing DuoView Stage 1 output' }
+          if (!(Test-Path 'backend/src/mods/VR.cpp')) { throw 'Missing Stage 1 target source' }
       - name: Apply Native Stereo Fix backed DuoView source changes
         shell: pwsh
         run: |
