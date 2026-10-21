@@ -201,6 +201,23 @@ class SourceCheckpointTests(unittest.TestCase):
         self.assertNotIn('[QuadViews][Producer] missing GT frame', script)
         self.assertNotIn('take_observed_gt_frame(key.generation', script)
 
+    def test_build42_lighting_parity_is_constructor_only(self) -> None:
+        """Do not regress into Native Stereo Fix's two-eye renderer or tone hack."""
+        script = Path(__file__).with_name("apply_quadviews.py").read_text(encoding="utf-8")
+        self.assertIn('if (is_quadview_mode_selected() || is_mono_transition_quiescing()) { return false; }', script)
+        self.assertIn('qv_lighting_main', script)
+        self.assertIn('(qv_prior_count == 1 || qv_prior_count == 3)', script)
+        self.assertIn('qv_original_pass == EStereoscopicPass::eSSP_SECONDARY', script)
+        self.assertIn('init_options->set_stereo_pass(EStereoscopicPass::eSSP_PRIMARY)', script)
+        self.assertIn('init_options->set_stereo_pass(qv_original_pass)', script)
+        self.assertIn('[QuadViews][Lighting42] slot=0', script)
+        self.assertIn('[QuadViews][Lighting42] slot=1', script)
+        self.assertIn('[QuadViews][Lighting42] slot=2', script)
+        self.assertIn('[QuadViews][Lighting42] slot=3', script)
+        self.assertNotIn('views->count = 0', script)
+        # Conservative guard: do not broaden to scene-view, ghosting or Native Fix.
+        self.assertIn('if (is_using_mono() || is_quadview_mode_selected()) { return false; }', script)
+
     def test_dirty_sdk_is_still_rejected(self) -> None:
         write(self.sdk, "unexpected.hpp", "untracked SDK change\n")
         with self.assertRaisesRegex(RuntimeError, "restricted SDK working tree changed"):
