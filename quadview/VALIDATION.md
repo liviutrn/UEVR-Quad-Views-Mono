@@ -187,7 +187,17 @@ not implemented behavior.
   only `FFakeStereoRenderingHook.cpp/.hpp` and `QuadViewNativeDelivery.hpp`;
   the new retirement diagnostics header is exported by the overlay.
 
-Build 47 Windows compilation/CTest/WARP/frontend validation and headset
-testing have not yet run. CMake is not installed in this container. The local
-checks establish the portable policy and source-overlay application only;
-they make no claim about runtime image quality, queue ordering or performance.
+Build 47 Windows run [39693394986](https://github.com/liviutrn/MUSE-UEVR-DUOVIEW/actions/runs/39693394986)
+passed compilation, the full CTest suite, WARP checks and frontend tests/build.
+The suite passed 62/62 tests: QuadView 11/11 (including both new diagnostics
+tests), pinned production 4/4, independent DuoView 6/6 and original backend
+compatibility 41/41. The package contains the Build 46 findings report and all
+three future review/plan documents. Package validation matched all 24 packaged
+file hashes, ten generated production source hashes, AMD64 binaries and ZIP
+integrity. The installable package
+[UEVR-QuadViews-Build47-NativeStereoFix-13.zip](https://github.com/liviutrn/MUSE-UEVR-DUOVIEW/actions/runs/39693394986/artifacts/12391120421)
+has SHA-256 `b1fe81bf0428cd0094ade6504f8dd5e393e71c3fec28962fc56b2c7efb639084`.
+The build pins source commit `20d96b2f825b7b23a4465e7c145dda421d4d0122`
+and records `headsetVerified=false`. No headset image-quality, lighting-parity,
+queue-ordering or performance result is claimed; adaptive screen percentage
+remains a future plan and is not implemented in Build 47.
