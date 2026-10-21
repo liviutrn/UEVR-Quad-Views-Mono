@@ -57,6 +57,16 @@ def git(root: Path, *arguments: str) -> str:
 
 
 def inspect(backend: Path, frontend: Path) -> dict:
+    # Validate overlay exports before compilation; standalone tests can find
+    # headers in the overlay directory even when the backend copy is missing.
+    overlay_root = backend / "src/mods/vr"
+    for path in sorted(overlay_root.rglob("*")):
+        if not path.is_file() or path.suffix not in {".hpp", ".cpp"}:
+            continue
+        for header in re.findall(r'^\s*#include\s+"(QuadView[^"/]+\.hpp)"',
+                                 path.read_text(encoding="utf-8"), re.MULTILINE):
+            if not (path.parent / header).is_file() and not (overlay_root / header).is_file():
+                raise RuntimeError(f"Missing QuadView overlay header: {header} (included by {path.name})")
     roots = {"backend": backend, "frontend": frontend,
              "sdk": backend / "dependencies/submodules/UESDK"}
     for name, root in roots.items():

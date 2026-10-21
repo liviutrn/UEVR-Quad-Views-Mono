@@ -152,3 +152,10 @@ This environment does not provide CMake or Windows tooling, so this local pass
 does not replace the required Windows Actions build, WARP shader tests or full
 backend/frontend compatibility suite. Those outcomes must be recorded from the
 Build 46 CI run. No headset test or headset trace is included here.
+
+The first Windows run passed the rendering suites but failed the production
+compile because the overlay omitted the `QuadViewFamilyRouting.hpp` export.
+The export is corrected. A clean overlay reapplication recreates the header,
+and a new source-checkpoint regression rejects missing local QuadView includes
+before compilation. All nine checkpoint tests pass after this correction;
+the replacement Windows run remains the final compilation gate.

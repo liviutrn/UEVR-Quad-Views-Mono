@@ -206,6 +206,15 @@ class SourceCheckpointTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "restricted SDK working tree changed"):
             checkpoint.inspect(self.backend, self.frontend)
 
+    def test_missing_overlay_header_is_rejected_before_build(self) -> None:
+        write(self.backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+              '#include "QuadViewFamilyRouting.hpp"\n')
+        with self.assertRaisesRegex(RuntimeError, "Missing QuadView overlay header: QuadViewFamilyRouting.hpp"):
+            checkpoint.inspect(self.backend, self.frontend)
+        write(self.backend, "src/mods/vr/QuadViewFamilyRouting.hpp", "#pragma once\n")
+        actual = checkpoint.inspect(self.backend, self.frontend)
+        self.assertIn("backend/src/mods/vr/QuadViewFamilyRouting.hpp", actual["sha256"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

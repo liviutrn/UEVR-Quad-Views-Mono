@@ -393,5 +393,6 @@ def main():
     vp.write_text(v)
     hp.write_text(h);cp.write_text(s)
     shutil.copyfile(src/'QuadViewNativeDelivery.hpp',root/'src/mods/vr/QuadViewNativeDelivery.hpp')
+    shutil.copyfile(src/'QuadViewFamilyRouting.hpp',root/'src/mods/vr/QuadViewFamilyRouting.hpp')
     print('Applied exact four-target native GT/RT/RHI ownership adapter.')
 if __name__=='__main__':main()
