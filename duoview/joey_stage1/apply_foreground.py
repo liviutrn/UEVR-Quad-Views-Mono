@@ -87,6 +87,7 @@ r'''void VR::update_duoview_game_foreground(sdk::UGameEngine* engine) {
     // STALKER 2 destroys and recreates MPC assets across level reloads.
     struct Baseline {
         uintptr_t world_id{};
+        uintptr_t collection_id{};
         float is_fov_enabled{};
         float depth_scale{};
         bool active{};
@@ -115,6 +116,10 @@ r'''void VR::update_duoview_game_foreground(sdk::UGameEngine* engine) {
                 collection = object;
             }
         }
+        // An asset may be reloaded within the same world; never restore a
+        // previous collection's baseline into a replacement object.
+        if (baseline.active && baseline.collection_id != reinterpret_cast<uintptr_t>(collection))
+            baseline = {};
         const auto klass = sdk::find_uobject<sdk::UClass>(
             L"Class /Script/Engine.KismetMaterialLibrary");
         auto* library = klass != nullptr ? klass->get_class_default_object() : nullptr;
@@ -164,7 +169,7 @@ r'''void VR::update_duoview_game_foreground(sdk::UGameEngine* engine) {
                     "[DuoView][Foreground] MPC_FOV parameters unavailable: no changes made");
                 return;
             }
-            baseline = {world_id, fov, depth, true};
+            baseline = {world_id, reinterpret_cast<uintptr_t>(collection), fov, depth, true};
         }
 
         // GSC's MF_ForegroundWithShadowSwitch uses both parameters for its
