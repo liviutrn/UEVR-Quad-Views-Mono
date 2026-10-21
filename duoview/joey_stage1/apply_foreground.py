@@ -47,9 +47,9 @@ def apply(changed, edit):
                         {uevr::duoview::reject_foreground_factor,"First-person fovea factor"},''')
     edit(cpp,
 '''        .feather_fraction=m_duo_feather->value(), .sharpen_strength=m_duo_sharpen->value(), .debug_border=m_duo_border->value(),''',
-'''        .feather_fraction=m_duo_feather->value(), .sharpen_strength=m_duo_sharpen->value(), .debug_border=m_duo_border->value(),
+'''        .feather_fraction=m_duo_feather->value(), .sharpen_strength=m_duo_sharpen->value(),
         .foreground_crop_correction=m_duo_foreground_fix->value(),
-        .foreground_fovea_factor=m_duo_foreground_factor->value(),''')
+        .foreground_fovea_factor=m_duo_foreground_factor->value(), .debug_border=m_duo_border->value(),''')
     edit(cpp,
 '''        current.feather_fraction==candidate.feather_fraction && current.sharpen_strength==candidate.sharpen_strength &&
         current.debug_border==candidate.debug_border &&''',
