@@ -42,6 +42,9 @@ jobs:
           assert 'MPC source must follow selected UE fovea view' not in verification
           print('R2 static lifecycle/QA invariants PASSED')
           PY
+      - name: Python integration patch syntax
+        run: |
+          python -m py_compile duoview/joey_stage1/apply_foreground.py duoview/joey_stage1/apply_stage234.py duoview/joey_stage1/verify_stage234.py
       - name: Configure and build independent DuoView tests
         run: |
           cmake -S duoview -B build-global-fov-r2 -DCMAKE_BUILD_TYPE=Release
