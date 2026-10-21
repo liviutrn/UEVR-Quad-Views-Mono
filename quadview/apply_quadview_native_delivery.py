@@ -131,7 +131,7 @@ def main():
         const auto qv_dispatch_result=uevr::quadview::dispatch_main_views(
             views.data,views.capacity,views.count,*view_family,native_context.original_views,
             native_context.render_targets,
-            [](const sdk::FSceneViewFamily& family) { return family.get_render_target(); },
+            [](sdk::FSceneViewFamily& family) { return family.get_render_target(); },
             [](sdk::FSceneViewFamily& family,auto* target) { family.set_render_target(target); },
             [&](size_t slot) {
                 if (slot!=0) reinterpret_cast<sdk::FScene*>(qv_scene)->decrement_frame_count();
