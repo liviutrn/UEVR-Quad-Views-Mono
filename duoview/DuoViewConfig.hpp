@@ -18,7 +18,7 @@ struct Settings {
     float feather_fraction{.08f};
     float sharpen_strength{}; // Glamarye fovea-only; 0 preserves v182 output.
     bool foreground_crop_correction{}; // Experimental UE5.5 tagged first-person primitives only
-    float foreground_fovea_factor{.50f}; // Starts at crop width, adjustable for headset calibration
+    float foreground_fovea_factor{1.f}; // Starts at crop width, adjustable for headset calibration
     bool debug_border{};
     bool eye_tracked{true};
     uint32_t fovea_view{};
@@ -170,7 +170,7 @@ public:
         if (!std::isfinite(proposed.sharpen_strength) || proposed.sharpen_strength<0.f ||
             proposed.sharpen_strength>2.f ||
             !std::isfinite(proposed.foreground_fovea_factor) ||
-            proposed.foreground_fovea_factor<.2f || proposed.foreground_fovea_factor>2.f ||
+            proposed.foreground_fovea_factor<.2f || proposed.foreground_fovea_factor>3.f ||
             !std::isfinite(proposed.feather_fraction) ||
             proposed.feather_fraction < 0.f || proposed.feather_fraction > .45f ||
             proposed.fovea_view > 1 || proposed.diagnostic_view > 2 ||
