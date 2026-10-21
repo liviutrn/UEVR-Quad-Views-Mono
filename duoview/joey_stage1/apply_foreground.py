@@ -1,125 +1,90 @@
 #!/usr/bin/env python3
-"""STALKER 2 material MPC_FOV.TanFOV experiment; removes the ineffective
-FFirstPersonParameters heuristic from Build 195 completely.
+"""Disable STALKER 2 artificial first-person FOV in BOTH DuoView sources.
 
-Uses SDK-reflected KismetMaterialLibrary Get/SetScalarParameterValue and
-immediate readback. Both DuoView source controls are independently OFF by
-default. Source-specific visual ownership is NOT assumed: UE material
-parameter collections are world-scoped, so per-pass timing needs a headset
-test even when readback succeeds.
+No per-source TanFOV mutation. The single world-global IsFOVEnabled=0 write
+happens on Unreal's game-thread pre-engine tick, prior to the two producer
+draws. Keep the validated compositor, gaze, render packet and XR path intact.
+Experimental, OFF by default; switch OFF/mode exit restores the captured
+pre-override parameter (when the game hasn't already changed ownership).
 """
 def apply(changed, edit):
     header="src/mods/VR.hpp"
     cpp="src/mods/VR.cpp"
-    hook="src/mods/vr/FFakeStereoRenderingHook.cpp"
     edit(header,
-'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};''',
-'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};
-    const ModToggle::Ptr m_duo_mpc_fovea_on{ModToggle::create(generate_name("DuoViewMPCTanFOVFoveaEnabled"),false)};
-    const ModSlider::Ptr m_duo_mpc_fovea_factor{ModSlider::create(generate_name("DuoViewMPCTanFOVFoveaFactor"),.33f,3.f,1.f)};
-    const ModToggle::Ptr m_duo_mpc_periphery_on{ModToggle::create(generate_name("DuoViewMPCTanFOVPeripheryEnabled"),false)};
-    const ModSlider::Ptr m_duo_mpc_periphery_factor{ModSlider::create(generate_name("DuoViewMPCTanFOVPeripheryFactor"),.33f,3.f,1.f)};
-    std::atomic<uint64_t> m_duo_mpc_fovea_confirmed{0}, m_duo_mpc_fovea_failed{0};
-    std::atomic<uint64_t> m_duo_mpc_periphery_confirmed{0}, m_duo_mpc_periphery_failed{0};
-    std::atomic<float> m_duo_mpc_baseline{0.f},m_duo_mpc_last_write{0.f};
-    std::atomic<int> m_duo_mpc_last_status{0};''')
+'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamayreFoveaStrength"), 0.f, 2.f, 1.f)};''',
+'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamayreFoveaStrength"), 0.f, 2.f, 1.f)};
+    const ModToggle::Ptr m_duo_disable_firstperson_fov{ModToggle::create(generate_name("DuoViewDisableFirstPersonFOV"),false)};
+    std::atomic<uint64_t> m_duo_fov_verified{0},m_duo_fov_failed{0};
+    std::atomic<int> m_duo_fov_status{0};
+    std::atomic<float> m_duo_fov_original{0.f},m_duo_fov_last{0.f};''')
     edit(header,
 '''            *m_duo_feather, *m_duo_sharpen, *m_duo_gaze,''',
-'''            *m_duo_feather, *m_duo_sharpen, *m_duo_mpc_fovea_on, *m_duo_mpc_fovea_factor,
-            *m_duo_mpc_periphery_on, *m_duo_mpc_periphery_factor, *m_duo_gaze,''')
+'''            *m_duo_feather, *m_duo_sharpen, *m_duo_disable_firstperson_fov, *m_duo_gaze,''')
     edit(header,
 '''    void note_duoview_gpu_ms(float ms) { m_duo_gpu_ms.store(ms, std::memory_order_relaxed); }''',
-'''    void note_duoview_mpc(bool fovea, bool verified, int status, float baseline, float last) {
-        (fovea ? (verified ? m_duo_mpc_fovea_confirmed : m_duo_mpc_fovea_failed)
-               : (verified ? m_duo_mpc_periphery_confirmed : m_duo_mpc_periphery_failed))
+'''    void note_duoview_global_fov(bool verified,int status,float original,float last) {
+        (verified ? m_duo_fov_verified : m_duo_fov_failed)
             .fetch_add(1,std::memory_order_relaxed);
-        m_duo_mpc_last_status.store(status,std::memory_order_relaxed);
-        m_duo_mpc_baseline.store(baseline,std::memory_order_relaxed);
-        m_duo_mpc_last_write.store(last,std::memory_order_relaxed);
+        m_duo_fov_status.store(status,std::memory_order_relaxed);
+        m_duo_fov_original.store(original,std::memory_order_relaxed);
+        m_duo_fov_last.store(last,std::memory_order_relaxed);
     }
     void note_duoview_gpu_ms(float ms) { m_duo_gpu_ms.store(ms, std::memory_order_relaxed); }''')
     edit(cpp,
+'''#include "VR.hpp"''',
+'''#include "VR.hpp"
+#include "vr/DuoViewMPCFov.hpp"''')
+    edit(cpp,
 '''                    m_duo_feather->value()=.08f; m_duo_sharpen->value()=1.f; m_duo_gaze->value()=true;''',
 '''                    m_duo_feather->value()=.08f; m_duo_sharpen->value()=1.f; m_duo_gaze->value()=true;
-                    m_duo_mpc_fovea_on->value()=false; m_duo_mpc_fovea_factor->value()=1.f;
-                    m_duo_mpc_periphery_on->value()=false; m_duo_mpc_periphery_factor->value()=1.f;''')
+                    m_duo_disable_firstperson_fov->value()=false;''')
     edit(cpp,
-'''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");''',
-'''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");
+'''                m_duo_sharpen->draw("Glamayre fovea strength (default 1.0; 0 = off)");''',
+'''                m_duo_sharpen->draw("Glamayre fovea strength (default 1.0; 0 = off)");
                 ImGui::Separator();
-                ImGui::TextUnformatted("STALKER 2 weapon materials: MPC_FOV.TanFOV (experimental)");
-                m_duo_mpc_fovea_on->draw("Fovea MPC TanFOV correction");
-                if (m_duo_mpc_fovea_on->value()) {
-                    m_duo_mpc_fovea_factor->draw("Fovea MPC TanFOV factor (0.33 - 3.0)");
-                    ImGui::Text("Fovea MPC verified %llu / failed %llu",
-                        (unsigned long long)m_duo_mpc_fovea_confirmed.load(),
-                        (unsigned long long)m_duo_mpc_fovea_failed.load());
-                }
-                m_duo_mpc_periphery_on->draw("Periphery MPC TanFOV correction");
-                if (m_duo_mpc_periphery_on->value()) {
-                    m_duo_mpc_periphery_factor->draw("Periphery MPC TanFOV factor (0.33 - 3.0)");
-                    ImGui::Text("Periphery MPC verified %llu / failed %llu",
-                        (unsigned long long)m_duo_mpc_periphery_confirmed.load(),
-                        (unsigned long long)m_duo_mpc_periphery_failed.load());
-                }
-                ImGui::Text("MPC TanFOV status %d, base %.4f, last %.4f",
-                    m_duo_mpc_last_status.load(),m_duo_mpc_baseline.load(),
-                    m_duo_mpc_last_write.load());
-                ImGui::TextWrapped("Status 6 = Kismet Get/Set readback confirmed. This adjusts the REAL game MPC_FOV.TanFOV material parameter, not UE's native first-person primitive FOV. Warning: MPC is world-shared. Readback does NOT prove the two GPU passes sampled independent values; test visually and check logs.");
+                m_duo_disable_firstperson_fov->draw("Disable STALKER 2 First-Person FOV (both sources)");
+                ImGui::TextWrapped("Experimental: sets the shared game MPC_FOV.IsFOVEnabled=0 BEFORE both UE source passes; restores the original value when disabled or leaving DuoView. Does not change crop, projection or HUD.");
+                ImGui::Text("First-person FOV write/readback: verified %llu / failed %llu",
+                    (unsigned long long)m_duo_fov_verified.load(),
+                    (unsigned long long)m_duo_fov_failed.load());
+                ImGui::Text("MPC status %d (6=confirmed); original %.3f; last %.3f",
+                    m_duo_fov_status.load(),m_duo_fov_original.load(),m_duo_fov_last.load());
 ''')
-    edit(cpp,
-'''                        {uevr::duoview::reject_sharpen,"Glamarye strength"},''',
-'''                        {uevr::duoview::reject_sharpen,"Glamarye strength"},
-                        {uevr::duoview::reject_mpc_fovea,"MPC TanFOV fovea factor"},
-                        {uevr::duoview::reject_mpc_periphery,"MPC TanFOV periphery factor"},''')
     edit(cpp,
 '''        .feather_fraction=m_duo_feather->value(), .sharpen_strength=m_duo_sharpen->value(), .debug_border=m_duo_border->value(),''',
 '''        .feather_fraction=m_duo_feather->value(), .sharpen_strength=m_duo_sharpen->value(),
-        .mpc_fovea_enabled=m_duo_mpc_fovea_on->value(),
-        .mpc_fovea_factor=m_duo_mpc_fovea_factor->value(),
-        .mpc_periphery_enabled=m_duo_mpc_periphery_on->value(),
-        .mpc_periphery_factor=m_duo_mpc_periphery_factor->value(),
+        .disable_firstperson_fov=m_duo_disable_firstperson_fov->value(),
         .debug_border=m_duo_border->value(),''')
     edit(cpp,
 '''        current.feather_fraction==candidate.feather_fraction && current.sharpen_strength==candidate.sharpen_strength &&
         current.debug_border==candidate.debug_border &&''',
 '''        current.feather_fraction==candidate.feather_fraction && current.sharpen_strength==candidate.sharpen_strength &&
-        current.mpc_fovea_enabled==candidate.mpc_fovea_enabled &&
-        current.mpc_fovea_factor==candidate.mpc_fovea_factor &&
-        current.mpc_periphery_enabled==candidate.mpc_periphery_enabled &&
-        current.mpc_periphery_factor==candidate.mpc_periphery_factor &&
+        current.disable_firstperson_fov==candidate.disable_firstperson_fov &&
         current.debug_border==candidate.debug_border &&''')
-    edit(hook,
-'''#include "DuoViewGeometry.hpp"''',
-'''#include "DuoViewGeometry.hpp"
-#include "DuoViewMPCFov.hpp"''')
-    edit(hook,
-'''            vr->duoview_state().scene(key,index,state,applied);''',
-'''            // Verified STALKER 2 game material mechanism (WorldPositionOffset):
-            // MPC_FOV.TanFOV, called through UKismetMaterialLibrary.
-            // This is a world-shared MPC: separate producer passes are attempted
-            // in sequence, but GPU visual independence requires headset testing.
-            if (const auto frozen=vr->duoview_state().snapshot(key); frozen) {
-                const auto& quality=frozen->config.settings;
-                const bool fovea=index==quality.fovea_view;
-                const bool enabled=fovea ? quality.mpc_fovea_enabled
-                                         : quality.mpc_periphery_enabled;
-                const float factor=fovea ? quality.mpc_fovea_factor
-                                         : quality.mpc_periphery_factor;
-                auto& bridge=uevr::duoview::mpc::active();
-                if (enabled || bridge.attempts()!=0) {
-                    const bool verified=bridge.set_factor(factor,enabled);
-                    if (enabled) vr->note_duoview_mpc(fovea,verified,
-                        static_cast<int>(bridge.status()),bridge.baseline(),bridge.last_value());
-                    if (enabled && !verified)
-                        SPDLOG_WARNING_EVERY_N_SEC(5,
-                            "[DuoView][MPC_FOV] {} UE{} TanFOV write/readback failed; status {}",
-                            fovea ? "fovea" : "periphery",index,
-                            static_cast<int>(bridge.status()));
-                    if (enabled && verified)
-                        SPDLOG_INFO_EVERY_N_SEC(5,
-                            "[DuoView][MPC_FOV] {} UE{} TanFOV factor {:.3f}, base {:.3f}, last {:.3f} readback confirmed (per-pass sampling unverified)",
-                            fovea ? "fovea" : "periphery",index,factor,bridge.baseline(),bridge.last_value());
-                }
-            }
-            vr->duoview_state().scene(key,index,state,applied);''')
+    edit(cpp,
+'''    m_cvar_manager->on_pre_engine_tick(engine, delta);''',
+'''    m_cvar_manager->on_pre_engine_tick(engine, delta);
+    // STALKER 2 viewmodel FOV is a single game WORLD material collection.
+    // Do not change it while preparing each UE source: both must sample the
+    // same value. This callback is the UE game thread before viewport drawing.
+    // When ID6/option turns OFF, restore here even when producer hooks stop.
+    {
+        auto& bridge=uevr::duoview::mpc::active();
+        const bool disable=is_duoview_renderer_active() &&
+            m_duoview.settings().disable_firstperson_fov;
+        if (disable || bridge.override_active()) {
+            const bool ok=bridge.apply(disable);
+            note_duoview_global_fov(ok,static_cast<int>(bridge.status()),
+                bridge.baseline(),bridge.last_value());
+            if (!ok)
+                SPDLOG_WARNING_EVERY_N_SEC(5,
+                    "[DuoView][FirstPersonFOV] {} write/readback failed; status {}",
+                    disable ? "disable" : "restore",
+                    static_cast<int>(bridge.status()));
+            else
+                SPDLOG_INFO_EVERY_N_SEC(5,
+                    "[DuoView][FirstPersonFOV] {} IsFOVEnabled last {:.3f}, original {:.3f}",
+                    disable ? "disabled for BOTH views" : "restored",
+                    bridge.last_value(),bridge.baseline());
+        }
+    }''')
