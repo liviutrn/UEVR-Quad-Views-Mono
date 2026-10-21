@@ -48,7 +48,7 @@ inline std::optional<Slot> find_slot(std::span<const std::byte> bytes) {
     return only;
 }
 inline bool correct(std::span<std::byte> bytes, const Slot& slot, float factor) {
-    if (!std::isfinite(factor) || factor < .2f || factor > 3.f ||
+    if (!std::isfinite(factor) || factor < .33f || factor > 3.f ||
         slot.correction_offset+sizeof(float)>bytes.size()) return false;
     const float before=slot.fields.correction;
     if (!std::isfinite(before) || before<.1f || before>4.f) return false;
