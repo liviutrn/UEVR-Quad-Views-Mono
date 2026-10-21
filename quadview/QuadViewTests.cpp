@@ -5,6 +5,7 @@
 #include "QuadViewDelivery.hpp"
 #include "QuadViewProducer.hpp"
 #include "QuadViewViewDemand.hpp"
+#include "QuadViewNativePairLedger.hpp"
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -49,6 +50,20 @@ static uevr::quadview::gaze::Projection flat_matrix(const std::array<std::array<
 
 int main() {
     using namespace uevr::quadview;
+    // Build43 experiment: exactly two independently owned native stereo
+    // render callbacks, never early-publish the context (first) callback.
+    NativePairLedger pairs;
+    const NativePairLedger::Owner first_frame{5, 91, 0x1234, 0x5678};
+    assert(pairs.observe(first_frame) == NativePairLedger::Phase::First);
+    assert(pairs.observe(first_frame) == NativePairLedger::Phase::Second);
+    assert(pairs.observe(first_frame) == NativePairLedger::Phase::Invalid);
+    assert(pairs.observe({5, 91, 0, 0x5678}) == NativePairLedger::Phase::Invalid);
+    const NativePairLedger::Owner next_frame{5, 92, 0x1234, 0x5678};
+    assert(pairs.observe(next_frame) == NativePairLedger::Phase::First);
+    assert(pairs.observe({5, 92, 0x1234, 0x5679}) == NativePairLedger::Phase::First);
+    pairs.reset();
+    assert(pairs.observe(first_frame) == NativePairLedger::Phase::First);
+
     // The supported STALKER 2 game must install the BeginRenderViewFamily
     // callback at injection, even if the active/requested mode is still 0.
     // Rendering-mode ID7 is usually enabled later through the UI.
