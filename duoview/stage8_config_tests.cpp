@@ -34,6 +34,28 @@ int main() {
     assert(!latch.set_settings(invalid));
     auto partial=d::reconcile_ui_settings(invalid,modified);
     assert((partial.rejected & d::reject_sharpen)!=0 && near(partial.settings.sharpen_strength,.4f));
+    // Independent foreground controls must not couple the two Unreal views.
+    d::Settings both=modified;
+    both.foreground_fovea_enabled=true;
+    both.foreground_fovea_factor=2.4f;
+    both.foreground_periphery_enabled=false;
+    both.foreground_periphery_factor=.5f;
+    auto accepted=d::reconcile_ui_settings(both,modified);
+    assert(accepted.rejected==0 && accepted.settings.foreground_fovea_enabled);
+    assert(!accepted.settings.foreground_periphery_enabled && near(accepted.settings.foreground_fovea_factor,2.4f));
+    both.foreground_periphery_enabled=true;
+    both.foreground_periphery_factor=3.f;
+    accepted=d::reconcile_ui_settings(both,modified);
+    assert(accepted.rejected==0 && accepted.settings.foreground_periphery_enabled);
+    assert(near(accepted.settings.foreground_periphery_factor,3.f));
+    both.foreground_periphery_factor=.32f;
+    accepted=d::reconcile_ui_settings(both,modified);
+    assert((accepted.rejected & d::reject_foreground_periphery)!=0);
+    assert((accepted.rejected & d::reject_foreground_fovea)==0);
+    assert(near(accepted.settings.foreground_fovea_factor,2.4f));
+    assert(near(accepted.settings.foreground_periphery_factor,1.f));
+    both.foreground_periphery_factor=.33f;
+    assert(latch.set_settings(both));
     invalid=modified;invalid.sharpen_strength=std::nanf("");
     assert(!latch.set_settings(invalid));
     auto still=latch.for_frame({5,12},3000,3000,{.5f,.5f});
