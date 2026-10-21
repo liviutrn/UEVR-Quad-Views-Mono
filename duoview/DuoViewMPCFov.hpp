@@ -1,10 +1,9 @@
 #pragma once
-// STALKER 2 UE5.5: dynamic World Material Parameter Collection (MPC_FOV/TanFOV).
-// Uses the game's proven KismetMaterialLibrary UFunctions, NOT the unrelated
-// FSceneViewInitOptions.FirstPersonParams native first-person primitive field.
-// No private SDK source edits. If reflection or parameter ABI is not verified,
-// no ProcessEvent writes occur. Both DuoView views use a shared WORLD MPC;
-// distinct per-source visual states remain an experimental timing question.
+// STALKER 2 global viewmodel FOV removal (IsFOVEnabled=0). Kismet read/write
+// run only on the game thread, before Unreal draws either DuoView source.
+// This game-wide material parameter is NEVER set independently per view.
+// The previous TanFOV magnification experiment is intentionally removed.
+// Disable restores the observed pre-override value only if still owned here.
 #include <array>
 #include <algorithm>
 #include <cmath>
@@ -71,45 +70,67 @@ public:
     uint64_t rejects() const { return rejects_; }
     uint64_t attempts() const { return attempts_; }
 
-    // Called from the game's producer-side scene-view initialization; NEVER
-    // the XR copy callback. Source parameters are frame-frozen by DuoView.
-    bool set_factor(float factor, bool enabled) {
-        std::scoped_lock _{mutex_};
-        if (!enabled && !override_active_) return false;
+    // Called exactly once per game tick, before the source pair is drawn.
+    // If another game system re-enables the FOV effect while we're active,
+    // remember that value and disable it again for BOTH views.
+    bool apply(bool disable) {
+        std::scoped_lock lock{mutex_};
+        if (!disable && !override_active_) return true;
         ++attempts_;
-        if (!std::isfinite(factor) || factor<.33f || factor>3.f) { ++rejects_; return false; }
         if (!resolve()) { ++rejects_; return false; }
-        auto actual=read_value();
-        if (!actual) { status_=Status::parameter_read_failed; ++rejects_; return false; }
-        if (!baseline_ready_) { baseline_=*actual; baseline_ready_=true; }
-        else if (last_write_ready_ && std::fabs(*actual-last_value_)>.0005f) {
-            // Game-provided transition / ADS value takes precedence.
-            baseline_=*actual;
-        }
-        const float wanted=enabled ? baseline_*factor : baseline_;
-        if (!std::isfinite(wanted) || wanted<.05f || wanted>10.f) {
-            ++rejects_; return false;
-        }
-        if (std::fabs(*actual-wanted)<.0005f) {
-            last_value_=*actual;
-            last_write_ready_=true;
-            override_active_=enabled && std::fabs(factor-1.f)>.0005f;
+        const auto current=read_value();
+        if (!current) { status_=Status::parameter_read_failed; ++rejects_; return false; }
+        if (disable) {
+            if (!override_active_) {
+                baseline_=*current;
+                baseline_ready_=true;
+            } else if (*current > .0005f) {
+                // The game refreshed its FOV setting, for example on ADS.
+                // Treat that as the new value to restore on mode exit.
+                baseline_=*current;
+            }
+            // Remember ownership only after confirming or explicitly writing
+            // zero. An initial game-provided zero is also a valid baseline.
+            if (*current > .0005f) {
+                if (!invoke(*setter_,0.f)) {
+                    status_=Status::function_abi_unavailable; ++rejects_; return false;
+                }
+                ++writes_;
+            }
+            const auto after=read_value();
+            if (!after || std::fabs(*after)>.0005f) {
+                status_=Status::write_readback_failed; ++rejects_; return false;
+            }
+            override_active_=true;
+            last_value_=*after;
             status_=Status::confirmed;
             return true;
         }
-        if (!invoke(*setter_,wanted)) {
-            ++rejects_; status_=Status::function_abi_unavailable; return false;
+        // Do not overwrite a value a different system has already changed.
+        // Restoration is idempotent, and scoped to the same live controller.
+        const float wanted=baseline_ready_ ? baseline_ : *current;
+        if (std::fabs(*current)<.0005f && std::fabs(wanted-*current)>.0005f) {
+            if (!invoke(*setter_,wanted)) {
+                status_=Status::function_abi_unavailable; ++rejects_; return false;
+            }
+            ++writes_;
+            const auto after=read_value();
+            if (!after || std::fabs(*after-wanted)>.0005f) {
+                status_=Status::write_readback_failed; ++rejects_; return false;
+            }
+            last_value_=*after;
+        } else {
+            last_value_=*current;
         }
-        auto confirmed=read_value();
-        if (!confirmed || std::fabs(*confirmed-wanted)>.001f) {
-            ++rejects_; status_=Status::write_readback_failed; return false;
-        }
-        ++writes_;
-        last_value_=*confirmed;
-        last_write_ready_=true;
-        override_active_=enabled && std::fabs(factor-1.f)>.0005f;
+        override_active_=false;
+        baseline_ready_=false;
         status_=Status::confirmed;
         return true;
+    }
+
+    bool override_active() const {
+        std::scoped_lock lock{mutex_};
+        return override_active_;
     }
 
 private:
@@ -119,12 +140,12 @@ private:
     sdk::UObject* controller_{};
     std::optional<sdk::object_liveness::Identity> controller_identity_{};
     std::optional<FunctionLayout> setter_,getter_;
-    sdk::OwnedFName parameter_name_{L"TanFOV"};
+    sdk::OwnedFName parameter_name_{L"IsFOVEnabled"};
     float baseline_{1.f},last_value_{1.f};
     bool baseline_ready_{},last_write_ready_{},override_active_{};
     Status status_{Status::uninitialized};
     uint64_t writes_{},rejects_{},attempts_{};
-    std::mutex mutex_{};
+    mutable std::mutex mutex_{};
 
     bool resolve() {
         if (!collection_) {
@@ -185,7 +206,7 @@ private:
         } else {
             std::memcpy(&value,bytes.data()+getter_->value,8);
         }
-        if (!std::isfinite(value) || value<.05 || value>10.0) return {};
+        if (!std::isfinite(value) || value < -.0005 || value > 10.0) return {};
         return static_cast<float>(value);
     }
     bool invoke(const FunctionLayout& fn,float v) {
