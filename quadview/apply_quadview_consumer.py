@@ -240,6 +240,7 @@ void D3D12Component::OpenXR::initialize(XrSessionCreateInfo& session_info) {''')
                             ? stereo->quadview_delivery.select(vr->mono_generation(),GetCurrentThreadId())
                             : std::optional<FFakeStereoRenderingHook::QuadViewDelivery::Source>{};
                         if (source && source->packet && source->packet->producer && source->packet->atlas) {
+                          [&]() {
                             const auto packet=source->packet;
                             const auto frozen=packet->producer;
                             UINT64 timestamp_frequency{};
@@ -310,6 +311,7 @@ void D3D12Component::OpenXR::initialize(XrSessionCreateInfo& session_info) {''')
                                     source->serial,accepted,recorded,reinterpret_cast<uintptr_t>(output),
                                     source->generation,vr->mono_generation());
                             }
+                          }();
                         } else {
                             vr->set_quadview_status("Waiting for four distinct main-family views and executed source");
                             SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadView][OutputWaiting] no executed source generation={} thread={}",

@@ -181,7 +181,7 @@ int main(int argc, char** argv) try {
         native_to.pResource = native_targets[view].Get();
         commands->CopyTextureRegion(&native_to, 0, 0, 0, &native_from, nullptr);
         transition(commands.Get(), native_targets[view].Get(), D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_GENERIC_READ);
+            D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heap_description{};
@@ -361,7 +361,7 @@ int main(int argc, char** argv) try {
             const bool source_ok = pass >= 9
                 ? production.record_sources(commands.Get(), {native_targets[0].Get(), native_targets[1].Get(),
                     native_targets[2].Get(), native_targets[3].Get()}, output.Get(), *layout, settings,
-                    D3D12_RESOURCE_STATE_GENERIC_READ, output_state, owner, timestamp_frequency)
+                    D3D12_RESOURCE_STATE_RENDER_TARGET, output_state, owner, timestamp_frequency)
                 : production.record(commands.Get(), atlas.Get(), output.Get(), *layout, settings,
                     atlas_state, output_state, owner, timestamp_frequency);
             if (!source_ok) throw std::runtime_error(production.error());

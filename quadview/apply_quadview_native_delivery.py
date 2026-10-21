@@ -45,6 +45,8 @@ def main():
                         const bool registered=native_owned && g_hook->quadview_delivery.register_bound(qv_source);
                         if (native_callback && native_owned && !registered)
                             vr->set_quadview_status("Native quartet will drain without publishing: source ledger is full");''')
+    block=replace(block, 'qv_packet->source_state=is_ue_5_5_runtime()',
+        'qv_packet->source_state=!native_callback && is_ue_5_5_runtime()')
     # Even a missing/changed pose must retain engine ownership until the four
     # singleton commands drain. Such a packet is never registered for output.
     if not block.endswith('    }\n'): raise RuntimeError('Unexpected GT registration block ending')

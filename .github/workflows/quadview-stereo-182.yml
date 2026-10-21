@@ -93,6 +93,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'QuadView consumer source overlay failed' }
           python workspace/quadview/apply_quadview_native_delivery.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Four-source Native Stereo Fix delivery overlay failed' }
+          python workspace/quadview/apply_quadview_native_retirement.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Fenced native target retirement overlay failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -192,7 +194,7 @@ jobs:
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
           Copy-Item evidence/quadview-source.json package/
           Copy-Item evidence/quadview-source-generated.json package/
-          @{ baseline='Build182'; baselineSource='67c6e1ec5b931d2922e0ef5d253b8e9bef7a1a80'; overlay=$env:GITHUB_SHA; run=$env:GITHUB_RUN_ID; mode='ID7 stereo quad views'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ baseline='Build182'; baselineSource='7486fc59890b14673cd50770b0dafeb692576716'; overlay=$env:GITHUB_SHA; run=$env:GITHUB_RUN_ID; mode='ID7 stereo quad views'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $needed=@('UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
