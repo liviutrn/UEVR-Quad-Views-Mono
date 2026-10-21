@@ -18,7 +18,7 @@ struct Settings {
     float feather_fraction{.08f};
     float sharpen_strength{}; // Glamarye fovea-only; 0 preserves v182 output.
     bool foreground_crop_correction{}; // Experimental UE5.5 tagged first-person primitives only
-    float foreground_fovea_factor{1.f}; // Starts at crop width, adjustable for headset calibration
+    float foreground_fovea_factor{1.f}; // 1.0 is neutral; below/above adjust native foreground scale
     bool debug_border{};
     bool eye_tracked{true};
     uint32_t fovea_view{};
@@ -125,7 +125,7 @@ inline UiReconciled reconcile_ui_settings(const Settings& requested,
     };
     scalar(requested.feather_fraction,0.f,.45f,reject_feather,&Settings::feather_fraction);
     scalar(requested.sharpen_strength,0.f,2.f,reject_sharpen,&Settings::sharpen_strength);
-    scalar(requested.foreground_fovea_factor,.2f,2.f,reject_foreground_factor,&Settings::foreground_fovea_factor);
+    scalar(requested.foreground_fovea_factor,.2f,3.f,reject_foreground_factor,&Settings::foreground_fovea_factor);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
     scalar(requested.gaze_offset_v,-.25f,.25f,reject_offset_v,&Settings::gaze_offset_v);
