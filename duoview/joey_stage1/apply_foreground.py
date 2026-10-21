@@ -11,8 +11,8 @@ def apply(changed, edit):
     header="src/mods/VR.hpp"
     cpp="src/mods/VR.cpp"
     edit(header,
-'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamayreFoveaStrength"), 0.f, 2.f, 1.f)};''',
-'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamayreFoveaStrength"), 0.f, 2.f, 1.f)};
+'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};''',
+'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};
     const ModToggle::Ptr m_duo_disable_firstperson_fov{ModToggle::create(generate_name("DuoViewDisableFirstPersonFOV"),false)};
     std::atomic<uint64_t> m_duo_fov_verified{0},m_duo_fov_failed{0};
     std::atomic<int> m_duo_fov_status{0};
@@ -39,8 +39,8 @@ def apply(changed, edit):
 '''                    m_duo_feather->value()=.08f; m_duo_sharpen->value()=1.f; m_duo_gaze->value()=true;
                     m_duo_disable_firstperson_fov->value()=false;''')
     edit(cpp,
-'''                m_duo_sharpen->draw("Glamayre fovea strength (default 1.0; 0 = off)");''',
-'''                m_duo_sharpen->draw("Glamayre fovea strength (default 1.0; 0 = off)");
+'''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");''',
+'''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");
                 ImGui::Separator();
                 m_duo_disable_firstperson_fov->draw("Disable STALKER 2 First-Person FOV (both sources)");
                 ImGui::TextWrapped("Experimental: sets the shared game MPC_FOV.IsFOVEnabled=0 BEFORE both UE source passes; restores the original value when disabled or leaving DuoView. Does not change crop, projection or HUD.");
