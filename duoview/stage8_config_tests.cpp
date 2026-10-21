@@ -55,7 +55,11 @@ int main() {
     assert(near(accepted.settings.foreground_fovea_factor,2.4f));
     assert(near(accepted.settings.foreground_periphery_factor,1.f));
     both.foreground_periphery_factor=.33f;
-    assert(latch.set_settings(both));
+    d::ConfigLatch independent_latch;
+    assert(independent_latch.set_settings(both));
+    auto dual=independent_latch.for_frame({1,1},3000,3000,{.5f,.5f});
+    assert(dual && dual->settings.foreground_fovea_enabled && dual->settings.foreground_periphery_enabled);
+    assert(near(dual->settings.foreground_fovea_factor,2.4f) && near(dual->settings.foreground_periphery_factor,.33f));
     invalid=modified;invalid.sharpen_strength=std::nanf("");
     assert(!latch.set_settings(invalid));
     auto still=latch.for_frame({5,12},3000,3000,{.5f,.5f});
