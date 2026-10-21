@@ -862,13 +862,66 @@ def main() -> None:
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "    auto& views = *views_ptr;\n    const auto prev_count = views.count;\n\n    // Observe Native Fix's original two-view main family before the fix",
         "    auto& views = *views_ptr;\n    const auto prev_count = views.count;\n\n"
-                "    if (quadview_active) {\n"
-        "        // The source is now registered by BeginRenderViewFamily on the game thread,\n"
-        "        // before the render-thread family can execute. Never publish it from\n"
-        "        // this later renderer entry; the old order raced against RHI delivery.\n"
+                        "if (quadview_active) {\n"
+        "        // Build 40 remains available verbatim when the experimental native\n"
+        "        // pair switch is OFF. The producer is still registered on the GT.\n"
+        "        if (!vr->quadview_split_native_pair_enabled()) {\n"
+        "            call_original();\n"
+        "            return;\n"
+        "        }\n"
+        "\n"
+        "        // A staged native renderer A/B experiment, not a four-target Native\n"
+        "        // Stereo Fix. Two actual Unreal render transactions use a stereo\n"
+        "        // context pair then a stereo focus pair. The second RHI family tail\n"
+        "        // owns publication, so the original four-view producer cannot submit\n"
+        "        // prematurely after the first engine transaction.\n"
+        "        const auto qv_key = vr->quadview_producer_key();\n"
+        "        const auto qv_snapshot = vr->quadview_producer().frozen(qv_key);\n"
+        "        bool qv_valid = qv_snapshot && prev_count == 4 && views.capacity >= 4 &&\n"
+        "            views.data != nullptr &&\n"
+        "            is_readable_process_range(reinterpret_cast<uintptr_t>(views.data), sizeof(void*) * 4) &&\n"
+        "            is_writable_process_range(reinterpret_cast<uintptr_t>(views.data), sizeof(void*) * 4) &&\n"
+        "            qv_snapshot->family == reinterpret_cast<uintptr_t>(view_family) &&\n"
+        "            qv_snapshot->target == reinterpret_cast<uintptr_t>(view_family->get_render_target()) &&\n"
+        "            qv_snapshot->scene == reinterpret_cast<uintptr_t>(view_family->get_scene_interface());\n"
+        "        std::array<sdk::FSceneView*, 4> qv_original{};\n"
+        "        if (qv_valid) {\n"
+        "            for (uint32_t i = 0; i != 4; ++i) {\n"
+        "                qv_original[i] = views.data[i];\n"
+        "                if (!qv_original[i] || qv_snapshot->views[i].view != reinterpret_cast<uintptr_t>(qv_original[i]) ||\n"
+        "                    !qv_original[i]->has_view_family(view_family)) qv_valid = false;\n"
+        "                for (uint32_t j = 0; j < i; ++j)\n"
+        "                    if (qv_original[i] == qv_original[j]) qv_valid = false;\n"
+        "            }\n"
+        "        }\n"
+        "        if (!qv_valid) {\n"
+        "            vr->set_quadview_status(\"Native pair split not eligible; preserving Build 40 four-view engine renderer\");\n"
+        "            call_original();\n"
+        "            return;\n"
+        "        }\n"
+        "\n"
+        "        utility::ScopeGuard restore_quadviews{[&] {\n"
+        "            for (size_t i = 0; i != 4; ++i) views.data[i] = qv_original[i];\n"
+        "            views.count = prev_count;\n"
+        "        }};\n"
+        "        views.count = 2;\n"
+        "        // First native L/R stereo transaction — context.\n"
         "        call_original();\n"
+        "\n"
+        "        // Like the verified two-source Native Stereo Fix, the extra engine\n"
+        "        // render must not advance the scene frame identity as another frame.\n"
+        "        if (auto* scene = reinterpret_cast<sdk::FScene*>(view_family->get_scene_interface()); scene)\n"
+        "            scene->decrement_frame_count();\n"
+        "\n"
+        "        // Second native L/R stereo transaction — fovea.\n"
+        "        views.data[0] = qv_original[2];\n"
+        "        views.data[1] = qv_original[3];\n"
+        "        views.count = 2;\n"
+        "        call_original();\n"
+        "        vr->set_quadview_status(\"Experimental separate native stereo pair render transactions submitted\");\n"
         "        return;\n"
         "    }\n"
+        "\n"
         "\n"
         "    // Observe Native Fix's original two-view main family before the fix")
 
@@ -1159,6 +1212,36 @@ def main() -> None:
         '    if (choices.ContainsKey("99")) { throw new Exception("Unknown ID leaked into other profiles"); }',
         '    if (choices["7"] != "Quad Views Stereo (Experimental)") { throw new Exception("ID 7 must be labeled as stereo Quad Views"); }\n'
         '    if (choices.ContainsKey("99")) { throw new Exception("Unknown ID leaked into other profiles"); }')
+
+
+    # Build43 candidate: switchable pair-isolated native render experiment.
+    # No destructive changes to the known-good one-pass Build 40 defaults.
+    edit(backend, "src/mods/VR.hpp",
+        "    bool is_quadview_renderer_active() const;",
+        "    bool is_quadview_renderer_active() const;\n"
+        "    bool quadview_split_native_pair_enabled() const { return m_quadview_native_pair->value(); }")
+    edit(backend, "src/mods/VR.hpp",
+        '    const ModToggle::Ptr m_quadview_gpu_timing{ModToggle::create(generate_name("QuadViewGpuTiming"), false)};',
+        '    const ModToggle::Ptr m_quadview_gpu_timing{ModToggle::create(generate_name("QuadViewGpuTiming"), false)};\n'
+        '    const ModToggle::Ptr m_quadview_native_pair{ModToggle::create(generate_name("QuadViewNativeStereoPairExperiment"), false)};')
+    edit(backend, "src/mods/VR.cpp",
+        '                m_quadview_sharpen->draw("Fused focus sharpening strength");',
+        '                m_quadview_sharpen->draw("Fused focus sharpening strength");\n'
+        '                m_quadview_native_pair->draw("EXPERIMENTAL: Separate Unreal stereo context/focus render calls (may clear earlier views)");\n'
+        '                if (m_quadview_native_pair->value()) ImGui::TextWrapped("Experimental two-transaction test. Not full four-target Native Stereo Fix. For safe Build 40 renderer keep OFF.");')
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+        '#include "QuadViewDelivery.hpp"',
+        '#include "QuadViewDelivery.hpp"\n#include "QuadViewNativePairLedger.hpp"')
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+        '    mutable QuadViewDelivery quadview_delivery{};',
+        '    mutable QuadViewDelivery quadview_delivery{};\n    mutable uevr::quadview::NativePairLedger quadview_pair_ledger{};')
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+        '        quadview_delivery.retire_all();',
+        '        quadview_delivery.retire_all();\n        quadview_pair_ledger.reset();')
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+        '        quad_engine_opt=g_hook->quadview_delivery.render_engine_family(vr->mono_generation(),frame_count,',
+        '        if (!vr->quadview_split_native_pair_enabled() || qv_pair_phase == uevr::quadview::NativePairLedger::Phase::Second)\n'
+        '            quad_engine_opt=g_hook->quadview_delivery.render_engine_family(vr->mono_generation(),frame_count,')
 
     for path, content in changed.items():
         path.write_text(content, encoding="utf-8")
