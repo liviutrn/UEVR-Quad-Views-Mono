@@ -18,6 +18,121 @@ def main():
     using QuadViewNativeDelivery = uevr::quadview::NativeDelivery<QuadViewDelivery>;
     mutable QuadViewNativeDelivery quadview_native_delivery{quadview_delivery};''')
     h=replace(h, '        quadview_delivery.retire_all();', '        quadview_delivery.retire_all();\n        quadview_native_delivery.reset();')
+    provenance_declaration='''struct QuadViewNativeRhiQueueSnapshot {
+    uint64_t tail_owner_records{};
+    uint64_t tracked_engine_records{};
+    uint64_t hooked_command_records_all_modes{};
+    bool observed{};
+    bool busy{};
+};
+QuadViewNativeRhiQueueSnapshot sample_quadview_native_rhi_queue();
+
+'''
+    s=replace(s,'std::string FFakeStereoRenderingHook::build_hook_provenance_json() {',
+        provenance_declaration+'std::string FFakeStereoRenderingHook::build_hook_provenance_json() {')
+    s=replace(s,'        result["native_frame_diagnostics"] = uevr::native_frame::export_json(m_native_frame_diagnostics);', '''        result["native_frame_diagnostics"] = uevr::native_frame::export_json(m_native_frame_diagnostics);
+
+        // Independent best-effort samples; busy means this component was dropped.
+        result["quadview_diagnostics_snapshot"] = {
+            {"observation_only", true}, {"components_sampled_independently", true},
+            {"cross_component_atomic", false},
+            {"no_gpu_or_queue_work", true},
+        };
+        const auto& quad_vr = VR::get();
+        const uint64_t quad_generation = quad_vr ? quad_vr->mono_generation() : 0;
+        const auto quad_delivery = quadview_delivery.diagnostics_snapshot(quad_generation);
+        nlohmann::json quad_delivery_json{
+            {"observed", !quad_delivery.busy}, {"busy", quad_delivery.busy},
+            {"requested_generation", quad_generation ? nlohmann::json(quad_generation) : nlohmann::json(nullptr)},
+            {"generation_scope", quad_generation ? "active generation filter" : "all generations (unfiltered)"},
+        };
+        if (!quad_delivery.busy) {
+            quad_delivery_json["source_slots"] = quad_delivery.source_slots;
+            quad_delivery_json["incomplete_source_slots"] = quad_delivery.incomplete_source_slots;
+            quad_delivery_json["pending_engine_tickets"] = quad_delivery.pending_engine_tickets;
+            quad_delivery_json["engine_tracking_overflowed"] = quad_delivery.engine_tracking_overflowed;
+        }
+        result["quadview_delivery"] = std::move(quad_delivery_json);
+
+        const auto quad_native = quadview_native_delivery.diagnostics_snapshot(quad_generation);
+        nlohmann::json quad_native_json{
+            {"observed", !quad_native.busy}, {"busy", quad_native.busy},
+            {"requested_generation", quad_generation ? nlohmann::json(quad_generation) : nlohmann::json(nullptr)},
+            {"generation_scope", quad_generation ? "active generation filter" : "all generations (unfiltered)"},
+        };
+        if (!quad_native.busy) {
+            quad_native_json["occupied_slots"] = quad_native.occupied_slots;
+            quad_native_json["active_tails"] = quad_native.active_tails;
+            quad_native_json["shared_tails"] = quad_native.shared_tails;
+            quad_native_json["ambiguous_tails"] = quad_native.ambiguous_tails;
+            quad_native_json["oldest_retained_found"] = quad_native.oldest_retained_found;
+        }
+        if (!quad_native.busy && quad_native.oldest_retained_found) {
+            quad_native_json["oldest_retained_owner"] = {
+                {"generation", quad_native.oldest_retained_generation}, {"serial", quad_native.oldest_retained_serial},
+                {"rendered_mask", quad_native.oldest_retained_rendered}, {"hooked_mask", quad_native.oldest_retained_hooked},
+                {"executed_mask", quad_native.oldest_retained_executed}, {"written_mask", quad_native.oldest_retained_written},
+                {"pending_count", quad_native.oldest_retained_pending_count},
+                {"completion_latched", quad_native.oldest_retained_completion_latched},
+                {"publish", quad_native.oldest_retained_publish}, {"overwritten", quad_native.oldest_retained_overwritten},
+            };
+        } else if (!quad_native.busy) {
+            quad_native_json["oldest_retained_owner"] = nullptr;
+        }
+        result["quadview_native_delivery"] = std::move(quad_native_json);
+
+        const auto quad_rhi = sample_quadview_native_rhi_queue();
+        nlohmann::json quad_rhi_json{
+            {"observed", quad_rhi.observed}, {"busy", quad_rhi.busy},
+            {"requested_generation", nullptr},
+            {"generation_scope", "process-global map records; includes entries across generation resets"},
+        };
+        if (quad_rhi.observed && !quad_rhi.busy) {
+            quad_rhi_json["tail_owner_records"] = quad_rhi.tail_owner_records;
+            quad_rhi_json["tail_owner_record_semantics"] = "retained map records; not unique quartets";
+            quad_rhi_json["tracked_engine_records"] = quad_rhi.tracked_engine_records;
+            quad_rhi_json["hooked_command_records_all_modes"] = quad_rhi.hooked_command_records_all_modes;
+            quad_rhi_json["scope"] = "native tail and engine maps are Quad Views; original vtable map spans all tracked RHI hook modes";
+        }
+        result["quadview_native_rhi_queue"] = std::move(quad_rhi_json);
+
+        if (auto* manager = get_render_target_manager()) {
+            const auto retire = manager->get_quadview_native_retirement_diagnostics();
+            nlohmann::json retire_json{
+                {"observed", retire.observed}, {"busy", retire.busy},
+                {"requested_generation", nullptr},
+                {"generation_scope", "process-global retirement queue across resets"},
+            };
+            if (!retire.observed) retire_json["status"] = "not_observed";
+            if (retire.observed && !retire.busy) {
+                retire_json["pending"] = {{"count", retire.pending.count}, {"truncated", retire.pending.truncated}};
+                retire_json["staged"] = {{"count", retire.staged.count}, {"truncated", retire.staged.truncated}};
+                retire_json["in_flight"] = {{"count", retire.in_flight.count}, {"truncated", retire.in_flight.truncated}};
+                retire_json["ready"] = {{"count", retire.ready.count}, {"truncated", retire.ready.truncated}};
+                retire_json["count_is_lower_bound_when_truncated"] = true;
+                retire_json["per_list_walk_cap"] = uevr::quadview::native_retirement_list_walk_cap;
+                retire_json["last_successful_signal_observed"] = retire.last_successful_signal_observed;
+                retire_json["last_successful_queue"] = retire.last_successful_queue ? nlohmann::json(fmt::format("0x{:x}", retire.last_successful_queue)) : nlohmann::json(nullptr);
+                retire_json["last_successful_device"] = retire.last_successful_device ? nlohmann::json(fmt::format("0x{:x}", retire.last_successful_device)) : nlohmann::json(nullptr);
+                retire_json["last_successful_fence"] = retire.last_successful_fence ? nlohmann::json(fmt::format("0x{:x}", retire.last_successful_fence)) : nlohmann::json(nullptr);
+                retire_json["last_successful_signal_value"] = retire.last_successful_signal_observed
+                    ? nlohmann::json(retire.last_successful_signal_value) : nlohmann::json(nullptr);
+                retire_json["last_poll_state"] = uevr::quadview::to_string(retire.last_poll_state);
+                retire_json["last_poll_fence"] = retire.last_poll_fence ? nlohmann::json(fmt::format("0x{:x}", retire.last_poll_fence)) : nlohmann::json(nullptr);
+                retire_json["last_poll_device"] = retire.last_poll_device ? nlohmann::json(fmt::format("0x{:x}", retire.last_poll_device)) : nlohmann::json(nullptr);
+                retire_json["last_poll_completed_value"] = retire.last_poll_state != uevr::quadview::NativeRetirementPollState::unobserved
+                    ? nlohmann::json(retire.last_poll_completed_value) : nlohmann::json(nullptr);
+                retire_json["last_poll_target_value"] = retire.last_poll_state != uevr::quadview::NativeRetirementPollState::unobserved
+                    ? nlohmann::json(retire.last_poll_target_value) : nlohmann::json(nullptr);
+                retire_json["signal_and_poll_values_are_compared"] = false;
+                retire_json["queue_identity_proves_ordered_execution"] = false;
+                retire_json["poll_target_is_for_last_polled_fence_only"] = true;
+                retire_json["cross_fence_epoch_progress_is_inferred"] = false;
+            }
+            result["quadview_native_retirement"] = std::move(retire_json);
+        } else {
+            result["quadview_native_retirement"] = {{"observed", false}, {"busy", false}, {"status", "manager_unavailable"}};
+        }''')
     # The ID7 router authenticates all readable candidates itself. Keep the
     # existing blanket vtable gate scoped to its original consumers so a valid
     # derived auxiliary family remains eligible for exact ID7 pass-through.
@@ -377,6 +492,26 @@ def main():
     s,worker_drain_count=worker_drain.subn(scope_worker_drain,s)
     if worker_drain_count != 6:
         raise RuntimeError(f'Expected six validated Slate worker execute sites, found {worker_drain_count}')
+    s=replace(s,'''\n};
+
+template<int N>
+void SceneViewExtensionAnalyzer::FillVtable<N>::fill''','''\n};
+
+QuadViewNativeRhiQueueSnapshot sample_quadview_native_rhi_queue() {
+    QuadViewNativeRhiQueueSnapshot result{};
+    try {
+        std::unique_lock lock{SceneViewExtensionAnalyzer::vtable_mutex, std::try_to_lock};
+        if (!lock.owns_lock()) { result.busy = true; return result; }
+        result.observed = true;
+        result.tail_owner_records = SceneViewExtensionAnalyzer::quad_native_commands.size();
+        result.tracked_engine_records = SceneViewExtensionAnalyzer::quad_command_engines.size();
+        result.hooked_command_records_all_modes = SceneViewExtensionAnalyzer::original_vtables.size();
+    } catch (...) { result.busy = true; }
+    return result;
+}
+
+template<int N>
+void SceneViewExtensionAnalyzer::FillVtable<N>::fill''')
     h=replace(h, '        quadview_native_delivery.reset();',
         '        quadview_native_delivery.reset();\n        if (auto* manager=get_render_target_manager()) manager->retire_quadview_native_target_set();')
     vp=root/'src/mods/VR.cpp'; v=vp.read_text()

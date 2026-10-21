@@ -157,5 +157,37 @@ The first Windows run passed the rendering suites but failed the production
 compile because the overlay omitted the `QuadViewFamilyRouting.hpp` export.
 The export is corrected. A clean overlay reapplication recreates the header,
 and a new source-checkpoint regression rejects missing local QuadView includes
-before compilation. All nine checkpoint tests pass after this correction;
-the replacement Windows run remains the final compilation gate.
+before compilation. All nine checkpoint tests passed after this correction.
+The final Build 46 replacement run, [Windows run 39687797421](https://github.com/liviutrn/MUSE-UEVR-DUOVIEW/actions/runs/39687797421),
+passed all 60 CTests and frontend checks. The verified installable package has
+SHA-256 `a7a7b4600b2c20d18f82ff5ae226b29771449f21e39c6a97d5151f5f7c8c361e`.
+
+## Build 47 diagnostic increment — local pre-CI checks
+
+The isolated Build 47 source adds only read-only delivery snapshots and the
+approved no-staged-owner `GetDevice` short-circuit. The Debug export remains
+default-off and on demand. Adaptive screen percentage is still a future plan,
+not implemented behavior.
+
+- Both new portable diagnostics executables passed with GCC C++20,
+  `-Wall -Wextra -Werror`; the busy-lock checks use bounded asynchronous
+  probes and release/join their lock-holding workers before assertions.
+  Both also passed ASan/UBSan with LeakSanitizer disabled, which is unavailable
+  in this container.
+- Existing `NativeDeliveryTests.cpp` and
+  `ContentProvenancePropertyTests.cpp` passed, including all 40,320 write
+  permutations and 40 target replacements.
+- All 10 `SourceCheckpointTests.py` tests passed, including checks for
+  independent on-demand export sections, try-lock map sampling, no RHI map
+  enumeration, retirement snapshot read-only behavior and the staged-owner
+  query guard. Both modified overlay scripts passed `py_compile`.
+- `source_smoke_future.py` reapplied the overlay to the captured Build 46
+  sources successfully. It intentionally deferred Windows shader compilation.
+  The normalized diff against the captured Build 46 generated files changes
+  only `FFakeStereoRenderingHook.cpp/.hpp` and `QuadViewNativeDelivery.hpp`;
+  the new retirement diagnostics header is exported by the overlay.
+
+Build 47 Windows compilation/CTest/WARP/frontend validation and headset
+testing have not yet run. CMake is not installed in this container. The local
+checks establish the portable policy and source-overlay application only;
+they make no claim about runtime image quality, queue ordering or performance.

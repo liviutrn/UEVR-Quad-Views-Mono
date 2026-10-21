@@ -1,4 +1,32 @@
-# Build 46 — four-source Native Stereo Fix
+# Build 47 — read-only delivery diagnostics
+
+Build 47 carries the Build 46 four-source renderer and adds an on-demand
+snapshot to the existing **Hook Provenance JSON** export. Enable **Hook
+Provenance Diagnostics** under **Debug → Stereo Hook Options**, refresh, then
+export the JSON. The existing checkbox remains default-off; no new UI or
+per-frame sampler was added.
+
+The export reports independently sampled Delivery and NativeDelivery ledger
+counts, tail sharing/ambiguity, a representative oldest retained quartet,
+scalar RHI map occupancy, and bounded pending/staged/in-flight/ready retirement
+lists. Busy samples omit counts; retirement walks are capped per list and
+report truncation. Fence and queue identities/values come only from already
+performed signals and polls. Export does not query or wait on the GPU, retain
+owners or COM references, or change selection, acceptance or retirement
+decisions.
+
+The retirement path skips its existing command-queue `GetDevice` query when
+there is no staged owner to signal. The in-flight poll and next-present
+staging/signal order are unchanged. No performance gain is claimed. This build
+does not include an adaptive FPS/screen-percentage controller.
+
+Local portable checks cover empty/partial/full/reset snapshots, same-quartet
+shared tails, cross-quartet quarantine, overflow visibility, try-lock busy
+samples, bounded/cyclic retirement lists and device-removed fence semantics.
+Generated-source smoke application passed; the production Windows build and
+headset acceptance remain separate validation steps.
+
+## Build 46 — four-source Native Stereo Fix
 
 Build 46 addresses the reviewed ID7 issues around deferred command ownership,
 main-family routing and physical render-target contents. It is built from the

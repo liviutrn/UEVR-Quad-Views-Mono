@@ -1,4 +1,4 @@
-UEVR QUAD VIEWS — BUILD 46 NATIVE STEREO FIX
+UEVR QUAD VIEWS — BUILD 47 DIAGNOSTICS FOLLOW-UP
 
 Target: STALKER 2 (UE5.5), DX12, OpenXR, PSVR2.
 Baseline: Build 40, 7486fc59890b14673cd50770b0dafeb692576716.
@@ -15,11 +15,20 @@ Mode ID7: Quad Views Stereo (Experimental).
    switching, loading a save and sustained gameplay. Save the full log if a
    check fails.
 
+Build 47 includes the Build 46 renderer and adds bounded, on-demand
+diagnostics. To export them, open **Debug → Stereo Hook Options → Hook
+Provenance Diagnostics**, then select **Refresh Hook Provenance** and
+**Export Hook Provenance JSON**. The checkbox is default-off. The export does
+not add a resolution controller and does not establish GPU completion,
+lighting parity, queue ordering, stability or performance.
+
 ID7 uses four independent engine render targets and requires a coherent
 four-source frame. Their full atlas extents preserve Build 40 view rectangles
 and projections, with increased target memory use. Rendered pixel counts do
 not predict total GPU cost. Build 40's ID6 DuoView remains unchanged; keep your
-Build 40 installation for direct comparison.
+Build 40 installation for direct comparison. Build 47's diagnostics are
+observation-only; use the Build 40 image checks above for FOV, gaze, stereo,
+brightness and shadows.
 
 Diagnostics: 0 blended, 1 context only, 2 focus only, 3 synthetic view colors.
 Synthetic colors cannot establish that Unreal rendered four valid scene views.

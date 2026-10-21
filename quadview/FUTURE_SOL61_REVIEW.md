@@ -96,3 +96,11 @@ The current NVIDIA DLSS-RR guide explicitly states DRS is unsupported and changi
 | Opt-in controller | Same-scene A/B, native frame cadence and p95/p99, temporal quality, memory, transitions | Worse stability/latency, sustained oscillation, external-writer fight, unverified feedback |
 
 This plan can improve quality under a measured GPU budget; it cannot promise 40 FPS in CPU-bound or fixed-cost scenes. The first implementation should make the remaining uncertainty measurable while preserving Build46's ownership and accepted baseline behavior.
+
+## Build 47 bounded implementation review
+
+22 October 2026: reviewed the actual isolated diff and generated production integration. Approve this candidate for Windows compilation; no blocking defect found. The final design uses the existing on-demand Hook Provenance JSON export instead of the optional periodic logs proposed above. It adds independent try-lock POD summaries for delivery, native quartet state, RHI map sizes and bounded retirement lists. Busy data is omitted, retained completed owners remain visible, and shared tails include multiple roles within one attachment.
+
+Snapshots retain no Source/Command/COM owners, nest no ledger locks, initialize no retirement queue and perform no GPU/COM queries. Retirement metadata is captured alongside existing polls/successful signals; device removal is explicit and historical fence values are not compared. The separately approved staged-head guard skips an unused GetDevice call while preserving pending staging, next-present signaling, fence polling and GT cleanup. No measured FPS gain is established.
+
+New tests cover ledger states, actual lock contention, overflow, shared/ambiguous tails and bounded retirement aggregation. Production COM retirement remains an integration test limitation. Local passes are reported by the implementation worker; Windows production/WARP and headset gates remain outstanding at this review point. No active adaptive screen-percentage controller is included.

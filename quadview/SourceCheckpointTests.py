@@ -201,6 +201,34 @@ class SourceCheckpointTests(unittest.TestCase):
         self.assertNotIn('[QuadViews][Producer] missing GT frame', script)
         self.assertNotIn('take_observed_gt_frame(key.generation', script)
 
+    def test_on_demand_diagnostics_export_is_complete_and_read_only(self) -> None:
+        directory = Path(__file__).parent
+        delivery = (directory / "apply_quadview_native_delivery.py").read_text(encoding="utf-8")
+        retirement = (directory / "apply_quadview_native_retirement.py").read_text(encoding="utf-8")
+        for field in (
+            'result["quadview_delivery"]', 'result["quadview_native_delivery"]',
+            'result["quadview_native_rhi_queue"]', 'result["quadview_native_retirement"]',
+            'tail_owner_record_semantics', 'oldest_retained_owner', 'signal_and_poll_values_are_compared',
+            'components_sampled_independently', 'cross_component_atomic', 'requested_generation',
+            'hooked_command_records_all_modes', 'queue_identity_proves_ordered_execution',
+            'poll_target_is_for_last_polled_fence_only',
+        ):
+            self.assertIn(field, delivery)
+        self.assertIn('std::try_to_lock', delivery)
+        self.assertIn('quad_native_commands.size()', delivery)
+        map_snapshot = delivery.split('QuadViewNativeRhiQueueSnapshot sample_quadview_native_rhi_queue() {', 1)[1]
+        map_snapshot = map_snapshot.split('template<int N>', 1)[0]
+        self.assertNotIn('for (', map_snapshot)
+        self.assertNotIn('.begin()', map_snapshot)
+        self.assertEqual(map_snapshot.count('std::try_to_lock'), 1)
+        self.assertIn('QuadViewNativeRetirementDiagnostics.hpp', retirement)
+        self.assertIn('native_retirement_list_walk_cap', delivery)
+        self.assertIn('if (queue.staged_head && command_queue && SUCCEEDED(command_queue->GetDevice', retirement)
+        snapshot = retirement.split('static uevr::quadview::NativeRetirementDiagnostics diagnostics_snapshot()', 1)[1]
+        snapshot = snapshot.split('static void append(', 1)[0]
+        for forbidden in ('GetCompletedValue', 'GetDevice', 'CreateFence', 'Signal(', 'retire_queue()', 'ComPtr<'):
+            self.assertNotIn(forbidden, snapshot)
+
     def test_dirty_sdk_is_still_rejected(self) -> None:
         write(self.sdk, "unexpected.hpp", "untracked SDK change\n")
         with self.assertRaisesRegex(RuntimeError, "restricted SDK working tree changed"):

@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <type_traits>
 
 namespace uevr::quadview {
 
@@ -15,6 +16,18 @@ namespace uevr::quadview {
 template <class Packet, size_t Capacity = 16>
 class Delivery {
 public:
+    // Bounded, ownership-free view used by the on-demand diagnostics export.
+    // A busy result means this ledger was not sampled.
+    struct DiagnosticsSnapshot {
+        uint64_t generation{};
+        uint32_t source_slots{};
+        uint32_t incomplete_source_slots{};
+        uint32_t pending_engine_tickets{};
+        bool engine_tracking_overflowed{};
+        bool busy{};
+    };
+    static_assert(std::is_trivially_copyable_v<DiagnosticsSnapshot>);
+
     struct Source {
         std::shared_ptr<const Packet> packet{};
         uint64_t generation{}, serial{};
@@ -184,6 +197,30 @@ public:
     bool engine_tracking_overflowed(uint64_t generation) const {
         std::scoped_lock lock{mutex_};
         return engine_overflow_generation_ == generation;
+    }
+
+    DiagnosticsSnapshot diagnostics_snapshot(uint64_t generation = 0) const {
+        DiagnosticsSnapshot result{};
+        result.generation = generation;
+        std::unique_lock<std::mutex> lock;
+        try { lock = std::unique_lock<std::mutex>{mutex_, std::try_to_lock}; }
+        catch (...) { result.busy = true; return result; }
+        if (!lock.owns_lock()) {
+            result.busy = true;
+            return result;
+        }
+        for (const auto& slot : slots_) {
+            if (!slot.source || (generation && slot.source.generation != generation)) continue;
+            ++result.source_slots;
+            if (!slot.executed) ++result.incomplete_source_slots;
+        }
+        for (const auto& slot : engine_slots_) {
+            if (slot.ticket && (!generation || slot.ticket.generation == generation))
+                ++result.pending_engine_tickets;
+        }
+        result.engine_tracking_overflowed = engine_overflow_generation_ != 0 &&
+            (!generation || engine_overflow_generation_ == generation);
+        return result;
     }
 
     // Publish the validated assigned frame and source in one ledger insertion.

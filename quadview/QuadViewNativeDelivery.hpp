@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <mutex>
 #include <optional>
+#include <type_traits>
 
 namespace uevr::quadview {
 
@@ -46,6 +47,29 @@ template<class Delivery> class NativeDelivery {
 public:
     using Source = typename Delivery::Source;
     using EngineTicket = typename Delivery::EngineTicket;
+
+    // Fixed scalar summary; never copies a source, command, or packet owner.
+    // Counts are sampled under one try-lock and may independently be busy.
+    struct DiagnosticsSnapshot {
+        uint64_t generation{};
+        uint32_t occupied_slots{};
+        uint32_t active_tails{};
+        uint32_t shared_tails{};
+        uint32_t ambiguous_tails{};
+        uint64_t oldest_retained_generation{};
+        uint64_t oldest_retained_serial{};
+        std::array<uint32_t,4> oldest_retained_pending_count{};
+        uint8_t oldest_retained_rendered{};
+        uint8_t oldest_retained_hooked{};
+        uint8_t oldest_retained_executed{};
+        uint8_t oldest_retained_written{};
+        bool oldest_retained_completion_latched{};
+        bool oldest_retained_publish{};
+        bool oldest_retained_overwritten{};
+        bool oldest_retained_found{};
+        bool busy{};
+    };
+    static_assert(std::is_trivially_copyable_v<DiagnosticsSnapshot>);
 
     struct Command {
         Source source{};
@@ -118,6 +142,61 @@ public:
     };
 
     explicit NativeDelivery(Delivery& delivery): delivery_{delivery} {}
+
+    DiagnosticsSnapshot diagnostics_snapshot(uint64_t generation = 0) const {
+        DiagnosticsSnapshot result{};
+        result.generation = generation;
+        std::unique_lock<std::mutex> lock;
+        try { lock = std::unique_lock<std::mutex>{mutex_, std::try_to_lock}; }
+        catch (...) { result.busy = true; return result; }
+        if (!lock.owns_lock()) {
+            result.busy = true;
+            return result;
+        }
+        for (const auto& slot : slots_) {
+            if (!slot.source || (generation && slot.source.generation != generation)) continue;
+            ++result.occupied_slots;
+            if (!result.oldest_retained_found ||
+                slot.source.generation < result.oldest_retained_generation ||
+                (slot.source.generation == result.oldest_retained_generation &&
+                 slot.source.serial < result.oldest_retained_serial)) {
+                result.oldest_retained_found = true;
+                result.oldest_retained_generation = slot.source.generation;
+                result.oldest_retained_serial = slot.source.serial;
+                result.oldest_retained_rendered = slot.rendered;
+                result.oldest_retained_hooked = slot.hooked;
+                result.oldest_retained_executed = slot.executed;
+                result.oldest_retained_written = slot.written;
+                result.oldest_retained_pending_count = slot.pending_count;
+                result.oldest_retained_completion_latched = slot.completion_latched;
+                result.oldest_retained_publish = slot.publish;
+                result.oldest_retained_overwritten = slot.overwritten;
+            }
+        }
+        for (const auto& tail : tails_) {
+            if (!tail.command) continue;
+            bool belongs = false;
+            for (size_t i = 0; i < tail.attachment_count; ++i) {
+                const auto& participant = tail.attachments[i];
+                if (participant.slot >= slots_.size()) continue;
+                const auto& slot = slots_[participant.slot];
+                if (slot.owner_id != participant.owner_id || !slot.source ||
+                    (generation && slot.source.generation != generation)) continue;
+                belongs = true;
+                break;
+            }
+            if (!belongs) continue;
+            ++result.active_tails;
+            bool shared = tail.attachment_count > 1;
+            for (size_t i = 0; !shared && i < tail.attachment_count; ++i) {
+                const auto mask = tail.attachments[i].view_mask;
+                shared = mask != 0 && (mask & uint8_t(mask - 1)) != 0;
+            }
+            if (shared) ++result.shared_tails;
+            if (tail.ambiguous) ++result.ambiguous_tails;
+        }
+        return result;
+    }
 
     bool bind(Source source, EngineTicket engine, uint64_t target_set,
               std::array<uintptr_t,4> targets) {

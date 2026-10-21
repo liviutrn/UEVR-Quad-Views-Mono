@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fence-retire Native Stereo Fix source targets after Unreal GPU use."""
 from pathlib import Path
+import shutil
 import sys
 
 
@@ -23,6 +24,7 @@ OWNER_IMPL = r'''struct VRRenderTargetManager_Base::QuadViewNativeTargetOwner {
     QuadViewNativeTargetOwner* next_retired{};
     Microsoft::WRL::ComPtr<ID3D12Fence> retire_fence{};
     uint64_t retire_fence_value{};
+    uintptr_t retire_fence_device_identity{};
 
     struct RetireQueue {
         std::mutex mutex{};
@@ -33,8 +35,46 @@ OWNER_IMPL = r'''struct VRRenderTargetManager_Base::QuadViewNativeTargetOwner {
         Microsoft::WRL::ComPtr<ID3D12Device> signal_device{};
         Microsoft::WRL::ComPtr<ID3D12Fence> signal_fence{};
         uint64_t next_fence_value{};
+        uintptr_t last_successful_queue{}, last_successful_device{}, last_successful_fence{};
+        uint64_t last_successful_signal_value{};
+        uintptr_t last_poll_fence{}, last_poll_device{};
+        uint64_t last_poll_completed_value{}, last_poll_target_value{};
+        uevr::quadview::NativeRetirementPollState last_poll_state{
+            uevr::quadview::NativeRetirementPollState::unobserved};
+        bool last_successful_signal_observed{};
     };
-    static RetireQueue& retire_queue() { static auto* queue=new RetireQueue{}; return *queue; }
+    inline static std::atomic<RetireQueue*> observed_queue{};
+    static RetireQueue& retire_queue() {
+        static auto* queue=[] { auto* value=new RetireQueue{}; observed_queue.store(value,std::memory_order_release); return value; }();
+        return *queue;
+    }
+
+    static uevr::quadview::NativeRetirementDiagnostics diagnostics_snapshot() {
+        uevr::quadview::NativeRetirementDiagnostics result{};
+        try {
+            auto* queue=observed_queue.load(std::memory_order_acquire);
+            if (!queue) return result; // Export does not initialize retirement state.
+            std::unique_lock lock{queue->mutex,std::try_to_lock};
+            if (!lock.owns_lock()) { result.observed=true; result.busy=true; return result; }
+            result.observed=true;
+            const auto next=[](const QuadViewNativeTargetOwner* owner) noexcept { return owner->next_retired; };
+            result.pending=uevr::quadview::count_native_retirement_list(queue->pending_head,next);
+            result.staged=uevr::quadview::count_native_retirement_list(queue->staged_head,next);
+            result.in_flight=uevr::quadview::count_native_retirement_list(queue->in_flight_head,next);
+            result.ready=uevr::quadview::count_native_retirement_list(queue->ready_head,next);
+            result.last_successful_queue=queue->last_successful_queue;
+            result.last_successful_device=queue->last_successful_device;
+            result.last_successful_fence=queue->last_successful_fence;
+            result.last_successful_signal_value=queue->last_successful_signal_value;
+            result.last_successful_signal_observed=queue->last_successful_signal_observed;
+            result.last_poll_fence=queue->last_poll_fence;
+            result.last_poll_device=queue->last_poll_device;
+            result.last_poll_completed_value=queue->last_poll_completed_value;
+            result.last_poll_target_value=queue->last_poll_target_value;
+            result.last_poll_state=queue->last_poll_state;
+        } catch (...) { result.observed=true; result.busy=true; }
+        return result;
+    }
 
     static void append(QuadViewNativeTargetOwner*& head, QuadViewNativeTargetOwner*& tail,
                        QuadViewNativeTargetOwner* owner) noexcept {
@@ -134,11 +174,19 @@ OWNER_IMPL = r'''struct VRRenderTargetManager_Base::QuadViewNativeTargetOwner {
             while (*link) {
                 auto* owner=*link;
                 const auto completed=owner->retire_fence ? owner->retire_fence->GetCompletedValue() : 0;
+                if (owner->retire_fence) {
+                    queue.last_poll_fence=reinterpret_cast<uintptr_t>(owner->retire_fence.Get());
+                    queue.last_poll_device=owner->retire_fence_device_identity;
+                    queue.last_poll_completed_value=completed;
+                    queue.last_poll_target_value=owner->retire_fence_value;
+                    queue.last_poll_state=uevr::quadview::native_retirement_poll_state(true,completed);
+                }
                 if (owner->retire_fence && completed!=UINT64_MAX && completed>=owner->retire_fence_value) {
                     *link=owner->next_retired;
                     owner->next_retired=nullptr;
                     owner->retire_fence.Reset();
                     owner->retire_fence_value=0;
+                    owner->retire_fence_device_identity=0;
                     append(queue.ready_head,queue.ready_tail,owner);
                     queue_game_thread_drain=true;
                 } else {
@@ -147,7 +195,7 @@ OWNER_IMPL = r'''struct VRRenderTargetManager_Base::QuadViewNativeTargetOwner {
             }
 
             Microsoft::WRL::ComPtr<ID3D12Device> queue_device{};
-            if (command_queue && SUCCEEDED(command_queue->GetDevice(IID_PPV_ARGS(&queue_device))) && queue_device) {
+            if (queue.staged_head && command_queue && SUCCEEDED(command_queue->GetDevice(IID_PPV_ARGS(&queue_device))) && queue_device) {
                 QuadViewNativeTargetOwner *signal_head{}, *signal_tail{};
                 auto** staged_link=&queue.staged_head;
                 queue.staged_tail=nullptr;
@@ -182,6 +230,7 @@ OWNER_IMPL = r'''struct VRRenderTargetManager_Base::QuadViewNativeTargetOwner {
                         for (auto* owner=signal_head; owner; owner=owner->next_retired) {
                             owner->retire_fence=queue.signal_fence;
                             owner->retire_fence_value=value;
+                            owner->retire_fence_device_identity=reinterpret_cast<uintptr_t>(queue.signal_device.Get());
                         }
                         QuadViewNativeTargetOwner* flight_tail=signal_head;
                         while (flight_tail && flight_tail->next_retired) flight_tail=flight_tail->next_retired;
@@ -190,6 +239,11 @@ OWNER_IMPL = r'''struct VRRenderTargetManager_Base::QuadViewNativeTargetOwner {
                             queue.in_flight_head=signal_head;
                         }
                         queue.next_fence_value=value;
+                        queue.last_successful_queue=reinterpret_cast<uintptr_t>(command_queue);
+                        queue.last_successful_device=reinterpret_cast<uintptr_t>(queue.signal_device.Get());
+                        queue.last_successful_fence=reinterpret_cast<uintptr_t>(queue.signal_fence.Get());
+                        queue.last_successful_signal_value=value;
+                        queue.last_successful_signal_observed=true;
                     } else {
                         QuadViewNativeTargetOwner* staged_tail=signal_head;
                         while (staged_tail && staged_tail->next_retired) staged_tail=staged_tail->next_retired;
@@ -221,6 +275,9 @@ def main() -> None:
     dp = root / "src/mods/vr/D3D12Component.cpp"
     h, s, d = hp.read_text(), cp.read_text(), dp.read_text()
 
+    h = replace_once(h, '#include "QuadViewNativeDelivery.hpp"',
+        '#include "QuadViewNativeDelivery.hpp"\n#include "QuadViewNativeRetirementDiagnostics.hpp"')
+
     if "QuadViewNativeDelivery.hpp" not in h or "quadview_native_delivery" not in h:
         raise RuntimeError("Run native retirement after the NativeDelivery overlay")
     if "service_quadview_native_target_retirements_after_present" in s or "service_quadview_native_target_retirements_after_present" in d:
@@ -234,7 +291,8 @@ def main() -> None:
         h,
         "    void retire_quadview_native_target_set();",
         "    void retire_quadview_native_target_set();\n"
-        "    void service_quadview_native_target_retirements_after_present(ID3D12CommandQueue* command_queue);",
+        "    void service_quadview_native_target_retirements_after_present(ID3D12CommandQueue* command_queue);\n"
+        "    uevr::quadview::NativeRetirementDiagnostics get_quadview_native_retirement_diagnostics() const;",
     )
     s = replace_once(
         s,
@@ -246,6 +304,9 @@ def main() -> None:
         "bool VRRenderTargetManager_Base::ensure_quadview_native_target_set(uint32_t width,uint32_t height) {",
         "void VRRenderTargetManager_Base::service_quadview_native_target_retirements_after_present(ID3D12CommandQueue* command_queue) {\n"
         "    QuadViewNativeTargetOwner::service_after_present(command_queue);\n"
+        "}\n\n"
+        "uevr::quadview::NativeRetirementDiagnostics VRRenderTargetManager_Base::get_quadview_native_retirement_diagnostics() const {\n"
+        "    return QuadViewNativeTargetOwner::diagnostics_snapshot();\n"
         "}\n\n"
         "bool VRRenderTargetManager_Base::ensure_quadview_native_target_set(uint32_t width,uint32_t height) {",
     )
@@ -268,6 +329,8 @@ def main() -> None:
     hp.write_text(h)
     cp.write_text(s)
     dp.write_text(d)
+    shutil.copyfile(Path(__file__).with_name("QuadViewNativeRetirementDiagnostics.hpp"),
+                    root / "src/mods/vr/QuadViewNativeRetirementDiagnostics.hpp")
     print("Applied fenced Native Stereo Fix target retirement.")
 
 

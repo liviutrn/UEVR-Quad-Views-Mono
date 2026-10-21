@@ -41,7 +41,7 @@ The export will provide independently sampled, best-effort sections:
 | Section | Useful evidence | Limits |
 | --- | --- | --- |
 | QuadView delivery | Generation, source/engine occupancy and overflow latch | Busy is unavailable, never zero |
-| Native quartet delivery | Live owners/tails, ambiguous tails, representative incomplete serial and rendered/hooked/executed masks | A mask describes callback bookkeeping, not a GPU completion fence |
+| Native quartet delivery | Live owners/tails, ambiguous tails, representative oldest retained serial and rendered/hooked/executed masks | A mask describes callback bookkeeping, not a GPU completion fence |
 | Queued RHI records | Scalar retained-record count under the existing map lock | No map/owner copies or unlocked enumeration |
 | Native target retirement | Bounded pending/staged/in-flight/ready counts; last observed successful signal and poll identities/values | Counts can be lower bounds when truncated; one poll does not summarize all fences |
 
