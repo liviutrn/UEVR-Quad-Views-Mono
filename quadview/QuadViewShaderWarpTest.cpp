@@ -157,9 +157,36 @@ int main(int argc, char** argv) try {
     commands->CopyTextureRegion(&atlas_location, 0, 0, 0, &upload_location, nullptr);
     transition(commands.Get(), atlas.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
+    // Each native target contains only its own rectangle; every other region is
+    // poison. Binding the wrong eye/level SRV therefore fails the pixel checks.
+    std::array<ComPtr<ID3D12Resource>, 4> native_targets, native_uploads;
+    for (unsigned view = 0; view != 4; ++view) {
+        native_targets[view] = resource(device.Get(), texture(AW, H, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+            D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+        native_uploads[view] = resource(device.Get(), buffer(byte_count), D3D12_HEAP_TYPE_UPLOAD,
+            D3D12_RESOURCE_STATE_GENERIC_READ);
+        require(native_uploads[view]->Map(0, &no_read, &mapped), "Map native upload");
+        std::memset(mapped, 0, static_cast<size_t>(byte_count));
+        const auto& rect = layout->views[view];
+        for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < AW; ++x) {
+            Color color{255, 0, 255, 255};
+            if (x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height)
+                color = source_color(view, x - rect.x, y - rect.y);
+            std::memcpy(static_cast<uint8_t*>(mapped) + y * footprint.Footprint.RowPitch + x * 4, color.data(), 4);
+        }
+        native_uploads[view]->Unmap(0, nullptr);
+        auto native_from = upload_location;
+        native_from.pResource = native_uploads[view].Get();
+        auto native_to = atlas_location;
+        native_to.pResource = native_targets[view].Get();
+        commands->CopyTextureRegion(&native_to, 0, 0, 0, &native_from, nullptr);
+        transition(commands.Get(), native_targets[view].Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_GENERIC_READ);
+    }
+
     D3D12_DESCRIPTOR_HEAP_DESC heap_description{};
     heap_description.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heap_description.NumDescriptors = 1;
+    heap_description.NumDescriptors = 4;
     heap_description.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> srv_heap;
     require(device->CreateDescriptorHeap(&heap_description, IID_PPV_ARGS(&srv_heap)), "Create SRV heap");
@@ -168,7 +195,13 @@ int main(int argc, char** argv) try {
     srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srv.Texture2D.MipLevels = 1;
-    device->CreateShaderResourceView(atlas.Get(), &srv, srv_heap->GetCPUDescriptorHandleForHeapStart());
+    auto source_descriptor = srv_heap->GetCPUDescriptorHandleForHeapStart();
+    const auto source_stride = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    for (unsigned i = 0; i != 4; ++i) {
+        device->CreateShaderResourceView(atlas.Get(), &srv, source_descriptor);
+        source_descriptor.ptr += source_stride;
+    }
+    heap_description.NumDescriptors = 1;
     heap_description.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     heap_description.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ComPtr<ID3D12DescriptorHeap> rtv_heap;
@@ -181,7 +214,7 @@ int main(int argc, char** argv) try {
 
     D3D12_DESCRIPTOR_RANGE range{};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    range.NumDescriptors = 1;
+    range.NumDescriptors = 4;
     D3D12_ROOT_PARAMETER parameters[2]{};
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -274,8 +307,8 @@ int main(int argc, char** argv) try {
     D3D12_RESOURCE_STATES atlas_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     std::vector<uint8_t> baseline_focus;
     std::vector<uint8_t> strength_one_focus;
-    for (unsigned pass = 0; pass < 9; ++pass) {
-        const unsigned mode = pass < 6 ? pass % 3 : 2u;
+    for (unsigned pass = 0; pass < 12; ++pass) {
+        const unsigned mode = pass < 6 || pass >= 9 ? pass % 3 : 2u;
         if (pass != 0) {
             require(allocator->Reset(), "Reset allocator");
             require(commands->Reset(allocator.Get(), nullptr), "Reset commands");
@@ -325,9 +358,13 @@ int main(int argc, char** argv) try {
                 throw std::runtime_error("Production compositor accepted overlapping atlas regions");
             // GPU timing is opt-in and requires the queue frequency on the actual record call;
             // prewarm alone cannot enable timestamp emission.
-            if (!production.record(commands.Get(), atlas.Get(), output.Get(), *layout, settings,
-                atlas_state, output_state, owner, timestamp_frequency))
-                throw std::runtime_error(production.error());
+            const bool source_ok = pass >= 9
+                ? production.record_sources(commands.Get(), {native_targets[0].Get(), native_targets[1].Get(),
+                    native_targets[2].Get(), native_targets[3].Get()}, output.Get(), *layout, settings,
+                    D3D12_RESOURCE_STATE_GENERIC_READ, output_state, owner, timestamp_frequency)
+                : production.record(commands.Get(), atlas.Get(), output.Get(), *layout, settings,
+                    atlas_state, output_state, owner, timestamp_frequency);
+            if (!source_ok) throw std::runtime_error(production.error());
             owner.reset();
             if (packet_lifetime.expired()) throw std::runtime_error("Production compositor lost packet before slot retirement");
         }
@@ -448,7 +485,7 @@ int main(int argc, char** argv) try {
             if (!packet_lifetime.expired()) throw std::runtime_error("Production packet owner leaked after retirement");
         }
     }
-    std::cout << "QuadView WARP: stereo isolation, off-center ROI, crop bounds, diagnostic modes, 0/1/2 Glamarye focus strength and slot ownership passed.\n";
+    std::cout << "QuadView WARP: four independent native target SRVs, stereo isolation, off-center ROI, crop bounds, diagnostic modes, 0/1/2 Glamarye focus strength and slot ownership passed.\n";
     return 0;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

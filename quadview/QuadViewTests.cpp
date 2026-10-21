@@ -5,6 +5,7 @@
 #include "QuadViewDelivery.hpp"
 #include "QuadViewProducer.hpp"
 #include "QuadViewViewDemand.hpp"
+#include "QuadViewNativeTargets.hpp"
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -48,6 +49,20 @@ static uevr::quadview::gaze::Projection flat_matrix(const std::array<std::array<
 }
 
 int main() {
+    std::array<uevr::quadview::NativeTargetIdentity,4> native_targets{};
+    for (uint32_t i=0; i!=4; ++i) native_targets[i]={
+        0x100u+i,0x200u+i,0x300u+i,0x400u+i,7,4096,2048,87};
+    assert(uevr::quadview::valid_native_target_quartet(native_targets));
+    auto aliased_native_targets=native_targets;
+    aliased_native_targets[2].native_resource=aliased_native_targets[1].native_resource;
+    assert(!uevr::quadview::valid_native_target_quartet(aliased_native_targets));
+    auto mismatched_native_extent=native_targets;
+    mismatched_native_extent[3].height++;
+    assert(!uevr::quadview::valid_native_target_quartet(mismatched_native_extent));
+    auto mismatched_native_generation=native_targets;
+    mismatched_native_generation[1].target_set_generation++;
+    assert(!uevr::quadview::valid_native_target_quartet(mismatched_native_generation));
+
     using namespace uevr::quadview;
     // The supported STALKER 2 game must install the BeginRenderViewFamily
     // callback at injection, even if the active/requested mode is still 0.

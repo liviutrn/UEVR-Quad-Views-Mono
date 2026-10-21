@@ -1,30 +1,24 @@
-# Local ID7 candidate notes
+# Build 44 — four-source Native Stereo Fix
 
-This candidate adds stereo ID7 frame-lifecycle guards, per-eye gaze projection,
-the published v186.1 DuoView gaze recovery and crop-stability behavior, quality
-controls, fused focus sharpening, and optional per-slot D3D12 GPU timing. It
-keeps ID6's DuoView source and the v186.1 production helper implementations
-unchanged. The `GLAMARYE_LICENSE.txt` file applies to the fused sharpening
-implementation and ships beside this note.
+Built from the accepted Build 40 source at `7486fc59890b14673cd50770b0dafeb692576716`.
 
-Portable geometry, producer/history, delivery, and asynchronous tests pass. The
-guarded source overlays applied to the pinned backend and frontend copies.
-Windows shader compilation, Windows backend compilation, and GPU WARP tests
-remain pending for this candidate. No headset test has been run.
+The ID7 native path isolates left/right context and left/right focus in four
+engine-owned outputs. The compositor samples each source independently,
+including focus sharpening. Publication requires a coherent quartet from the
+same frame and target generation. Build 40 gaze, crop geometry and stereo
+projection behavior are retained; the ID6 DuoView source is unchanged.
 
-The Build32 dump establishes a null indirect write while Unreal traverses
-render-graph resource metadata. It does not establish the specific resource or
-root cause. The nearby UI toggle is temporal correlation only. This candidate
-must not be described as crash-fixed or headset-stable.
+The full atlas extent is retained for each target to preserve existing engine
+view rectangles without introducing undocumented view-layout modifications.
+This increases render-target memory consumption; performance must be measured
+in the game rather than inferred from pixel counts.
 
-The transition drain covers tracked ID7 engine tickets and command tails. An
-unknown owner, an overflow, or a missing tail deliberately blocks the
-transition. This ledger does not prove that every Unreal render-thread or RHI
-consumer has drained. Native secondary-pass shading is excluded because the
-existing DuoView path changes mono-dependent state and cannot be reused safely
-for true stereo four-view rendering without a separate engine design.
+Validation includes portable frame/history and asynchronous-delivery contracts,
+Windows shader compilation, four-source WARP compositor checks, the original
+compatibility suite, and the Windows backend/frontend build. The accompanying
+CI evidence records their actual outcomes. No automated test establishes
+STALKER 2 lighting parity, headset stability, or headset performance.
 
-Before use, require the full Windows CI build and a headset retest. Verify
-stereo depth, per-eye focus alignment, gaze-loss recovery, GPU timing output
-when enabled, and a sustained gameplay run. CI success alone does not establish
-headset stability or resolve the dump's unproven root cause.
+Compare shadowed interiors against Native Stereo Fix, DuoView and Build 40,
+including the previously reported left-eye focus/periphery shading mismatch.
+Also check FOV, gaze, mode transitions, loading and sustained frame delivery.

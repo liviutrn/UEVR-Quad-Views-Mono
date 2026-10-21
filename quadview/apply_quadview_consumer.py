@@ -249,13 +249,27 @@ void D3D12Component::OpenXR::initialize(XrSessionCreateInfo& session_info) {''')
                                         queue->GetTimestampFrequency(&timestamp_frequency);
                                 }
                             }
-                            m_openxr.prepare_quadview_compositors(device,packet->atlas->GetDesc().Format,timestamp_frequency);
+                            std::array<ID3D12Resource*,4> native_sources{};
+                            const bool isolated=packet->native_target_set_generation!=0;
+                            bool sources_valid=true;
+                            for (size_t i=0; i!=4; ++i) {
+                                native_sources[i]=isolated ? packet->native_sources[i].Get() : packet->atlas.Get();
+                                if (!native_sources[i]) sources_valid=false;
+                                if (isolated) for (size_t j=0; j<i; ++j)
+                                    if (native_sources[i]==native_sources[j]) sources_valid=false;
+                            }
+                            if (!sources_valid) {
+                                vr->set_quadview_status("Rejected an incomplete or aliased Native Stereo Fix quartet");
+                                return;
+                            }
+                            m_openxr.prepare_quadview_compositors(device,uevr::quadview::dx12::Compositor::sampling_format(
+                                native_sources[0]->GetDesc().Format),timestamp_frequency);
                             bool recorded=false;
                             ID3D12Resource* output=nullptr;
                             uintptr_t command_list=0;
                             const bool accepted=m_openxr.copy(
                                 (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE,nullptr,
-                                [this,packet,frozen,timestamp_frequency,&recorded,&output,&command_list](d3d12::CommandContext& commands,ID3D12Resource* destination) {
+                                [this,packet,frozen,native_sources,timestamp_frequency,&recorded,&output,&command_list](d3d12::CommandContext& commands,ID3D12Resource* destination) {
                                     if (!commands.ready() || frozen->key.generation!=VR::get()->mono_generation()) return;
                                     if (!commands.references_retired()) {
                                         VR::get()->set_quadview_status("Waiting for the selected GPU command slot to retire before reuse");
@@ -266,7 +280,7 @@ void D3D12Component::OpenXR::initialize(XrSessionCreateInfo& session_info) {''')
                                     auto& comp=*found->second;
                                     comp.on_slot_retired();
                                     VR::get()->note_quadview_gpu_ms(comp.gpu_milliseconds());
-                                    recorded=comp.record(commands.cmd_list.Get(),packet->atlas.Get(),destination,
+                                    recorded=comp.record_sources(commands.cmd_list.Get(),native_sources,destination,
                                         frozen->layout,frozen->settings,
                                         packet->source_state,D3D12_RESOURCE_STATE_RENDER_TARGET,
                                         std::static_pointer_cast<const void>(packet),

@@ -1,4 +1,7 @@
-Texture2D<float4> SourceAtlas : register(t0);
+Texture2D<float4> ContextLeftSource : register(t0);
+Texture2D<float4> ContextRightSource : register(t1);
+Texture2D<float4> FocusLeftSource : register(t2);
+Texture2D<float4> FocusRightSource : register(t3);
 SamplerState LinearClamp : register(s0);
 
 cbuffer QuadViewConstants : register(b0) {
@@ -33,6 +36,14 @@ float2 AtlasUv(uint4 rectangle, float2 uv) {
     return texel / atlasSize;
 }
 
+// Explicit SM5 resource selection keeps each source independent, including sharpening taps.
+float4 ReadSource(uint sourceIndex, float2 uv) {
+    if (sourceIndex == 0u) return ContextLeftSource.SampleLevel(LinearClamp, uv, 0.0);
+    if (sourceIndex == 1u) return ContextRightSource.SampleLevel(LinearClamp, uv, 0.0);
+    if (sourceIndex == 2u) return FocusLeftSource.SampleLevel(LinearClamp, uv, 0.0);
+    return FocusRightSource.SampleLevel(LinearClamp, uv, 0.0);
+}
+
 float FocusWeight(float2 uv, float4 crop) {
     if (any(uv < crop.xy) || any(uv > crop.zw)) return 0.0;
     const float2 cropExtent = crop.zw - crop.xy;
@@ -59,23 +70,23 @@ float3 GlamEncode(float3 color) {
     return lerp(low, high, float3(color.r > 0.0031308, color.g > 0.0031308, color.b > 0.0031308));
 }
 
-float3 ReadFocus(uint4 rect, float4 crop, float2 fullUv, float2 pixelOffset) {
+float3 ReadFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float2 pixelOffset) {
     // Offsets are in final output pixels after the game's upscaler. AtlasUv
     // clamps each tap to this eye's focus rectangle, so eyes never bleed.
     const float2 shifted = fullUv + pixelOffset / float2(EyeAndAtlas.xy);
     const float2 local = (shifted - crop.xy) / (crop.zw - crop.xy);
-    return GlamDecode(SourceAtlas.SampleLevel(LinearClamp, AtlasUv(rect, local), 0.0).rgb);
+    return GlamDecode(ReadSource(sourceIndex, AtlasUv(rect, local)).rgb);
 }
 
-float3 GlamSharpenFocus(uint4 rect, float4 crop, float2 fullUv, float3 center) {
+float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float3 center) {
     // Fused v186.1 Glamarye Bigger-radius four-diagonal filter with its
     // FXAA-style edge guard and maximum-change limiter. No separate pass.
     const float3 c = GlamDecode(center);
     const float radius = 1.4;
-    const float3 ne = ReadFocus(rect, crop, fullUv, float2( radius,  radius));
-    const float3 sw = ReadFocus(rect, crop, fullUv, float2(-radius, -radius));
-    const float3 se = ReadFocus(rect, crop, fullUv, float2( radius, -radius));
-    const float3 nw = ReadFocus(rect, crop, fullUv, float2(-radius,  radius));
+    const float3 ne = ReadFocus(sourceIndex, rect, crop, fullUv, float2( radius,  radius));
+    const float3 sw = ReadFocus(sourceIndex, rect, crop, fullUv, float2(-radius, -radius));
+    const float3 se = ReadFocus(sourceIndex, rect, crop, fullUv, float2( radius, -radius));
+    const float3 nw = ReadFocus(sourceIndex, rect, crop, fullUv, float2(-radius,  radius));
     float3 smoothed = (ne + nw) + (se + sw);
     smoothed = clamp((smoothed + c) / 5.0, c * 0.5, c * 2.0);
     smoothed = min(smoothed, 1.0);
@@ -88,8 +99,8 @@ float3 GlamSharpenFocus(uint4 rect, float4 crop, float2 fullUv, float3 center) {
     n2 *= 0.5; s2 *= 0.5;
     const float2 west = horizontal ? float2(-3.5, 0.0) : float2(0.0, 3.5);
     const float2 east = horizontal ? float2( 3.5, 0.0) : float2(0.0,-3.5);
-    const float3 ww = ReadFocus(rect, crop, fullUv, west);
-    const float3 ee = ReadFocus(rect, crop, fullUv, east);
+    const float3 ww = ReadFocus(sourceIndex, rect, crop, fullUv, west);
+    const float3 ee = ReadFocus(sourceIndex, rect, crop, fullUv, east);
     const float3 d1 = abs((ww - n2) - (ee - s2));
     const float3 d2 = abs((ee - n2) - (ww - s2));
     const float3 totalDiff = d1 + d2 + 0.00004;
@@ -127,19 +138,19 @@ float4 CompositePixel(VertexOut input) {
     // 50% crop this skips a texture fetch for most focused pixels, including
     // pixels using the fused Glamarye filter. Keep diagnostics exact.
     if (debugMode == 1)
-        return SourceAtlas.SampleLevel(LinearClamp, AtlasUv(contextRect, eyeUv), 0.0);
+        return ReadSource(eye, AtlasUv(contextRect, eyeUv));
     if (weight <= 0.0) {
         if (debugMode == 2) return float4(0.04, 0.04, 0.04, 1.0);
-        return SourceAtlas.SampleLevel(LinearClamp, AtlasUv(contextRect, eyeUv), 0.0);
+        return ReadSource(eye, AtlasUv(contextRect, eyeUv));
     }
 
     const float2 focusUv = (eyeUv - crop.xy) / (crop.zw - crop.xy);
-    float4 focus = SourceAtlas.SampleLevel(LinearClamp, AtlasUv(focusRect, focusUv), 0.0);
+    float4 focus = ReadSource(2u + eye, AtlasUv(focusRect, focusUv));
     [branch] if (Sharpen.x > 0.0)
-        focus.rgb = GlamSharpenFocus(focusRect, crop, eyeUv, focus.rgb);
+        focus.rgb = GlamSharpenFocus(2u + eye, focusRect, crop, eyeUv, focus.rgb);
     float4 output = focus;
     [branch] if (debugMode != 2 && weight < 1.0) {
-        const float4 context = SourceAtlas.SampleLevel(LinearClamp, AtlasUv(contextRect, eyeUv), 0.0);
+        const float4 context = ReadSource(eye, AtlasUv(contextRect, eyeUv));
         output = lerp(context, focus, weight);
     }
     if (Options.w > 0.5) {

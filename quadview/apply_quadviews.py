@@ -140,6 +140,10 @@ def main() -> None:
         "        return eye<2 && m_quadview_draw_config_key==key && m_quadview_draw_config && m_quadview_draw_config->base_projection_valid\n"
         "            ? std::optional<uevr::quadview::gaze::Projection>{m_quadview_draw_config->projections[eye]} : std::nullopt;\n"
         "    }\n"
+        "    std::shared_ptr<const VRRenderTargetManager_Base::QuadViewNativeTargetSetSnapshot> quadview_native_target_set(uevr::quadview::Key key) const {\n"
+        "        std::scoped_lock lock{m_quadview_layout_mutex};\n"
+        "        return m_quadview_draw_config_key==key && m_quadview_draw_config && m_quadview_draw_config->native_target_set_ready\n"
+        "            ? m_quadview_draw_config->native_target_set : nullptr;\n    }\n"
         "    unsigned quadview_desired_view_count() const {\n"
         "        const auto key=quadview_key();\n"
         "        const auto demand=m_quadview_draw_demand.get(key.generation,key.draw_serial);\n"
@@ -242,7 +246,8 @@ def main() -> None:
         "    std::once_flag m_duoview_settings_once;",
         "    std::once_flag m_duoview_settings_once;\n"
         "    uevr::quadview::Producer m_quadview;\n"
-        "    struct QuadViewDrawConfig { uevr::quadview::Settings settings{}; uint64_t settings_revision{}; bool gaze_valid{},base_projection_valid{}; uevr::quadview::GazeEvidence gaze{};\n"
+        "    struct QuadViewDrawConfig { uevr::quadview::Settings settings{}; uint64_t settings_revision{}; bool gaze_valid{},base_projection_valid{},native_target_set_ready{}; uint64_t native_target_set_generation{};\n"
+        "        std::shared_ptr<const VRRenderTargetManager_Base::QuadViewNativeTargetSetSnapshot> native_target_set{}; uevr::quadview::GazeEvidence gaze{};\n"
         "        std::array<uevr::quadview::gaze::Projection,2> projections{}; };\n"
         "    std::atomic<uint64_t> m_quadview_draw_serial{};\n"
         "    uevr::quadview::DrawDemandLatch m_quadview_draw_demand{};\n"
@@ -498,6 +503,19 @@ def main() -> None:
         "            key.generation,key.draw_serial,m_render_frame_count);\n"
         "        return {};\n    }\n"
         "    const auto rtm = m_fake_stereo_hook->get_render_target_manager();\n"
+        "    std::shared_ptr<const VRRenderTargetManager_Base::QuadViewNativeTargetSetSnapshot> native_target_set{};\n"
+        "    if (rtm && is_quadview_supported_title() && rtm->ensure_quadview_native_target_set(layout->atlas_width,layout->atlas_height))\n"
+        "        native_target_set=rtm->get_quadview_native_target_set();\n"
+        "    const bool native_target_ready=native_target_set && native_target_set->width==layout->atlas_width &&\n"
+        "        native_target_set->height==layout->atlas_height && native_target_set->complete();\n"
+        "    draw_config.native_target_set_ready=native_target_ready;\n"
+        "    draw_config.native_target_set_generation=native_target_ready ? native_target_set->generation : 0;\n"
+        "    draw_config.native_target_set=native_target_ready ? native_target_set : nullptr;\n"
+        "    { std::scoped_lock lock{m_quadview_layout_mutex}; if (m_quadview_draw_config_key==key && m_quadview_draw_config) {\n"
+        "        m_quadview_draw_config->native_target_set_ready=draw_config.native_target_set_ready;\n"
+        "        m_quadview_draw_config->native_target_set_generation=draw_config.native_target_set_generation;\n"
+        "        m_quadview_draw_config->native_target_set=draw_config.native_target_set; } }\n"
+        "    if (!native_target_ready) set_quadview_status(\"Four-source native targets are warming up; this draw keeps the complete legacy family\");\n"
         "    const auto target = rtm != nullptr ? rtm->get_view_family_render_target() : nullptr;\n"
         "    if (!m_quadview.begin(key, 0, reinterpret_cast<uintptr_t>(target), 0, *layout,draw_config.settings,draw_config.settings_revision,draw_config.gaze)) {\n"
         "        if (const auto snapshot = m_quadview.snapshot(key)) return snapshot;\n"
@@ -631,15 +649,322 @@ def main() -> None:
         '#include "DuoViewDelivery.hpp"',
         '#include "DuoViewDelivery.hpp"\n#include "runtimes/OpenXR.hpp"\n#include "QuadViewDelivery.hpp"\n#include "QuadViewFramePacket.hpp"\n#include "QuadViewViewDemand.hpp"')
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+        '#include "QuadViewDelivery.hpp"',
+        '#include "QuadViewDelivery.hpp"\n#include "QuadViewNativeTargets.hpp"')
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+        '#include "FFakeStereoRenderingHook.hpp"',
+        '#include "FFakeStereoRenderingHook.hpp"\n\n'
+        'thread_local FFakeStereoRenderingHook::QuadViewNativeBuildContext FFakeStereoRenderingHook::quadview_native_build_context{};')
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+        "        uint32_t height{};\n        std::optional<uevr::ue58_owned_ui::Resource> ue58_owned_resource{};",
+        "        uint32_t height{};\n"
+        "        std::shared_ptr<const void> owner_lifetime{};\n"
+        "        std::optional<uevr::ue58_owned_ui::Resource> ue58_owned_resource{};")
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+        "    struct Everspace2D3D12SceneTargetSnapshot {",
+        "    struct QuadViewNativeTargetSetSnapshot {\n"
+        "        std::array<std::shared_ptr<const SceneCaptureTargetSnapshot>,4> target_owners{};\n"
+        "        std::array<sdk::FRenderTarget*,4> render_targets{};\n"
+        "        std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,4> native_sources{};\n"
+        "        uint64_t generation{};\n"
+        "        uintptr_t world_identity{};\n"
+        "        uint32_t width{},height{};\n"
+        "        bool complete() const {\n"
+        "            std::array<uevr::quadview::NativeTargetIdentity,4> identities{};\n"
+        "            for (size_t i=0;i!=4;++i) {\n"
+        "                const auto& owner=target_owners[i];\n"
+        "                const auto& native=native_sources[i];\n"
+        "                if (!owner || !native || !render_targets[i]) return false;\n"
+        "                const auto desc=native->GetDesc();\n"
+        "                identities[i]={owner->owner_texture,reinterpret_cast<uintptr_t>(render_targets[i]),\n"
+        "                    reinterpret_cast<uintptr_t>(owner->rhi_texture),reinterpret_cast<uintptr_t>(native.Get()),\n"
+        "                    generation,static_cast<uint32_t>(desc.Width),desc.Height,static_cast<uint32_t>(desc.Format)};\n"
+        "            }\n"
+        "            return generation && world_identity && width && height &&\n"
+        "                std::all_of(identities.begin(),identities.end(),[&](const auto& value) {\n"
+        "                    return value.width==width && value.height==height;\n"
+        "                }) && uevr::quadview::valid_native_target_quartet(identities);\n"
+        "        }\n"
+        "    };\n"
+        "    struct Everspace2D3D12SceneTargetSnapshot {")
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+        "    bool create_scene_capture();\n    void destroy_scene_capture();",
+        "    bool create_scene_capture();\n"
+        "    void destroy_scene_capture();\n"
+        "    bool ensure_quadview_native_target_set(uint32_t width,uint32_t height);\n"
+        "    void retire_quadview_native_target_set();\n"
+        "    static float quadview_native_capture_display_gamma(const sdk::FRenderTarget* target);\n"
+        "    std::shared_ptr<const QuadViewNativeTargetSetSnapshot> get_quadview_native_target_set() const {\n"
+        "        return quadview_native_target_set_snapshot.load(std::memory_order_acquire);\n"
+        "    }")
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+        "    struct UE58UITextureOwner;",
+        "    struct UE58UITextureOwner;\n"
+        "    struct QuadViewNativeTargetOwner;\n"
+        "    struct QuadViewNativeTargetBuild;")
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
+        "    std::atomic<std::shared_ptr<const SceneCaptureTargetSnapshot>> scene_capture_target_snapshot{};",
+        "    std::atomic<std::shared_ptr<const SceneCaptureTargetSnapshot>> scene_capture_target_snapshot{};\n"
+        "    std::atomic<std::shared_ptr<const QuadViewNativeTargetSetSnapshot>> quadview_native_target_set_snapshot{};\n"
+        "    std::shared_ptr<QuadViewNativeTargetBuild> quadview_native_target_build{};\n"
+        "    std::mutex quadview_native_target_mutex{};\n"
+        "    std::atomic<uint64_t> quadview_native_target_generation{};\n"
+        "    std::atomic_bool quadview_native_target_creation_requested{};")
+
+    qv_native_target_impl = r'''struct VRRenderTargetManager_Base::QuadViewNativeTargetOwner {
+    inline static std::atomic_bool servicing_enabled{};
+    sdk::UObjectReference<sdk::UTexture> texture{nullptr};
+    sdk::FRenderTarget* render_target{};
+    uintptr_t original_vtable_address{};
+    std::array<uintptr_t,100> original_vtable{};
+    std::array<uintptr_t,100> hooked_vtable{};
+    bool rooted{}, gamma_hooked{};
+    QuadViewNativeTargetOwner* next_retired{};
+    struct RetireQueue { std::mutex mutex{}; QuadViewNativeTargetOwner* head{}; };
+    static RetireQueue& retire_queue() { static auto* queue=new RetireQueue{}; return *queue; }
+    static void retire(QuadViewNativeTargetOwner* owner) noexcept {
+        try { auto& queue=retire_queue(); std::scoped_lock lock{queue.mutex}; owner->next_retired=queue.head; queue.head=owner; }
+        catch (...) { /* Keep the UObject rooted rather than unroot off-thread. */ }
+        try { GameThreadWorker::get().enqueue([] { QuadViewNativeTargetOwner::drain_retired(); }); }
+        catch (...) { /* The next target service drains the safe retirement queue. */ }
+    }
+    static void drain_retired() {
+        auto& queue=retire_queue(); QuadViewNativeTargetOwner* head{};
+        { std::scoped_lock lock{queue.mutex}; head=std::exchange(queue.head,nullptr); }
+        while (head) {
+            std::unique_ptr<QuadViewNativeTargetOwner> owner{head}; head=owner->next_retired;
+            try {
+                if (owner->gamma_hooked && owner->render_target &&
+                    is_readable_process_range(reinterpret_cast<uintptr_t>(owner->render_target),sizeof(uintptr_t)))
+                    *reinterpret_cast<uintptr_t*>(owner->render_target)=owner->original_vtable_address;
+                if (owner->rooted && owner->texture.valid()) unroot_dedicated_ui_texture(owner->texture.get());
+            } catch (...) { SPDLOG_WARNING_EVERY_N_SEC(5,"[QuadViews][NativeFix] Could not retire a native source target safely"); }
+        }
+    }
+};
+
+struct VRRenderTargetManager_Base::QuadViewNativeTargetBuild {
+    uint64_t generation{};
+    uintptr_t world_identity{};
+    uint32_t width{},height{};
+    std::array<std::shared_ptr<QuadViewNativeTargetOwner>,4> owners{};
+};
+
+float VRRenderTargetManager_Base::quadview_native_capture_display_gamma(const sdk::FRenderTarget*) {
+    const auto rtm=g_hook ? g_hook->get_render_target_manager() : nullptr;
+    const auto viewport=rtm ? rtm->get_viewport() : nullptr;
+    if (viewport) {
+        const auto gamma=viewport->get_display_gamma();
+        if (std::isfinite(gamma) && gamma>0.0f) return gamma;
+    }
+    return 2.2f;
+}
+
+bool VRRenderTargetManager_Base::ensure_quadview_native_target_set(uint32_t width,uint32_t height) {
+    QuadViewNativeTargetOwner::servicing_enabled.store(true,std::memory_order_release);
+    if (GameThreadWorker::get().is_same_thread()) QuadViewNativeTargetOwner::drain_retired();
+    const auto vr=VR::get();
+    if (!width || !height || width>16384 || height>8192 || !g_framework || !g_framework->is_dx12() ||
+        !is_ue_5_5_runtime() || !stalker2_uses_ue55_draw_windows_array_layout() ||
+        !vr || !vr->is_quadview_mode_selected()) return false;
+    if (!GameThreadWorker::get().is_same_thread()) {
+        if (!quadview_native_target_creation_requested.exchange(true,std::memory_order_acq_rel)) {
+            try { GameThreadWorker::get().enqueue([this,width,height]() {
+                quadview_native_target_creation_requested.store(false,std::memory_order_release);
+                (void)ensure_quadview_native_target_set(width,height);
+            }); } catch (...) { quadview_native_target_creation_requested.store(false,std::memory_order_release); }
+        }
+        return false;
+    }
+    auto* engine=sdk::UGameEngine::get();
+    auto* world=engine ? engine->get_world() : nullptr;
+    auto* kismet=sdk::UKismetRenderingLibrary::get();
+    if (!world || !kismet) {
+        SPDLOG_INFO_EVERY_N_SEC(2,"[QuadViews][NativeFix] Waiting for world/Kismet before creating four native source targets");
+        return false;
+    }
+    const auto world_identity=reinterpret_cast<uintptr_t>(world);
+    if (const auto current=quadview_native_target_set_snapshot.load(std::memory_order_acquire);
+        current && current->world_identity==world_identity && current->width==width &&
+        current->height==height && current->complete()) return true;
+
+    std::shared_ptr<QuadViewNativeTargetBuild> build{};
+    {
+        std::scoped_lock lock{quadview_native_target_mutex};
+        if (quadview_native_target_build && quadview_native_target_build->world_identity==world_identity &&
+            quadview_native_target_build->width==width && quadview_native_target_build->height==height) return false;
+        build=std::make_shared<QuadViewNativeTargetBuild>();
+        build->generation=quadview_native_target_generation.fetch_add(1,std::memory_order_acq_rel)+1;
+        build->world_identity=world_identity; build->width=width; build->height=height;
+        quadview_native_target_build=build;
+        quadview_native_target_set_snapshot.store(nullptr,std::memory_order_release);
+    }
+
+    // Kismet may flush rendering; the manager mutex is deliberately not held here.
+    const float clear_color[4]{0.0f,0.0f,0.0f,1.0f};
+    try {
+        for (size_t i=0;i!=4;++i) {
+            auto owner=std::shared_ptr<QuadViewNativeTargetOwner>{new QuadViewNativeTargetOwner{},&QuadViewNativeTargetOwner::retire};
+            auto* texture=kismet->create_render_target_2d(world,width,height,2,clear_color,false);
+            if (!texture) {
+                std::scoped_lock lock{quadview_native_target_mutex};
+                if (quadview_native_target_build==build) quadview_native_target_build.reset();
+                SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadViews][NativeFix] Kismet failed to create source target {}",i);
+                return false;
+            }
+            root_dedicated_ui_texture(texture); owner->rooted=true; owner->texture=texture; build->owners[i]=std::move(owner);
+        }
+    } catch (...) {
+        { std::scoped_lock lock{quadview_native_target_mutex}; if (quadview_native_target_build==build) quadview_native_target_build.reset(); }
+        SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadViews][NativeFix] Kismet target creation failed; the original family remains active");
+        return false;
+    }
+
+    auto* worker=g_hook ? g_hook->get_slate_thread_worker() : nullptr;
+    if (!worker) {
+        std::scoped_lock lock{quadview_native_target_mutex};
+        if (quadview_native_target_build==build) quadview_native_target_build.reset();
+        return false;
+    }
+    worker->enqueue_conditional([this,build](FRHICommandListImmediate*) {
+        {
+            std::scoped_lock lock{quadview_native_target_mutex};
+            if (quadview_native_target_build!=build ||
+                build->generation!=quadview_native_target_generation.load(std::memory_order_acquire)) return true;
+        }
+        std::array<ValidatedNativeFixTextureChain,4> chains{};
+        for (size_t i=0;i!=4;++i) {
+            const auto& owner=build->owners[i];
+            if (!owner || !owner->texture.valid()) return false;
+            const auto validated=validate_native_fix_texture_chain(owner->texture.get(),build->width,build->height,
+                STALKER2_UE55_NATIVE_FIX_TEXTURE_LAYOUT);
+            if (!validated) return false;
+            chains[i]=*validated;
+        }
+        const bool texture_offsets=sdk::UTexture::commit_validated_render_resource_offsets_texture2d(
+            build->owners[0]->texture.get(),STALKER2_UE55_UTEXTURE_PRIVATE_RESOURCE_OFFSET,
+            STALKER2_UE55_FTEXTURE_RHI_OFFSET);
+        const bool render_target_offset=sdk::FTextureRenderTargetResource::commit_validated_render_target_vtable_offset(
+            chains[0].texture_resource,STALKER2_UE55_FRENDER_TARGET_OFFSET);
+        if (!texture_offsets || !render_target_offset) {
+            SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadViews][NativeFix] Exact validated source chain changed before offset publication");
+            std::scoped_lock lock{quadview_native_target_mutex};
+            if (quadview_native_target_build==build) quadview_native_target_build.reset();
+            return true;
+        }
+        auto target_set=std::make_shared<QuadViewNativeTargetSetSnapshot>();
+        target_set->generation=build->generation; target_set->world_identity=build->world_identity;
+        target_set->width=build->width; target_set->height=build->height;
+        sdk::FRenderTarget::update_offsets(chains[0].render_target);
+        const auto gamma_index=sdk::FRenderTarget::get_display_gamma_index();
+        if (!gamma_index || *gamma_index>=build->owners[0]->hooked_vtable.size()) {
+            SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadViews][NativeFix] Validated FRenderTarget gamma slot is unavailable");
+            std::scoped_lock lock{quadview_native_target_mutex};
+            if (quadview_native_target_build==build) quadview_native_target_build.reset();
+            return true;
+        }
+        for (size_t i=0;i!=4;++i) {
+            auto& owner=*build->owners[i]; auto* frt=chains[i].render_target;
+            sdk::FRenderTarget::update_offsets(frt);
+            uintptr_t original_vtable{};
+            if (!safe_read_value(reinterpret_cast<uintptr_t>(frt),original_vtable) ||
+                !is_readable_process_range(original_vtable,sizeof(owner.original_vtable))) {
+                for (auto& prior:build->owners) if (prior && prior->gamma_hooked) {
+                    *reinterpret_cast<uintptr_t*>(prior->render_target)=prior->original_vtable_address;
+                    prior->gamma_hooked=false;
+                }
+                std::scoped_lock lock{quadview_native_target_mutex};
+                if (quadview_native_target_build==build) quadview_native_target_build.reset();
+                return true;
+            }
+            owner.original_vtable_address=original_vtable;
+            std::memcpy(owner.original_vtable.data(),reinterpret_cast<const void*>(original_vtable),sizeof(owner.original_vtable));
+            owner.hooked_vtable=owner.original_vtable;
+            owner.hooked_vtable[*gamma_index]=reinterpret_cast<uintptr_t>(&VRRenderTargetManager_Base::quadview_native_capture_display_gamma);
+            owner.render_target=frt;
+            *reinterpret_cast<uintptr_t*>(frt)=reinterpret_cast<uintptr_t>(owner.hooked_vtable.data());
+            owner.gamma_hooked=true;
+            auto snapshot=std::make_shared<SceneCaptureTargetSnapshot>();
+            snapshot->native_resource=chains[i].native_resource.Get(); snapshot->rhi_texture=chains[i].rhi_texture;
+            snapshot->owner_texture=reinterpret_cast<uintptr_t>(owner.texture.get());
+            snapshot->generation=build->generation; snapshot->width=build->width; snapshot->height=build->height;
+            snapshot->owner_lifetime=build->owners[i];
+            target_set->target_owners[i]=std::move(snapshot); target_set->render_targets[i]=frt;
+            target_set->native_sources[i]=chains[i].native_resource;
+        }
+        if (!target_set->complete()) {
+            for (auto& owner:build->owners) { if (owner && owner->gamma_hooked) {
+                *reinterpret_cast<uintptr_t*>(owner->render_target)=owner->original_vtable_address;
+                owner->gamma_hooked=false;
+            }}
+            std::scoped_lock lock{quadview_native_target_mutex};
+            if (quadview_native_target_build==build) quadview_native_target_build.reset();
+            SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadViews][NativeFix] Four-source identity validation failed; no native set published");
+            return true;
+        }
+        {
+            std::scoped_lock lock{quadview_native_target_mutex};
+            if (quadview_native_target_build!=build ||
+                build->generation!=quadview_native_target_generation.load(std::memory_order_acquire)) {
+                for (auto& owner:build->owners) if (owner && owner->gamma_hooked) {
+                    *reinterpret_cast<uintptr_t*>(owner->render_target)=owner->original_vtable_address;
+                    owner->gamma_hooked=false;
+                }
+                return true;
+            }
+            quadview_native_target_set_snapshot.store(std::move(target_set),std::memory_order_release);
+        }
+        SPDLOG_INFO("[QuadViews][NativeFix] Published four independent {}x{} UE5.5 source targets generation={}",
+            build->width,build->height,build->generation);
+        return true;
+    },[this,build]() {
+        std::scoped_lock lock{quadview_native_target_mutex};
+        if (quadview_native_target_build==build) quadview_native_target_build.reset();
+        SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadViews][NativeFix] Four-source targets did not initialize; retaining legacy constructor/render discipline");
+    },std::chrono::seconds(30));
+    return false;
+}
+
+void VRRenderTargetManager_Base::retire_quadview_native_target_set() {
+    std::scoped_lock lock{quadview_native_target_mutex};
+    quadview_native_target_generation.fetch_add(1,std::memory_order_acq_rel);
+    quadview_native_target_build.reset();
+    quadview_native_target_creation_requested.store(false,std::memory_order_release);
+    quadview_native_target_set_snapshot.store(nullptr,std::memory_order_release);
+}
+'''
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+        "bool VRRenderTargetManager_Base::create_ue58_ui_texture() {",
+        qv_native_target_impl + "\nbool VRRenderTargetManager_Base::create_ue58_ui_texture() {")
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+        "void VRRenderTargetManager_Base::service_ue58_ui_game_thread() {\n    if (!UE58UITextureOwner::servicing_enabled.load(std::memory_order_acquire)) {",
+        "void VRRenderTargetManager_Base::service_ue58_ui_game_thread() {\n"
+        "    QuadViewNativeTargetOwner::drain_retired();\n"
+        "    if (!UE58UITextureOwner::servicing_enabled.load(std::memory_order_acquire)) {")
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.hpp",
         "    using DuoDelivery = uevr::duoview::Delivery<NativeStereoFramePacket>;\n"
         "    mutable DuoDelivery duoview_delivery{};",
         "    struct QuadViewSourcePacket {\n"
         "        std::shared_ptr<const uevr::quadview::Snapshot> producer{};\n"
         "        Microsoft::WRL::ComPtr<ID3D12Resource> atlas{};\n"
+        "        std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,4> native_sources{};\n"
+        "        std::array<std::shared_ptr<const VRRenderTargetManager_Base::SceneCaptureTargetSnapshot>,4> native_target_owners{};\n"
+        "        std::shared_ptr<const VRRenderTargetManager_Base::QuadViewNativeTargetSetSnapshot> native_target_set_owner{};\n"
+        "        uint64_t native_target_set_generation{};\n"
         "        runtimes::OpenXR::PipelineState pose{};\n"
         "        D3D12_RESOURCE_STATES source_state{D3D12_RESOURCE_STATE_RENDER_TARGET};\n"
         "        uint64_t runtime_frame{}, serial{};\n"
         "    };\n"
+        "    struct QuadViewNativeBuildContext {\n"
+        "        bool active{},source_registered{}; uint32_t current_slot{},original_count{},engine_frame{0xffffffffu};\n"
+        "        uintptr_t family{},scene{}; std::array<sdk::FSceneView*,4> original_views{};\n"
+        "        std::array<sdk::FRenderTarget*,4> render_targets{}; sdk::FRenderTarget* original_target{};\n"
+        "        std::shared_ptr<const VRRenderTargetManager_Base::QuadViewNativeTargetSetSnapshot> target_set{};\n"
+        "        std::array<std::shared_ptr<const VRRenderTargetManager_Base::SceneCaptureTargetSnapshot>,4> target_owners{};\n"
+        "        std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,4> native_sources{}; uint64_t target_set_generation{};\n"
+        "        std::shared_ptr<QuadViewSourcePacket> packet{};\n"
+        "    };\n"
+        "    static thread_local QuadViewNativeBuildContext quadview_native_build_context;\n"
         "    using DuoDelivery = uevr::duoview::Delivery<NativeStereoFramePacket>;\n"
         "    using QuadViewDelivery = uevr::quadview::Delivery<QuadViewSourcePacket>;\n"
         "    mutable DuoDelivery duoview_delivery{};\n"
@@ -823,6 +1148,32 @@ def main() -> None:
         "        if (!inside_viewport_client_draw || !vr->is_hmd_active() || init_options == nullptr || !g_hook->m_has_double_precision)\n"
         "            return g_hook->m_sceneview_data.constructor_hook.unsafe_call<sdk::FSceneView*>(view, init_options, a3, a4);\n"
         "        update_init_offsets();\n"
+        "        const auto qv_draw_key=vr->quadview_producer_key();\n"
+        "        const auto qv_native_targets=vr->quadview_native_target_set(qv_draw_key);\n"
+        "        auto* qv_init_family=init_options->get_view_family();\n"
+        "        auto* qv_init_views=qv_init_family ? qv_init_family->get_views() : nullptr;\n"
+        "        auto* qv_constructor_rtm=g_hook->get_render_target_manager();\n"
+        "        const bool qv_constructor_main=qv_init_family && qv_constructor_rtm &&\n"
+        "            qv_init_family->get_render_target()==qv_constructor_rtm->get_view_family_render_target();\n"
+        "        const auto qv_original_pass=init_options->get_stereo_pass();\n"
+        "        const int32_t qv_original_view_count=qv_init_views ? qv_init_views->count : 0;\n"
+        "        const bool qv_native_constructor=qv_native_targets && qv_constructor_main && qv_init_views && qv_original_view_count>=0 &&\n"
+        "            qv_original_view_count<=4 && qv_init_views->capacity>=qv_original_view_count &&\n"
+        "            (qv_original_view_count==0 || (qv_init_views->data &&\n"
+        "                is_readable_process_range(reinterpret_cast<uintptr_t>(qv_init_views->data),sizeof(void*)*qv_original_view_count)));\n"
+        "        if (qv_native_targets && qv_constructor_main && !qv_native_constructor) {\n"
+        "            vr->set_quadview_status(\"Rejected an unvalidated native constructor; incomplete quartet cannot render\");\n"
+        "            return g_hook->m_sceneview_data.constructor_hook.unsafe_call<sdk::FSceneView*>(view,init_options,a3,a4);\n"
+        "        }\n"
+        "        if (qv_native_constructor) {\n"
+        "            init_options->set_stereo_pass(EStereoscopicPass::eSSP_PRIMARY);\n"
+        "            qv_init_views->count=0;\n"
+        "        }\n"
+        "        utility::ScopeGuard qv_restore_constructor_discipline{[&]() {\n"
+        "            if (!qv_native_constructor) return;\n"
+        "            qv_init_views->count=qv_original_view_count;\n"
+        "            init_options->set_stereo_pass(qv_original_pass);\n"
+        "        }};\n"
         "        auto* family = init_options->get_view_family();\n"
         "        auto* state = init_options->get_scene_state();\n"
         "        auto* scene = family != nullptr ? family->get_scene_interface() : nullptr;\n"
@@ -862,11 +1213,69 @@ def main() -> None:
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "    auto& views = *views_ptr;\n    const auto prev_count = views.count;\n\n    // Observe Native Fix's original two-view main family before the fix",
         "    auto& views = *views_ptr;\n    const auto prev_count = views.count;\n\n"
-                "    if (quadview_active) {\n"
-        "        // The source is now registered by BeginRenderViewFamily on the game thread,\n"
-        "        // before the render-thread family can execute. Never publish it from\n"
-        "        // this later renderer entry; the old order raced against RHI delivery.\n"
-        "        call_original();\n"
+        "    if (quadview_active) {\n"
+        "        auto& native_context=g_hook->quadview_native_build_context;\n"
+        "        if (native_context.active) { call_original(); return; }\n"
+        "        auto* qv_rtm=rtm;\n"
+        "        const auto qv_key=vr->quadview_producer_key();\n"
+        "        const auto qv_target_set=vr->quadview_native_target_set(qv_key);\n"
+        "        const auto qv_snapshot=vr->quadview_producer().snapshot(qv_key);\n"
+        "        auto* qv_scene=view_family->get_scene_interface();\n"
+        "        const auto qv_expected_target=qv_rtm ? qv_rtm->get_view_family_render_target() : nullptr;\n"
+        "        if (!qv_target_set) { call_original(); return; }\n"
+        "        const bool qv_family_valid=qv_target_set && qv_target_set->complete() && qv_snapshot && qv_snapshot->histories_complete() &&\n"
+        "            qv_target_set->width==qv_snapshot->layout.atlas_width && qv_target_set->height==qv_snapshot->layout.atlas_height &&\n"
+        "            views.count==4 && views.capacity>=4 && views.data &&\n"
+        "            is_readable_process_range(reinterpret_cast<uintptr_t>(views.data),sizeof(void*)*4) &&\n"
+        "            sdk::FSceneViewFamily::validate_views(view_family,views_ptr,4) && qv_scene &&\n"
+        "            view_family->get_render_target()==qv_expected_target && qv_expected_target;\n"
+        "        if (!qv_family_valid) {\n"
+        "            vr->set_quadview_status(\"Frozen native target set or original four-view source family is no longer valid\");\n"
+        "            return;\n"
+        "        }\n"
+        "        FFakeStereoRenderingHook::QuadViewNativeBuildContext previous_context=std::move(native_context);\n"
+        "        native_context={}; native_context.active=true; native_context.current_slot=0;\n"
+        "        native_context.original_count=4; native_context.family=reinterpret_cast<uintptr_t>(view_family);\n"
+        "        native_context.scene=reinterpret_cast<uintptr_t>(qv_scene); native_context.original_target=qv_expected_target;\n"
+        "        native_context.target_set=qv_target_set; native_context.target_set_generation=qv_target_set->generation;\n"
+        "        for (size_t i=0;i!=4;++i) {\n"
+        "            native_context.original_views[i]=views.data[i];\n"
+        "            native_context.render_targets[i]=qv_target_set->render_targets[i];\n"
+        "            native_context.target_owners[i]=qv_target_set->target_owners[i];\n"
+        "            native_context.native_sources[i]=qv_target_set->native_sources[i];\n"
+        "        }\n"
+        "        const int32_t qv_original_count=views.count;\n"
+        "        std::array<sdk::FSceneView*,4> qv_original_storage{};\n"
+        "        for(size_t i=0;i!=4;++i) qv_original_storage[i]=views.data[i];\n"
+        "        utility::ScopeGuard restore_qv_dispatch{[&]() {\n"
+        "            for(size_t i=0;i!=4;++i) views.data[i]=qv_original_storage[i];\n"
+        "            views.count=qv_original_count; view_family->set_render_target(qv_expected_target);\n"
+        "            native_context=std::move(previous_context);\n"
+        "        }};\n"
+        "        const auto qv_call_singleton=[&]() {\n"
+        "            if (native_context.current_slot==0) { call_original(); return; }\n"
+        "            if (uses_tarrayview) { TArrayViewViewFamily one_family{&view_family,1};\n"
+        "                g_hook->m_render_module_begin_render_viewfamily_hook.unsafe_call<void>(render_module,canvas,\n"
+        "                    reinterpret_cast<sdk::FSceneViewFamily*>(&one_family));\n"
+        "            } else g_hook->m_render_module_begin_render_viewfamily_hook.unsafe_call<void>(render_module,canvas,view_family);\n"
+        "        };\n"
+        "        for (uint32_t slot=0;slot!=4;++slot) {\n"
+        "            if (slot!=0) reinterpret_cast<sdk::FScene*>(qv_scene)->decrement_frame_count();\n"
+        "            native_context.current_slot=slot; views.data[0]=native_context.original_views[slot]; views.count=1;\n"
+        "            view_family->set_render_target(native_context.render_targets[slot]);\n"
+        "            if (view_family->get_render_target()!=native_context.render_targets[slot]) {\n"
+        "                vr->set_quadview_status(\"Could not select a distinct owned native source target\"); return;\n"
+        "            }\n"
+        "            qv_call_singleton();\n"
+        "            if (slot==0 && !native_context.source_registered) {\n"
+        "                vr->set_quadview_status(\"First native source did not bind a complete original four-view packet; transaction stopped\"); return;\n"
+        "            }\n"
+        "            if (views.count!=1 || views.data[0]!=native_context.original_views[slot] ||\n"
+        "                view_family->get_render_target()!=native_context.render_targets[slot]) {\n"
+        "                vr->set_quadview_status(\"Engine changed singleton family ownership before native source completion\"); return;\n"
+        "            }\n"
+        "        }\n"
+        "        vr->set_quadview_status(\"Four isolated native source renders completed; waiting for exact quartet RHI tails\");\n"
         "        return;\n"
         "    }\n"
         "\n"
@@ -1166,7 +1575,7 @@ def main() -> None:
     # Reuse the tested production-independent headers. The generated bytecode
     # is emitted in CI after applying this overlay.
     target = backend / "src/mods/vr"
-    for name in ("QuadViewGeometry.hpp", "QuadViewProducer.hpp", "QuadViewDelivery.hpp",
+    for name in ("QuadViewGeometry.hpp", "QuadViewProducer.hpp", "QuadViewDelivery.hpp", "QuadViewNativeTargets.hpp",
                  "QuadViewFramePacket.hpp", "QuadViewD3D12.hpp", "QuadViewViewDemand.hpp",
                  "QuadViewSettings.hpp", "QuadViewGaze.hpp", "QuadViewPSVR2Gaze.hpp"):
         source = overlay / name

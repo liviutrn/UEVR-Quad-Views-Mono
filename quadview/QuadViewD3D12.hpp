@@ -34,6 +34,16 @@ public:
     Compositor& operator=(const Compositor&) = delete;
     ~Compositor() { if (constants_ && mapped_) constants_->Unmap(0, nullptr); }
 
+    static DXGI_FORMAT sampling_format(DXGI_FORMAT format) {
+        switch (format) {
+        case DXGI_FORMAT_R8G8B8A8_TYPELESS: return DXGI_FORMAT_R8G8B8A8_UNORM;
+        case DXGI_FORMAT_B8G8R8A8_TYPELESS: return DXGI_FORMAT_B8G8R8A8_UNORM;
+        case DXGI_FORMAT_R10G10B10A2_TYPELESS: return DXGI_FORMAT_R10G10B10A2_UNORM;
+        case DXGI_FORMAT_R16G16B16A16_TYPELESS: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+        default: return format;
+        }
+    }
+
     const char* error() const { return error_; }
     bool prepared() const { return device_ && root_ && pipeline_ && mapped_; }
     bool commands_recorded() const { return recorded_; }
@@ -65,7 +75,7 @@ public:
 
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 1;
+        range.NumDescriptors = 4;
         D3D12_ROOT_PARAMETER parameters[2]{};
         parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -119,10 +129,11 @@ public:
             return fail("Could not create QuadView raster pipeline");
 
         D3D12_DESCRIPTOR_HEAP_DESC heap{};
-        heap.NumDescriptors = 1;
+        heap.NumDescriptors = 4;
         heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&srv_heap_)))) return fail("Could not create QuadView SRV heap");
+        heap.NumDescriptors = 1;
         heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&rtv_heap_)))) return fail("Could not create QuadView RTV heap");
@@ -154,7 +165,8 @@ public:
         // and resource reference in this slot has completed.
         read_timing();
         owner_.reset();
-        source_.Reset(); destination_.Reset();
+        for (auto& source : sources_) source.Reset();
+        destination_.Reset();
         recorded_ = false;
     }
     float gpu_milliseconds() const { return gpu_ms_; }
@@ -165,8 +177,17 @@ public:
                 const Layout& layout, const Settings& settings,
                 D3D12_RESOURCE_STATES source_state, D3D12_RESOURCE_STATES destination_state,
                 std::shared_ptr<const void> owner, UINT64 timestamp_frequency = 0) {
+        return record_sources(commands, {source, source, source, source}, destination, layout, settings,
+            source_state, destination_state, std::move(owner), timestamp_frequency);
+    }
+
+    bool record_sources(ID3D12GraphicsCommandList* commands,
+                const std::array<ID3D12Resource*, 4>& sources, ID3D12Resource* destination,
+                const Layout& layout, const Settings& settings,
+                D3D12_RESOURCE_STATES source_state, D3D12_RESOURCE_STATES destination_state,
+                std::shared_ptr<const void> owner, UINT64 timestamp_frequency = 0) {
         recorded_ = false;
-        if (!prepared() || !commands || !source || !destination || source == destination || !owner)
+        if (!prepared() || !commands || !destination || !sources[0] || !sources[1] || !sources[2] || !sources[3] || !owner)
             return fail("Unprepared compositor or invalid source/destination ownership");
         if (owner_) return fail("Compositor command slot has not retired");
         if (timing_pending_) return fail("Previous timestamp query has not retired");
@@ -174,15 +195,19 @@ public:
             layout.eye_width,layout.eye_height);
         if (!valid_layout(layout) || checked_settings.rejected || !same_settings(checked_settings.settings, settings))
             return fail("Invalid QuadView layout or debug controls");
-        const auto input = source->GetDesc(), output = destination->GetDesc();
-        if (input.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || output.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
-            input.Width != layout.atlas_width || input.Height != layout.atlas_height ||
-            output.Width != layout.eye_width * 2ull || output.Height != layout.eye_height ||
-            input.SampleDesc.Count != 1 || output.SampleDesc.Count != 1 ||
-            input.DepthOrArraySize != 1 || output.DepthOrArraySize != 1 ||
-            (input.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE) ||
-            !(output.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) || !compatible_source(output.Format, output_format_) ||
-            !compatible_source(input.Format, source_format_)) return fail("Source or destination texture does not match prepared QuadView layout/formats");
+        const auto output = destination->GetDesc();
+        for (auto* source : sources) {
+            if (source == destination) return fail("Source aliases the compositor destination");
+            const auto input = source->GetDesc();
+            if (input.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || output.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+                input.Width != layout.atlas_width || input.Height != layout.atlas_height ||
+                output.Width != layout.eye_width * 2ull || output.Height != layout.eye_height ||
+                input.SampleDesc.Count != 1 || output.SampleDesc.Count != 1 ||
+                input.DepthOrArraySize != 1 || output.DepthOrArraySize != 1 ||
+                (input.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE) ||
+                !(output.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) || !compatible_source(output.Format, output_format_) ||
+                !compatible_source(input.Format, source_format_)) return fail("Source or destination texture does not match prepared QuadView layout/formats");
+        }
 
         ShaderConstants constants{};
         constants.eye_and_atlas[0] = layout.eye_width; constants.eye_and_atlas[1] = layout.eye_height;
@@ -215,15 +240,25 @@ public:
         srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MipLevels = 1;
-        device_->CreateShaderResourceView(source, &srv, srv_heap_->GetCPUDescriptorHandleForHeapStart());
+        auto descriptor = srv_heap_->GetCPUDescriptorHandleForHeapStart();
+        const auto stride = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        for (auto* source : sources) {
+            device_->CreateShaderResourceView(source, &srv, descriptor);
+            descriptor.ptr += stride;
+        }
         D3D12_RENDER_TARGET_VIEW_DESC rtv_description{};
         rtv_description.Format = output_format_;
         rtv_description.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
         const auto rtv = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
         device_->CreateRenderTargetView(destination, &rtv_description, rtv);
         owner_ = std::move(owner);
-        source_ = source; destination_ = destination;
-        barrier(commands, source, source_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        for (size_t i = 0; i != 4; ++i) sources_[i] = sources[i];
+        destination_ = destination;
+        for (size_t i = 0; i != 4; ++i) {
+            bool duplicate = false;
+            for (size_t j = 0; j < i; ++j) duplicate = duplicate || sources[j] == sources[i];
+            if (!duplicate) barrier(commands, sources[i], source_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
         barrier(commands, destination, destination_state, D3D12_RESOURCE_STATE_RENDER_TARGET);
         commands->SetPipelineState(pipeline_.Get());
         commands->SetGraphicsRootSignature(root_.Get());
@@ -246,7 +281,11 @@ public:
             commands->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,2,timestamps_.Get(),0);
             timing_pending_=true;
         }
-        barrier(commands, source, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, source_state);
+        for (size_t i = 0; i != 4; ++i) {
+            bool duplicate = false;
+            for (size_t j = 0; j < i; ++j) duplicate = duplicate || sources[j] == sources[i];
+            if (!duplicate) barrier(commands, sources[i], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, source_state);
+        }
         barrier(commands, destination, D3D12_RESOURCE_STATE_RENDER_TARGET, destination_state);
         recorded_ = true;
         error_ = "";
@@ -334,7 +373,8 @@ private:
     ComPtr<ID3D12RootSignature> root_;
     ComPtr<ID3D12PipelineState> pipeline_;
     ComPtr<ID3D12DescriptorHeap> srv_heap_, rtv_heap_;
-    ComPtr<ID3D12Resource> constants_, source_, destination_, timestamps_;
+    ComPtr<ID3D12Resource> constants_, destination_, timestamps_;
+    std::array<ComPtr<ID3D12Resource>, 4> sources_;
     ComPtr<ID3D12QueryHeap> queries_;
     void* mapped_{};
     std::shared_ptr<const void> owner_;

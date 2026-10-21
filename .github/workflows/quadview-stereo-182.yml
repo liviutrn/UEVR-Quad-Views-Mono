@@ -91,6 +91,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'QuadView guarded source overlay failed' }
           python workspace/quadview/apply_quadview_consumer.py backend
           if ($LASTEXITCODE -ne 0) { throw 'QuadView consumer source overlay failed' }
+          python workspace/quadview/apply_quadview_native_delivery.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Four-source Native Stereo Fix delivery overlay failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py

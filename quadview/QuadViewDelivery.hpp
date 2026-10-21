@@ -397,6 +397,15 @@ public:
         return true;
     }
 
+    // Called at the first executed write of a new isolated quartet. Retire only
+    // older unsubmitted pixels; pending engine tickets still drain normally.
+    void invalidate_reused_target(uint64_t generation, uintptr_t target, uint64_t serial) {
+        std::scoped_lock lock{mutex_};
+        for (auto& slot : slots_) if (slot.source && slot.executed && !slot.submitted &&
+            slot.source.generation == generation && slot.source.target == target && slot.source.serial < serial)
+            slot = {};
+    }
+
     // Select the newest exact source owner whose RHI command executed on the
     // submission thread. Never match against an independently sampled UE or XR
     // frame counter: the selected packet carries the two frozen eye poses that
