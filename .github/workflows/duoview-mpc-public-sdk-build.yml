@@ -1,6 +1,9 @@
-name: DuoView MPC TanFOV Windows Public SDK Feasibility Build
-run-name: DuoView MPC TanFOV public-SDK Windows candidate (${{ github.run_number }})
+name: DuoView First Person FOV Public SDK Build Probe
+run-name: DuoView First Person FOV public-SDK candidate (${{ github.run_number }})
 on:
+  push:
+    branches:
+      - experiment/duoview-disable-firstperson-fov-20261022
   workflow_dispatch:
 permissions:
   contents: read
@@ -134,7 +137,7 @@ jobs:
           COMPATIBILITY PROBE ONLY: PUBLIC UESDK (elliotttate/UESDK-RenderDoc) at 4187290. PRIVATE SDK NOT USED.
           This binary uses a different SDK; it is NOT the proven production baseline.
           STALKER 2-only ABI guard disables UE5.0-5.3 and UE5.8 transitional paths. Headset behavior unverified.
-          MPC_FOV.TanFOV per-view correction is EXPERIMENTAL; material collections are world shared and do not guarantee per-eye independent values.
+          First-person FOV experiment: globally set MPC_FOV.IsFOVEnabled=0 BEFORE both DuoView source views; restore when the toggle or DuoView turns OFF. Experimental and headset unverified.
           Matching frontend source: 60be4b0f9a646109fd9fdf448bacd41477234091, plus ID 6.
           Modes 0 and 5 are routed to ORIGINAL JOEY. Experimental mode ID6 is active ONLY in STALKER 2 DX12 OpenXR.
           ID6 forces Joey Native Stereo Fix on and uses its original primary and secondary render sources. Native Stereo Fix settings for ordinary Native ID0 are unchanged. Supported sources are sampled directly; the validated atlas gather remains as a format-compatibility fallback.
@@ -176,16 +179,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-Quad-Views-Mono-v197-MPC-PublicSDK-${{ github.run_number }}.zip"
+          $zip="UEVR-Quad-Views-Mono-v198-FirstPersonFOV-PublicSDK-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-Quad-Views-Mono-v197-MPC-PublicSDK-${{ github.run_number }}
+          name: UEVR-Quad-Views-Mono-v198-FirstPersonFOV-PublicSDK-${{ github.run_number }}
           path: |
-            UEVR-Quad-Views-Mono-v197-MPC-PublicSDK-*.zip
-            UEVR-Quad-Views-Mono-v197-MPC-PublicSDK-*.zip.sha256
+            UEVR-Quad-Views-Mono-v198-FirstPersonFOV-PublicSDK-*.zip
+            UEVR-Quad-Views-Mono-v198-FirstPersonFOV-PublicSDK-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -201,7 +204,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-v197-MPC-PublicSDK-Evidence-${{ github.run_number }}
+          name: UEVR-v198-FirstPersonFOV-PublicSDK-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
