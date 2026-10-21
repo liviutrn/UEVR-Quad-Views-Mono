@@ -15,6 +15,7 @@
 #include <string>
 
 #include <sdk/UObjectArray.hpp>
+#include <sdk/UGameEngine.hpp>
 #include <sdk/UClass.hpp>
 #include <sdk/UFunction.hpp>
 #include <sdk/FProperty.hpp>
@@ -73,11 +74,11 @@ public:
     // Called exactly once per game tick, before the source pair is drawn.
     // If another game system re-enables the FOV effect while we're active,
     // remember that value and disable it again for BOTH views.
-    bool apply(bool disable) {
+    bool apply(bool disable, sdk::UGameEngine* engine) {
         std::scoped_lock lock{mutex_};
         if (!disable && !override_active_) return true;
         ++attempts_;
-        if (!resolve()) { ++rejects_; return false; }
+        if (!select_world(engine) || !resolve()) { ++rejects_; return false; }
         const auto current=read_value();
         if (!current) { status_=Status::parameter_read_failed; ++rejects_; return false; }
         if (disable) {
@@ -92,6 +93,10 @@ public:
             // Remember ownership only after confirming or explicitly writing
             // zero. An initial game-provided zero is also a valid baseline.
             if (*current > .0005f) {
+                // OWNERSHIP MUST BE LATCHED BEFORE the write: ProcessEvent can
+                // change the collection even if readback later fails. Without
+                // this, mode exit could permanently lose the baseline.
+                override_active_=true;
                 if (!invoke(*setter_,0.f)) {
                     status_=Status::function_abi_unavailable; ++rejects_; return false;
                 }
@@ -137,8 +142,9 @@ private:
     sdk::UClass* class_{};
     sdk::UObject* library_{};
     sdk::UObject* collection_{};
-    sdk::UObject* controller_{};
-    std::optional<sdk::object_liveness::Identity> controller_identity_{};
+    std::optional<sdk::object_liveness::Identity> collection_identity_{};
+    sdk::UObject* world_{};
+    std::optional<sdk::object_liveness::Identity> world_identity_{};
     std::optional<FunctionLayout> setter_,getter_;
     sdk::OwnedFName parameter_name_{L"IsFOVEnabled"};
     float baseline_{1.f},last_value_{1.f};
@@ -147,10 +153,56 @@ private:
     uint64_t writes_{},rejects_{},attempts_{};
     mutable std::mutex mutex_{};
 
+    // Read the game thread's ACTUAL active world. The earlier implementation
+    // arbitrarily selected the first PlayerController in GUObjectArray and
+    // could retain the wrong world over level loads.
+    bool select_world(sdk::UGameEngine* engine) {
+        if (!engine || !sdk::observe_uobject(engine)) {
+            status_=Status::missing_world_context;
+            return false;
+        }
+        const auto* viewport_slot=engine->get_property_data(L"GameViewport");
+        if (!viewport_slot) { status_=Status::missing_world_context; return false; }
+        auto* viewport=*reinterpret_cast<sdk::UObject* const*>(viewport_slot);
+        if (!viewport || !sdk::observe_uobject(viewport)) {
+            status_=Status::missing_world_context;
+            return false;
+        }
+        const auto* world_slot=viewport->get_property_data(L"World");
+        if (!world_slot) { status_=Status::missing_world_context; return false; }
+        auto* candidate=*reinterpret_cast<sdk::UObject* const*>(world_slot);
+        if (!candidate) { status_=Status::missing_world_context; return false; }
+        const auto observation=sdk::observe_uobject(candidate);
+        if (!observation) { status_=Status::missing_world_context; return false; }
+        if (candidate!=world_ || !world_identity_ ||
+            !sdk::is_current_object(*world_identity_)) {
+            // A new world is a new MPC instance: never restore the old
+            // world's value into a different level.
+            world_=candidate;
+            world_identity_=observation->identity;
+            baseline_ready_=last_write_ready_=override_active_=false;
+        }
+        return true;
+    }
     bool resolve() {
+        // Unreal may unload/recreate the material collection on world changes.
+        // Never dereference a cached UObject after its FUObjectArray identity
+        // has changed. Retire the old per-world baseline on invalidation.
+        if (collection_identity_ && !sdk::is_current_object(*collection_identity_)) {
+            collection_=nullptr;
+            collection_identity_.reset();
+            baseline_ready_=last_write_ready_=override_active_=false;
+        }
         if (!collection_) {
             collection_=sdk::find_uobject<sdk::UObject>(collection_name,false);
             if (!collection_) { status_=Status::missing_collection; return false; }
+            const auto observation=sdk::observe_uobject(collection_);
+            if (!observation) {
+                collection_=nullptr;
+                status_=Status::missing_collection;
+                return false;
+            }
+            collection_identity_=observation->identity;
         }
         if (!library_) {
             class_=sdk::find_uobject<sdk::UClass>(L"Class /Script/Engine.KismetMaterialLibrary",false);
@@ -161,35 +213,6 @@ private:
             if (!library_ || !setter_ || !getter_) {
                 status_=Status::function_abi_unavailable; return false;
             }
-        }
-        if (controller_identity_ && !sdk::is_current_object(*controller_identity_)) {
-            controller_=nullptr;
-            controller_identity_.reset();
-            baseline_ready_=last_write_ready_=override_active_=false;
-        }
-        if (!controller_) {
-            auto* klass=sdk::find_uobject<sdk::UClass>(L"Class /Script/Engine.PlayerController",false);
-            auto* objects=sdk::FUObjectArray::get();
-            if (!klass || !objects) { status_=Status::missing_world_context; return false; }
-            const auto count=std::clamp(objects->get_object_count(),0,1500000);
-            for(int32_t i=0;i<count;i++) {
-                auto* item=objects->get_object(i);
-                auto* object=item?item->get_object():nullptr;
-                if (!object) continue;
-                auto* candidate=reinterpret_cast<sdk::UObject*>(object);
-                if (!candidate->is_a(klass)) continue;
-                // Never use the Class Default Object as WorldContextObject;
-                // Kismet would resolve a null world and silently no-op.
-                const auto name=candidate->get_name_safe();
-                if (name.starts_with(L"Default__") || name.starts_with(L"REINST_") ||
-                    candidate->is_pending_kill_or_unreachable()) continue;
-                const auto observation=sdk::observe_uobject(candidate);
-                if (!observation) continue;
-                controller_=candidate;
-                controller_identity_=observation->identity;
-                break;
-            }
-            if (!controller_) { status_=Status::missing_world_context; return false; }
         }
         return true;
     }
@@ -222,10 +245,11 @@ private:
         return true;
     }
     bool prepare(const FunctionLayout& fn,std::array<std::byte,128>& bytes) {
-        if (!sdk::UObjectBase::try_resolve_process_event_index() || !controller_ || !collection_ ||
-            !controller_identity_ || !sdk::is_current_object(*controller_identity_))
+        if (!sdk::UObjectBase::try_resolve_process_event_index() || !world_ || !collection_ ||
+            !collection_identity_ || !sdk::is_current_object(*collection_identity_) ||
+            !world_identity_ || !sdk::is_current_object(*world_identity_))
             return false;
-        std::memcpy(bytes.data()+fn.world,&controller_,8);
+        std::memcpy(bytes.data()+fn.world,&world_,8);
         std::memcpy(bytes.data()+fn.collection,&collection_,8);
         return parameter_name_.write_to(bytes.data()+fn.name,bytes.size()-fn.name);
     }

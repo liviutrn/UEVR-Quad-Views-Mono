@@ -28,3 +28,13 @@ Updated `stage8_config_tests.cpp` verifies the single frame-latched global boole
 ## Fallback
 
 An optional Lua overlay implements the same global scalar write on the already compiled stable v186.1 UEVR binary. It is a separate experiment, **not** a newly compiled native backend. It uses the existing LuaLoader from Joey UEVR and activates only while ID6 is selected.
+
+## Revision 2 audit (2026-10-22)
+
+A deliberate adversarial re-review found that the prior bridge selected an arbitrary `PlayerController` as its WorldContextObject and cached the collection without revalidating its UObject identity. It also marked an override as active only **after** successful readback, which could lose restoration ownership if the setter changed the value but readback then failed. The legacy `verify_stage234.py` still required obsolete per-view `TanFOV` sliders, so a successful native build could have been rejected by outdated QA.
+
+R2 fixes those defects. `Bridge::apply(disable, engine)` now resolves `GameViewport.World` from the live `sdk::UGameEngine` on the game thread; viewport, world and collection UObject identities are validated before the read/write. A new world retires the old world's baseline rather than writing into the wrong level. The write arms ownership **before** calling `SetScalarParameterValue`; a failed readback leaves cleanup pending. The final verifier asserts game-tick placement, liveness and removal of `TanFOV` controls.
+
+The optional Lua overlay is independently delivered as `DuoView_FirstPersonFOV_Reviewed_R2.zip`, not merged into the native DLL. Nine mocked Lua 5.4 scenarios pass (mode transitions, initial zero, game refresh, read and write failures, mode unavailable and level switch). Those tests do not establish headset visual alignment or actual UEVR ABI compatibility. Do **not** run the overlay together with a future native build containing this functionality.
+
+Native compilation remains blocked by the exact Joey SDK credential scope in public GitHub Actions; the public SDK substitute is missing required source/headers. Do not merge or release a native DLL without a full compile, game startup and headset acceptance tests.

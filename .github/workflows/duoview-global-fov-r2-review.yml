@@ -1,0 +1,53 @@
+name: DuoView Global First Person FOV R2 Review
+on:
+  push:
+    branches:
+      - experiment/duoview-firstperson-fov-r2-20261022
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static FOV lifecycle and integration invariants
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          bridge = Path('duoview/DuoViewMPCFov.hpp').read_text()
+          patch = Path('duoview/joey_stage1/apply_foreground.py').read_text()
+          tests = Path('duoview/stage8_config_tests.cpp').read_text()
+          config = Path('duoview/DuoViewConfig.hpp').read_text()
+          verification = Path('duoview/joey_stage1/verify_stage234.py').read_text()
+          pipeline = Path('duoview/joey_stage1/apply_stage234.py').read_text()
+          for pattern in ['L"IsFOVEnabled"','bool select_world(sdk::UGameEngine* engine)',
+                          'world_identity_', 'collection_identity_',
+                          'sdk::observe_uobject(candidate)',
+                          'override_active_=true;\n                if (!invoke(*setter_,0.f))']:
+              assert pattern in bridge, f'Missing R2 guard: {pattern}'
+          assert 'L"TanFOV"' not in bridge
+          assert 'set_factor(' not in bridge
+          assert 'controller_' not in bridge
+          for pattern in ['bridge.apply(disable,engine)', 'm_cvar_manager->on_pre_engine_tick(engine, delta)',
+                          'm_duo_disable_firstperson_fov->draw(']:
+              assert pattern in patch, f'Missing integration: {pattern}'
+          assert 'duoview_state().scene(' not in patch, 'per-view mutation unexpectedly present'
+          assert 'disable_firstperson_fov' in tests and 'disable_firstperson_fov' in config
+          assert 'mpc_fovea_enabled' not in config and 'mpc_periphery_enabled' not in config
+          assert 'from apply_foreground import apply as apply_foreground' in pipeline
+          assert 'const bool ok=bridge.apply(disable,engine);' in verification
+          assert 'MPC source must follow selected UE fovea view' not in verification
+          print('R2 static lifecycle/QA invariants PASSED')
+          PY
+      - name: Python integration patch syntax
+        run: |
+          python -m py_compile duoview/joey_stage1/apply_foreground.py duoview/joey_stage1/apply_stage234.py duoview/joey_stage1/verify_stage234.py
+      - name: Configure and build independent DuoView tests
+        run: |
+          cmake -S duoview -B build-global-fov-r2 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-global-fov-r2 --parallel 2
+      - name: Run geometry, gaze, frame, config and state regressions
+        run: ctest --test-dir build-global-fov-r2 --output-on-failure --no-tests=error
