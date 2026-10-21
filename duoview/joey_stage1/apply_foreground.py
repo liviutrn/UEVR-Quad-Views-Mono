@@ -11,8 +11,8 @@ def apply(changed, edit):
     cpp="src/mods/VR.cpp"
     hook="src/mods/vr/FFakeStereoRenderingHook.cpp"
     edit(header,
-'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 0.f)};''',
-'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 0.f)};
+'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};''',
+'''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};
     const ModToggle::Ptr m_duo_foreground_fix{ModToggle::create(generate_name("DuoViewFirstPersonFovCorrection"),false)};
     const ModSlider::Ptr m_duo_foreground_factor{ModSlider::create(generate_name("DuoViewFirstPersonFoveaFactor"),.2f,2.f,.5f)};
     std::atomic<uint64_t> m_duo_foreground_applied{0};
