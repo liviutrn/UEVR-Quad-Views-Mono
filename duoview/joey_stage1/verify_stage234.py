@@ -18,7 +18,7 @@ ADDED_BACKEND = {
  "src/mods/vr/DuoViewPSVR2Gaze.hpp", "src/mods/vr/DuoViewCropStability.hpp",
  "src/mods/vr/DuoViewFrame.hpp", "src/mods/vr/DuoViewConfig.hpp",
  "src/mods/vr/DuoViewState.hpp", "src/mods/vr/DuoViewD3D12.hpp",
- "src/mods/vr/DuoViewFirstPerson.hpp",
+ "src/mods/vr/DuoViewMPCFov.hpp",
  "src/mods/vr/DuoViewMonoCopyD3D12.hpp", "src/mods/vr/DuoViewShaderSource.hpp",
 }
 EDITED_FRONTEND = {"UEVR/RenderingModeOptions.cs", "tests/RenderingModes/Program.cs"}
@@ -113,20 +113,22 @@ def main():
   if token not in vr_cpp: raise RuntimeError("General settings validation/status wiring missing: "+token)
  for token in ("m_duo_ui_rejected_mask{0}",):
   if token not in vr_header: raise RuntimeError("General controls audit counter missing: "+token)
- if "DuoViewFirstPerson.hpp" not in hook or "note_duoview_foreground(fovea,adjusted)" not in hook:
-  raise RuntimeError("Guarded two-source first-person correction missing")
- for token in ("DuoViewFirstPersonFoveaEnabled", "DuoViewFirstPersonFoveaFactor",
-               "DuoViewFirstPersonPeripheryEnabled", "DuoViewFirstPersonPeripheryFactor"):
-  if token not in vr_header: raise RuntimeError("First-person two-source control not persisted: "+token)
- for token in ("foreground_fovea_enabled", "foreground_fovea_factor",
-               "foreground_periphery_enabled", "foreground_periphery_factor"):
+ if "DuoViewMPCFov.hpp" not in hook or "uevr::duoview::mpc::active()" not in hook:
+  raise RuntimeError("True STALKER 2 MPC TanFOV route not applied")
+ for token in ("DuoViewMPCTanFOVFoveaEnabled", "DuoViewMPCTanFOVFoveaFactor",
+               "DuoViewMPCTanFOVPeripheryEnabled", "DuoViewMPCTanFOVPeripheryFactor"):
+  if token not in vr_header: raise RuntimeError("MPC controls not persisted: "+token)
+ for token in ("mpc_fovea_enabled", "mpc_fovea_factor", "mpc_periphery_enabled", "mpc_periphery_factor"):
   if token not in vr_cpp or token not in hook:
-   raise RuntimeError("First-person source settings not routed via frozen frame: "+token)
+   raise RuntimeError("MPC TanFOV source controls not routed via frozen frame: "+token)
  if "index==quality.fovea_view" not in hook:
-  raise RuntimeError("First-person correction source role must follow source view selection")
- foreground_header=(a.backend/"src/mods/vr/DuoViewFirstPerson.hpp").read_text(encoding="utf-8")
- if "if (only) return {}" not in foreground_header or "correct(std::span" not in foreground_header:
-  raise RuntimeError("No ambiguous-signature fail-safe in foreground correction")
+  raise RuntimeError("MPC source must follow selected UE fovea view")
+ mpc_header=(a.backend/"src/mods/vr/DuoViewMPCFov.hpp").read_text(encoding="utf-8")
+ for token in ("MPC_FOV.MPC_FOV", "TanFOV", "SetScalarParameterValue",
+               "GetScalarParameterValue", "write_readback_failed", "process_event"):
+  if token not in mpc_header: raise RuntimeError("MPC reflected read/write contract missing: "+token)
+ if "draw_duoview_convergence_controls()" not in vr_cpp:
+  raise RuntimeError("OpenXR convergence controls invisible in DuoView mode panel")
  overlay_header=(a.backend/"src/mods/vr/OverlayComponent.hpp").read_text(encoding="utf-8")
  overlay_cpp=(a.backend/"src/mods/vr/OverlayComponent.cpp").read_text(encoding="utf-8")
  for token in ("duoview_convergence_enabled()", "UI_DuoView_ConvergenceReference"):
