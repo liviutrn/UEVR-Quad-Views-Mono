@@ -10,6 +10,7 @@ EDITED_BACKEND = {
  "src/mods/vr/runtimes/OpenXR.cpp", "src/mods/vr/runtimes/OpenXR.hpp",
  "src/mods/vr/D3D12Component.hpp", "src/mods/vr/D3D12Component.cpp", "tests/MonoRenderingTests.hpp",
  "tests/CadenceReplayTests.cpp",
+ "src/mods/vr/OverlayComponent.hpp", "src/mods/vr/OverlayComponent.cpp",
 }
 ADDED_BACKEND = {
  "src/mods/vr/DuoViewDelivery.hpp",
@@ -111,6 +112,13 @@ def main():
   if token not in vr_cpp: raise RuntimeError("General settings validation/status wiring missing: "+token)
  for token in ("m_duo_ui_rejected_mask{0}",):
   if token not in vr_header: raise RuntimeError("General controls audit counter missing: "+token)
+ overlay_header=(a.backend/"src/mods/vr/OverlayComponent.hpp").read_text(encoding="utf-8")
+ overlay_cpp=(a.backend/"src/mods/vr/OverlayComponent.cpp").read_text(encoding="utf-8")
+ for token in ("duoview_convergence_enabled()", "UI_DuoView_ConvergenceReference"):
+  if token not in overlay_header: raise RuntimeError("Missing DuoView convergence control "+token)
+ for token in ("half_shift", "XR_EYE_VISIBILITY_LEFT", "XR_EYE_VISIBILITY_RIGHT"):
+  if token not in overlay_cpp: raise RuntimeError("Missing guarded per-eye UI convergence "+token)
+ if "duo_converged" not in d3d: raise RuntimeError("Per-eye UI quads not submitted")
  ui_config=(a.backend/"src/mods/vr/DuoViewConfig.hpp").read_text(encoding="utf-8")
  for token in ("UiReconciled reconcile_ui_settings", "reject_width", "reject_still",
                "out.native_fix_same_pass=requested.native_fix_same_pass",
