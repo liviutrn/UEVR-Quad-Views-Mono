@@ -10,7 +10,10 @@ permissions:
   contents: read
 jobs:
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
