@@ -25,7 +25,11 @@ int main() {
     std::memcpy(&corrected,bytes.data()+0x7c,4);
     assert(std::fabs(corrected-.725f)<1e-6f);
     assert(!correct(bytes,*slot,0.f));
-    assert(!correct(bytes,*slot,3.f));
+    assert(!correct(bytes,*slot,.329f));
+    assert(!correct(bytes,*slot,3.001f));
+    assert(correct(bytes,*slot,3.f)); // maximum permitted scale
+    assert(correct(bytes,*slot,.33f)); // minimum permitted scale
+    assert(correct(bytes,*slot,1.f)); // neutral
     assert(!correct(bytes,*slot,std::numeric_limits<float>::quiet_NaN()));
     // The immediately adjacent scale, flags and world FOV are NOT modified.
     auto untouched=find_slot(bytes);
