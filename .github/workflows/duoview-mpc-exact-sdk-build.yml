@@ -1,9 +1,9 @@
-name: DuoView MPC TanFOV Exact Joey SDK Build Probe
-run-name: DuoView MPC TanFOV exact SDK checkout probe (${{ github.run_number }})
+name: DuoView First Person FOV Exact SDK Build
+run-name: DuoView First Person FOV exact SDK build (${{ github.run_number }})
 on:
   push:
     branches:
-      - build/duoview-mpc-tanfov-publicsdk-20261021
+      - experiment/duoview-disable-firstperson-fov-20261022
   pull_request:
     branches:
       - build-182
@@ -189,16 +189,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-Quad-Views-Mono-v197-MPC-ExactSDK-${{ github.run_number }}.zip"
+          $zip="UEVR-Quad-Views-Mono-v198-FirstPersonFOV-ExactSDK-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-Quad-Views-Mono-v197-MPC-ExactSDK-${{ github.run_number }}
+          name: UEVR-Quad-Views-Mono-v198-FirstPersonFOV-ExactSDK-${{ github.run_number }}
           path: |
-            UEVR-Quad-Views-Mono-v197-MPC-ExactSDK-*.zip
-            UEVR-Quad-Views-Mono-v197-MPC-ExactSDK-*.zip.sha256
+            UEVR-Quad-Views-Mono-v198-FirstPersonFOV-ExactSDK-*.zip
+            UEVR-Quad-Views-Mono-v198-FirstPersonFOV-ExactSDK-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -213,7 +213,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-v197-MPC-ExactSDK-Evidence-${{ github.run_number }}
+          name: UEVR-v198-FirstPersonFOV-ExactSDK-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
