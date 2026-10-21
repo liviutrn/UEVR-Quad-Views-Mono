@@ -18,7 +18,7 @@ def apply(changed, edit):
     std::atomic<uint64_t> m_duo_foreground_applied{0};
     std::atomic<uint64_t> m_duo_foreground_not_found{0};''')
     edit(header,
-'''             *m_duo_feather, *m_duo_sharpen, *m_duo_gaze,''',
+'''            *m_duo_feather, *m_duo_sharpen, *m_duo_gaze,''',
 '''             *m_duo_feather, *m_duo_sharpen, *m_duo_foreground_fix, *m_duo_foreground_factor, *m_duo_gaze,''')
     edit(header,
 '''    void note_duoview_gpu_ms(float ms) { m_duo_gpu_ms.store(ms, std::memory_order_relaxed); }''',
