@@ -11,7 +11,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: duoview-stage234-${{ github.ref }}
+  group: duoview-exact-sdk-${{ github.ref }}
   cancel-in-progress: true
 env:
   PYTHONDONTWRITEBYTECODE: '1'
