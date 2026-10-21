@@ -73,7 +73,7 @@ def apply(changed, edit):
         const bool disable=is_duoview_renderer_active() &&
             m_duoview.settings().disable_firstperson_fov;
         if (disable || bridge.override_active()) {
-            const bool ok=bridge.apply(disable);
+            const bool ok=bridge.apply(disable,engine);
             note_duoview_global_fov(ok,static_cast<int>(bridge.status()),
                 bridge.baseline(),bridge.last_value());
             if (!ok)
