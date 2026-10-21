@@ -13,7 +13,7 @@ def apply(changed, edit):
     edit(header,
 '''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};''',
 '''    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};
-    const ModToggle::Ptr m_duo_foreground_fix{ModToggle::create(generate_name("DuoViewStalker2ForegroundMPC"),false)};
+    const ModToggle::Ptr m_duo_foreground_fix{ModToggle::create(generate_name("DuoViewStalker2ForegroundMPC"),true)};
     std::atomic<uint64_t> m_duo_foreground_applied{0}, m_duo_foreground_not_found{0};
     const ModToggle::Ptr m_duo_fg_fovea_on{ModToggle::create(generate_name("DuoViewFirstPersonFoveaEnabled"),false)};
     const ModSlider::Ptr m_duo_fg_fovea_factor{ModSlider::create(generate_name("DuoViewFirstPersonFoveaFactor"),.33f,3.f,1.f)};
@@ -43,7 +43,7 @@ def apply(changed, edit):
 '''                    m_duo_feather->value()=.08f; m_duo_sharpen->value()=1.f; m_duo_gaze->value()=true;
                     m_duo_fg_fovea_on->value()=false; m_duo_fg_fovea_factor->value()=1.f;
                     m_duo_fg_periphery_on->value()=false; m_duo_fg_periphery_factor->value()=1.f;
-                    m_duo_foreground_fix->value()=false;''')
+                    m_duo_foreground_fix->value()=true;''')
     edit(cpp,
 '''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");''',
 '''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");
@@ -108,7 +108,7 @@ r'''void VR::update_duoview_game_foreground(sdk::UGameEngine* engine) {
         // avoid a hardcoded cooked package path or stale UObject cache.
         for (auto* object : get_live_objects_by_class_name(
                  L"Class /Script/Engine.MaterialParameterCollection")) {
-            if (object && object->get_name().to_string() == L"MPC_FOV") {
+            if (object && object->get_full_name().ends_with(L".MPC_FOV")) {
                 if (collection != nullptr) {
                     note_duoview_game_foreground(false); // ambiguous asset
                     return;
@@ -183,7 +183,7 @@ r'''void VR::update_duoview_game_foreground(sdk::UGameEngine* engine) {
             SPDLOG_WARNING_EVERY_N_SEC(5,
                 "[DuoView][Foreground] STALKER 2 material override failed; do not infer parity");
     } catch (...) {
-        if (requested) note_duoview_foreground(false);
+        if (requested) note_duoview_game_foreground(false);
         SPDLOG_WARNING_EVERY_N_SEC(5,
             "[DuoView][Foreground] reflected MPC access refused safely");
     }
