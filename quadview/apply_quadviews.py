@@ -1277,6 +1277,15 @@ def main() -> None:
         "            vr->set_quadview_status(\"Renderer source did not contain a proven four-view family or final native stereo pair\");\n")
 
 
+    # Each RT FViewInfo copy may allocate exactly two view slots in split
+    # mode; validating/copying four pointers would read beyond the copied
+    # array and silently disable the experiment.
+    edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
+        "            (qv_split && qv_pair_phase==uevr::quadview::NativePairLedger::Phase::Second)) && qv_views->capacity >= 4 &&\n"
+        "            qv_views->data != nullptr && is_readable_process_range(reinterpret_cast<uintptr_t>(qv_views->data), sizeof(void*)*4);",
+        "            (qv_split && qv_pair_phase==uevr::quadview::NativePairLedger::Phase::Second)) && qv_views->capacity >= qv_views->count &&\n"
+        "            qv_views->data != nullptr && is_readable_process_range(reinterpret_cast<uintptr_t>(qv_views->data), sizeof(void*)*qv_views->count);")
+
     for path, content in changed.items():
         path.write_text(content, encoding="utf-8")
 
