@@ -113,20 +113,28 @@ def main():
   if token not in vr_cpp: raise RuntimeError("General settings validation/status wiring missing: "+token)
  for token in ("m_duo_ui_rejected_mask{0}",):
   if token not in vr_header: raise RuntimeError("General controls audit counter missing: "+token)
- if "DuoViewMPCFov.hpp" not in hook or "uevr::duoview::mpc::active()" not in hook:
-  raise RuntimeError("True STALKER 2 MPC TanFOV route not applied")
- for token in ("DuoViewMPCTanFOVFoveaEnabled", "DuoViewMPCTanFOVFoveaFactor",
-               "DuoViewMPCTanFOVPeripheryEnabled", "DuoViewMPCTanFOVPeripheryFactor"):
-  if token not in vr_header: raise RuntimeError("MPC controls not persisted: "+token)
- for token in ("mpc_fovea_enabled", "mpc_fovea_factor", "mpc_periphery_enabled", "mpc_periphery_factor"):
-  if token not in vr_cpp or token not in hook:
-   raise RuntimeError("MPC TanFOV source controls not routed via frozen frame: "+token)
- if "index==quality.fovea_view" not in hook:
-  raise RuntimeError("MPC source must follow selected UE fovea view")
+ # Global STALKER 2 viewmodel FOV MUST be set before both UE source
+ # passes, not once per view. Old TanFOV slider flags must stay absent.
+ if "DuoViewMPCFov.hpp" in hook or "mpc::active()" in hook:
+  raise RuntimeError("Global MPC FOV must never be rewritten in per-view hook")
+ for token in ("DuoViewDisableFirstPersonFOV", "note_duoview_global_fov"):
+  if token not in vr_header: raise RuntimeError("Global first-person FOV option/status missing: "+token)
+ for token in ("m_duo_disable_firstperson_fov->draw(", ".disable_firstperson_fov=m_duo_disable_firstperson_fov->value()",
+               "const bool ok=bridge.apply(disable,engine);", "m_cvar_manager->on_pre_engine_tick(engine, delta);"):
+  if token not in vr_cpp: raise RuntimeError("Global FOV game-tick wiring missing: "+token)
+ if vr_cpp.index("const bool ok=bridge.apply(disable,engine);") < vr_cpp.index("m_cvar_manager->on_pre_engine_tick(engine, delta);"):
+  raise RuntimeError("First-person FOV must run inside on_pre_engine_tick")
+ for token in ("DuoViewMPCTanFOVFoveaEnabled", "DuoViewMPCTanFOVPeripheryEnabled",
+               "mpc_fovea_enabled", "mpc_periphery_enabled"):
+  if token in vr_header or token in vr_cpp or token in hook:
+   raise RuntimeError("Obsolete per-view TanFOV controls still present: "+token)
  mpc_header=(a.backend/"src/mods/vr/DuoViewMPCFov.hpp").read_text(encoding="utf-8")
- for token in ("MPC_FOV.MPC_FOV", "TanFOV", "SetScalarParameterValue",
-               "GetScalarParameterValue", "write_readback_failed", "process_event"):
-  if token not in mpc_header: raise RuntimeError("MPC reflected read/write contract missing: "+token)
+ for token in ('L"IsFOVEnabled"', "SetScalarParameterValue", "GetScalarParameterValue",
+               "sdk::observe_uobject(candidate)", "collection_identity_",
+               "world_identity_", "override_active_=true;", "select_world(engine)"):
+  if token not in mpc_header: raise RuntimeError("Live-world MPC FOV guard missing: "+token)
+ if 'L"TanFOV"' in mpc_header or "set_factor(" in mpc_header:
+  raise RuntimeError("Obsolete TanFOV factor bridge must be completely removed")
  if "draw_duoview_convergence_controls()" not in vr_cpp:
   raise RuntimeError("OpenXR convergence controls invisible in DuoView mode panel")
  overlay_header=(a.backend/"src/mods/vr/OverlayComponent.hpp").read_text(encoding="utf-8")
