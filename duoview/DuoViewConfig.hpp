@@ -17,8 +17,11 @@ struct Settings {
     float foveal_density{1.f};
     float feather_fraction{.08f};
     float sharpen_strength{}; // Glamarye fovea-only; 0 preserves v182 output.
-    bool foreground_crop_correction{}; // Experimental UE5.5 tagged first-person primitives only
-    float foreground_fovea_factor{1.f}; // 1.0 is neutral; below/above adjust native foreground scale
+    // Experimental UE5.5 native first-person transforms. Both independently OFF by default.
+    bool foreground_fovea_enabled{};
+    float foreground_fovea_factor{1.f}; // 1.0 = unchanged
+    bool foreground_periphery_enabled{};
+    float foreground_periphery_factor{1.f}; // 1.0 = unchanged
     bool debug_border{};
     bool eye_tracked{true};
     uint32_t fovea_view{};
@@ -53,7 +56,7 @@ enum UiReject : uint32_t {
     reject_hold=1u<<9, reject_reacquire=1u<<10, reject_offset_u=1u<<11,
     reject_offset_v=1u<<12, reject_micro=1u<<13,
     reject_breakout=1u<<14, reject_still=1u<<15, reject_relock=1u<<16,
-    reject_sharpen=1u<<17, reject_foreground_factor=1u<<18
+    reject_sharpen=1u<<17, reject_foreground_fovea=1u<<18, reject_foreground_periphery=1u<<19
 };
 struct UiReconciled {
     Settings settings{};
@@ -101,7 +104,8 @@ inline UiReconciled reconcile_ui_settings(const Settings& requested,
     }
     // Boolean controls are inherently valid and must always apply.
     out.debug_border=requested.debug_border;
-    out.foreground_crop_correction=requested.foreground_crop_correction;
+    out.foreground_fovea_enabled=requested.foreground_fovea_enabled;
+    out.foreground_periphery_enabled=requested.foreground_periphery_enabled;
     out.eye_tracked=requested.eye_tracked;
     out.gpu_timing=requested.gpu_timing;
     out.direct_xr_output=requested.direct_xr_output;
@@ -125,7 +129,8 @@ inline UiReconciled reconcile_ui_settings(const Settings& requested,
     };
     scalar(requested.feather_fraction,0.f,.45f,reject_feather,&Settings::feather_fraction);
     scalar(requested.sharpen_strength,0.f,2.f,reject_sharpen,&Settings::sharpen_strength);
-    scalar(requested.foreground_fovea_factor,.2f,3.f,reject_foreground_factor,&Settings::foreground_fovea_factor);
+    scalar(requested.foreground_fovea_factor,.33f,3.f,reject_foreground_fovea,&Settings::foreground_fovea_factor);
+    scalar(requested.foreground_periphery_factor,.33f,3.f,reject_foreground_periphery,&Settings::foreground_periphery_factor);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
     scalar(requested.gaze_offset_v,-.25f,.25f,reject_offset_v,&Settings::gaze_offset_v);
@@ -170,7 +175,9 @@ public:
         if (!std::isfinite(proposed.sharpen_strength) || proposed.sharpen_strength<0.f ||
             proposed.sharpen_strength>2.f ||
             !std::isfinite(proposed.foreground_fovea_factor) ||
-            proposed.foreground_fovea_factor<.2f || proposed.foreground_fovea_factor>3.f ||
+            proposed.foreground_fovea_factor<.33f || proposed.foreground_fovea_factor>3.f ||
+            !std::isfinite(proposed.foreground_periphery_factor) ||
+            proposed.foreground_periphery_factor<.33f || proposed.foreground_periphery_factor>3.f ||
             !std::isfinite(proposed.feather_fraction) ||
             proposed.feather_fraction < 0.f || proposed.feather_fraction > .45f ||
             proposed.fovea_view > 1 || proposed.diagnostic_view > 2 ||
