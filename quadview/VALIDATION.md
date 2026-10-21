@@ -124,3 +124,31 @@ owners, generation restart, fresh combined producer/consumer patch
 application, Python syntax, and all 84 preserved Build182 source identities.
 Windows compilation and WARP results are recorded in the replacement run.
 Headset recovery remains unverified until the user retests the new package.
+
+## Build 46 review regressions — local pre-CI checks
+
+Build 46 adds production-used tests for exact frozen main-family routing,
+auxiliary-batch preservation, same-drain shared tails, content provenance and
+queued RHI owner lifetime. The standalone Linux workspace passed:
+
+- Native quartet, family-routing and physical-content property executables
+  compiled with GCC C++20, `-Wall -Wextra -Werror`, optimization and assertions
+  enabled. The provenance property checked all 40,320 write orders across two
+  queued quartets, selection against reference target contents after every
+  write, fresh-quartet recovery and 40 same-generation target-set replacements.
+- ASan/UBSan runs passed for native delivery and family routing; the provenance
+  property also passed under ASan/UBSan in the independent root review. LeakSanitizer
+  is unavailable in this container, so those runs used `ASAN_OPTIONS=detect_leaks=0`.
+- Existing QuadView producer, asynchronous-delivery and recovery-contract
+  executables passed. The producer target was compiled with the repository's
+  normal warning policy; its pinned DuoView dependency has an existing
+  `-Wunused-parameter` warning when warnings are promoted to errors.
+- Eight source-checkpoint tests passed, including startup-hook installation,
+  queued-owner transition drainage and exact source/SDK boundary checks.
+  `source_smoke.py` reapplied the complete overlay successfully, and the
+  preserved Build182 verifier checked all 84 manifested files.
+
+This environment does not provide CMake or Windows tooling, so this local pass
+does not replace the required Windows Actions build, WARP shader tests or full
+backend/frontend compatibility suite. Those outcomes must be recorded from the
+Build 46 CI run. No headset test or headset trace is included here.

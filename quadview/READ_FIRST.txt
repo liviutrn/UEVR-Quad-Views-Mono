@@ -1,27 +1,27 @@
-UEVR QUAD VIEWS — BUILD 45 NATIVE STEREO FIX
+UEVR QUAD VIEWS — BUILD 46 NATIVE STEREO FIX
 
 Target: STALKER 2 (UE5.5), DX12, OpenXR, PSVR2.
 Baseline: Build 40, 7486fc59890b14673cd50770b0dafeb692576716.
 Mode ID7: Quad Views Stereo (Experimental).
 
-1. Extract the compiled package into a separate folder and run the included injector.
-2. Inject into STALKER 2 using your working Build 40 runtime/profile settings.
+1. Extract the compiled Windows package into a separate folder and run the
+   included injector.
+2. Inject into STALKER 2 with your working Build 40 runtime/profile settings.
 3. Select Quad Views Stereo (Experimental), ID7.
-4. Begin with the same crop, periphery resolution, gaze and sharpening settings
-   used for your Build 40 comparison. No Build 43 pair-experiment toggle is required.
-5. Compare a shadowed interior with Native Stereo Fix, DuoView and Build 40:
-   inspect each eye's focus/periphery boundary, brightness, shadows and Lumen.
+4. Start with your Build 40 crop, periphery, gaze and sharpening settings.
+5. Compare a shadowed interior with Native Stereo Fix, DuoView and Build 40.
+   Inspect both eyes' focus/periphery boundary, brightness, shadows and Lumen.
 6. Check horizontal FOV, stereo depth, gaze movement, startup, repeated mode
-   switching, loading a save and sustained gameplay. Preserve the full log on failure.
+   switching, loading a save and sustained gameplay. Save the full log if a
+   check fails.
 
-The native path uses four independently owned engine render targets and one
-coherent four-source frame. Their full atlas extents preserve Build 40 view
-rectangles and projections, with increased target memory usage. Rendered pixel
-counts alone do not predict total GPU cost.
+ID7 uses four independent engine render targets and requires a coherent
+four-source frame. Their full atlas extents preserve Build 40 view rectangles
+and projections, with increased target memory use. Rendered pixel counts do
+not predict total GPU cost. Build 40's ID6 DuoView remains unchanged; keep your
+Build 40 installation for direct comparison.
 
 Diagnostics: 0 blended, 1 context only, 2 focus only, 3 synthetic view colors.
 Synthetic colors cannot establish that Unreal rendered four valid scene views.
-
-ID6 remains the original DuoView implementation. Keep your original Build 40
-installation for direct comparison. Automated build/GPU tests cannot establish
-STALKER 2 headset lighting parity; that requires this in-game comparison.
+Automated builds and GPU tests do not establish headset lighting parity,
+stability, fence behavior or performance. Those require in-game testing.
