@@ -171,7 +171,8 @@ private:
         const auto* world_slot=viewport->get_property_data(L"World");
         if (!world_slot) { status_=Status::missing_world_context; return false; }
         auto* candidate=*reinterpret_cast<sdk::UObject* const*>(world_slot);
-        const auto observation=candidate ? sdk::observe_uobject(candidate) : std::nullopt;
+        if (!candidate) { status_=Status::missing_world_context; return false; }
+        const auto observation=sdk::observe_uobject(candidate);
         if (!observation) { status_=Status::missing_world_context; return false; }
         if (candidate!=world_ || !world_identity_ ||
             !sdk::is_current_object(*world_identity_)) {
