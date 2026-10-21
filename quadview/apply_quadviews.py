@@ -1243,38 +1243,38 @@ def main() -> None:
     # FSceneView pointers. Count the two exact main-family render callbacks
     # and attach the source/engine ticket only to the SECOND RHI owner.
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
-        "    if (vr->is_quadview_mode_selected()) {\\n"
-        "        quad_engine_opt=g_hook->quadview_delivery.render_engine_family(vr->mono_generation(),frame_count,\\n"
-        "            reinterpret_cast<uintptr_t>(view_family.get_render_target()),\\n"
-        "            reinterpret_cast<uintptr_t>(view_family.get_scene_interface()));\\n"
-        "        auto* qv_views=view_family.get_views();\\n"
-        "        bool valid_qv_family=qv_views != nullptr && qv_views->count == 4 && qv_views->capacity >= 4 &&\\n",
-        "    if (vr->is_quadview_mode_selected()) {\\n"
-        "        auto* qv_views=view_family.get_views();\\n"
-        "        const bool qv_split=vr->quadview_split_native_pair_enabled() && qv_views && qv_views->count==2;\\n"
-        "        const auto qv_pair_phase=qv_split ? g_hook->quadview_pair_ledger.observe({vr->mono_generation(),frame_count,\\n"
-        "            reinterpret_cast<uintptr_t>(view_family.get_render_target()),\\n"
-        "            reinterpret_cast<uintptr_t>(view_family.get_scene_interface())})\\n"
-        "            : uevr::quadview::NativePairLedger::Phase::Invalid;\\n"
-        "        if (!qv_split || qv_pair_phase==uevr::quadview::NativePairLedger::Phase::Second)\\n"
-        "            quad_engine_opt=g_hook->quadview_delivery.render_engine_family(vr->mono_generation(),frame_count,\\n"
-        "                reinterpret_cast<uintptr_t>(view_family.get_render_target()),\\n"
-        "                reinterpret_cast<uintptr_t>(view_family.get_scene_interface()));\\n"
-        "        bool valid_qv_family=qv_views != nullptr && (qv_views->count == 4 ||\\n"
-        "            (qv_split && qv_pair_phase==uevr::quadview::NativePairLedger::Phase::Second)) && qv_views->capacity >= 4 &&\\n")
+        "    if (vr->is_quadview_mode_selected()) {\n"
+        "        quad_engine_opt=g_hook->quadview_delivery.render_engine_family(vr->mono_generation(),frame_count,\n"
+        "            reinterpret_cast<uintptr_t>(view_family.get_render_target()),\n"
+        "            reinterpret_cast<uintptr_t>(view_family.get_scene_interface()));\n"
+        "        auto* qv_views=view_family.get_views();\n"
+        "        bool valid_qv_family=qv_views != nullptr && qv_views->count == 4 && qv_views->capacity >= 4 &&\n",
+        "    if (vr->is_quadview_mode_selected()) {\n"
+        "        auto* qv_views=view_family.get_views();\n"
+        "        const bool qv_split=vr->quadview_split_native_pair_enabled() && qv_views && qv_views->count==2;\n"
+        "        const auto qv_pair_phase=qv_split ? g_hook->quadview_pair_ledger.observe({vr->mono_generation(),frame_count,\n"
+        "            reinterpret_cast<uintptr_t>(view_family.get_render_target()),\n"
+        "            reinterpret_cast<uintptr_t>(view_family.get_scene_interface())})\n"
+        "            : uevr::quadview::NativePairLedger::Phase::Invalid;\n"
+        "        if (!qv_split || qv_pair_phase==uevr::quadview::NativePairLedger::Phase::Second)\n"
+        "            quad_engine_opt=g_hook->quadview_delivery.render_engine_family(vr->mono_generation(),frame_count,\n"
+        "                reinterpret_cast<uintptr_t>(view_family.get_render_target()),\n"
+        "                reinterpret_cast<uintptr_t>(view_family.get_scene_interface()));\n"
+        "        bool valid_qv_family=qv_views != nullptr && (qv_views->count == 4 ||\n"
+        "            (qv_split && qv_pair_phase==uevr::quadview::NativePairLedger::Phase::Second)) && qv_views->capacity >= 4 &&\n")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
-        "            for (size_t i=0; i!=4; ++i) {\\n"
-        "                qv_render_view_ids[i]=reinterpret_cast<uintptr_t>(qv_views->data[i]);\\n",
-        "            for (size_t i=0; i<static_cast<size_t>(qv_views->count); ++i) {\\n"
-        "                qv_render_view_ids[i]=reinterpret_cast<uintptr_t>(qv_views->data[i]);\\n")
+        "            for (size_t i=0; i!=4; ++i) {\n"
+        "                qv_render_view_ids[i]=reinterpret_cast<uintptr_t>(qv_views->data[i]);\n",
+        "            for (size_t i=0; i<static_cast<size_t>(qv_views->count); ++i) {\n"
+        "                qv_render_view_ids[i]=reinterpret_cast<uintptr_t>(qv_views->data[i]);\n")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
-        "        if (!valid_qv_family) {\\n"
-        "            vr->set_quadview_status(\\\"Render-thread family did not contain four readable distinct views\\\");\\n",
-        "        if (qv_split && qv_pair_phase==uevr::quadview::NativePairLedger::Phase::First) {\\n"
-        "            // First pair is allowed to enqueue, but may NOT publish a source\\n"
-        "            // before the second pair's engine/RHI command owner executes.\\n"
-        "        } else if (!valid_qv_family) {\\n"
-        "            vr->set_quadview_status(\\\"Renderer source did not contain a proven four-view family or final native stereo pair\\\");\\n")
+        "        if (!valid_qv_family) {\n"
+        "            vr->set_quadview_status(\\\"Render-thread family did not contain four readable distinct views\\\");\n",
+        "        if (qv_split && qv_pair_phase==uevr::quadview::NativePairLedger::Phase::First) {\n"
+        "            // First pair is allowed to enqueue, but may NOT publish a source\n"
+        "            // before the second pair's engine/RHI command owner executes.\n"
+        "        } else if (!valid_qv_family) {\n"
+        "            vr->set_quadview_status(\\\"Renderer source did not contain a proven four-view family or final native stereo pair\\\");\n")
 
 
     for path, content in changed.items():
