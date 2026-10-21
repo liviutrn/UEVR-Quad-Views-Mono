@@ -39,7 +39,7 @@ def apply(changed, edit):
     edit(cpp,
 '''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");''',
 '''                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");
-                ImGui::SeparatorText("First-person mesh FOV calibration (experimental)");
+                ImGui::Separator(); ImGui::TextUnformatted("First-person mesh FOV calibration (experimental)");
                 m_duo_fg_fovea_on->draw("Fovea: first-person FOV correction");
                 if (m_duo_fg_fovea_on->value()) {
                     m_duo_fg_fovea_factor->draw("Fovea first-person scale factor (0.33 - 3.0)");
