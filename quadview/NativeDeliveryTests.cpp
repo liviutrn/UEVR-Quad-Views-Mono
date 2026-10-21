@@ -59,6 +59,18 @@ int main() {
         assert(!d.engine_commands_retired(1)); // Original full ledger still owns its pending tails.
         assert(!d.select(1,77));
     }
+    {
+        D d;N n(d);
+        // Invalid/missing pose: retain engine targets but authorize no XR source.
+        D::Source discard{std::make_shared<const Packet>(Packet{1}),1,1,100,0,
+            0x100,0x200,0x300,{0x401,0x402,0x403,0x404}};
+        D::EngineTicket engine{1,1,100,0x100,0x200,0x300};
+        assert(d.register_engine_family(engine));
+        assert(n.bind(discard,engine,44,{0x501,0x502,0x503,0x504}));
+        auto c=hook(d,n,100,0x700);
+        for(size_t i=0;i<4;++i) assert(n.executed(c[i],0x700+i,77));
+        assert(d.engine_commands_retired(1)); assert(!d.select(1,77));
+    }
     std::array<unsigned,4> order{0,1,2,3};
     do {
         D d; N n(d); bind(d,n,1,100); auto c=hook(d,n,100,0x700);

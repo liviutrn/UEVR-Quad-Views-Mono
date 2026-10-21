@@ -45,6 +45,29 @@ def main():
                         const bool registered=native_owned && g_hook->quadview_delivery.register_bound(qv_source);
                         if (native_callback && native_owned && !registered)
                             vr->set_quadview_status("Native quartet will drain without publishing: source ledger is full");''')
+    # Even a missing/changed pose must retain engine ownership until the four
+    # singleton commands drain. Such a packet is never registered for output.
+    if not block.endswith('    }\n'): raise RuntimeError('Unexpected GT registration block ending')
+    block=block[:-6]+'''        if (native_callback && !native_context.source_registered && qv_engine_ticket && qv_snapshot) {
+            auto discard_packet=std::make_shared<FFakeStereoRenderingHook::QuadViewSourcePacket>();
+            discard_packet->native_sources=native_context.native_sources;
+            discard_packet->native_target_owners=native_context.target_owners;
+            discard_packet->native_target_set_owner=native_context.target_set;
+            discard_packet->native_target_set_generation=native_context.target_set_generation;
+            discard_packet->serial=qv_key.draw_serial;
+            FFakeStereoRenderingHook::QuadViewDelivery::Source discard_source{
+                discard_packet,qv_key.generation,qv_key.draw_serial,frame_count,0,
+                reinterpret_cast<uintptr_t>(&view_family),reinterpret_cast<uintptr_t>(qv_target),
+                reinterpret_cast<uintptr_t>(qv_scene),qv_view_ids};
+            std::array<uintptr_t,4> native_targets{};
+            for(size_t i=0;i!=4;++i) native_targets[i]=reinterpret_cast<uintptr_t>(native_context.render_targets[i]);
+            native_context.source_registered=g_hook->quadview_native_delivery.bind(discard_source,*qv_engine_ticket,
+                native_context.target_set_generation,native_targets);
+            native_context.packet=discard_packet;
+            native_context.engine_frame=frame_count;
+            vr->set_quadview_status("Native quartet has no valid pose/source; draining four engine owners without publication");
+        }
+'''+block[-6:]
     wrapped='''    [&]() {
         auto& native_context=g_hook->quadview_native_build_context;
         const bool native_callback=native_context.active &&
