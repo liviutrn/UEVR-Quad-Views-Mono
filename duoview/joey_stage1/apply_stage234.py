@@ -1079,6 +1079,8 @@ OpenXR::PipelineState OpenXR::get_submit_state() {
 
     from apply_delivery import apply as apply_delivery
     apply_delivery(changed, edit)
+    from apply_convergence import apply as apply_convergence
+    apply_convergence(changed, edit)
     shutil.copyfile(Path(__file__).with_name("DuoViewDelivery.hpp"), root/"src/mods/vr/DuoViewDelivery.hpp")
 
     # Copy reference modules into exact checked-out Joey tree. No private SDK
