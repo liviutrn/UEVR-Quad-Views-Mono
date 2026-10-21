@@ -1269,12 +1269,12 @@ def main() -> None:
         "                qv_render_view_ids[i]=reinterpret_cast<uintptr_t>(qv_views->data[i]);\n")
     edit(backend, "src/mods/vr/FFakeStereoRenderingHook.cpp",
         "        if (!valid_qv_family) {\n"
-        "            vr->set_quadview_status(\\\"Render-thread family did not contain four readable distinct views\\\");\n",
+        "            vr->set_quadview_status(\"Render-thread family did not contain four readable distinct views\");\n",
         "        if (qv_split && qv_pair_phase==uevr::quadview::NativePairLedger::Phase::First) {\n"
         "            // First pair is allowed to enqueue, but may NOT publish a source\n"
         "            // before the second pair's engine/RHI command owner executes.\n"
         "        } else if (!valid_qv_family) {\n"
-        "            vr->set_quadview_status(\\\"Renderer source did not contain a proven four-view family or final native stereo pair\\\");\n")
+        "            vr->set_quadview_status(\"Renderer source did not contain a proven four-view family or final native stereo pair\");\n")
 
 
     for path, content in changed.items():
