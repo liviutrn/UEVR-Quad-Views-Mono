@@ -1,0 +1,64 @@
+name: ID7 Build 42 standalone preflight
+run-name: ID7 Build 42 checks (${{ github.run_number }})
+on:
+  push:
+    branches: [experiment/id7-build42-lighting-parity-20261021]
+    paths: ['quadview/**', '.github/workflows/id7-build42-preflight.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: id7-build42-preflight-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline-preflight:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate Build 40 provenance and narrow change scope
+        shell: pwsh
+        run: |
+          $base='7486fc59890b14673cd50770b0dafeb692576716'
+          git merge-base --is-ancestor $base HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Build 42 must be based on Build 40' }
+          $allowed=@('quadview/apply_quadviews.py','quadview/SourceCheckpointTests.py','quadview/BUILD42_LIGHTING_PARITY.md','.github/workflows/quadview-stereo-182.yml','.github/workflows/id7-build42-preflight.yml')
+          $changed=@(git diff --name-only $base HEAD)
+          foreach ($file in $changed) { if ($allowed -cnotcontains $file) { throw "Unrelated file in Build 42: $file" } }
+          git diff --exit-code $base HEAD -- duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView baseline changed unexpectedly' }
+      - name: Check Python overlay syntax and source checkpoint contracts
+        shell: pwsh
+        run: |
+          python -m py_compile quadview/apply_quadviews.py quadview/apply_quadview_consumer.py quadview/SourceCheckpointTests.py
+          if ($LASTEXITCODE -ne 0) { throw 'Python overlay syntax is invalid' }
+          python quadview/SourceCheckpointTests.py
+          if ($LASTEXITCODE -ne 0) { throw 'QuadView source checkpoint tests failed' }
+      - name: Configure and compile independent native QuadView tests
+        shell: pwsh
+        run: |
+          cmake -S quadview -B standalone-tests -G 'Visual Studio 17 2022' -A x64 -DQUADVIEW_REQUIRE_DUOVIEW_TESTS=ON
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone QuadView CMake configure failed' }
+          cmake --build standalone-tests --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone QuadView build failed' }
+          ctest --test-dir standalone-tests -C Release --output-on-failure --no-tests=error
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone QuadView tests failed' }
+      - name: Package the reviewable Build 42 patch (not a playable DLL)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force patch-package | Out-Null
+          $base='7486fc59890b14673cd50770b0dafeb692576716'
+          git diff --binary $base HEAD | Out-File patch-package/ID7-Build42-from-Build40.patch -Encoding utf8
+          Copy-Item quadview/BUILD42_LIGHTING_PARITY.md patch-package/BUILD42_LIGHTING_PARITY.md
+          Copy-Item quadview/apply_quadviews.py patch-package/apply_quadviews.py
+          Copy-Item quadview/SourceCheckpointTests.py patch-package/SourceCheckpointTests.py
+          "Base: $base`nHead: $env:GITHUB_SHA`nOutput: SOURCE PATCH ONLY, no UEVR DLL`nFull Windows plugin build requires the original authorized UESDK token." | Out-File patch-package/README.txt -Encoding utf8
+          Compress-Archive -Path patch-package/* -DestinationPath ID7-Build42-source-only.zip -Force
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ID7-Build42-source-preflight-${{ github.run_number }}
+          path: ID7-Build42-source-only.zip
+          retention-days: 90
