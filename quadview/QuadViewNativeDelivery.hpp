@@ -240,7 +240,7 @@ public:
     }
 
     bool bind(Source source, EngineTicket engine, uint64_t target_set,
-              std::array<uintptr_t,4> targets) {
+              std::array<uintptr_t,4> targets, bool explicit_role_frames = false) {
         if (!source || !engine || !target_set || source.generation != engine.generation ||
             source.serial != engine.serial || source.engine_frame != engine.engine_frame ||
             source.family != engine.family || source.target != engine.target ||
@@ -260,10 +260,40 @@ public:
             slot.engine = engine;
             slot.target_set = target_set;
             slot.targets = targets;
+            slot.explicit_role_frames = explicit_role_frames;
+            if (!explicit_role_frames) {
+                slot.role_frames.fill(engine.engine_frame);
+                slot.roles_bound = 0xf;
+            }
             slot.owner_id = owner_id;
             return true;
         }
         return false;
+    }
+
+    // Called by the actual GT BeginRenderViewFamily callback, before Unreal
+    // copies that singleton. Never infer a role's frame from another role.
+    bool bind_role(uint64_t generation, uint64_t serial, size_t view,
+                   uint32_t frame, uintptr_t target, uintptr_t scene) {
+        if (view >= 4 || frame == UINT32_MAX || !target || !scene) return false;
+        std::scoped_lock lock{mutex_};
+        Slot* match{};
+        for (auto& slot : slots_) if (slot.source && slot.source.generation == generation &&
+            slot.source.serial == serial) {
+            if (match) return false;
+            match = &slot;
+        }
+        if (!match || !match->explicit_role_frames || match->targets[view] != target ||
+            match->source.scene != scene) return false;
+        const auto bit = uint8_t(1u << view);
+        if (match->roles_bound & bit) {
+            if (match->role_frames[view] == frame) return true;
+            poison_slot(*match);
+            return false;
+        }
+        match->role_frames[view] = frame;
+        match->roles_bound |= bit;
+        return true;
     }
 
     std::optional<Command> render(uint64_t generation, uint32_t frame, uintptr_t target, uintptr_t scene) {
@@ -271,8 +301,9 @@ public:
         Slot* match{};
         size_t view{};
         for (auto& slot : slots_) if (slot.source && slot.source.generation == generation &&
-            slot.source.engine_frame == frame && slot.source.scene == scene) {
-            for (size_t i = 0; i < 4; ++i) if (slot.targets[i] == target) {
+            slot.source.scene == scene) {
+            for (size_t i = 0; i < 4; ++i) if (slot.targets[i] == target &&
+                (slot.roles_bound & (1u << i)) && slot.role_frames[i] == frame) {
                 if (match) return {};
                 match = &slot;
                 view = i;
@@ -281,9 +312,9 @@ public:
         if (!match || (match->rendered & (1u << view))) return {};
         if (!match->rendered) {
             const auto engine = delivery_.render_engine_family(
-                generation, frame, match->source.target, scene);
+                generation, match->source.engine_frame, match->source.target, scene);
             const auto source = delivery_.render(
-                generation, frame, match->source.family, match->source.target, scene);
+                generation, match->source.engine_frame, match->source.family, match->source.target, scene);
             if (!engine || !engine->same_owner(match->engine)) return {};
             match->publish = source && source->same_owner(match->source);
         }
@@ -531,6 +562,9 @@ private:
         EngineTicket engine{};
         uint64_t target_set{}, owner_id{};
         std::array<uintptr_t,4> targets{};
+        std::array<uint32_t,4> role_frames{};
+        uint8_t roles_bound{};
+        bool explicit_role_frames{};
         std::array<uint32_t,4> pending_count{};
         uintptr_t completion_token{};
         uint32_t thread{};

@@ -65,13 +65,52 @@ public:
         }
     };
 
+    enum class EngineRegistrationStatus : uint8_t {
+        invalid_ticket,
+        stale_generation,
+        duplicate_same_owner,
+        ambiguous_rt_key,
+        capacity_exhausted,
+        accepted,
+    };
+
+    struct EngineRegistrationResult {
+        EngineRegistrationStatus status{EngineRegistrationStatus::invalid_ticket};
+        // Occupancy is measured after the registration attempt against the
+        // active ledger; oldest_serial is zero when no ticket is pending.
+        size_t pending{};
+        size_t capacity{Capacity};
+        uint64_t oldest_serial{};
+    };
+
     bool register_engine_family(EngineTicket ticket) {
-        if (!ticket) return false;
+        const auto result = register_engine_family_detailed(ticket);
+        return result.status == EngineRegistrationStatus::accepted ||
+            result.status == EngineRegistrationStatus::duplicate_same_owner;
+    }
+
+    EngineRegistrationResult register_engine_family_detailed(EngineTicket ticket) {
         std::scoped_lock lock{mutex_};
-        if (!advance(ticket.generation)) return false;
+        const auto summarize = [this](EngineRegistrationStatus status) {
+            EngineRegistrationResult result{};
+            result.status = status;
+            result.capacity = Capacity;
+            for (const auto& slot : engine_slots_) {
+                if (!slot.ticket) continue;
+                ++result.pending;
+                if (!result.oldest_serial || slot.ticket.serial < result.oldest_serial)
+                    result.oldest_serial = slot.ticket.serial;
+            }
+            return result;
+        };
+
+        if (!ticket) return summarize(EngineRegistrationStatus::invalid_ticket);
+        if (!advance(ticket.generation))
+            return summarize(EngineRegistrationStatus::stale_generation);
         for (const auto& slot : engine_slots_) {
             if (!slot.ticket) continue;
-            if (slot.ticket.same_owner(ticket)) return true;
+            if (slot.ticket.same_owner(ticket))
+                return summarize(EngineRegistrationStatus::duplicate_same_owner);
             // Two distinct GT families with identical RT matching keys cannot
             // be resolved safely once Unreal copies the family to FViewInfo.
             // Reject the second registration before any source is published.
@@ -83,17 +122,17 @@ public:
                 // no unique render-thread key we must retain an explicit
                 // unknown-owner marker and forbid premature mode teardown.
                 engine_overflow_generation_ = ticket.generation;
-                return false;
+                return summarize(EngineRegistrationStatus::ambiguous_rt_key);
             }
         }
         for (auto& slot : engine_slots_) {
             if (!slot.ticket) {
                 slot.ticket = ticket;
-                return true;
+                return summarize(EngineRegistrationStatus::accepted);
             }
         }
         engine_overflow_generation_ = ticket.generation;
-        return false;
+        return summarize(EngineRegistrationStatus::capacity_exhausted);
     }
 
     std::optional<EngineTicket> render_engine_family(
