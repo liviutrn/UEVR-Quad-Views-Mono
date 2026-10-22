@@ -1,0 +1,16 @@
+[2026-10-22 10:10:00.000] [UnrealVR] [info] [Mono] Committed rendering method 7 at viewport boundary, generation=41
+[2026-10-22 10:10:00.500] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=10 histories=15 source=aa output=bb
+[2026-10-22 10:10:00.501] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=10 held=false eyes=2
+[2026-10-22 10:10:02.500] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=11 histories=15 source=aa output=bc
+[2026-10-22 10:10:02.501] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=11 held=false eyes=2
+[2026-10-22 10:10:04.500] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=12 histories=15 source=aa output=bd
+[2026-10-22 10:10:04.501] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=12 held=false eyes=2
+[2026-10-22 10:10:08.000] [UnrealVR] [info] [Mono] Committed rendering method 6 at viewport boundary, generation=42
+[2026-10-22 10:11:48.000] [UnrealVR] [info] [Mono] Committed rendering method 7 at viewport boundary, generation=43
+[2026-10-22 10:11:49.000] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1 histories=15 source=ca output=db
+[2026-10-22 10:11:49.001] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1 held=false eyes=2
+[2026-10-22 10:11:51.000] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2 histories=15 source=ca output=dc
+[2026-10-22 10:11:51.001] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2 held=false eyes=2
+[2026-10-22 10:11:53.000] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=3 histories=15 source=ca output=dd
+[2026-10-22 10:11:53.001] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=3 held=false eyes=2
+[2026-10-22 10:11:54.000] [UnrealVR] [info] [Mono] Committed rendering method 6 at viewport boundary, generation=44

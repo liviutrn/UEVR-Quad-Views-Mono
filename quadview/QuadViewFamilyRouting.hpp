@@ -111,6 +111,39 @@ inline PartialFamilyRouteStatus classify_partial_main_family(
         PartialFamilyRouteStatus::auxiliary_only;
 }
 
+// Recovery authenticates an engine family, never a publishable source. The
+// original engine callback must run to establish its assigned frame and RHI
+// owner even when construction/pose evidence cannot yet authorize four views.
+inline FamilyRoute route_drain_family(std::span<const FamilyIdentity> candidates,
+                                      const PartialFamilyIdentity& partial) {
+    if (candidates.empty() || !partial.target || partial.view_count > partial.views.size())
+        return {FamilyRouteStatus::malformed_batch,0};
+    size_t selected{}, matches{};
+    for (size_t i=0;i<candidates.size();++i) {
+        const auto& c=candidates[i];
+        if (!c.readable || !c.family || c.view_count>c.views.size())
+            return {FamilyRouteStatus::malformed_batch,i};
+        if (c.target!=partial.target) continue;
+        if (!c.scene || !c.view_count || c.view_count>4 ||
+            (partial.family && c.family!=partial.family) ||
+            (partial.scene && c.scene!=partial.scene))
+            return {FamilyRouteStatus::malformed_main,i};
+        for (size_t a=0;a<c.view_count;++a) {
+            if (!c.views[a]) return {FamilyRouteStatus::malformed_main,i};
+            for (size_t b=0;b<a;++b) if(c.views[a]==c.views[b])
+                return {FamilyRouteStatus::malformed_main,i};
+        }
+        for (size_t a=0;a<partial.view_count;++a) {
+            if (!partial.views[a] || std::find(c.views.begin(),c.views.begin()+c.view_count,
+                    partial.views[a])==c.views.begin()+c.view_count)
+                return {FamilyRouteStatus::malformed_main,i};
+        }
+        selected=i; ++matches;
+    }
+    if (matches>1) return {FamilyRouteStatus::ambiguous_main,selected};
+    return {matches ? FamilyRouteStatus::main_family : FamilyRouteStatus::auxiliary_only,selected};
+}
+
 inline FamilyRoute route_current_main_family(std::span<const FamilyIdentity> candidates,
                                              const FamilyIdentity& expected) {
     if (candidates.empty() || !expected.readable || !expected.family || !expected.scene ||

@@ -1,0 +1,8 @@
+[2026-10-22 10:20:00.000] [UnrealVR] [info] [Mono] Committed rendering method 7 at viewport boundary, generation=50
+[2026-10-22 10:20:00.100] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=77 histories=15 source=ca output=db
+[2026-10-22 10:20:00.101] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=77 held=false eyes=2
+[2026-10-22 10:20:00.140] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=77 held=true eyes=2
+[2026-10-22 10:20:00.180] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=77 held=true eyes=2
+[2026-10-22 10:20:01.000] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=50 thread=3896
+[2026-10-22 10:20:09.000] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=50 thread=3896
+[2026-10-22 10:20:10.000] [UnrealVR] [info] [Mono] Committed rendering method 6 at viewport boundary, generation=51

@@ -1,0 +1,70 @@
+[2026-10-21 21:47:52.706] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:29090] Encountered attempted dereference of null pointer at 7ffab838df46
+[2026-10-21 21:47:52.795] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29574] Previous instruction does not use the same register as the dereference
+[2026-10-21 21:47:52.795] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:29090] Encountered attempted dereference of null pointer at 7ffab838d9c0
+[2026-10-21 21:47:52.795] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29574] Previous instruction does not use the same register as the dereference
+[2026-10-21 21:47:52.795] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:29090] Encountered attempted dereference of null pointer at 7ffab838dba4
+[2026-10-21 21:47:52.796] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29574] Previous instruction does not use the same register as the dereference
+[2026-10-21 21:47:53.018] [UnrealVR] [info] [Mono] Committed rendering method 6 at viewport boundary, generation=1
+[2026-10-21 21:47:53.378] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:29090] Encountered attempted dereference of null pointer at 7ffb4cd45e21
+[2026-10-21 21:47:53.378] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29574] Previous instruction does not use the same register as the dereference
+[2026-10-21 21:47:53.712] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:29090] Encountered attempted dereference of null pointer at 7ffab838de58
+[2026-10-21 21:47:53.712] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29574] Previous instruction does not use the same register as the dereference
+[2026-10-21 21:47:53.712] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:29090] Encountered attempted dereference of null pointer at 7ffab838dbeb
+[2026-10-21 21:47:53.712] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29574] Previous instruction does not use the same register as the dereference
+[2026-10-21 21:47:57.699] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:29090] Encountered attempted dereference of null pointer at 7ffab7ced9ab
+[2026-10-21 21:48:18.548] [UnrealVR] [info] [Mono] Committed rendering method 7 at viewport boundary, generation=2
+[2026-10-21 21:48:18.552] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27266] [QuadViews][GTProducer] BOUND serial=667 frame=7868 family=14e870 scene=2abb5560 target=523f386e8 views=5ee3f5580,5eca35580,58bb20040,5eb090040 pose=29378509945300
+[2026-10-21 21:48:18.562] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28530] [QuadViews][RenderFamily] matched serial=667 source_frame=7868 render_frame=7868 family_copy=5ed227128
+[2026-10-21 21:48:18.596] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22112] [QuadViews][RHI] tail hooked serial=667 frame=7868 command=5abc6c518
+[2026-10-21 21:48:19.893] [UnrealVR] [info] [D3D12Component.cpp:5347] [QuadView][CopyEnqueued] serial=668 histories=15 source=18254d9290 output=19bdde1b80
+[2026-10-21 21:48:19.896] [UnrealVR] [info] [OpenXR.cpp:4343] [QuadView][Submit] serial=668 held=false eyes=2
+[2026-10-21 21:48:19.901] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=2 thread=3896
+[2026-10-21 21:48:20.023] [UnrealVR] [warning] [VR] No stage views to submit
+[2026-10-21 21:48:20.054] [UnrealVR] [warning] [VR] No stage views to submit
+[2026-10-21 21:48:21.922] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=2 thread=3896
+[2026-10-21 21:48:23.925] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=2 thread=3896
+[2026-10-21 21:48:25.927] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=2 thread=3896
+[2026-10-21 21:48:27.929] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=2 thread=3896
+[2026-10-21 21:48:29.930] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=2 thread=3896
+[2026-10-21 21:48:31.934] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=2 thread=3896
+[2026-10-21 21:48:34.116] [UnrealVR] [info] [Mono] Committed rendering method 6 at viewport boundary, generation=3
+[2026-10-21 21:48:44.162] [UnrealVR] [info] [Mono] Committed rendering method 0 at viewport boundary, generation=4
+[2026-10-21 21:49:20.514] [UnrealVR] [info] [Mono] Committed rendering method 7 at viewport boundary, generation=5
+[2026-10-21 21:49:20.517] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27266] [QuadViews][GTProducer] BOUND serial=1801 frame=9315 family=14e870 scene=2abb5560 target=523f386e8 views=5e9f40040,5c6378020,27a28020,5dc760040 pose=29440447845300
+[2026-10-21 21:49:20.752] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28530] [QuadViews][RenderFamily] matched serial=1801 source_frame=9315 render_frame=9315 family_copy=5ecc7a0f8
+[2026-10-21 21:49:20.818] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22112] [QuadViews][RHI] tail hooked serial=1801 frame=9315 command=5ea367658
+[2026-10-21 21:49:22.097] [UnrealVR] [info] [D3D12Component.cpp:5347] [QuadView][CopyEnqueued] serial=1802 histories=15 source=18254d9290 output=19bdde84b0
+[2026-10-21 21:49:22.098] [UnrealVR] [info] [OpenXR.cpp:4343] [QuadView][Submit] serial=1802 held=false eyes=2
+[2026-10-21 21:49:22.103] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:24.127] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:26.136] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:28.139] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:30.141] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:32.146] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:34.148] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:36.152] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:38.598] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:40.621] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:42.624] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:44.627] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:46.656] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:48.659] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:50.666] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:52.667] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:54.671] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:56.705] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:49:58.739] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:00.741] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:02.745] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:04.745] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:06.747] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:08.748] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:10.750] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:12.752] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:14.756] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:16.757] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:18.758] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:20.760] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:22.728] [UnrealVR] [warning] [VR] No stage views to submit
+[2026-10-21 21:50:22.762] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=5 thread=3896
+[2026-10-21 21:50:22.762] [UnrealVR] [warning] [VR] No stage views to submit

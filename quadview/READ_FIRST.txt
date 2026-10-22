@@ -1,4 +1,4 @@
-UEVR QUAD VIEWS — BUILD 47 DIAGNOSTICS FOLLOW-UP
+UEVR QUAD VIEWS — BUILD 48 RECOVERY CANDIDATE
 
 Target: STALKER 2 (UE5.5), DX12, OpenXR, PSVR2.
 Baseline: Build 40, 7486fc59890b14673cd50770b0dafeb692576716.
@@ -15,7 +15,11 @@ Mode ID7: Quad Views Stereo (Experimental).
    switching, loading a save and sustained gameplay. Save the full log if a
    check fails.
 
-Build 47 includes the Build 46 renderer and adds bounded, on-demand
+Build 48 adds authenticated engine-only recovery for incomplete startup
+snapshots and coalesced recovery/native tails. Recovery never publishes an
+incomplete source. See BUILD48_FINDINGS_STATUS.md for evidence and limits.
+
+The included Build 47 diagnostics provide bounded, on-demand
 diagnostics. To export them, open **Debug → Stereo Hook Options → Hook
 Provenance Diagnostics**, then select **Refresh Hook Provenance** and
 **Export Hook Provenance JSON**. The checkbox is default-off. The export does

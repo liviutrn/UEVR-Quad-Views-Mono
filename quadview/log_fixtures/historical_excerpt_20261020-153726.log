@@ -1,0 +1,253 @@
+[2026-10-20 18:34:26.510] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28878] Encountered attempted dereference of null pointer at 7ffa559b8ba6
+[2026-10-20 18:34:26.600] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29362] Previous instruction does not use the same register as the dereference
+[2026-10-20 18:34:26.600] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28878] Encountered attempted dereference of null pointer at 7ffa559b8620
+[2026-10-20 18:34:26.600] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29362] Previous instruction does not use the same register as the dereference
+[2026-10-20 18:34:26.600] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28878] Encountered attempted dereference of null pointer at 7ffa559b8804
+[2026-10-20 18:34:26.600] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29362] Previous instruction does not use the same register as the dereference
+[2026-10-20 18:34:27.189] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28878] Encountered attempted dereference of null pointer at 7ffac17d5e21
+[2026-10-20 18:34:27.190] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29362] Previous instruction does not use the same register as the dereference
+[2026-10-20 18:34:27.489] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28878] Encountered attempted dereference of null pointer at 7ffa559b8ab8
+[2026-10-20 18:34:27.489] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29362] Previous instruction does not use the same register as the dereference
+[2026-10-20 18:34:27.489] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28878] Encountered attempted dereference of null pointer at 7ffa559b884b
+[2026-10-20 18:34:27.489] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29362] Previous instruction does not use the same register as the dereference
+[2026-10-20 18:34:30.385] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28878] Encountered attempted dereference of null pointer at 7ffa5532060b
+[2026-10-20 18:34:57.321] [UnrealVR] [info] [Mono] Committed rendering method 7 at viewport boundary, generation=1
+[2026-10-20 18:34:57.357] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=858 frame=12738 family=7fe870 scene=6a21aab0 target=65c88088 views=5cf148020,5ec31d560,185516aac0,5dbbbaac0 pose=16548951864900
+[2026-10-20 18:34:57.372] [UnrealVR] [warning] [D3D12Component.cpp:5317] [QuadView][OutputWaiting] no executed source generation=1 thread=19104
+[2026-10-20 18:34:57.373] [UnrealVR] [warning] [VR] No stage views to submit
+[2026-10-20 18:34:57.391] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=858 source_frame=12738 render_frame=12738 family_copy=185647e0b8
+[2026-10-20 18:34:57.416] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=858 frame=12738 command=5fb2895d8
+[2026-10-20 18:34:57.520] [UnrealVR] [warning] [VR] No stage views to submit
+[2026-10-20 18:34:57.548] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=858 frame=12738 command=5fb2895d8 thread=19104
+[2026-10-20 18:34:57.962] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=858 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:34:57.963] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=858 held=false eyes=2
+[2026-10-20 18:34:59.359] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=903 frame=12783 family=7fe870 scene=6a21aab0 target=65c88088 views=5dbbbaac0,185516aac0,5ec31d560,5cf148020 pose=16550953824200
+[2026-10-20 18:34:59.416] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=903 frame=12783 command=5bed4fc38
+[2026-10-20 18:34:59.418] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=904 source_frame=12784 render_frame=12784 family_copy=5bd695148
+[2026-10-20 18:34:59.549] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=907 frame=12787 command=5ccf3d4d8 thread=19104
+[2026-10-20 18:34:59.990] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=920 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:34:59.992] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=920 held=false eyes=2
+[2026-10-20 18:35:01.383] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=964 frame=12844 family=7fe870 scene=6a21aab0 target=65c88088 views=5cf148020,5ec31d560,185516aac0,5dbbbaac0 pose=16552989137700
+[2026-10-20 18:35:01.417] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=963 frame=12843 command=1655d4d8
+[2026-10-20 18:35:01.419] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=964 source_frame=12844 render_frame=12844 family_copy=17162c1188
+[2026-10-20 18:35:01.552] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=967 frame=12847 command=5b9419db8 thread=19104
+[2026-10-20 18:35:01.991] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=980 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:35:01.992] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=980 held=false eyes=2
+[2026-10-20 18:35:03.398] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=1024 frame=12904 family=7fe870 scene=6a21aab0 target=65c88088 views=5cf148020,5ec31d560,185516aac0,5dbbbaac0 pose=16554991079700
+[2026-10-20 18:35:03.421] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=1023 frame=12903 command=5b2690c08
+[2026-10-20 18:35:03.423] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=1024 source_frame=12904 render_frame=12904 family_copy=1745ef0198
+[2026-10-20 18:35:03.555] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=1027 frame=12907 command=5bd7ebd38 thread=19104
+[2026-10-20 18:35:03.996] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1040 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:35:03.998] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1040 held=false eyes=2
+[2026-10-20 18:35:05.427] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=1085 frame=12965 family=7fe870 scene=6a21aab0 target=65c88088 views=5dbbbaac0,185516aac0,5ec31d560,5cf148020 pose=16557026392400
+[2026-10-20 18:35:05.454] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=1084 frame=12964 command=5e267c128
+[2026-10-20 18:35:05.456] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=1085 source_frame=12965 render_frame=12965 family_copy=5b5aac0d8
+[2026-10-20 18:35:05.556] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=1087 frame=12967 command=1702bc4718 thread=19104
+[2026-10-20 18:35:05.997] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1100 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:35:05.998] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1100 held=false eyes=2
+[2026-10-20 18:35:07.435] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=1145 frame=13025 family=7fe870 scene=6a21aab0 target=65c88088 views=5dbbbaac0,185516aac0,5ec31d560,5cf148020 pose=16559028335300
+[2026-10-20 18:35:07.458] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=1144 frame=13024 command=18535e7a48
+[2026-10-20 18:35:07.460] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=1145 source_frame=13025 render_frame=13025 family_copy=5be189108
+[2026-10-20 18:35:07.558] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=1147 frame=13027 command=184fef0c08 thread=19104
+[2026-10-20 18:35:07.997] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1160 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:35:08.000] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1160 held=false eyes=2
+[2026-10-20 18:35:09.436] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=1205 frame=13085 family=7fe870 scene=6a21aab0 target=65c88088 views=5f9410040,5dbbbaac0,5ec31d560,17193a0040 pose=16561030280300
+[2026-10-20 18:35:09.491] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=1205 frame=13085 command=4818c518
+[2026-10-20 18:35:09.492] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=1206 source_frame=13086 render_frame=13086 family_copy=5b861d0c8
+[2026-10-20 18:35:09.566] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=1207 frame=13087 command=5b8970818 thread=19104
+[2026-10-20 18:35:10.002] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1220 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:35:10.003] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1220 held=false eyes=2
+[2026-10-20 18:35:11.436] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=1265 frame=13145 family=7fe870 scene=6a21aab0 target=65c88088 views=1844d82ae0,5dbbbaac0,184390d560,17463bd560 pose=16563032227500
+[2026-10-20 18:35:11.495] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=1265 frame=13145 command=183ed6ccf8
+[2026-10-20 18:35:11.496] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=1266 source_frame=13146 render_frame=13146 family_copy=5b8615148
+[2026-10-20 18:35:11.595] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=1268 frame=13148 command=5cc906698 thread=19104
+[2026-10-20 18:35:12.034] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1281 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:35:12.035] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1281 held=false eyes=2
+[2026-10-20 18:35:13.437] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=1325 frame=13205 family=7fe870 scene=6a21aab0 target=65c88088 views=1844d82ae0,173b8f8020,5dbbbaac0,184390d560 pose=16565034168600
+[2026-10-20 18:35:13.497] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=1325 frame=13205 command=5fa45f458
+[2026-10-20 18:35:13.498] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=1326 source_frame=13206 render_frame=13206 family_copy=17184de0b8
+[2026-10-20 18:35:13.596] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=1328 frame=13208 command=5bed4a988 thread=19104
+[2026-10-20 18:35:14.040] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1341 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:35:14.041] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1341 held=false eyes=2
+[2026-10-20 18:35:15.442] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=1385 frame=13265 family=7fe870 scene=6a21aab0 target=65c88088 views=17193fd560,184390d560,170a295580,173b8f8020 pose=16567036118300
+[2026-10-20 18:35:15.497] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=1385 frame=13265 command=5cd001fb8
+[2026-10-20 18:35:15.499] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=1386 source_frame=13266 render_frame=13266 family_copy=17425f6138
+[2026-10-20 18:35:15.599] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=1388 frame=13268 command=5b35e95d8 thread=19104
+[2026-10-20 18:35:16.074] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1402 histories=15 source=1790004cc0 output=7bffc4f0
+[2026-10-20 18:35:16.075] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1402 held=false eyes=2
+[2026-10-20 18:35:17.476] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=1446 frame=13326 family=7fe870 scene=6a21aab0 target=65c88088 views=1703820040,170a295580,173fb98020,17193fd560 pose=16569071424700
+[2026-10-20 18:35:17.502] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=1445 frame=13325 command=5cd642f78
+[2026-10-20 18:35:17.503] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=1446 source_frame=13326 render_frame=13326 family_copy=1703749108
+[2026-10-20 18:35:17.601] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=1448 frame=13328 command=171b9891e8 thread=19104
+[2026-10-20 18:35:18.106] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1463 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:35:18.108] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1463 held=false eyes=2
+[2026-10-20 18:35:19.479] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=1506 frame=13386 family=7fe870 scene=6a21aab0 target=65c88088 views=1703820040,170a295580,173fb98020,17193fd560 pose=16571073368700
+[2026-10-20 18:35:19.534] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=1506 frame=13386 command=5bd221fb8
+[2026-10-20 18:35:19.535] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=1507 source_frame=13387 render_frame=13387 family_copy=5fed6f0a8
+[2026-10-20 18:35:19.603] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=1508 frame=13388 command=5cf132f78 thread=19104
+[2026-10-20 18:35:20.108] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1523 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:35:20.109] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1523 held=false eyes=2
+[2026-10-20 18:35:20.745] [UnrealVR] [info] [Mono] Committed rendering method 6 at viewport boundary, generation=2
+[2026-10-20 18:35:29.590] [UnrealVR] [info] [Mono] Committed rendering method 0 at viewport boundary, generation=3
+[2026-10-20 18:35:35.992] [UnrealVR] [info] [Mono] Committed rendering method 7 at viewport boundary, generation=4
+[2026-10-20 18:35:36.025] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=1963 frame=14067 family=7fe870 scene=6a21aab0 target=65c88088 views=17463bd560,17194faac0,171aff5580,170a295580 pose=16587622785500
+[2026-10-20 18:35:36.043] [UnrealVR] [warning] [D3D12Component.cpp:5317] [QuadView][OutputWaiting] no executed source generation=4 thread=19104
+[2026-10-20 18:35:36.054] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=1963 source_frame=14067 render_frame=14067 family_copy=5ec577128
+[2026-10-20 18:35:36.073] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=1963 frame=14067 command=5fa452798
+[2026-10-20 18:35:36.117] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=1963 frame=14067 command=5fa452798 thread=19104
+[2026-10-20 18:35:36.122] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=1963 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:35:36.123] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=1963 held=false eyes=2
+[2026-10-20 18:35:38.026] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2023 frame=14127 family=7fe870 scene=6a21aab0 target=65c88088 views=17463bd560,17194faac0,171aff5580,170a295580 pose=16589624733600
+[2026-10-20 18:35:38.054] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2023 source_frame=14127 render_frame=14127 family_copy=5b85e7128
+[2026-10-20 18:35:38.087] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2023 frame=14127 command=514cdbd38
+[2026-10-20 18:35:38.120] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2024 frame=14128 command=50b2b7658 thread=19104
+[2026-10-20 18:35:38.124] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2024 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:35:38.125] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2024 held=false eyes=2
+[2026-10-20 18:35:40.031] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2083 frame=14187 family=7fe870 scene=6a21aab0 target=65c88088 views=17463bd560,17194faac0,171aff5580,170a295580 pose=16591626672000
+[2026-10-20 18:35:40.054] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2083 source_frame=14187 render_frame=14187 family_copy=5bb688118
+[2026-10-20 18:35:40.121] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2084 frame=14188 command=1743eb91e8
+[2026-10-20 18:35:40.123] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2084 frame=14188 command=1743eb91e8 thread=19104
+[2026-10-20 18:35:40.127] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2084 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:35:40.129] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2084 held=false eyes=2
+[2026-10-20 18:35:42.033] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2143 frame=14247 family=7fe870 scene=6a21aab0 target=65c88088 views=17463bd560,17194faac0,171aff5580,170a295580 pose=16593628609900
+[2026-10-20 18:35:42.059] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2143 source_frame=14247 render_frame=14247 family_copy=17184d0198
+[2026-10-20 18:35:42.125] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2144 frame=14248 command=5cdcc0038
+[2026-10-20 18:35:42.125] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2144 frame=14248 command=5cdcc0038 thread=19104
+[2026-10-20 18:35:42.131] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2144 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:35:42.132] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2144 held=false eyes=2
+[2026-10-20 18:35:44.061] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2203 source_frame=14307 render_frame=14307 family_copy=5bd7f5148
+[2026-10-20 18:35:44.071] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2204 frame=14308 family=7fe870 scene=6a21aab0 target=65c88088 views=170a295580,171aff5580,17194faac0,17463bd560 pose=16595663932300
+[2026-10-20 18:35:44.125] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2204 frame=14308 command=5b0532b88
+[2026-10-20 18:35:44.128] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2204 frame=14308 command=5b0532b88 thread=19104
+[2026-10-20 18:35:44.133] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2204 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:35:44.136] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2204 held=false eyes=2
+[2026-10-20 18:35:46.095] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2264 source_frame=14368 render_frame=14368 family_copy=18492f0198
+[2026-10-20 18:35:46.101] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2265 frame=14369 family=7fe870 scene=6a21aab0 target=65c88088 views=17463b2ae0,50dc28020,1702c18020,1702c12ae0 pose=16597699238600
+[2026-10-20 18:35:46.128] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2264 frame=14368 command=67143368
+[2026-10-20 18:35:46.128] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2264 frame=14368 command=67143368 thread=19104
+[2026-10-20 18:35:46.168] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2265 histories=15 source=1790004cc0 output=7bffc4f0
+[2026-10-20 18:35:46.170] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2265 held=false eyes=2
+[2026-10-20 18:35:48.097] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2324 source_frame=14428 render_frame=14428 family_copy=1703741188
+[2026-10-20 18:35:48.105] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2325 frame=14429 family=7fe870 scene=6a21aab0 target=65c88088 views=17463b2ae0,50dc28020,1702c18020,1702c12ae0 pose=16599701185500
+[2026-10-20 18:35:48.130] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2324 frame=14428 command=5cfc76a88
+[2026-10-20 18:35:48.130] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2324 frame=14428 command=5cfc76a88 thread=19104
+[2026-10-20 18:35:48.169] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2325 histories=15 source=1790004cc0 output=7bffc4f0
+[2026-10-20 18:35:48.171] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2325 held=false eyes=2
+[2026-10-20 18:35:50.099] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2384 source_frame=14488 render_frame=14488 family_copy=170e3d0198
+[2026-10-20 18:35:50.106] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2385 frame=14489 family=7fe870 scene=6a21aab0 target=65c88088 views=17455c8020,1702fb8020,1702fb2ae0,170a2f0040 pose=16601703133400
+[2026-10-20 18:35:50.131] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2384 frame=14488 command=5ccf3b168
+[2026-10-20 18:35:50.133] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2384 frame=14488 command=5ccf3b168 thread=19104
+[2026-10-20 18:35:50.172] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2385 histories=15 source=1790004cc0 output=7bffc4f0
+[2026-10-20 18:35:50.173] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2385 held=false eyes=2
+[2026-10-20 18:35:52.101] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2444 source_frame=14548 render_frame=14548 family_copy=5b8137128
+[2026-10-20 18:35:52.111] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2445 frame=14549 family=7fe870 scene=6a21aab0 target=65c88088 views=17455c8020,1702fb8020,1702fb2ae0,170a2f0040 pose=16603705079400
+[2026-10-20 18:35:52.134] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2444 frame=14548 command=5bed4a1a8
+[2026-10-20 18:35:52.134] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2444 frame=14548 command=5bed4a1a8 thread=19104
+[2026-10-20 18:35:52.173] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2445 histories=15 source=1790004cc0 output=7bffc4f0
+[2026-10-20 18:35:52.175] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2445 held=false eyes=2
+[2026-10-20 18:35:54.106] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2504 source_frame=14608 render_frame=14608 family_copy=5fed66138
+[2026-10-20 18:35:54.113] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2505 frame=14609 family=7fe870 scene=6a21aab0 target=65c88088 views=17455c8020,1702fb8020,1702fb2ae0,170a2f0040 pose=16605707014300
+[2026-10-20 18:35:54.137] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2504 frame=14608 command=5e187a1a8
+[2026-10-20 18:35:54.137] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2504 frame=14608 command=5e187a1a8 thread=19104
+[2026-10-20 18:35:54.174] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2505 histories=15 source=1790004cc0 output=7bffc4f0
+[2026-10-20 18:35:54.176] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2505 held=false eyes=2
+[2026-10-20 18:35:56.106] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2563 source_frame=14667 render_frame=14667 family_copy=173f4d8118
+[2026-10-20 18:35:56.114] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2564 frame=14668 family=7fe870 scene=6a21aab0 target=65c88088 views=170a2f0040,1702fb2ae0,1702fb8020,1702fbaac0 pose=16607708971300
+[2026-10-20 18:35:56.138] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2563 frame=14667 command=5b940f848
+[2026-10-20 18:35:56.138] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2563 frame=14667 command=5b940f848 thread=19104
+[2026-10-20 18:35:56.175] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2564 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:35:56.177] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2564 held=false eyes=2
+[2026-10-20 18:35:58.107] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2623 source_frame=14727 render_frame=14727 family_copy=1733d9d0c8
+[2026-10-20 18:35:58.116] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2624 frame=14728 family=7fe870 scene=6a21aab0 target=65c88088 views=170a2f0040,1702fb2ae0,1702fb8020,1702fbaac0 pose=16609710914900
+[2026-10-20 18:35:58.139] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2623 frame=14727 command=5bd9191e8
+[2026-10-20 18:35:58.139] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2623 frame=14727 command=5bd9191e8 thread=19104
+[2026-10-20 18:35:58.177] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2624 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:35:58.179] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2624 held=false eyes=2
+[2026-10-20 18:36:00.109] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2683 source_frame=14787 render_frame=14787 family_copy=1743e7e0b8
+[2026-10-20 18:36:00.117] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2684 frame=14788 family=7fe870 scene=6a21aab0 target=65c88088 views=170a2f0040,1702fb2ae0,1702fb8020,1702fbaac0 pose=16611712861100
+[2026-10-20 18:36:00.143] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2683 frame=14787 command=170d3217d8 thread=19104
+[2026-10-20 18:36:00.172] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2684 frame=14788 command=5ced04718
+[2026-10-20 18:36:00.180] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2684 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:36:00.182] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2684 held=false eyes=2
+[2026-10-20 18:36:02.111] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2743 source_frame=14847 render_frame=14847 family_copy=5bac6a0f8
+[2026-10-20 18:36:02.118] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2744 frame=14848 family=7fe870 scene=6a21aab0 target=65c88088 views=170a2f0040,1702fb2ae0,1702fb8020,1702fbaac0 pose=16613714801400
+[2026-10-20 18:36:02.177] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2744 frame=14848 command=173abeb948
+[2026-10-20 18:36:02.177] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2744 frame=14848 command=173abeb948 thread=19104
+[2026-10-20 18:36:02.181] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2744 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:36:02.182] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2744 held=false eyes=2
+[2026-10-20 18:36:04.112] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2803 source_frame=14907 render_frame=14907 family_copy=5b85e9108
+[2026-10-20 18:36:04.120] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2804 frame=14908 family=7fe870 scene=6a21aab0 target=65c88088 views=170a2f0040,1702fb2ae0,1702fb8020,1702fbaac0 pose=16615716748200
+[2026-10-20 18:36:04.178] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2804 frame=14908 command=5b897c128
+[2026-10-20 18:36:04.179] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2804 frame=14908 command=5b897c128 thread=19104
+[2026-10-20 18:36:04.183] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2804 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:36:04.185] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2804 held=false eyes=2
+[2026-10-20 18:36:06.113] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=2863 source_frame=14967 render_frame=14967 family_copy=5bac6a0f8
+[2026-10-20 18:36:06.122] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=2864 frame=14968 family=7fe870 scene=6a21aab0 target=65c88088 views=170a2f0040,1702fb2ae0,1702fb8020,1702fbaac0 pose=16617718693000
+[2026-10-20 18:36:06.181] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=2864 frame=14968 command=171a2c7268 thread=19104
+[2026-10-20 18:36:06.185] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=2864 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:36:06.186] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=2864 held=false eyes=2
+[2026-10-20 18:36:06.214] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=2865 frame=14969 command=5cdcc3b48
+[2026-10-20 18:36:07.615] [UnrealVR] [warning] [D3D12Component.cpp:5317] [QuadView][OutputWaiting] no executed source generation=4 thread=19104
+[2026-10-20 18:36:09.625] [UnrealVR] [warning] [D3D12Component.cpp:5317] [QuadView][OutputWaiting] no executed source generation=4 thread=19104
+[2026-10-20 18:36:11.628] [UnrealVR] [warning] [D3D12Component.cpp:5317] [QuadView][OutputWaiting] no executed source generation=4 thread=19104
+[2026-10-20 18:36:13.633] [UnrealVR] [warning] [D3D12Component.cpp:5317] [QuadView][OutputWaiting] no executed source generation=4 thread=19104
+[2026-10-20 18:36:15.664] [UnrealVR] [warning] [D3D12Component.cpp:5317] [QuadView][OutputWaiting] no executed source generation=4 thread=19104
+[2026-10-20 18:36:15.734] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=3150 frame=15254 family=7fe870 scene=6a21aab0 target=65c88088 views=1702c1d560,5df68aac0,1702fbaac0,1702c12ae0 pose=16627328038500
+[2026-10-20 18:36:15.756] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=3150 source_frame=15254 render_frame=15254 family_copy=185647e0b8
+[2026-10-20 18:36:15.792] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=3150 frame=15254 command=171b98f068
+[2026-10-20 18:36:15.901] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=3150 frame=15254 command=171b98f068 thread=19104
+[2026-10-20 18:36:15.904] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=3150 histories=15 source=1790004cc0 output=7bffc4f0
+[2026-10-20 18:36:15.908] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=3150 held=false eyes=2
+[2026-10-20 18:36:17.736] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=3208 frame=15312 family=7fe870 scene=6a21aab0 target=65c88088 views=170a4d0040,170a2f0040,1702fb8020,1702fb2ae0 pose=16629329982600
+[2026-10-20 18:36:17.759] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=3208 source_frame=15312 render_frame=15312 family_copy=5b73dd0c8
+[2026-10-20 18:36:17.792] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=3208 frame=15312 command=1849e656d8
+[2026-10-20 18:36:17.926] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=3212 frame=15316 command=50b2ba988 thread=19104
+[2026-10-20 18:36:17.932] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=3212 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:36:17.933] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=3212 held=false eyes=2
+[2026-10-20 18:36:18.581] [UnrealVR] [warning] [D3D12Component.cpp:5317] [QuadView][OutputWaiting] no executed source generation=4 thread=19104
+[2026-10-20 18:36:20.602] [UnrealVR] [warning] [D3D12Component.cpp:5317] [QuadView][OutputWaiting] no executed source generation=4 thread=19104
+[2026-10-20 18:36:22.436] [UnrealVR] [warning] [VR] No stage views to submit
+[2026-10-20 18:36:22.437] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=3349 frame=15453 family=7fe870 scene=6a21aab0 target=65c88088 views=170a2f0040,170a4d0040,1702fb8020,1702fb2ae0 pose=16634034558400
+[2026-10-20 18:36:22.464] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=3349 source_frame=15453 render_frame=15453 family_copy=1734dcb0e8
+[2026-10-20 18:36:22.469] [UnrealVR] [warning] [VR] No stage views to submit
+[2026-10-20 18:36:22.497] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=3349 frame=15453 command=5b4aa0038
+[2026-10-20 18:36:22.535] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=3349 frame=15453 command=5b4aa0038 thread=19104
+[2026-10-20 18:36:22.539] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=3349 histories=15 source=1790004cc0 output=7bffbb60
+[2026-10-20 18:36:22.543] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=3349 held=false eyes=2
+[2026-10-20 18:36:24.466] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=3409 source_frame=15513 render_frame=15513 family_copy=184915c0d8
+[2026-10-20 18:36:24.473] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=3410 frame=15514 family=7fe870 scene=6a21aab0 target=65c88088 views=1702fb2ae0,1702fb8020,170a4d0040,170a2f0040 pose=16636069869500
+[2026-10-20 18:36:24.497] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=3409 frame=15513 command=514478618
+[2026-10-20 18:36:24.565] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=3411 frame=15515 command=4818f848 thread=19104
+[2026-10-20 18:36:24.570] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=3411 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:36:24.573] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=3411 held=false eyes=2
+[2026-10-20 18:36:26.469] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=3468 source_frame=15572 render_frame=15572 family_copy=5b8630198
+[2026-10-20 18:36:26.476] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=3469 frame=15573 family=7fe870 scene=6a21aab0 target=65c88088 views=170a2f0040,170a4d0040,1702fb8020,1702fb2ae0 pose=16638071820800
+[2026-10-20 18:36:26.501] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=3468 frame=15572 command=1702bc2f78
+[2026-10-20 18:36:26.568] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=3470 frame=15574 command=170a4e8618 thread=19104
+[2026-10-20 18:36:26.573] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=3470 histories=15 source=1790004cc0 output=7bffc4f0
+[2026-10-20 18:36:26.575] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=3470 held=false eyes=2
+[2026-10-20 18:36:28.471] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=3528 source_frame=15632 render_frame=15632 family_copy=5bbb9d0c8
+[2026-10-20 18:36:28.478] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=3529 frame=15633 family=7fe870 scene=6a21aab0 target=65c88088 views=170a2f0040,170a4d0040,1702fb8020,1702fb2ae0 pose=16640073761600
+[2026-10-20 18:36:28.504] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=3528 frame=15632 command=5d0bfc908
+[2026-10-20 18:36:28.570] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=3530 frame=15634 command=174aaa17d8 thread=19104
+[2026-10-20 18:36:28.575] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=3530 histories=15 source=1790004cc0 output=7bffc4f0
+[2026-10-20 18:36:28.577] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=3530 held=false eyes=2
+[2026-10-20 18:36:30.473] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=3588 source_frame=15692 render_frame=15692 family_copy=5ce354158
+[2026-10-20 18:36:30.479] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=3589 frame=15693 family=7fe870 scene=6a21aab0 target=65c88088 views=17194f8020,17194faac0,1703828020,173a41aac0 pose=16642075722500
+[2026-10-20 18:36:30.505] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=3588 frame=15692 command=5ceb4e888
+[2026-10-20 18:36:30.573] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=3590 frame=15694 command=1743ebe0a8 thread=19104
+[2026-10-20 18:36:30.578] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=3590 histories=15 source=1790004cc0 output=7bffc4f0
+[2026-10-20 18:36:30.579] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=3590 held=false eyes=2
+[2026-10-20 18:36:32.480] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=3649 frame=15753 family=7fe870 scene=6a21aab0 target=65c88088 views=17194f8020,17194faac0,1703828020,173a41aac0 pose=16644077651400
+[2026-10-20 18:36:32.508] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=3648 frame=15752 command=554e76698
+[2026-10-20 18:36:32.509] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=3649 source_frame=15753 render_frame=15753 family_copy=174a95f0a8
+[2026-10-20 18:36:32.575] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=3650 frame=15754 command=166c8618 thread=19104
+[2026-10-20 18:36:32.579] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=3650 held=false eyes=2
+[2026-10-20 18:36:32.626] [UnrealVR] [info] [D3D12Component.cpp:5302] [QuadView][CopyEnqueued] serial=3651 histories=15 source=1790004cc0 output=7bffd810
+[2026-10-20 18:36:34.483] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:27100] [QuadViews][GTProducer] BOUND serial=3709 frame=15813 family=7fe870 scene=6a21aab0 target=65c88088 views=1702c15580,1743088020,173a41aac0,17194faac0 pose=16646079605400
+[2026-10-20 18:36:34.540] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:22081] [QuadViews][RHI] tail hooked serial=3709 frame=15813 command=174acffc38
+[2026-10-20 18:36:34.541] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28322] [QuadViews][RenderFamily] matched serial=3710 source_frame=15814 render_frame=15814 family_copy=5b93c2178
+[2026-10-20 18:36:34.579] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:21857] [QuadViews][RHI] source executed serial=3710 frame=15814 command=5b2690ff8 thread=19104
+[2026-10-20 18:36:34.584] [UnrealVR] [info] [OpenXR.cpp:4319] [QuadView][Submit] serial=3710 held=false eyes=2
+[2026-10-20 18:36:34.593] [UnrealVR] [info] [FFakeStereoRenderingHook.cpp:28878] Encountered attempted dereference of null pointer at 7ffac3781548
+[2026-10-20 18:36:34.594] [UnrealVR] [error] [FFakeStereoRenderingHook.cpp:29362] Previous instruction does not use the same register as the dereference

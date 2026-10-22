@@ -1,3 +1,13 @@
+# Build 48 recovery validation
+
+The portable recovery harness, strict legacy mutation check and historical log
+classifier are registered in CTest. The Windows workflow also runs the existing
+WARP shader, pinned production, baseline and original compatibility suites.
+A separate Linux ASan/UBSan job exercises recovery, native ownership, family
+routing and physical-content properties. A green full workflow is required
+before distributing the compiled package. Actual headset acceptance is pending.
+See [BUILD48_FINDINGS_STATUS.md](BUILD48_FINDINGS_STATUS.md).
+
 # QuadView validation evidence
 
 The preserved Build182 overlay passes `scripts/verify_baseline.py` for all

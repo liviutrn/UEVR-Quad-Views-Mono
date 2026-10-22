@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
@@ -9,6 +10,33 @@
 #include <type_traits>
 
 namespace uevr::quadview {
+
+// Engine-only recovery callbacks can coalesce at one deferred Slate tail.
+// Retire every authenticated ticket at that actual callback; this container
+// cannot authorize source publication and never stands in for a GPU fence.
+template<class Delivery> struct EngineDrainBatch {
+    using Ticket=typename Delivery::EngineTicket;
+    std::array<Ticket,32> tickets{};
+    size_t count{};
+    uint64_t newest_serial{};
+    uintptr_t tail{};
+    bool attach(Delivery& delivery,const Ticket& ticket,uintptr_t command) {
+        if (!ticket || !command || (tail && tail!=command)) return false;
+        for(size_t i=0;i<count;++i) if(tickets[i].same_owner(ticket)) return true;
+        if(count==tickets.size() || (count && tickets[0].generation!=ticket.generation)) return false;
+        if(!delivery.tail_hooked_engine_family(ticket,command)) return false;
+        tail=command;
+        tickets[count++]=ticket;
+        newest_serial=std::max(newest_serial,ticket.serial);
+        return true;
+    }
+    bool execute(Delivery& delivery,uintptr_t command,uint32_t thread,uint64_t generation) const {
+        bool result=true;
+        for(size_t i=0;i<count;++i) if(tickets[i].generation==generation)
+            result=delivery.executed_engine_family(tickets[i],typename Delivery::Source{},command,thread) && result;
+        return result;
+    }
+};
 
 // Identifies one explicitly bracketed Slate-worker drain. The list pointer is
 // retained alongside the unique drain token; a reused command-list address in

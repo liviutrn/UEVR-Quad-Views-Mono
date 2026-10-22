@@ -1,3 +1,23 @@
+# Build 48 — recover incomplete startup and shared engine tails
+
+The incomplete-snapshot path now authenticates the unique original family by
+target, scene, available constructor views and family identity before calling
+Unreal unchanged. It tracks its assigned engine frame and drains the actual
+RHI callback without authorizing image publication. A missing pose/constructor
+record no longer suppresses the callback needed for recovery.
+
+Engine-only families that coalesce at one deferred tail retain all their
+individual tickets. Mixed engine/native tails retain both kinds of owners;
+mixed legacy atlas sources lose publication eligibility and remain leased
+through the original callback. Ambiguous native quartets remain quarantined.
+No additional blocking waits, retries or scene-image substitutes are added.
+
+New regression coverage includes startup starvation detection, shared/mixed
+tail recovery, 2,400 successful quartet-owner cycles over 24 resets, partial
+source rejection, late/stale identities and historical log continuity. GPU
+completion and actual STALKER 2/PSVR2 visuals still require hardware evidence.
+The shader, geometry, gaze, source-publication checks and ID6 source are unchanged.
+
 # Build 47 — read-only delivery diagnostics
 
 Build 47 carries the Build 46 four-source renderer and adds an on-demand

@@ -1,0 +1,8 @@
+[2026-10-22 10:00:00.000] [UnrealVR] [info] [Mono] Committed rendering method 7 at viewport boundary, generation=99
+[2026-10-22 10:00:00.200] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=99 thread=3896
+[2026-10-22 10:00:00.201] [UnrealVR] [warning] [VR] No stage views to submit
+[2026-10-22 10:00:02.200] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=99 thread=3896
+[2026-10-22 10:00:02.201] [UnrealVR] [warning] [VR] No stage views to submit
+[2026-10-22 10:00:04.200] [UnrealVR] [warning] [D3D12Component.cpp:5363] [QuadView][OutputWaiting] no executed source generation=99 thread=3896
+[2026-10-22 10:00:04.201] [UnrealVR] [warning] [VR] No stage views to submit
+[2026-10-22 10:00:07.000] [UnrealVR] [info] [Mono] Committed rendering method 6 at viewport boundary, generation=100

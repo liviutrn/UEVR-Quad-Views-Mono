@@ -106,3 +106,17 @@ else()
   target_compile_options(QuadViewFamilyRoutingTests PRIVATE -UNDEBUG)
 endif()
 add_test(NAME quadview-frozen-main-family-routing COMMAND QuadViewFamilyRoutingTests)
+
+add_executable(QuadViewRecoveryContinuityTests RecoveryContinuityTests.cpp)
+if(MSVC)
+  target_compile_options(QuadViewRecoveryContinuityTests PRIVATE /UNDEBUG)
+else()
+  target_compile_options(QuadViewRecoveryContinuityTests PRIVATE -UNDEBUG)
+endif()
+add_test(NAME quadview-recovery-sustained-continuity COMMAND QuadViewRecoveryContinuityTests)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME quadview-recovery-detects-build47-starvation COMMAND "${Python3_EXECUTABLE}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/RecoveryMutationTest.py" "$<TARGET_FILE:QuadViewRecoveryContinuityTests>")
+add_test(NAME quadview-historical-log-continuity COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+  -s "${CMAKE_CURRENT_SOURCE_DIR}" -p test_quadview_log_regression.py -v)
+set_tests_properties(quadview-recovery-sustained-continuity PROPERTIES TIMEOUT 60)

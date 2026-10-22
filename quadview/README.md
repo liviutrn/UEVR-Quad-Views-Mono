@@ -1,4 +1,12 @@
-# Stereo Quad Views — Build 47 diagnostics follow-up
+# Stereo Quad Views — Build 48 recovery candidate
+
+Build 48 fixes authenticated engine-only startup recovery and retention of
+coalesced recovery/native command owners. See
+[BUILD48_FINDINGS_STATUS.md](BUILD48_FINDINGS_STATUS.md) for the concrete fixes,
+tests, limits and hardware acceptance steps. The production overlay order adds
+`apply_quadview_recovery.py` after `apply_quadview_native_retirement.py`.
+
+## Inherited Build 47 diagnostics and renderer
 
 Build 47 carries the Build 46 renderer plus an on-demand, read-only
 diagnostics export for QuadView delivery and target retirement. It also skips
