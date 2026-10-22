@@ -78,7 +78,7 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
                 fg.collection_identity = observed_collection->identity;
             }
 
-            const auto* klass = sdk::find_uobject<sdk::UClass>(
+            auto* klass = sdk::find_uobject<sdk::UClass>(
                 L"Class /Script/Engine.KismetMaterialLibrary");
             auto* library = klass != nullptr ? klass->get_class_default_object() : nullptr;
             auto* getter = klass != nullptr ? klass->find_function(L"GetScalarParameterValue") : nullptr;
