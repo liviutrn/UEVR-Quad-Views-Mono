@@ -120,3 +120,11 @@ add_test(NAME quadview-recovery-detects-build47-starvation COMMAND "${Python3_EX
 add_test(NAME quadview-historical-log-continuity COMMAND "${Python3_EXECUTABLE}" -m unittest discover
   -s "${CMAKE_CURRENT_SOURCE_DIR}" -p test_quadview_log_regression.py -v)
 set_tests_properties(quadview-recovery-sustained-continuity PROPERTIES TIMEOUT 60)
+
+add_executable(QuadViewWindowsMacroCompatibilityTests WindowsMacroCompatibilityTests.cpp)
+if(MSVC)
+  target_compile_options(QuadViewWindowsMacroCompatibilityTests PRIVATE /UNDEBUG)
+else()
+  target_compile_options(QuadViewWindowsMacroCompatibilityTests PRIVATE -UNDEBUG)
+endif()
+add_test(NAME quadview-windows-header-macro-compatibility COMMAND QuadViewWindowsMacroCompatibilityTests)

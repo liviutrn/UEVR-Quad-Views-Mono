@@ -60,6 +60,15 @@ repaired and covered by targeted tests. Stale generation drain batches are
 intentionally ignored after a ledger reset; this protects the new generation
 and is not a statement that an old GPU fence completed.
 
+## Windows compiler regression
+
+The first complete Windows compile exposed a Windows SDK `max` macro collision
+in the new drain helper. The helper now compares serials directly. A dedicated
+compile/runtime test includes the production header under a hostile function-like
+`max` macro and verifies that newest-serial ordering is unchanged. A negative
+compile with the pre-fix header reproduces the collision. The rebuilt pinned
+Windows workflow must pass before distribution.
+
 ## Preserved behavior and acceptance limits
 
 Build 40 remains the user-tested binocular/FOV/gaze comparison. The shader,

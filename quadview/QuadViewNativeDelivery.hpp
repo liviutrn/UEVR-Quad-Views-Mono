@@ -1,7 +1,6 @@
 #pragma once
 
 #include <array>
-#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
@@ -41,7 +40,7 @@ template<class Delivery> struct EngineDrainBatch {
         tail=command;
         leases[count]=std::move(source);
         tickets[count++]=ticket;
-        newest_serial=std::max(newest_serial,ticket.serial);
+        if(ticket.serial>newest_serial) newest_serial=ticket.serial;
         return true;
     }
     bool execute(Delivery& delivery,uintptr_t command,uint32_t thread,uint64_t generation) const {
