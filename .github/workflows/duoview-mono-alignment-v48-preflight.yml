@@ -74,26 +74,27 @@ jobs:
           ox=(d/'runtimes/OpenXR.cpp').read_text()
           oh=(d/'runtimes/OpenXR.hpp').read_text()
           assert "mono_eye_alignment_enabled->value()" in ox
-          assert "total_px / source_width" in ox and "std::atan(tl + shift)" in ox
+          assert "total_percent * 0.01f" in ox and "std::atan(tl + shift)" in ox
           assert "std::atan(tr + shift)" in ox
           assert "projection_layer_views[i].pose.orientation" in ox
           assert "push_dummy_projection" in ox
-          assert "mono_eye_alignment_pixels->draw(" in ox
+          assert "mono_eye_alignment_percent->draw(" in ox
           assert "Reset Mono Eye Shift to Zero" in ox
           assert "OpenXR_MonoEyeAlignmentEnabled" in oh
-          assert "OpenXR_MonoEyeAlignmentTotalPixels" in oh
-          assert "ModSlider::create(\"OpenXR_MonoEyeAlignmentTotalPixels\", -512.0f, 512.0f, 0.0f)" in oh
+          assert "OpenXR_MonoEyeAlignmentPercent" in oh
+          assert "ModSlider::create(\"OpenXR_MonoEyeAlignmentPercent\", -3.0f, 3.0f, 0.0f)" in oh
           assert "bool push_dummy_projection{ false };" in oh
           # Verify conceptual shift: positive converges by moving optical rays
           # toward the right for left eye, left for right, no FOV span changes.
           for width in (1920,3136,4416):
-            for total in (-512,-120,-20,0,20,120,512):
-              left=0.5*total/width
-              right=-0.5*total/width
+            for total_pct in (-3.0,-2.0,-1.0,-0.25,0.0,0.25,1.0,2.0,3.0):
+              left=0.005*total_pct
+              right=-0.005*total_pct
               assert left+right==0
               lo=-1.2;hi=1.2
               assert abs((hi+left*(hi-lo))-(lo+left*(hi-lo))-(hi-lo))<1e-12
               assert abs((hi+right*(hi-lo))-(lo+right*(hi-lo))-(hi-lo))<1e-12
+              assert abs(total_pct*width/100.0 / width - total_pct/100.0)<1e-12
           print('PASS: Unchanged scene, foveal composition, foreground MPC, pose, layer ordering')
           print('PASS: HUD gates removed; quad/cylinder/per-eye support')
           print('PASS: reversible source-equivalent Mono FOV offset, symmetry and range')
