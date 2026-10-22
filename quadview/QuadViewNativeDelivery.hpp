@@ -22,8 +22,9 @@ template<class Delivery> struct EngineDrainBatch {
     size_t count{};
     uint64_t newest_serial{};
     uintptr_t tail{};
-    bool allows_runtime(uint64_t generation) const {
-        return !count || tickets[0].generation==generation;
+    bool allows_runtime(uint64_t generation,const Ticket& primary={}) const {
+        return (!primary || primary.generation==generation) &&
+            (!count || tickets[0].generation==generation);
     }
     bool attach(Delivery& delivery,const Ticket& ticket,uintptr_t command,Source source={}) {
         if (!ticket || !command || (tail && tail!=command)) return false;

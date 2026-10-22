@@ -121,7 +121,7 @@ def main():
     if s.count(cadence) != 2:
         raise RuntimeError('Expected both native runtime-cadence gates')
     s = s.replace(cadence,
-        'if ((quad_native ? quad_native_runtime_claimed : quad_drain.allows_runtime(vr->mono_generation())) &&')
+        'if ((quad_native ? quad_native_runtime_claimed : quad_drain.allows_runtime(vr->mono_generation(),quad_engine)) &&')
     s = replace(s, '        result.tracked_engine_records = SceneViewExtensionAnalyzer::quad_command_engines.size();',
         '''        result.tracked_engine_records = SceneViewExtensionAnalyzer::quad_command_engines.size();
         result.tracked_engine_records+=SceneViewExtensionAnalyzer::quad_drain_commands.size();''')

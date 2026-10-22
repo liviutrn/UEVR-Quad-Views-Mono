@@ -118,6 +118,15 @@ int main(int argc,char** argv) {
         assert(weak.expired());
     }
     {
+        // An empty/failed recovery attachment cannot legitimize a stale
+        // primary engine owner. Default non-QuadView callbacks stay unchanged.
+        const EngineDrainBatch<D> empty{};
+        const D::EngineTicket old{1,1,10,0x100,0x200,0x300};
+        assert(empty.allows_runtime(2));
+        assert(empty.allows_runtime(1,old));
+        assert(!empty.allows_runtime(2,old));
+    }
+    {
         D mixed; N native{mixed};
         D::Source legacy_source{std::make_shared<const RecoveryPacket>(RecoveryPacket{1}),
             1,1,10,20,0x100,0x200,0x300,{0x401,0x402,0x403,0x404}};
