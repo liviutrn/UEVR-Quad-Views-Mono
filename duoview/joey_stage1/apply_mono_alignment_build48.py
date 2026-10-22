@@ -91,11 +91,11 @@ s=h.read_text(encoding="utf-8")
 s=once(s,
 '''    const ModToggle::Ptr ignore_vd_checks{ ModToggle::create("OpenXR_IgnoreVirtualDesktopChecks", false) };''',
 '''    // Live Mono ID5 / DuoView ID6 presentation calibration; disabled = exact Build 47.
-    // Value is TOTAL interocular image shift in per-eye full-resolution pixels.
+    // Value is TOTAL horizontal eye-to-eye alignment as a percentage of each submitted eye crop.
     const ModToggle::Ptr mono_eye_alignment_enabled{
         ModToggle::create("OpenXR_MonoEyeAlignmentEnabled", false) };
-    const ModSlider::Ptr mono_eye_alignment_pixels{
-        ModSlider::create("OpenXR_MonoEyeAlignmentTotalPixels", -512.0f, 512.0f, 0.0f) };
+    const ModSlider::Ptr mono_eye_alignment_percent{
+        ModSlider::create("OpenXR_MonoEyeAlignmentPercent", -3.0f, 3.0f, 0.0f) };
     const ModToggle::Ptr ignore_vd_checks{ ModToggle::create("OpenXR_IgnoreVirtualDesktopChecks", false) };''',
 "eye alignment persisted controls")
 s=once(s,
@@ -103,7 +103,7 @@ s=once(s,
         *ignore_vd_checks,''',
 '''        *resolution_scale,
         *mono_eye_alignment_enabled,
-        *mono_eye_alignment_pixels,
+        *mono_eye_alignment_percent,
         *ignore_vd_checks,''',
 "eye alignment persistence")
 h.write_text(s,encoding="utf-8",newline="")
@@ -117,13 +117,13 @@ s=once(s,
         if (VR::get()->is_using_mono()) {
             mono_eye_alignment_enabled->draw("Mono Eye Alignment (presentation only)");
             if (mono_eye_alignment_enabled->value()) {
-                mono_eye_alignment_pixels->draw("Total Horizontal Eye Shift (source px)");
+                mono_eye_alignment_percent->draw("Total Horizontal Eye Alignment (%)");
                 ImGui::TextWrapped("Positive shifts left-eye image RIGHT and right-eye image LEFT; "
-                    "negative reverses. Full-resolution source-pixel units; up to +/-512 total. "
-                    "Live change, zero resets; does not touch scene textures, source crops, "
+                    "negative reverses. Total shift is a percentage of each eye crop; range +/-3%. "
+                    "Live calibration, zero resets; does not touch scene textures, source crops, "
                     "eye-tracking, pose, shaders, or SteamVR settings. For stationary calibration only.");
                 if (ImGui::Button("Reset Mono Eye Shift to Zero")) {
-                    mono_eye_alignment_pixels->value() = 0.0f;
+                    mono_eye_alignment_percent->value() = 0.0f;
                 }
             }
         }
@@ -148,16 +148,15 @@ repl='''                projection_layer_views[i].fov = {std::atan(crop.fov[0]),
             // still receives valid FOV metadata, not an unreported bitmap shift.
             // No additional OpenXR layer, pose change, GPU copy or reprojection flag.
             if (mono_projection && mono_crops[i] && mono_eye_alignment_enabled->value()) {
-                const float total_px = mono_eye_alignment_pixels->value();
+                const float total_percent = mono_eye_alignment_percent->value();
                 const auto& fov = projection_layer_views[i].fov;
                 const int crop_width = projection_layer_views[i].subImage.imageRect.extent.width;
                 // Rect is filled below, so use the already-validated crop extent.
-                const float source_width = static_cast<float>(mono_crops[i]->width);
-                if (std::isfinite(total_px) && std::abs(total_px) <= 512.0f &&
-                    source_width > 0.0f && std::abs(total_px) > 0.0001f) {
+                if (std::isfinite(total_percent) && std::abs(total_percent) <= 3.0f &&
+                    mono_crops[i]->width > 0 && std::abs(total_percent) > 0.0001f) {
                     const float tl = std::tan(fov.angleLeft);
                     const float tr = std::tan(fov.angleRight);
-                    const float interp = (i == 0 ? 0.5f : -0.5f) * total_px / source_width;
+                    const float interp = (i == 0 ? 0.5f : -0.5f) * total_percent * 0.01f;
                     const float shift = interp * (tr - tl);
                     if (std::isfinite(shift) && (tr - tl) > 0.0f) {
                         projection_layer_views[i].fov.angleLeft = std::atan(tl + shift);
