@@ -92,6 +92,70 @@ int main(int argc,char** argv) {
         assert(mixed.engine_commands_retired(1)); assert(!mixed.select(1,77));
     }
 
+    {
+        // A newly demoted source must survive map erasure and ledger retirement
+        // until the original RHI callback has returned, including after reset.
+        D mixed; EngineDrainBatch<D> pending{};
+        D::Source source{std::make_shared<const RecoveryPacket>(RecoveryPacket{1}),
+            1,1,10,20,0x100,0x200,0x300,{0x401,0x402,0x403,0x404}};
+        std::weak_ptr<const RecoveryPacket> weak=source.packet;
+        D::EngineTicket ticket{1,1,10,0x100,0x200,0x300};
+        assert(mixed.register_engine_family(ticket)); assert(mixed.register_bound(source));
+        auto owner=mixed.render_engine_family(1,10,0x200,0x300); assert(owner);
+        auto rendered=mixed.render(1,10,0x100,0x200,0x300); assert(rendered);
+        assert(pending.attach(mixed,*owner,0x700,*rendered));
+        assert(mixed.retire(1,1)); source={}; rendered.reset();
+        assert(!weak.expired());
+        {
+            const auto executing=pending; // same local lease as production
+            pending={}; mixed.retire_all();
+            assert(!weak.expired());
+            assert(executing.execute(mixed,0x700,77,2)); // stale generation ignored
+            assert(!weak.expired()); // original command has not returned
+        }
+        assert(weak.expired());
+    }
+    {
+        D mixed; N native{mixed};
+        D::Source legacy_source{std::make_shared<const RecoveryPacket>(RecoveryPacket{1}),
+            1,1,10,20,0x100,0x200,0x300,{0x401,0x402,0x403,0x404}};
+        D::EngineTicket first{1,1,10,0x100,0x200,0x300};
+        assert(mixed.register_engine_family(first)); assert(mixed.register_bound(legacy_source));
+        auto primary=mixed.render_engine_family(1,10,0x200,0x300); assert(primary);
+        auto old=mixed.render(1,10,0x100,0x200,0x300); assert(old);
+        assert(mixed.tail_hooked_engine_family(*primary,*old,0x700));
+        D::Source fresh{std::make_shared<const RecoveryPacket>(RecoveryPacket{2}),
+            1,2,11,21,0x100,0x200,0x300,{0x401,0x402,0x403,0x404}};
+        D::EngineTicket next{1,2,11,0x100,0x200,0x300};
+        assert(mixed.register_engine_family(next)); assert(mixed.register_bound(fresh));
+        assert(native.bind(fresh,next,1,{0x501,0x502,0x503,0x504}));
+        N::TailTicket tail{};
+        for(size_t i=0;i<4;++i) {
+            auto role=native.render(1,11,0x501+i,0x300); assert(role);
+            auto attach=native.hook_batch(*role,0x700,1,0x900,11); assert(attach.publishable());
+            tail=attach.tail;
+        }
+        assert(mixed.retire(1,1)); // native joining legacy revokes old atlas proof
+        assert(native.executed_tail(tail,77).accepted);
+        assert(mixed.executed_engine_family(*primary,D::Source{},0x700,77));
+        assert(mixed.engine_commands_retired(1));
+        auto result=mixed.select(1,77); assert(result && result->serial==2);
+    }
+    {
+        using Wide=Delivery<RecoveryPacket,40>;
+        Wide ledger; EngineDrainBatch<Wide> batch{};
+        for(uint64_t serial=1;serial<=33;++serial) {
+            Wide::EngineTicket ticket{1,serial,uint32_t(serial),0x100,0x200,0x300};
+            assert(ledger.register_engine_family(ticket));
+            auto owner=ledger.render_engine_family(1,uint32_t(serial),0x200,0x300); assert(owner);
+            assert(batch.attach(ledger,*owner,0x700)==(serial<=32));
+        }
+        assert(batch.count==32 && batch.newest_serial==32);
+        assert(batch.execute(ledger,0x700,77,1));
+        assert(ledger.pending_engine_commands(1)==1); // overflow cannot falsely retire unknown work
+        assert(!ledger.engine_commands_retired(1));
+        assert(!ledger.select(1,77));
+    }
     D d; N n{d};
     uint64_t published{}, runtime_events{}, drained{};
     for(uint64_t generation=1;generation<=24;++generation) {

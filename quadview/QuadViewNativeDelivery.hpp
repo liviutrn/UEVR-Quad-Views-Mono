@@ -16,16 +16,26 @@ namespace uevr::quadview {
 // cannot authorize source publication and never stands in for a GPU fence.
 template<class Delivery> struct EngineDrainBatch {
     using Ticket=typename Delivery::EngineTicket;
+    using Source=typename Delivery::Source;
     std::array<Ticket,32> tickets{};
+    std::array<Source,32> leases{};
     size_t count{};
     uint64_t newest_serial{};
     uintptr_t tail{};
-    bool attach(Delivery& delivery,const Ticket& ticket,uintptr_t command) {
+    bool attach(Delivery& delivery,const Ticket& ticket,uintptr_t command,Source source={}) {
         if (!ticket || !command || (tail && tail!=command)) return false;
-        for(size_t i=0;i<count;++i) if(tickets[i].same_owner(ticket)) return true;
+        if(source && (source.generation!=ticket.generation || source.serial!=ticket.serial ||
+            source.engine_frame!=ticket.engine_frame || source.family!=ticket.family ||
+            source.target!=ticket.target || source.scene!=ticket.scene)) return false;
+        for(size_t i=0;i<count;++i) if(tickets[i].same_owner(ticket)) {
+            if(source && leases[i] && !leases[i].same_owner(source)) return false;
+            if(source) leases[i]=std::move(source);
+            return true;
+        }
         if(count==tickets.size() || (count && tickets[0].generation!=ticket.generation)) return false;
         if(!delivery.tail_hooked_engine_family(ticket,command)) return false;
         tail=command;
+        leases[count]=std::move(source);
         tickets[count++]=ticket;
         newest_serial=std::max(newest_serial,ticket.serial);
         return true;

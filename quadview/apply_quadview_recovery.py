@@ -61,7 +61,7 @@ def main():
                     auto& drain=quad_drain_commands[last_command];
                     const auto prior_serial=drain.newest_serial;
                     if (!drain.attach(g_hook->quadview_delivery,quad_engine,
-                            reinterpret_cast<uintptr_t>(last_command))) {
+                            reinterpret_cast<uintptr_t>(last_command),quad_source)) {
                         vr->set_quadview_status("Recovery tail owner capacity or identity rejected; transition remains blocked"); return;
                     }
                     // Mixed legacy atlas writes have no ordered content proof.
@@ -104,13 +104,16 @@ def main():
                             vr->set_quadview_status("Native role could not join the authenticated recovery tail"); return;
                         }
                         quad_native_commands.emplace(last_command,std::move(batch));
+                        const auto legacy=quad_command_sources.find(last_command);
+                        if (legacy!=quad_command_sources.end())
+                            g_hook->quadview_delivery.retire(legacy->second.generation,legacy->second.serial);
                         return;
                     }
                     const auto drain=uevr::quadview::NativeDrainScope::current();''')
     s = replace(s, '''g_hook->quadview_delivery.executed_engine_family(quad_engine,quad_source,
                             reinterpret_cast<uintptr_t>(cmd),GetCurrentThreadId())''',
         '''g_hook->quadview_delivery.executed_engine_family(quad_engine,
-                            quad_drain.count ? FFakeStereoRenderingHook::QuadViewDelivery::Source{} : quad_source,
+                            (quad_drain.count || quad_native) ? FFakeStereoRenderingHook::QuadViewDelivery::Source{} : quad_source,
                             reinterpret_cast<uintptr_t>(cmd),GetCurrentThreadId())''')
     s = replace(s, '        result.tracked_engine_records = SceneViewExtensionAnalyzer::quad_command_engines.size();',
         '''        result.tracked_engine_records = SceneViewExtensionAnalyzer::quad_command_engines.size();
