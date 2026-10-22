@@ -1,0 +1,22 @@
+{
+  "sha256": "c42b1a755f7577c07e2da25d94e56cf2834e844457a1e6c688549dfe7fe19923",
+  "binary_sha256": "0A7DEE114D378B2E7939D1DB949515908117DDC515FC9A681E587612719D7B90",
+  "source": "f4e086cde6d4a183cf2c1223dd9effaf6f8f7a77",
+  "run": "39868145292",
+  "files": 33,
+  "ci_package_sha256": "36d9e8ab035c51f4dad80c0d98fbe1d22de884bdacf06e6dd9ad22b4ab44e681",
+  "bytes": 11603482,
+  "validation": "CRC, CI package hash, AMD64 PE, pinned source/build identity and binary hash verified",
+  "headset_verified": false,
+  "ci_result": "success",
+  "ctest_passes": {
+    "quadview": 21,
+    "pinned_duoview": 4,
+    "duoview": 6,
+    "compatibility": 41
+  },
+  "frontend_checks": "passed",
+  "portable_sanitizers": "passed",
+  "exact_symbols_artifact_id": 12466296100,
+  "package_changes": "Added current notes and symbolized diagnosis only; all CI payload files byte-identical."
+}
