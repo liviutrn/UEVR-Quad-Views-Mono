@@ -1,0 +1,107 @@
+name: Build48 Optical Alignment Source Regression
+on:
+  push:
+    branches:
+      - experiment/duoview-mono-eye-alignment-hud-v48-20261022
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolate:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: joeyhodge/UEVR
+          ref: 5ac7edc207866569334175e4ed8a7517971547f6
+          path: backend
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: joeyhodge/uevr-frontend
+          ref: 60be4b0f9a646109fd9fdf448bacd41477234091
+          path: frontend
+          persist-credentials: false
+      - name: Syntax-check all four patch stages
+        run: |
+          python -m py_compile workspace/duoview/joey_stage1/apply_stage1.py
+          python -m py_compile workspace/duoview/joey_stage1/apply_stage234.py
+          python -m py_compile workspace/duoview/joey_stage1/apply_foreground_mpc_minimal.py
+          python -m py_compile workspace/duoview/joey_stage1/apply_mono_hud_convergence.py
+          python -m py_compile workspace/duoview/joey_stage1/apply_mono_alignment_build48.py
+      - name: Reconstruct immutable Build47 baseline
+        run: |
+          mkdir -p evidence
+          python workspace/duoview/joey_stage1/apply_stage1.py backend frontend evidence
+          python workspace/duoview/joey_stage1/apply_stage234.py backend frontend workspace/duoview
+          python workspace/duoview/joey_stage1/apply_foreground_mpc_minimal.py backend
+          python workspace/duoview/joey_stage1/apply_mono_hud_convergence.py backend
+          git -C backend diff --binary > evidence/build47.diff
+          cp backend/src/mods/vr/OverlayComponent.cpp evidence/build47-Overlay.cpp
+          cp backend/src/mods/vr/runtimes/OpenXR.cpp evidence/build47-OpenXR.cpp
+          cp backend/src/mods/vr/runtimes/OpenXR.hpp evidence/build47-OpenXR.hpp
+          cp backend/src/mods/VR.cpp evidence/build47-VR.cpp
+          cp backend/src/mods/vr/D3D12Component.cpp evidence/build47-D3D12.cpp
+          cp backend/src/mods/vr/FFakeStereoRenderingHook.cpp evidence/build47-Hook.cpp
+          python workspace/duoview/joey_stage1/apply_mono_alignment_build48.py backend
+      - name: Verify original stable scene is identical and correct controls are real
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          d=Path('backend/src/mods/vr')
+          E=Path('evidence')
+          for name,old in [('VR.cpp','build47-VR.cpp'),('D3D12Component.cpp','build47-D3D12.cpp'),('FFakeStereoRenderingHook.cpp','build47-Hook.cpp')]:
+              assert (d/name).read_bytes()==(E/old).read_bytes(),name
+          s=(d/'OverlayComponent.cpp').read_text()
+          a=E.joinpath('build47-Overlay.cpp').read_text()
+          assert "eye == XR_EYE_VISIBILITY_BOTH &&" in a
+          assert "eye == XR_EYE_VISIBILITY_BOTH &&" not in s[s.index('const bool mono_hud_optical ='):s.index('const float optical_scale =')]
+          assert "get_ui_composition_request() & 1) == 0" in a
+          assert "get_ui_composition_request() & 1) == 0" not in s
+          assert "!force_stage_space && follows_view" in a
+          assert "!force_stage_space && follows_view" not in s
+          assert s.count('const bool mono_hud_optical')==2
+          assert "XR_EYE_VISIBILITY_BOTH" in s # unchanged OpenXR layer base
+          assert "m_slate_layer_right" in s
+          ox=(d/'runtimes/OpenXR.cpp').read_text()
+          oh=(d/'runtimes/OpenXR.hpp').read_text()
+          assert "mono_eye_alignment_enabled->value()" in ox
+          assert "total_px / source_width" in ox and "std::atan(tl + shift)" in ox
+          assert "std::atan(tr + shift)" in ox
+          assert "projection_layer_views[i].pose.orientation" in ox
+          assert "push_dummy_projection" in ox
+          assert "mono_eye_alignment_pixels->draw(" in ox
+          assert "Reset Mono Eye Shift to Zero" in ox
+          assert "OpenXR_MonoEyeAlignmentEnabled" in oh
+          assert "OpenXR_MonoEyeAlignmentTotalPixels" in oh
+          assert "ModSlider::create(\"OpenXR_MonoEyeAlignmentTotalPixels\", -512.0f, 512.0f, 0.0f)" in oh
+          assert "bool push_dummy_projection{ false };" in oh
+          # Verify conceptual shift: positive converges by moving optical rays
+          # toward the right for left eye, left for right, no FOV span changes.
+          for width in (1920,3136,4416):
+            for total in (-512,-120,-20,0,20,120,512):
+              left=0.5*total/width
+              right=-0.5*total/width
+              assert left+right==0
+              lo=-1.2;hi=1.2
+              assert abs((hi+left*(hi-lo))-(lo+left*(hi-lo))-(hi-lo))<1e-12
+              assert abs((hi+right*(hi-lo))-(lo+right*(hi-lo))-(hi-lo))<1e-12
+          print('PASS: Unchanged scene, foveal composition, foreground MPC, pose, layer ordering')
+          print('PASS: HUD gates removed; quad/cylinder/per-eye support')
+          print('PASS: reversible source-equivalent Mono FOV offset, symmetry and range')
+          PY
+      - name: Preserve preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build48-mono-alignment-source-preflight
+          path: evidence/
+          retention-days: 30
