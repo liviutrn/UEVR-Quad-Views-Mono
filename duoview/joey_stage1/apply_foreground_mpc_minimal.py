@@ -22,6 +22,10 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             std::optional<sdk::object_liveness::Identity> world_identity{};
             sdk::UObject* collection{};
             std::optional<sdk::object_liveness::Identity> collection_identity{};
+            sdk::UObject* library{};
+            std::optional<sdk::object_liveness::Identity> library_identity{};
+            sdk::UFunction* getter{};
+            sdk::UFunction* setter{};
             float original_enabled{};
             float original_depth{};
             bool active{};
@@ -78,29 +82,41 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
                 fg.collection_identity = observed_collection->identity;
             }
 
-            auto* klass = sdk::find_uobject<sdk::UClass>(
-                L"Class /Script/Engine.KismetMaterialLibrary");
-            auto* library = klass != nullptr ? klass->get_class_default_object() : nullptr;
-            auto* getter = klass != nullptr ? klass->find_function(L"GetScalarParameterValue") : nullptr;
-            auto* setter = klass != nullptr ? klass->find_function(L"SetScalarParameterValue") : nullptr;
-            if (!library || !getter || !setter) return;
+            // Reflection method lookups are also cached per activation;
+            // only cheap UObject identity checks remain on the fast path.
+            if (!fg.library || !fg.library_identity ||
+                !sdk::is_current_object(*fg.library_identity)) {
+                auto* klass = sdk::find_uobject<sdk::UClass>(
+                    L"Class /Script/Engine.KismetMaterialLibrary");
+                auto* library = klass != nullptr ? klass->get_class_default_object() : nullptr;
+                auto* getter = klass != nullptr ? klass->find_function(L"GetScalarParameterValue") : nullptr;
+                auto* setter = klass != nullptr ? klass->find_function(L"SetScalarParameterValue") : nullptr;
+                if (!library || !getter || !setter) return;
+                const auto observed = sdk::observe_uobject(
+                    static_cast<sdk::UObjectBase*>(library));
+                if (!observed || !sdk::is_current_object(observed->identity)) return;
+                fg.library = library;
+                fg.library_identity = observed->identity;
+                fg.getter = getter;
+                fg.setter = setter;
+            }
 
             const auto read = [&](std::wstring_view parameter, float& value) {
-                sdk::ReflectedNameCall call{getter};
+                sdk::ReflectedNameCall call{fg.getter};
                 if (!call.write(L"WorldContextObject", static_cast<sdk::UObject*>(world)) ||
                     !call.write(L"Collection", fg.collection) ||
                     !call.write_name(L"ParameterName", sdk::OwnedFName{parameter}) ||
                     !call.field(L"ReturnValue", sizeof(float)) ||
-                    !call.invoke(library)) return false;
+                    !call.invoke(fg.library)) return false;
                 value = call.read<float>(L"ReturnValue");
                 return std::isfinite(value);
             };
             const auto write = [&](std::wstring_view parameter, float value) {
-                sdk::ReflectedNameCall call{setter};
+                sdk::ReflectedNameCall call{fg.setter};
                 return call.write(L"WorldContextObject", static_cast<sdk::UObject*>(world)) &&
                     call.write(L"Collection", fg.collection) &&
                     call.write_name(L"ParameterName", sdk::OwnedFName{parameter}) &&
-                    call.write(L"ParameterValue", value) && call.invoke(library);
+                    call.write(L"ParameterValue", value) && call.invoke(fg.library);
             };
 
             float current_enabled{}, current_depth{};
