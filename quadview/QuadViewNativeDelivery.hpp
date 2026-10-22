@@ -296,7 +296,18 @@ public:
         return true;
     }
 
-    std::optional<Command> render(uint64_t generation, uint32_t frame, uintptr_t target, uintptr_t scene) {
+    struct RenderTrace {
+        // 0 accepted, 1 no role key, 2 ambiguous role key, 3 already rendered,
+        // 4 no engine claim, 5 engine identity mismatch. Observation only.
+        unsigned reason{1}, role{255};
+        uint64_t serial{};
+        uint32_t canonical_frame{};
+        unsigned rendered{},hooked{},executed{},written{};
+        bool engine_claim{},source_claim{},publish{};
+    };
+    std::optional<Command> render(uint64_t generation, uint32_t frame, uintptr_t target, uintptr_t scene,
+                                  RenderTrace* trace=nullptr) {
+        if(trace) *trace={};
         std::scoped_lock lock{mutex_};
         Slot* match{};
         size_t view{};
@@ -304,21 +315,32 @@ public:
             slot.source.scene == scene) {
             for (size_t i = 0; i < 4; ++i) if (slot.targets[i] == target &&
                 (slot.roles_bound & (1u << i)) && slot.role_frames[i] == frame) {
-                if (match) return {};
+                if (match) { if(trace) trace->reason=2; return {}; }
                 match = &slot;
                 view = i;
             }
         }
-        if (!match || (match->rendered & (1u << view))) return {};
+        if (!match) return {};
+        if(trace) {
+            trace->serial=match->source.serial;trace->canonical_frame=match->source.engine_frame;
+            trace->role=unsigned(view);trace->rendered=match->rendered;trace->hooked=match->hooked;
+            trace->executed=match->executed;trace->written=match->written;trace->publish=match->publish;
+        }
+        if(match->rendered & (1u << view)) {if(trace) trace->reason=3;return {};}
         if (!match->rendered) {
             const auto engine = delivery_.render_engine_family(
                 generation, match->source.engine_frame, match->source.target, scene);
             const auto source = delivery_.render(
                 generation, match->source.engine_frame, match->source.family, match->source.target, scene);
-            if (!engine || !engine->same_owner(match->engine)) return {};
+            if(trace) {trace->engine_claim=bool(engine);trace->source_claim=bool(source);}
+            if (!engine || !engine->same_owner(match->engine)) {
+                if(trace) trace->reason=engine ? 5 : 4;
+                return {};
+            }
             match->publish = source && source->same_owner(match->source);
         }
         match->rendered |= uint8_t(1u << view);
+        if(trace) {trace->reason=0;trace->rendered=match->rendered;trace->publish=match->publish;}
         return Command{match->source, match->engine, match->target_set, target, uint8_t(view)};
     }
 

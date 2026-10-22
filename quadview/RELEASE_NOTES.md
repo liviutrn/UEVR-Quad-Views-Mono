@@ -1,3 +1,9 @@
+# Build50 - hook trace diagnostic
+
+Build49 failed actual headset testing. Build50 adds bounded observation only;
+no rendering or ownership fix is claimed. Read BUILD50_FINDINGS_STATUS.md and
+READ_FIRST.txt for the three separate log captures and release gates.
+
 # Build 48 — recover incomplete startup and shared engine tails
 
 The incomplete-snapshot path now authenticates the unique original family by

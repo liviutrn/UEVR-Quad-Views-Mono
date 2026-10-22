@@ -1,40 +1,40 @@
-UEVR QUAD VIEWS — BUILD 48 RECOVERY CANDIDATE
+UEVR QUAD VIEWS - BUILD 50 HOOK TRACE DIAGNOSTIC
 
-Target: STALKER 2 (UE5.5), DX12, OpenXR, PSVR2.
-Baseline: Build 40, 7486fc59890b14673cd50770b0dafeb692576716.
-Mode ID7: Quad Views Stereo (Experimental).
+Target: STALKER 2, DX12, OpenXR, PSVR2. Mode ID7.
+Build49 repeatedly showed a black headset. Build50 adds observation only;
+it is not a verified fix or a production release.
 
-1. Extract the compiled Windows package into a separate folder and run the
-   included injector.
-2. Inject into STALKER 2 with your working Build 40 runtime/profile settings.
-3. Select Quad Views Stereo (Experimental), ID7.
-4. Start with your Build 40 crop, periphery, gaze and sharpening settings.
-5. Compare a shadowed interior with Native Stereo Fix, DuoView and Build 40.
-   Inspect both eyes' focus/periphery boundary, brightness, shadows and Lumen.
-6. Check horizontal FOV, stereo depth, gaze movement, startup, repeated mode
-   switching, loading a save and sustained gameplay. Save the full log if a
-   check fails.
+Extract into a separate folder. Keep your working DuoView installation.
+Use the same game/runtime/profile settings used for the failed Build49 test.
+Hook tracing is automatic; no extra diagnostic checkbox is required.
 
-Build 48 adds authenticated engine-only recovery for incomplete startup
-snapshots and coalesced recovery/native tails. Recovery never publishes an
-incomplete source. See BUILD48_FINDINGS_STATUS.md for evidence and limits.
+Please collect separate full logs for:
+1. Fresh game process: choose ID7 directly, wait 15-20 seconds after the
+   scene loads, then exit. Preserve this log before another launch.
+2. Fresh process: reproduce ID6 -> ID0 -> ID7, wait 15-20 seconds in ID7,
+   then exit. Preserve the complete log, including startup and mode changes.
+3. Fresh process: ID0 only; move your head in a loaded scene for 20 seconds
+   to capture the reported tracking stutter. Preserve this separate log.
 
-The included Build 47 diagnostics provide bounded, on-demand
-diagnostics. To export them, open **Debug → Stereo Hook Options → Hook
-Provenance Diagnostics**, then select **Refresh Hook Provenance** and
-**Export Hook Provenance JSON**. The checkbox is default-off. The export does
-not add a resolution controller and does not establish GPU completion,
-lighting parity, queue ordering, stability or performance.
+If the headset works, report stereo, gaze, FOV, interior lighting and motion.
+If black, the full log is enough; repeated attempts are unnecessary.
+Send the three logs plus QUADVIEW_BUILD.json. Existing Hook Provenance JSON
+(Debug -> Stereo Hook Options) remains useful but optional.
 
-ID7 uses four independent engine render targets and requires a coherent
-four-source frame. Their full atlas extents preserve Build 40 view rectangles
-and projections, with increased target memory use. Rendered pixel counts do
-not predict total GPU cost. Build 40's ID6 DuoView remains unchanged; keep your
-Build 40 installation for direct comparison. Build 47's diagnostics are
-observation-only; use the Build 40 image checks above for FOV, gaze, stereo,
-brightness and shadows.
+Optional PC-side summary (Python 3):
+  python quadview_hook_trace_summary.py "path/to/log.txt"
+The full log is the primary evidence. Summary counts are sampled observations,
+not frame totals; absent markers do not prove a callback never ran.
 
-Diagnostics: 0 blended, 1 context only, 2 focus only, 3 synthetic view colors.
-Synthetic colors cannot establish that Unreal rendered four valid scene views.
-Automated builds and GPU tests do not establish headset lighting parity,
-stability, fence behavior or performance. Those require in-game testing.
+What is traced: GT registration and per-role frame binding, native RT match
+reasons, Slate fallback queue/entry/exit, all 27 hook returns, live vs recorded
+vtable identity, owner maps and drain identity, attachment results, hook
+installation, pre-lock and owner-qualified RHI entry, lock wait/hold time,
+worker/original callback boundaries and XR synchronization timing.
+Logging is bounded independently per site and generation: initial draw detail,
+then at most one summary per second at each active site. It can affect timing.
+
+Build50 retains Build49 rendering, geometry, source ownership, retirement and
+SDK pins. The known-good DuoView source baseline remains byte-for-byte intact;
+ID7 still uses its custom four-source dispatcher and ledger. Shared adapter
+instrumentation means runtime equivalence/performance still requires testing.
