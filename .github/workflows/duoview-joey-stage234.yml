@@ -1,9 +1,10 @@
-name: UEVR Quad Views Mono v182 Fovea Glamarye Build
+name: DuoView v186.1 Glamayre minimal Foreground MPC
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
   push:
     branches:
       - feature/v182-fovea-glamayre-fused
+      - fix/duoview-v1861-foreground-mpc-minimal-20261022
   pull_request:
     branches:
       - build-182
@@ -74,6 +75,8 @@ jobs:
         run: |
           python workspace/duoview/joey_stage1/apply_stage234.py backend frontend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 source anchors did not match original Joey' }
+          python workspace/duoview/joey_stage1/apply_foreground_mpc_minimal.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Minimal STALKER 2 foreground MPC patch failed' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
       - name: Verify pinned production geometry and pair-state contracts
@@ -181,6 +184,7 @@ jobs:
           The exact source pose is frozen before Native Fix invokes either renderer callback and travels with the completed packet. Brief source gaps may reuse the last successfully submitted released image with its original pose for at most 100ms; no new source pair is composed during the hold. A new scene-image acquisition, mode generation, swapchain change or submission failure invalidates continuity. Until the first valid Native pair is available, warmup keeps the XR transition loop live and waits for the next pair. A compositor fault after validation returns ID6 to original Joey Mono on the following frame.
           An incomplete or cropped Native source is never presented as a full-FOV Mono image.
           DXBC shaders are precompiled during CI; per-XR-image PSOs/textures are prewarmed on swapchain setup.
+          NEW v186.1 Foreground MPC ONLY: In STALKER 2 ID6, save MPC_FOV IsFOVEnabled/DepthScale and request 0/1. Revalidate once per game tick and write only if game values drift; cache and liveness-check MPC UObject. Restore on exit in the same world. No HUD/convergence, first-person per-source controls, or changes to stable Glamayre compositing.
           Changing source formats or unexpected swapchain lifecycle may still cause reconstruction. Monitor frame pacing.
           Experimental: Source/test/CI passing cannot prove exact game GPU producer completion or headset stability.
           NEVER overwrite 30-minute-proven Build3! Extract this ZIP into a SEPARATE TEST DIRECTORY.
@@ -194,16 +198,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-Quad-Views-Mono-v182-Glamarye-Fovea-${{ github.run_number }}.zip"
+          $zip="UEVR-Quad-Views-Mono-v186.1-Glamayre-ForegroundMPC-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-Quad-Views-Mono-v182-Glamarye-Fovea-${{ github.run_number }}
+          name: UEVR-Quad-Views-Mono-v186.1-Glamayre-ForegroundMPC-${{ github.run_number }}
           path: |
-            UEVR-Quad-Views-Mono-v182-Glamarye-Fovea-*.zip
-            UEVR-Quad-Views-Mono-v182-Glamarye-Fovea-*.zip.sha256
+            UEVR-Quad-Views-Mono-v186.1-Glamayre-ForegroundMPC-*.zip
+            UEVR-Quad-Views-Mono-v186.1-Glamayre-ForegroundMPC-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -218,7 +222,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-v182-Glamarye-Fovea-Evidence-${{ github.run_number }}
+          name: UEVR-v186.1-ForegroundMPC-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
