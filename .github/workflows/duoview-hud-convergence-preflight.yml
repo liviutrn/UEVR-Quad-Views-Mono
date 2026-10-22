@@ -1,0 +1,106 @@
+name: DuoView v186.1 MPC + Mono HUD Convergence Preflight
+on:
+  push:
+    branches:
+      - experiment/duoview-v1861-mpc-hud-mono-convergence-20261022
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hud-source-contract:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: joeyhodge/UEVR
+          ref: 5ac7edc207866569334175e4ed8a7517971547f6
+          path: backend
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: joeyhodge/uevr-frontend
+          ref: 60be4b0f9a646109fd9fdf448bacd41477234091
+          path: frontend
+          persist-credentials: false
+      - name: Python syntax and exact Build 45 ancestry
+        run: |
+          git -C workspace merge-base --is-ancestor 0bfb814e4b7f4f2b1b1fbe53be238fff2a34146a HEAD
+          python -m py_compile workspace/duoview/joey_stage1/apply_stage1.py
+          python -m py_compile workspace/duoview/joey_stage1/apply_stage234.py
+          python -m py_compile workspace/duoview/joey_stage1/apply_foreground_mpc_minimal.py
+          python -m py_compile workspace/duoview/joey_stage1/apply_mono_hud_convergence.py
+      - name: Reconstruct known-good Build 45 and isolate HUD patch
+        run: |
+          mkdir -p evidence
+          python workspace/duoview/joey_stage1/apply_stage1.py backend frontend evidence
+          python workspace/duoview/joey_stage1/apply_stage234.py backend frontend workspace/duoview
+          python workspace/duoview/joey_stage1/apply_foreground_mpc_minimal.py backend
+          cp backend/src/mods/vr/OverlayComponent.hpp evidence/build45-overlay.hpp
+          cp backend/src/mods/vr/OverlayComponent.cpp evidence/build45-overlay.cpp
+          cp backend/src/mods/VR.cpp evidence/build45-VR.cpp
+          cp backend/src/mods/vr/D3D12Component.cpp evidence/build45-D3D12.cpp
+          cp backend/src/mods/vr/runtimes/OpenXR.cpp evidence/build45-OpenXR.cpp
+          cp backend/src/mods/vr/FFakeStereoRenderingHook.cpp evidence/build45-StereoHook.cpp
+          python workspace/duoview/joey_stage1/apply_mono_hud_convergence.py backend
+      - name: Verify sole overlay diff, no second XR layer, and geometry
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0,"workspace/duoview/joey_stage1")
+          import apply_mono_hud_convergence as m
+          root=Path("backend/src/mods/vr")
+          h=(root/"OverlayComponent.hpp").read_text()
+          c=(root/"OverlayComponent.cpp").read_text()
+          prevh=Path("evidence/build45-overlay.hpp").read_text()
+          prevc=Path("evidence/build45-overlay.cpp").read_text()
+          assert h.replace(m.HEADER_SETTINGS_NEW,m.HEADER_SETTINGS_OLD).replace(
+              m.HEADER_OPTIONS_NEW,m.HEADER_OPTIONS_OLD)==prevh, "HUD header has unwanted diff"
+          assert c.replace(m.MENU_NEW,m.MENU_OLD).replace(
+              m.QUAD_NEW,m.QUAD_OLD)==prevc, "HUD C++ has unwanted diff"
+          for cur,old in (
+              ("src/mods/VR.cpp","build45-VR.cpp"),
+              ("src/mods/vr/D3D12Component.cpp","build45-D3D12.cpp"),
+              ("src/mods/vr/runtimes/OpenXR.cpp","build45-OpenXR.cpp"),
+              ("src/mods/vr/FFakeStereoRenderingHook.cpp","build45-StereoHook.cpp")):
+              assert Path("backend",cur).read_bytes()==Path("evidence",old).read_bytes(),cur
+          assert "m_slate_layer_right" in c  # original Joey stock support untouched
+          block=m.QUAD_NEW
+          assert "XR_EYE_VISIBILITY_BOTH" in block
+          assert "std::isfinite" in block and "get_ui_composition_request" in block
+          assert "is_using_mono()" in block and "follows_view" in block
+          assert "size_meters = m_parent->m_slate_size->value() * optical_scale" in block
+          assert "m_slate_x_offset->value() * optical_scale" in block
+          assert "m_slate_y_offset->value() * optical_scale" in block
+          assert "glm_matrix[3] -= glm_matrix[2] * optical_distance;" in block
+          assert "generate_slate_layer" not in block and "quad_layers.push_back" not in block
+          assert m.QUAD_OLD in prevc and m.QUAD_OLD not in c
+          for base_distance,size,offx,offy in (
+              (2.0,2.0,0.0,0.0),(10.0,10.0,1.0,-0.3),(3.0,8.0,-2.0,2.0)):
+              for optical in (2.0,10.0,25.0,50.0,100.0,200.0):
+                  k=optical/base_distance
+                  assert abs(size*k/optical-size/base_distance)<1e-9
+                  assert abs(offx*k/optical-offx/base_distance)<1e-9
+                  assert abs(offy*k/optical-offy/base_distance)<1e-9
+                  assert optical>0
+          print("PASS: original Build 45 backend unchanged except two Joey HUD overlay source files.")
+          print("PASS: single BOTH-eye layer, default OFF, no new submit path, finite geometry bounds.")
+          print("PASS: angular size, HUD offsets preserved through the optical distance sweep.")
+          PY
+      - name: Archive isolated regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1861-build45-mono-hud-convergence-source-contract
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
