@@ -45,7 +45,6 @@ s=once(s,
         m_parent->m_mono_hud_convergence->value() &&''',
 '''        (swapchain == runtimes::OpenXR::SwapchainIndex::UI ||
          swapchain == runtimes::OpenXR::SwapchainIndex::UI_RIGHT) &&
-        !vr->is_using_2d_screen() &&
         vr->is_using_mono() &&
         m_parent->m_mono_hud_convergence->value() &&''',
 "HUD all original OpenXR quad modes")
@@ -60,7 +59,7 @@ cylinder_new='''    // Preserve apparent height, angular width and offsets while
     // the cylinder optical distance. Includes stage-space and per-eye UI.
     const float configured_distance = m_parent->m_slate_distance->value();
     const float optical_request = m_parent->m_mono_hud_optical_distance->value();
-    const bool mono_hud_optical = vr->is_using_mono() && !vr->is_using_2d_screen() &&
+    const bool mono_hud_optical = vr->is_using_mono() &&
         (swapchain == runtimes::OpenXR::SwapchainIndex::UI ||
          swapchain == runtimes::OpenXR::SwapchainIndex::UI_RIGHT) &&
         m_parent->m_mono_hud_convergence->value() &&
