@@ -58,8 +58,8 @@ jobs:
           from pathlib import Path
           d=Path('backend/src/mods/vr')
           E=Path('evidence')
-          for name,old in [('VR.cpp','build47-VR.cpp'),('D3D12Component.cpp','build47-D3D12.cpp'),('FFakeStereoRenderingHook.cpp','build47-Hook.cpp')]:
-              assert (d/name).read_bytes()==(E/old).read_bytes(),name
+          for path,old in [(d.parent/'VR.cpp','build47-VR.cpp'),(d/'D3D12Component.cpp','build47-D3D12.cpp'),(d/'FFakeStereoRenderingHook.cpp','build47-Hook.cpp')]:
+              assert path.read_bytes()==(E/old).read_bytes(),str(path)
           s=(d/'OverlayComponent.cpp').read_text()
           a=E.joinpath('build47-Overlay.cpp').read_text()
           assert "eye == XR_EYE_VISIBILITY_BOTH &&" in a
