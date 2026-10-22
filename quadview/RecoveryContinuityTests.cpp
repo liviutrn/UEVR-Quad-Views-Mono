@@ -110,6 +110,8 @@ int main(int argc,char** argv) {
             const auto executing=pending; // same local lease as production
             pending={}; mixed.retire_all();
             assert(!weak.expired());
+            assert(executing.allows_runtime(1));
+            assert(!executing.allows_runtime(2)); // no old frame may advance new XR poses
             assert(executing.execute(mixed,0x700,77,2)); // stale generation ignored
             assert(!weak.expired()); // original command has not returned
         }

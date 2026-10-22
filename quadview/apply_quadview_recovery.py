@@ -115,6 +115,13 @@ def main():
         '''g_hook->quadview_delivery.executed_engine_family(quad_engine,
                             (quad_drain.count || quad_native) ? FFakeStereoRenderingHook::QuadViewDelivery::Source{} : quad_source,
                             reinterpret_cast<uintptr_t>(cmd),GetCurrentThreadId())''')
+    # A retained old-generation CPU callback must release its owners, but must
+    # not assign stale engine-frame poses or synchronize the new XR generation.
+    cadence = 'if ((!quad_native || quad_native_runtime_claimed) &&'
+    if s.count(cadence) != 2:
+        raise RuntimeError('Expected both native runtime-cadence gates')
+    s = s.replace(cadence,
+        'if ((quad_native ? quad_native_runtime_claimed : quad_drain.allows_runtime(vr->mono_generation())) &&')
     s = replace(s, '        result.tracked_engine_records = SceneViewExtensionAnalyzer::quad_command_engines.size();',
         '''        result.tracked_engine_records = SceneViewExtensionAnalyzer::quad_command_engines.size();
         for (const auto& [command,batch]:SceneViewExtensionAnalyzer::quad_drain_commands)
