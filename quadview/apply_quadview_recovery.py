@@ -124,8 +124,7 @@ def main():
         'if ((quad_native ? quad_native_runtime_claimed : quad_drain.allows_runtime(vr->mono_generation())) &&')
     s = replace(s, '        result.tracked_engine_records = SceneViewExtensionAnalyzer::quad_command_engines.size();',
         '''        result.tracked_engine_records = SceneViewExtensionAnalyzer::quad_command_engines.size();
-        for (const auto& [command,batch]:SceneViewExtensionAnalyzer::quad_drain_commands)
-            result.tracked_engine_records+=batch.count;''')
+        result.tracked_engine_records+=SceneViewExtensionAnalyzer::quad_drain_commands.size();''')
     path.write_text(s)
     print('Applied engine-only bootstrap admission and shared recovery-tail drainage.')
 
