@@ -17,6 +17,10 @@ p.add_argument("backend",type=Path)
 args=p.parse_args()
 path=args.backend/"src/mods/VR.hpp"
 s=path.read_text(encoding="utf-8-sig")
+# Explicitly include <cmath> for std::isfinite on every build toolchain.
+if "#include <cmath>" not in s:
+    if s.count("#include <array>") != 1: raise RuntimeError("Header include anchor changed")
+    s=s.replace("#include <array>", "#include <array>\n#include <cmath>", 1)
 old="""    std::optional<std::string> reinitialize_openxr() {
         spdlog::info("Reinitializing OpenXR");
         std::scoped_lock _{m_openvr_mtx};
