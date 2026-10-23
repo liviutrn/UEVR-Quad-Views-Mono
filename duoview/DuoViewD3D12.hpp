@@ -109,7 +109,7 @@ public:
                 D3D12_RESOURCE_STATES secondary_state, const ViewFrame& frame,
                 std::shared_ptr<const void> packet_lifetime, UINT64 frequency = 0,
                 ID3D12Resource* depth0=nullptr, ID3D12Resource* depth1=nullptr,
-                uint32_t depth_debug=0) {
+                uint32_t depth_debug=0, uint32_t stereo_preview_strength=0) {
         recorded_commands_=false;
         error_.clear();
         last_native_direct_xr_=false;
@@ -142,15 +142,23 @@ public:
         // Direct double-wide raster would run sharpening twice on the same
         // monoscopic foveal content. Use the existing single-Mono compose+copy
         // when fused sharpening is enabled; leave v182 behavior otherwise.
-        const bool depth_mode=depth_debug>=1 && depth_debug<=4 && depth0 && depth1 && native_depth_pipeline_;
-        const bool direct_xr=!depth_mode && frame.config.settings.direct_xr_output &&
-            frame.config.settings.sharpen_strength <= 0.0f &&
+        const bool direct_compatible=
             xrd.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
             xrd.Width==static_cast<uint64_t>(width_)*2 && xrd.Height==height_ &&
             xrd.DepthOrArraySize==1 && xrd.MipLevels==1 &&
             xrd.SampleDesc.Count==1 && xrd.SampleDesc.Quality==0 &&
             (xrd.Flags&D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)!=0 &&
             (xrd.Format==xr_format || xrd.Format==DXGI_FORMAT_B8G8R8A8_TYPELESS);
+        // Optional S0 preview never activates without explicit user opt-in,
+        // two completed snapshots, an available precompiled shader, and
+        // a compatible double-wide XR render target. Otherwise MONO.
+        const bool stereo_preview=depth_debug==5 && stereo_preview_strength>0 &&
+            depth0 && depth1 && native_stereo_preview_pipeline_ && direct_compatible;
+        const bool depth_mode=depth_debug>=1 && depth_debug<=4 &&
+            depth0 && depth1 && native_depth_pipeline_;
+        const bool direct_xr=stereo_preview ||
+            (!depth_mode && frame.config.settings.direct_xr_output &&
+             frame.config.settings.sharpen_strength<=0.0f && direct_compatible);
         const auto& pr=frame.config.settings.fovea_view==0 ? layout.fovea : layout.periphery;
         const auto& sr=frame.config.settings.fovea_view==1 ? layout.fovea : layout.periphery;
         const auto is_bgra_family=[](DXGI_FORMAT f) {
@@ -207,17 +215,21 @@ public:
             {layout.u0,layout.v0,layout.u1,layout.v1},
             frame.config.settings.feather_fraction,
             frame.config.settings.debug_border ? 1u : 0u,
-            depth_mode ? 10u+depth_debug : frame.config.settings.diagnostic_view,
+            stereo_preview ? 15u : (depth_mode ? 10u+depth_debug : frame.config.settings.diagnostic_view),
             static_cast<float>(frame.config.settings.fovea_view),
             {static_cast<uint32_t>(fd.Width),fd.Height},
             {static_cast<uint32_t>(vd.Width),vd.Height},
-            {0u,0u},
+            {stereo_preview ? (stereo_preview_strength>40?40:stereo_preview_strength) : 0u,0u},
             frame.config.settings.sharpen_strength, 0.10f, 0.02f,
             3u | (srgb_ ? 0u : 4u) // larger radius, edge protection, SDR conversion
         };
         ensure_srvs(device,fovea,periphery,sampling_format);
-        if (depth_mode && !ensure_depth_srvs(device,depth0,depth1))
-            return reject("P1 owned depth resource format/device not sampleable");
+        if ((depth_mode || stereo_preview) && !ensure_depth_srvs(device,depth0,depth1)) {
+            // Depth resources invalid: fall back to the already validated
+            // original gather path instead of handing OpenXR a black frame.
+            return record_native_gather(device,cmd,primary,secondary,destination,
+                primary_state,secondary_state,frame,std::move(packet_lifetime),frequency);
+        }
         // GPU lifetime remains bound to the exact retired OpenXR command slot,
         // never to whichever engine packet happens to arrive next.
         primary_reference_=primary; secondary_reference_=secondary;
@@ -231,7 +243,8 @@ public:
         ID3D12DescriptorHeap* heaps[]{srv_.Get()};
         cmd->SetDescriptorHeaps(1,heaps);
         cmd->SetGraphicsRootSignature(root_.Get());
-        cmd->SetPipelineState(depth_mode?native_depth_pipeline_.Get():native_pipeline_.Get());
+        cmd->SetPipelineState(stereo_preview ? native_stereo_preview_pipeline_.Get() :
+            (depth_mode ? native_depth_pipeline_.Get() : native_pipeline_.Get()));
         cmd->SetGraphicsRootDescriptorTable(0,srv_gpu_start_);
         cmd->SetGraphicsRoot32BitConstants(1,sizeof(constants)/4,&constants,0);
         auto handle=rtv_cpu_start_;
@@ -493,7 +506,7 @@ private:
     }
     bool prepare(ID3D12Device* device, UINT width, UINT height, bool srgb) {
         if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
-        output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); native_depth_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
+        output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); native_depth_pipeline_.Reset(); native_stereo_preview_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
         srv_first_reference_.Reset(); srv_second_reference_.Reset(); srv_depth_first_reference_.Reset(); srv_depth_second_reference_.Reset(); xr_rtv_reference_.Reset();
         srv_descriptors_valid_=false; srv_cached_format_=DXGI_FORMAT_UNKNOWN;
         xr_rtv_format_=DXGI_FORMAT_UNKNOWN;
@@ -553,6 +566,12 @@ private:
                 &graphics,IID_PPV_ARGS(&native_depth_pipeline_)))) {
             native_depth_pipeline_.Reset();
         }
+        graphics.PS={native_stereo_preview_pixel_shader_bytecode,
+                     sizeof(native_stereo_preview_pixel_shader_bytecode)};
+        // Experimental PSO failures cannot block the proven DuoView compositor.
+        if (FAILED(device->CreateGraphicsPipelineState(
+                &graphics,IID_PPV_ARGS(&native_stereo_preview_pipeline_))))
+            native_stereo_preview_pipeline_.Reset();
         D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT; heap.CreationNodeMask = heap.VisibleNodeMask = 1;
         D3D12_RESOURCE_DESC texture{};
         texture.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -589,7 +608,7 @@ private:
     ComPtr<ID3D12Resource> srv_first_reference_, srv_second_reference_, srv_depth_first_reference_, srv_depth_second_reference_, xr_rtv_reference_;
     std::shared_ptr<const void> packet_lifetime_{};
     ComPtr<ID3D12RootSignature> root_;
-    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_, native_depth_pipeline_;
+    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_, native_depth_pipeline_, native_stereo_preview_pipeline_;
     ComPtr<ID3D12DescriptorHeap> srv_, rtv_;
     D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_start_{}, rtv_cpu_start_{}, direct_xr_rtv_cpu_{};
     D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_start_{};
