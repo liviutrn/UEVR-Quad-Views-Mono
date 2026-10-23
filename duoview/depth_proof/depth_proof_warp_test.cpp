@@ -392,10 +392,12 @@ void run_gpu_capture(ID3D12Device* device, ID3D12CommandQueue* queue,
     require_hr(recording.command_list->Close(), "Close capture WARP command list");
     const bool replay_capture_list = spec.has_stencil;
     if (replay_capture_list) {
-        // Re-execution is legal before Reset. The observer must retarget its
-        // fence to the second queue signal and wait until Reset seals this epoch.
+        // Re-execution is legal before Reset, but D3D12 requires the prior
+        // execution to finish before submitting the same closed list again.
         execute_and_notify(queue, session, recording.command_list.Get());
+        signal_and_wait(queue, external_fence, completion_event, external_value);
         execute_and_notify(queue, session, recording.command_list.Get());
+        // The observer must retarget its fence to execution 2 and wait until Reset seals this epoch.
         signal_and_wait(queue, external_fence, completion_event, external_value);
 
         reset_recording(recording); // Both submissions are complete before allocator reset.
