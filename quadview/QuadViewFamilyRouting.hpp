@@ -7,6 +7,7 @@
 #include <span>
 #include <type_traits>
 #include <utility>
+#include "QuadViewRenderOrder.hpp"
 
 namespace uevr::quadview {
 
@@ -256,6 +257,7 @@ private:
 enum class MainFamilyDispatchStatus : uint8_t {
     complete,
     invalid_storage,
+    invalid_order,
     preparation_failed,
     selection_failed,
     callback_validation_failed,
@@ -273,16 +275,18 @@ MainFamilyDispatchResult dispatch_main_views(
     View* data, size_t capacity, int32_t& count, Context& context,
     const std::array<View,4>& views, const std::array<Target,4>& targets,
     Getter getter, Setter setter, Before before, FirstBatch first_batch,
-    Singleton singleton, Validate validate) {
+    Singleton singleton, Validate validate, RenderOrder order=canonical_render_order) {
+    if (!valid_render_order(order)) return {MainFamilyDispatchStatus::invalid_order,0};
     ScopedMainFamilyMutation<View,Target,Context,Getter,Setter> mutation{
         data,capacity,count,context,getter,setter};
     if (!mutation) return {MainFamilyDispatchStatus::invalid_storage,0};
     uint8_t completed{};
-    for (size_t slot=0;slot<views.size();++slot) {
+    for (size_t ordinal=0;ordinal<order.size();++ordinal) {
+        const auto slot=order[ordinal];
         if (!before(slot)) return {MainFamilyDispatchStatus::preparation_failed,completed};
         if (!mutation.select_single(views[slot],targets[slot]))
             return {MainFamilyDispatchStatus::selection_failed,completed};
-        if (slot==0) first_batch();
+        if (ordinal==0) first_batch();
         else singleton();
         if (!validate(slot)) return {MainFamilyDispatchStatus::callback_validation_failed,completed};
         ++completed;

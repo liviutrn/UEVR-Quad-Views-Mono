@@ -240,10 +240,11 @@ public:
     }
 
     bool bind(Source source, EngineTicket engine, uint64_t target_set,
-              std::array<uintptr_t,4> targets, bool explicit_role_frames = false) {
+              std::array<uintptr_t,4> targets, bool explicit_role_frames = false,
+              uint8_t runtime_role = 3) {
         if (!source || !engine || !target_set || source.generation != engine.generation ||
             source.serial != engine.serial || source.engine_frame != engine.engine_frame ||
-            source.family != engine.family || source.target != engine.target ||
+            source.family != engine.family || source.target != engine.target || runtime_role >= 4 ||
             source.scene != engine.scene) return false;
         source.engine_frame_bound = true;
         for (size_t i = 0; i < 4; ++i) {
@@ -260,6 +261,7 @@ public:
             slot.engine = engine;
             slot.target_set = target_set;
             slot.targets = targets;
+            slot.runtime_role = runtime_role;
             slot.explicit_role_frames = explicit_role_frames;
             if (!explicit_role_frames) {
                 slot.role_frames.fill(engine.engine_frame);
@@ -431,9 +433,9 @@ public:
             tail->scope_valid = false;
             if (tail->attachment_count > 1) poison_tail(*tail);
         }
-        // Runtime cadence belongs to the canonical view-3 callback. Other
+        // Runtime cadence belongs to the selected final dispatch role. Other
         // native roles still attach/drain, but never advance OpenXR state.
-        if (owner.view == 3 && (!tail->runtime_event ||
+        if (owner.view == owner_slot.runtime_role && (!tail->runtime_event ||
             owner_slot.source.generation > tail->runtime_event.generation ||
             (owner_slot.source.generation == tail->runtime_event.generation &&
              owner_slot.source.serial > tail->runtime_event.serial))) {
@@ -585,6 +587,7 @@ private:
         uint64_t target_set{}, owner_id{};
         std::array<uintptr_t,4> targets{};
         std::array<uint32_t,4> role_frames{};
+        uint8_t runtime_role{3};
         uint8_t roles_bound{};
         bool explicit_role_frames{};
         std::array<uint32_t,4> pending_count{};

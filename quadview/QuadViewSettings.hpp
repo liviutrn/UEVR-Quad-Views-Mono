@@ -30,6 +30,7 @@ struct Settings {
     float gaze_breakout_radius{.035f};
     float gaze_still_radius{.008f};
     uint32_t gaze_relock_samples{3};
+    uint32_t render_order_mode{}; // Build53: 0 baseline, 1 LF, 2 RF, 3 alternating first.
 };
 
 enum Reject : uint32_t {
@@ -38,7 +39,7 @@ enum Reject : uint32_t {
     reject_diagnostic=1u<<6, reject_guard=1u<<7, reject_quant=1u<<8,
     reject_hold=1u<<9, reject_reacquire=1u<<10, reject_offset_u=1u<<11,
     reject_offset_v=1u<<12, reject_micro=1u<<13, reject_breakout=1u<<14,
-    reject_still=1u<<15, reject_relock=1u<<16
+    reject_still=1u<<15, reject_relock=1u<<16, reject_render_order=1u<<17
 };
 
 struct Reconciled {
@@ -124,6 +125,7 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     unsigned_integer(requested.diagnostic_view,0u,3u,reject_diagnostic,&Settings::diagnostic_view);
     unsigned_integer(requested.gaze_quant_pixels,0u,16u,reject_quant,&Settings::gaze_quant_pixels);
     unsigned_integer(requested.gaze_relock_samples,1u,10u,reject_relock,&Settings::gaze_relock_samples);
+    unsigned_integer(requested.render_order_mode,0u,3u,reject_render_order,&Settings::render_order_mode);
     integer(requested.gaze_hold_ms,50,2000,reject_hold,&Settings::gaze_hold_ms);
     integer(requested.gaze_reacquire_samples,1,4,reject_reacquire,&Settings::gaze_reacquire_samples);
 
@@ -154,7 +156,8 @@ inline bool same_settings(const Settings& a, const Settings& b) {
         a.gaze_hold_ms==b.gaze_hold_ms && a.gaze_reacquire_samples==b.gaze_reacquire_samples &&
         a.gaze_offset_u==b.gaze_offset_u && a.gaze_offset_v==b.gaze_offset_v &&
         a.gaze_micro_gain==b.gaze_micro_gain && a.gaze_breakout_radius==b.gaze_breakout_radius &&
-        a.gaze_still_radius==b.gaze_still_radius && a.gaze_relock_samples==b.gaze_relock_samples;
+        a.gaze_still_radius==b.gaze_still_radius && a.gaze_relock_samples==b.gaze_relock_samples &&
+        a.render_order_mode==b.render_order_mode;
 }
 
 } // namespace uevr::quadview
