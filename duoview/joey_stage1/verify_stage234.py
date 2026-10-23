@@ -18,7 +18,7 @@ ADDED_BACKEND = {
  "src/mods/vr/DuoViewPSVR2Gaze.hpp", "src/mods/vr/DuoViewCropStability.hpp",
  "src/mods/vr/DuoViewFrame.hpp", "src/mods/vr/DuoViewConfig.hpp",
  "src/mods/vr/DuoViewState.hpp", "src/mods/vr/DuoViewD3D12.hpp",
- "src/mods/vr/DuoViewMonoCopyD3D12.hpp", "src/mods/vr/DuoViewShaderSource.hpp",
+ "src/mods/vr/DuoViewMonoCopyD3D12.hpp", "src/mods/vr/DuoViewShaderSource.hpp", "src/mods/vr/DuoDepthPairP1.hpp",
 }
 EDITED_FRONTEND = {"UEVR/RenderingModeOptions.cs", "tests/RenderingModes/Program.cs"}
 GENERATED_FRONTEND = {"UEVR/FilteredExecutables.json"}
