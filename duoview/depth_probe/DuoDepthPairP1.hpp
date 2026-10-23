@@ -37,6 +37,19 @@ public:
         }
         auto dst=desc;
         dst.Alignment=0;
+        // Copy compatibility is defined by the matching typeless DXGI family.
+        // Typed DSV formats are not sampleable SRVs on the owned copy.
+        switch (desc.Format) {
+        case DXGI_FORMAT_D32_FLOAT: case DXGI_FORMAT_R32_FLOAT:
+            dst.Format=DXGI_FORMAT_R32_TYPELESS; break;
+        case DXGI_FORMAT_D16_UNORM: case DXGI_FORMAT_R16_UNORM:
+            dst.Format=DXGI_FORMAT_R16_TYPELESS; break;
+        case DXGI_FORMAT_D24_UNORM_S8_UINT:
+            dst.Format=DXGI_FORMAT_R24G8_TYPELESS; break;
+        case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+            dst.Format=DXGI_FORMAT_R32G8X24_TYPELESS; break;
+        default: break;
+        }
         dst.Flags &= ~(D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL |
             D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS |
