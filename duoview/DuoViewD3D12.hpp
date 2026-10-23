@@ -492,7 +492,7 @@ private:
         return false;
     }
     bool prepare(ID3D12Device* device, UINT width, UINT height, bool srgb) {
-        if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && native_depth_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
+        if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
         output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); native_depth_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
         srv_first_reference_.Reset(); srv_second_reference_.Reset(); srv_depth_first_reference_.Reset(); srv_depth_second_reference_.Reset(); xr_rtv_reference_.Reset();
         srv_descriptors_valid_=false; srv_cached_format_=DXGI_FORMAT_UNKNOWN;
@@ -547,7 +547,12 @@ private:
         graphics.PS = {native_pixel_shader_bytecode, sizeof(native_pixel_shader_bytecode)};
         if (!check(device->CreateGraphicsPipelineState(&graphics, IID_PPV_ARGS(&native_pipeline_)), "Create direct Native raster PSO")) return false;
         graphics.PS={native_depth_probe_pixel_shader_bytecode,sizeof(native_depth_probe_pixel_shader_bytecode)};
-        if (!check(device->CreateGraphicsPipelineState(&graphics,IID_PPV_ARGS(&native_depth_pipeline_)),"Create P1 raw-depth PSO")) return false;
+        // Optional diagnostic PSO must NEVER prevent the working Mono renderer
+        // from activating if this shader is incompatible with a given driver.
+        if (FAILED(device->CreateGraphicsPipelineState(
+                &graphics,IID_PPV_ARGS(&native_depth_pipeline_)))) {
+            native_depth_pipeline_.Reset();
+        }
         D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT; heap.CreationNodeMask = heap.VisibleNodeMask = 1;
         D3D12_RESOURCE_DESC texture{};
         texture.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
