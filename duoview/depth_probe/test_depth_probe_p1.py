@@ -25,7 +25,7 @@ def main(root):
     assert "packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0," in cpp
     assert "depth0.Get(),depth1.Get(),p1_debug" in cpp
     assert "const bool depth_mode=depth_debug>=1" in shader
-    assert "if (depth_mode && !ensure_depth_srvs" in shader
+    assert "if ((depth_mode || stereo_preview) && !ensure_depth_srvs" in shader
     assert "native_depth_probe_pixel_shader_bytecode" in shader and "native_depth_probe_pixel_shader_bytecode" in embedded
     assert "if (FAILED(device->CreateGraphicsPipelineState(" in shader
     assert "native_depth_pipeline_.Reset()" in shader
