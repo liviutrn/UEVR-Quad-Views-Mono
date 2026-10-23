@@ -11,6 +11,14 @@ def validate(root):
     gpu=read("src/mods/vr/DuoViewD3D12.hpp")
     shaders=read("src/mods/vr/DuoViewShaderSource.hpp")
     assert 'DuoViewExperimentalStereoS0"), false' in vr
+    assert 'DuoViewS0EyeOutputTest"), false' in vr
+    assert 'duoview_s0_eye_test_enabled()' in vr
+    assert 'S0 EYE OUTPUT CHECK (no depth' in ui
+    assert 'vr->duoview_s0_eye_test_enabled() ? 6u' in dx
+    assert 'native_eye_check_pixel_shader_bytecode' in shaders
+    assert 'native_eye_check_pipeline_' in gpu
+    assert 'const bool eye_test=depth_debug==6' in gpu
+    assert 'const bool direct_xr=eye_test ||' in gpu
     assert 'DuoViewStereoS0StrengthPct"), 0, 40, 8' in vr
     assert 'if (!is_duoview_depth_discovery_enabled()) return 0u' in vr
     assert 'duoview_p1_stereo_preview_strength()' in vr
