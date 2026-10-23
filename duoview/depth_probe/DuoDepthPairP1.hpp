@@ -20,7 +20,7 @@ public:
             return false; // prevent racing a resource still referenced on GPU
         }
         if (!device || !scene_depth || FAILED(device->GetDeviceRemovedReason())) {
-            status_="missing device or SceneDepthZ pool resource"; return false;
+            status_="no matching scene-sized depth resource available (pool or RHI survey)"; return false;
         }
         const auto desc=scene_depth->GetDesc();
         const auto format=srv_format(desc.Format);
