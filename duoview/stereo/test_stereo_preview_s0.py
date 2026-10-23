@@ -14,6 +14,12 @@ def validate(root):
     assert 'DuoViewS0EyeOutputTest"), false' in vr
     assert 'duoview_s0_eye_test_enabled()' in vr
     assert 'S0 EYE OUTPUT CHECK (no depth' in ui
+    assert '##DuoViewDepthDiagnosticsScroll' in ui
+    assert 'ImGuiWindowFlags_AlwaysVerticalScrollbar' in ui
+    assert 'S0 BLOCKED: no completed GPU depth pair' in ui
+    assert 'Reset empty P1 attempt (0 copies only)' in ui
+    assert 'required approx' in dx
+    assert 'm_duoview_depth_survey.candidate(' in dx
     assert 'vr->duoview_s0_eye_test_enabled() ? 6u' in dx
     assert 'native_eye_check_pixel_shader_bytecode' in shaders
     assert 'native_eye_check_pipeline_' in gpu
