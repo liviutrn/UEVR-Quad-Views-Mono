@@ -1,5 +1,6 @@
 #include "SourceLineage.hpp"
-#include <cassert>
+#include <cstdlib>
+#define CHECK(condition) do { if (!(condition)) { std::fprintf(stderr,"CHECK failed line %d: %s\n",__LINE__,#condition); std::exit(1); } } while(false)
 #include <cstdio>
 using namespace uevr::duoview::stereo;
 
@@ -19,25 +20,25 @@ static Pass valid(Role role) {
 }
 int main() {
     const auto p=valid(Role::Periphery), f=valid(Role::Fovea);
-    assert(ready_for_center_stereo(p,f));
-    {auto q=f;q.tick++; assert(check_pair(p,q)==Reject::DifferentTick);}
-    {auto q=f;q.pose_token++; assert(check_pair(p,q)==Reject::DifferentPose);}
-    {auto q=f;q.origin=Origin::Left; assert(check_pair(p,q)==Reject::DifferentOrigin);}
-    {auto q=f;q.role=Role::Periphery; assert(check_pair(p,q)==Reject::WrongRoles);}
+    CHECK(ready_for_center_stereo(p,f));
+    {auto q=f;q.tick++; CHECK(check_pair(p,q)==Reject::DifferentTick);}
+    {auto q=f;q.pose_token++; CHECK(check_pair(p,q)==Reject::DifferentPose);}
+    {auto q=f;q.origin=Origin::Left; CHECK(check_pair(p,q)==Reject::DifferentOrigin);}
+    {auto q=f;q.role=Role::Periphery; CHECK(check_pair(p,q)==Reject::WrongRoles);}
     {auto q=f;q.producer_pass_verified=false;
-        assert(check_pair(p,q)==Reject::UnmatchedColorDepth);}
+        CHECK(check_pair(p,q)==Reject::UnmatchedColorDepth);}
     {auto q=f;q.depth_stage_token=29;
-        assert(check_pair(p,q)==Reject::UnmatchedColorDepth);}
+        CHECK(check_pair(p,q)==Reject::UnmatchedColorDepth);}
     {auto q=f;q.gpu_queue_completed=11;
-        assert(check_pair(p,q)==Reject::UntrustedGPU);}
+        CHECK(check_pair(p,q)==Reject::UntrustedGPU);}
     {auto q=f;q.matrices_calibrated=false;
-        assert(check_pair(p,q)==Reject::UncalibratedGeometry);}
-    {auto q=f;q.projection_token=8888; assert(ready_for_center_stereo(p,q));}
+        CHECK(check_pair(p,q)==Reject::UncalibratedGeometry);}
+    {auto q=f;q.projection_token=8888; CHECK(ready_for_center_stereo(p,q));}
     {auto q=f;q.color_stage=Stage::Unknown;
-        assert(check_pair(p,q)==Reject::DifferentColorStage);}
-    {auto q=f;q.generation++; assert(check_pair(p,q)==Reject::Generation);}
+        CHECK(check_pair(p,q)==Reject::DifferentColorStage);}
+    {auto q=f;q.generation++; CHECK(check_pair(p,q)==Reject::Generation);}
     {auto q=p;q.origin=Origin::Left; auto z=f;z.origin=Origin::Left;
-        assert(check_pair(q,z)==Reject::None);
-        assert(!ready_for_center_stereo(q,z));}
+        CHECK(check_pair(q,z)==Reject::None);
+        CHECK(!ready_for_center_stereo(q,z));}
     std::puts("RGB-D lineage contract: 13 checks passed");
 }
