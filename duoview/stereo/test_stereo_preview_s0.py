@@ -14,6 +14,11 @@ def validate(root):
     assert 'DuoViewS0EyeOutputTest"), false' in vr
     assert 'duoview_s0_eye_test_enabled()' in vr
     assert 'S0 EYE OUTPUT CHECK (no depth' in ui
+    assert 'Log UE screen percentage and DLSS CVars (read-only)' in ui
+    assert '[StereoScaleSurvey][READONLY]' in ui
+    assert 'get_runtime_cvar_float(L"r.ScreenPercentage")' in ui
+    assert 'get_runtime_cvar_int(L"r.NGX.DLSS.Quality")' in ui
+    assert '(-1=unavailable, NOT disabled)' in ui
     assert '##DuoViewDepthDiagnosticsScroll' in ui
     assert 'ImGuiWindowFlags_AlwaysVerticalScrollbar' in ui
     assert 'S0 BLOCKED: no completed GPU depth pair' in ui
