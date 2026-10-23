@@ -12,6 +12,7 @@ on:
       - experiment/duoview-center-stereo-a-plus-20261023
       - fix/stereo-s0-activation-depth-discovery-20261023
       - fix/stereo-s0-depth-survey-ui-20261023
+      - fix/stereo-p1-depth-transition-copy-20261023
   pull_request:
     branches:
       - build-182
@@ -265,6 +266,15 @@ jobs:
           New GPU copies are produced only when a candidate has matching safe barriers.
           Raw hardware-Z old view 0=Legacy Mono,1=periphery candidate,
           2=fovea candidate,3=combined,4=UNVERIFIED mismatch mask.
+          HOTFIX after Build113: actual log shows 54,129 matching
+          depth-resource transitions, all 54,129 discarded by the old
+          exact NPSR->DEPTH_WRITE state predicate, and 0 GPU copies.
+          Now capture from actual incoming D3D12 resource StateBefore
+          (DEPTH_WRITE / DEPTH_READ / shader-readable), copy before original
+          engine transition and restore exactly that prior state.
+          When 0 copies, P1 status reports example_before/after/subresource
+          for the FIRST rejected transition. Do not keep retrying unchanged.
+          Depth candidates remain unverified with respect to color/view.
           NEW: set P1 per-eye depth selector (separate from old 0..4) to:
           0=Off/normal DuoView; 1=candidate Z0 in BOTH eyes;
           2=candidate Z1 in BOTH eyes; 3=LEFT Z0 / RIGHT Z1;
@@ -290,16 +300,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-P1-PerEyeDepthTest-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-P1-DepthStateRecovery-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-P1-PerEyeDepthTest-${{ github.run_number }}
+          name: UEVR-DuoView-P1-DepthStateRecovery-${{ github.run_number }}
           path: |
-            UEVR-DuoView-P1-PerEyeDepthTest-*.zip
-            UEVR-DuoView-P1-PerEyeDepthTest-*.zip.sha256
+            UEVR-DuoView-P1-DepthStateRecovery-*.zip
+            UEVR-DuoView-P1-DepthStateRecovery-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
