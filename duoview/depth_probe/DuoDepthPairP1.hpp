@@ -80,6 +80,10 @@ public:
         barriers_seen_.store(0,std::memory_order_release);
         source_seen_.store(0,std::memory_order_release);
         mismatched_states_.store(0,std::memory_order_release);
+        observed_before_.store(0,std::memory_order_release);
+        observed_after_.store(0,std::memory_order_release);
+        observed_subresource_.store(0,std::memory_order_release);
+        observed_rejected_.store(false,std::memory_order_release);
         armed_.store(true,std::memory_order_release);
         status_="armed, awaiting two qualifying SceneDepthZ transitions";
         return true;
@@ -94,6 +98,8 @@ public:
         source_.Reset();
         snapshots_[0].Reset(); snapshots_[1].Reset(); fence_.Reset();
         barriers_seen_.store(0); source_seen_.store(0); mismatched_states_.store(0);
+        observed_before_.store(0);observed_after_.store(0);
+        observed_subresource_.store(0);observed_rejected_.store(false);
         status_="no-copy attempt reset; safe to select a different depth candidate";
         return true;
     }
@@ -102,6 +108,9 @@ public:
         return status_+" | hook_calls="+std::to_string(barriers_seen_.load())+
             " source_transitions="+std::to_string(source_seen_.load())+
             " wrong_state="+std::to_string(mismatched_states_.load())+
+            " example_before="+std::to_string(observed_before_.load())+
+            " example_after="+std::to_string(observed_after_.load())+
+            " example_subresource="+std::to_string(observed_subresource_.load())+
             " copies="+std::to_string(captured_.load());
     }
     DXGI_FORMAT srv_format() const { std::scoped_lock lock{mutex_};return source_format_; }
@@ -156,11 +165,35 @@ public:
                 (d.Flags&D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)!=0);
             if (!same_shape) continue;
             source_seen_.fetch_add(1,std::memory_order_relaxed);
+            const auto before=t.Transition.StateBefore;
+            const auto after=t.Transition.StateAfter;
+            // The old P1 assumed only NPSR -> DEPTH_WRITE. Actual headset log:
+            // 54,129 matching depth transitions and all 54,129 were rejected.
+            // On a before-original-barrier hook, copy from the *real current*
+            // state and restore that same state before Unreal's barrier runs.
+            const auto can_copy_from_before =
+                before==D3D12_RESOURCE_STATE_DEPTH_WRITE ||
+                before==D3D12_RESOURCE_STATE_DEPTH_READ ||
+                before==D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE ||
+                before==D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
+                before==(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) ||
+                before==(D3D12_RESOURCE_STATE_DEPTH_READ|
+                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) ||
+                before==(D3D12_RESOURCE_STATE_DEPTH_READ|
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) ||
+                before==(D3D12_RESOURCE_STATE_DEPTH_READ|
+                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) ||
+                before==D3D12_RESOURCE_STATE_COPY_SOURCE;
             if ((t.Transition.Subresource!=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES &&
-                 t.Transition.Subresource!=0) ||
-                t.Transition.StateBefore!=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE ||
-                t.Transition.StateAfter!=D3D12_RESOURCE_STATE_DEPTH_WRITE) {
+                 t.Transition.Subresource!=0) || !can_copy_from_before) {
                 mismatched_states_.fetch_add(1,std::memory_order_relaxed);
+                if (!observed_rejected_.exchange(true,std::memory_order_relaxed)) {
+                    observed_before_.store(static_cast<uint32_t>(before),std::memory_order_relaxed);
+                    observed_after_.store(static_cast<uint32_t>(after),std::memory_order_relaxed);
+                    observed_subresource_.store(t.Transition.Subresource,std::memory_order_relaxed);
+                }
                 continue;
             }
             const auto index=captured_.load(std::memory_order_relaxed);
@@ -170,7 +203,7 @@ public:
             D3D12_RESOURCE_BARRIER barriers_before[2]{};
             barriers_before[0].Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barriers_before[0].Transition={t.Transition.pResource,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE};
+                before,D3D12_RESOURCE_STATE_COPY_SOURCE};
             barriers_before[1].Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barriers_before[1].Transition={dst,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
                 sample_state(),D3D12_RESOURCE_STATE_COPY_DEST};
@@ -184,8 +217,8 @@ public:
             }
             cmd->ResourceBarrier(2,barriers_before);
             captured_.store(index+1,std::memory_order_release);
-            status_= index==0 ? "copied same-format candidate 0; awaiting next depth pass"
-                : "two same-shape GPU copies recorded; roles/frame still UNVERIFIED";
+            status_= index==0 ? "GPU copied Z0; awaiting next depth transition (unverified)"
+                : "GPU copied Z0+Z1; unverified snapshots for headset inspection";
             if (index==1) armed_.store(false,std::memory_order_release);
             // Never intercept a second qualifying barrier in the same callback.
             // It may represent multiple resource state transitions, not a view.
@@ -220,6 +253,8 @@ private:
     std::atomic<unsigned> captured_{0};
     std::atomic<bool> armed_{false};
     std::atomic<uint64_t> barriers_seen_{0}, source_seen_{0}, mismatched_states_{0};
+    std::atomic<uint32_t> observed_before_{0},observed_after_{0},observed_subresource_{0};
+    std::atomic<bool> observed_rejected_{false};
     std::string status_{"disabled; no GPU depth copies"};
 };
 // P2 diagnostic-only fallback for UE5 RDG configurations where SceneDepthZ is
