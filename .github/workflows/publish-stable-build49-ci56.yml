@@ -1,0 +1,86 @@
+name: Publish stable DuoView Build49 (original CI56 artifact)
+run-name: Publish user-tested v186.1 Build49 CI56
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-stable-build49-ci56.yml
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: stable-build49-ci56-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: liviutrn/UEVR-Quad-Views-Mono
+      SOURCE_SHA: 60d0aae86949723d21266e4121a833f0191729c2
+      SOURCE_RUN: '39853198565'
+      ARTIFACT_ID: '12459542202'
+      ARTIFACT_NAME: UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-56
+      TAG: v186.1-mpc-hud-eyealignment-persist49-56
+      ZIP: UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-56.zip
+      EXPECTED_ACTIONS_ARTIFACT_SHA256: 5ad8dbecf0dddb2e1da71f0a54ce1e06f684bae88803cb0e0892d3570b25125a
+    steps:
+      - name: Check out maintained documentation (no source rebuild)
+        uses: actions/checkout@v4
+
+      - name: Validate exact successful source run and unexpired artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" --jq .head_sha)" = "$SOURCE_SHA"
+          test "$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" --jq .conclusion)" = "success"
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .name)" = "$ARTIFACT_NAME"
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .expired)" = "false"
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .workflow_run.head_sha)" = "$SOURCE_SHA"
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .digest)" = "sha256:$EXPECTED_ACTIONS_ARTIFACT_SHA256"
+          test -s RELEASE_NOTES_V1861_MPC_HUD_EYEALIGNMENT_PERSIST49.md
+
+      - name: Download and verify original CI56 distributable
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download "$SOURCE_RUN" --name "$ARTIFACT_NAME" --dir dist
+          test -s "dist/$ZIP"
+          test -s "dist/$ZIP.sha256"
+          expected=$(tr -d '[:space:]' < "dist/$ZIP.sha256" | tr '[:upper:]' '[:lower:]')
+          actual=$(sha256sum "dist/$ZIP" | cut -d' ' -f1)
+          test "${#expected}" -eq 64
+          test "$expected" = "$actual"
+          unzip -t "dist/$ZIP" >/dev/null
+          unzip -Z1 "dist/$ZIP" | grep -Eq '(^|/)UEVRBackend[.]dll$'
+          unzip -Z1 "dist/$ZIP" | grep -Eq '(^|/)READ_FIRST[.]txt$'
+          echo "Original CI56 zip SHA256: $actual"
+
+      - name: Publish immutable source-linked latest stable release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release tag already exists; refusing to overwrite a published stable release."
+            exit 1
+          fi
+          gh release create "$TAG" "dist/$ZIP" "dist/$ZIP.sha256" \
+            --target "$SOURCE_SHA" \
+            --title "v186.1 — MPC / HUD / Eye Alignment Persistence (Build49 / CI56)" \
+            --notes-file RELEASE_NOTES_V1861_MPC_HUD_EYEALIGNMENT_PERSIST49.md \
+            --latest
+
+      - name: Verify GitHub publication and both original binary assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq .object.sha)" = "$SOURCE_SHA"
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "false"
+          gh release view "$TAG" --json assets,url,isPrerelease,isLatest \
+            --jq '{url: .url, isLatest: .isLatest, isPrerelease: .isPrerelease, assets: [.assets[].name]}'
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$ZIP"
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$ZIP.sha256"
