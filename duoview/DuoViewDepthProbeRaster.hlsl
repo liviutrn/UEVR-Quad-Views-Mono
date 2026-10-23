@@ -9,7 +9,7 @@ float RawDepthAt(Texture2D<float> src, float2 local, float2 active) {
     uint w,h; src.GetDimensions(w,h);
     if (w==0 || h==0 || active.x<1 || active.y<1) return 0;
     const float2 limits=min(active,float2(w,h));
-    const float2 pixel=clamp(saturate(local)*active,.5.xx,limits-.5.xx);
+    const float2 pixel=clamp(saturate(local)*active,float2(.5,.5),limits-float2(.5,.5));
     return src.SampleLevel(LinearClamp,pixel/float2(w,h),0);
 }
 float RawFoveaDepth(float2 local) {
