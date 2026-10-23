@@ -1,8 +1,9 @@
-name: DuoView v186.1 Build49 Eye Alignment Persistence
+name: DuoView independent offline depth proof (Build49)
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
   push:
     branches:
+      - experiment/duoview-depth-offline-proof-20261023
       - feature/v182-fovea-glamayre-fused
       - fix/duoview-v1861-foreground-mpc-minimal-20261022
       - experiment/duoview-v1861-mpc-hud-mono-convergence-20261022
@@ -88,8 +89,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Build49 Mono eye alignment reset persistence patch failed' }
           python workspace/duoview/joey_stage1/test_runtime_eye_alignment_persistence_build49.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Build49 Mono eye alignment persistence regression failed' }
+          python workspace/duoview/depth_proof/test_depth_proof_patch.py backend --record evidence/protected-renderer-hashes.json
+          if ($LASTEXITCODE -ne 0) { throw 'Protected renderer hash recording failed' }
+          python workspace/duoview/depth_proof/apply_depth_proof.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Independent depth proof patch failed' }
+          python workspace/duoview/depth_proof/test_depth_proof_patch.py backend --compare evidence/protected-renderer-hashes.json
+          if ($LASTEXITCODE -ne 0) { throw 'Depth proof altered protected rendering source' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
+      - name: Verify real D3D12 depth readback and rejection paths on WARP
+        shell: pwsh
+        run: |
+          cmake -S workspace/duoview/depth_proof -B depth_proof_tests -G 'Visual Studio 17 2022' -A x64 *> evidence/depth-proof-config.log
+          if ($LASTEXITCODE -ne 0) { Get-Content evidence/depth-proof-config.log; throw 'Depth proof configure failed' }
+          cmake --build depth_proof_tests --config Release --parallel 2 *> evidence/depth-proof-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content evidence/depth-proof-build.log; throw 'Depth proof compile failed' }
+          ctest --test-dir depth_proof_tests -C Release --output-on-failure --no-tests=error *> evidence/depth-proof-test.log
+          Get-Content evidence/depth-proof-test.log
+          if ($LASTEXITCODE -ne 0) { throw 'Depth proof GPU/readback tests failed' }
+          Copy-Item depth_proof_tests/proof-output evidence/depth-proof-output -Recurse -ErrorAction SilentlyContinue
       - name: Verify pinned production geometry and pair-state contracts
         shell: pwsh
         run: |
@@ -158,70 +176,56 @@ jobs:
           Copy-Item backend/build/bin/uevr/*.dll package/
           Copy-Item backend/build/bin/vr-plugin-nullifier/UEVRPluginNullifier.dll package/
           Copy-Item backend/build/bin/LuaVR/LuaVR.dll package/
+          Copy-Item workspace/duoview/depth_proof/README.md package/DEPTH_PROOF_README.md
+          Copy-Item workspace/duoview/depth_proof/TAKEOVER_REVIEW.md package/DEPTH_PROOF_REVIEW.md
           Copy-Item workspace/duoview/clean_restart/baseline.lock.json package/
           Copy-Item evidence/exact-baseline-source.json package/
           Copy-Item evidence/duoview-stage1-edits.json package/
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
-          DUOVIEW NATIVE STEREO FIX v22 — ORIGINAL PRIMARY + SECONDARY SOURCES, MONO OUTPUT. HEADSET UNVERIFIED.
-          Backend: exact Joey 5ac7edc207866569334175e4ed8a7517971547f6 + guarded DuoView modifications.
-          Restricted SDK unchanged: joeyhodge/UESDK 3cffbc82429b6165ceec2714f0f0d9ae48f55596.
-          Matching frontend source: 60be4b0f9a646109fd9fdf448bacd41477234091, plus ID 6.
-          Modes 0 and 5 are routed to ORIGINAL JOEY. Experimental mode ID6 is active ONLY in STALKER 2 DX12 OpenXR.
-          ID6 forces Joey Native Stereo Fix on and uses its original primary and secondary render sources. Native Stereo Fix settings for ordinary Native ID0 are unchanged. Supported sources are sampled directly; the validated atlas gather remains as a format-compatibility fallback.
-          Old source defaults: 0.50x0.50 crop at 1.0x density, 0.20x periphery, gaze ON, fovea UE0/periphery UE1.
-          Press Restore old DuoView settings once if an existing profile retains newer settings. Increase density to match your old preferred tuning; exact historical tuning is unknown.
-          Foveal atlas rectangle starts at x=0, matching Injector-5. Gaze uses the inverse left optical rotation, matching the old coordinate path.
-          Stable gaze crop is ON by default, optional OFF. OpenNR r10 crop guard (adjustable 0-5% of crop), 4 foveal-source-pixel alignment; large eye movements recenter immediately without temporal smoothing.
-          Missing/invalid gaze holds crop position for the configured hold interval (350ms by default) while remaining labelled unavailable. Gaze loss does not trigger a rendering-mode change.
-          Both UE views use the exact frozen producer projection and explicitly bound OpenXR Mono pose token. Native engine histories and motion vectors remain engine-owned. The validated STALKER 2 same-pass constructor policy remains active for renderer safety.
-          The separate independent-shading option is ignored while DuoView is active; Joey Native Stereo Fix owns its normal source-rendering behavior.
-          The original Native Stereo Fix secondary scene-capture target supplies the second DuoView image. Packet identity, capture generation, source geometry, and Mono pose/projection are checked before composition.
-          Transaction correction: the immutable source packet is prepared before either renderer call, keyed to both exact family IDs/targets, and associated with their current RHI command tails. Present joins the executed source owners; DuoView no longer uses sampled engine/Present clock-distance acceptance. Stock Native ID0 and Mono ID5 retain their selector policies.
-          Source checkpoints precede rendering; GPU ordering is established by source work preceding DXGI Present on its RHI thread and composition using the swapchain owning direct queue. They are not GPU-completion fences. Primary resource identity and secondary capture generations remain checked, and existing compositor command-slot fences retain packet/resources.
-          Delivery trace is bounded in RAM; failures dump the last 24 events at most every five seconds. UI distinguishes unique transaction delivery from duplicate Presents and reports overwritten/unproven transactions. No headset fluidity or 0.001% miss-rate claim is made.
-          Actual shading parity and temporal stability require headset testing.
-          Optional GPU timing is OFF by default; it measures DuoView raster/output only and excludes Unreal scene rendering and any source gather copies. Compositor resources prewarm at swapchain creation and remain owned by each OpenXR command slot until its fence retires. No waits, shader compilation, or GPU resource creation occur in the XR copy callback; immutable packet lifetimes are retained through command-slot fence retirement.
-          Debug source 0=blended output, 1=periphery only, 2=fovea only (dark outside ROI).
-          Source view0 is the first UE pass (old prototype default), view1 is the second (Build19 default).
-          Both source passes share exactly the same Mono camera.
-          Stage5 reads combined calibrated PSVR2 Toolkit CAPI gaze ONCE per frame. No DLL bundled.
-          If CAPI is unavailable/invalid or blinked, ID6 stays at fixed center; no OpenXR gaze layer required.
-          Menu shows whether PSVR2 gaze is fresh, center fallback, or Mono quarantine.
-          The output remains monoscopic: DuoView writes the same full-FOV image to both OpenXR eye regions. Direct XR output is an experimental A/B option, OFF by default: OFF composes once and copies to both eyes; ON uses one double-wide draw when formats match. Either route may be faster on your GPU; no GPU gain is measured here. Incompatible formats retain composite-and-copy. Fallback textures remain preallocated with either route. The DuoView UI reports the route used by the last submitted frame and the physical primary/secondary source extents.
-          The compositor's SRVs and direct XR RTV are cached per fenced command slot and rewritten only when the resource pair, sampling format, or destination changes. This reduces CPU/driver descriptor work only; it does not claim a GPU-time improvement.
-          Descriptor heap handles and increments are captured during prewarm and reused with those per-slot descriptors.
-          The exact source pose is frozen before Native Fix invokes either renderer callback and travels with the completed packet. Brief source gaps may reuse the last successfully submitted released image with its original pose for at most 100ms; no new source pair is composed during the hold. A new scene-image acquisition, mode generation, swapchain change or submission failure invalidates continuity. Until the first valid Native pair is available, warmup keeps the XR transition loop live and waits for the next pair. A compositor fault after validation returns ID6 to original Joey Mono on the following frame.
-          An incomplete or cropped Native source is never presented as a full-FOV Mono image.
-          DXBC shaders are precompiled during CI; per-XR-image PSOs/textures are prewarmed on swapchain setup.
-          Build45 preserved: STALKER 2 ID6 uses cached, conditional MPC_FOV IsFOVEnabled=0 and DepthScale=1; restores original values on exit.
-          Build48 repairs the HUD Optical Convergence toggle: default OFF, effective in Mono ID5 and DuoView ID6 for both OpenXR game Quad and Cylinder layers (view-following ON or OFF, per-eye UI composition ON or OFF). HUD layer optical distance range 2..200m preserves apparent size and offset. If HUD is baked into the game scene, quad-only HUD control does not affect that embedded content.
-          Build49: preserves the live Mono Eye Alignment enabled toggle and exact percentage (for example -1.25%) when selecting Reset Runtime; restores before returning from OpenXR reinitialization, including repeated resets. Adds reset-log confirmation. No rendering, HUD, shader, gaze, frame timing or SteamVR layer modifications.
-          NEW Mono Eye Alignment in OpenXR overlay options: default OFF, total horizontal alignment -3%..+3% of each submitted eye crop, zero/reset available. Positive moves left image toward right and right image toward left. FOV tangent-only adjustment at FINAL submitted Mono frame; unchanged copy, pose, eye gaze and no additional OpenXR layers. Virtual Desktop Fix must remain OFF. Only Mono ID5/DuoView ID6 affected; original stereo untouched. CAUTION: calibrate with stationary head, then verify head-turn reprojection and revert to OFF if discomfort/artifacts.
-          Changing source formats or unexpected swapchain lifecycle may still cause reconstruction. Monitor frame pacing.
-          Experimental: Source/test/CI passing cannot prove exact game GPU producer completion or headset stability.
-          NEVER overwrite 30-minute-proven Build3! Extract this ZIP into a SEPARATE TEST DIRECTORY.
-          Built-in gaze freshness/age counters are read from the UI; no smoothing/deadzone forced.
-          Stage5 gaze requires installed PSVR2 Toolkit CAPI and still requires headset calibration validation.
-          Restored engine view order and optical gaze mapping are source verified. Actual Lumen/shadow/exposure and visual parity require a headset test; no gamma correction applied.
-          The eye-tracked source/compositor and first-use pacing are NOT headset verified.
+          DUOVIEW OFFLINE DEPTH PROOF — EXPERIMENTAL, GAME UNVERIFIED
+          Stable baseline: v186.1 Build49 / 60d0aae86949723d21266e4121a833f0191729c2.
+          Preserve your stable installation. Extract into a SEPARATE TEST DIRECTORY.
+          Source renderers, compositor, gaze, HUD/eye alignment, and shaders are unchanged.
+          This is NOT stereo. The prior P1/S0 depth/preview code is absent.
+          Test: activate DuoView ID6, open DuoView Mono quality -> Depth proof to disk.
+          Click Capture depth proof (10 seconds, once per game). Remain in a loaded scene.
+          After about 10 seconds plus export, read the explicit Saved / NO DEPTH IMAGE / FAILED status.
+          Capture callbacks are bounded; a slow frame can delay final status/export.
+          Output beside the UEVR log: %APPDATA%/UnrealVRMod/<game>/depth_proof/<timestamp>/
+          Open preview.html to inspect candidate_N.bmp previews. Also candidate_N.pgm
+          and candidate_N.f32 raw float32 Z,
+          manifest.json transition/rejection/submission metadata, image_results.json.
+          Zip the COMPLETE timestamp folder and fresh UEVR log, including failures.
+          No extra controls, HMD viewer, or stereo switch. Ordinary Mono output continues.
+          Each capture is anonymous: roles, scene identity, RGB correspondence, frame/pose
+          matching and metric depth remain unverified. First inspect geometry in the files.
+          GPU completion is based on the EXACT recorded command-list submission queue.
+          Plane 0 only; reject unknown recording, active/suspended passes, split barriers,
+          ambiguous batches and unsupported state windows. Do not broaden without evidence.
+          One session per game process. Up to 128MiB of readback memory retained until exit,
+          including timeout/reset, to avoid releasing references still used by the GPU.
+          Diagnostic discovery and one-time allocations may add temporary overhead.
+          Windows WARP tests check known depth values/readbacks. Green CI does NOT establish
+          STALKER 2 depth acquisition or headset behavior. No stable-release claim.
+          Ordinary Build49 behavior: warmup keeps the XR transition loop live.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','duoview-stage234-hashes.json','exact-baseline-source.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-OfflineDepthProof-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-${{ github.run_number }}
+          name: UEVR-DuoView-OfflineDepthProof-${{ github.run_number }}
           path: |
-            UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-*.zip
-            UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-*.zip.sha256
+            UEVR-DuoView-OfflineDepthProof-*.zip
+            UEVR-DuoView-OfflineDepthProof-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance

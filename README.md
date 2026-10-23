@@ -1,5 +1,8 @@
 # UEVR Quad Views Mono
 
+
+> **Experimental offline depth proof (2026-10-23):** This branch starts from the user-validated v186.1 Build49 baseline and adds one opt-in depth-to-disk diagnostic. The failed P1/S0 stereo experiments are absent. See [test directions](duoview/depth_proof/README.md) and [source audit / architecture review](duoview/depth_proof/TAKEOVER_REVIEW.md). Windows WARP tests verify known-depth readbacks; STALKER 2 scene-depth acquisition remains unverified until exported samples are inspected. Stable branch and release are unchanged.
+
 **Eye-tracked foveated rendering for Unreal Engine VR, built on Joey's UEVR.**
 
 UEVR Quad Views Mono is an experimental rendering extension that prioritizes image quality where you are looking and reduces rendering resolution in peripheral vision. It combines a detailed, gaze-positioned **foveal view** with a lower-resolution **full-field peripheral view**, then composites both into a single image for VR display.

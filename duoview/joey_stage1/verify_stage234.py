@@ -4,6 +4,7 @@ import argparse, hashlib, json, subprocess
 from pathlib import Path
 
 EDITED_BACKEND = {
+ "src/hooks/D3D12Hook.cpp", "src/hooks/D3D12Hook.hpp",
  "src/mods/vr/MonoRenderingPolicy.hpp", "src/mods/vr/CompatibilityPolicy.hpp",
  "src/mods/VR.hpp", "src/mods/VR.cpp",
  "src/mods/vr/OverlayComponent.hpp", "src/mods/vr/OverlayComponent.cpp",
@@ -13,6 +14,7 @@ EDITED_BACKEND = {
  "tests/CadenceReplayTests.cpp",
 }
 ADDED_BACKEND = {
+ "src/mods/vr/DepthProofSession.hpp", "src/mods/vr/DepthProofObserver.hpp",
  "src/mods/vr/DuoViewDelivery.hpp",
  "src/mods/vr/DuoViewGeometry.hpp", "src/mods/vr/DuoViewGaze.hpp",
  "src/mods/vr/DuoViewPSVR2Gaze.hpp", "src/mods/vr/DuoViewCropStability.hpp",
