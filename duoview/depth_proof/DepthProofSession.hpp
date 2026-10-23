@@ -46,8 +46,9 @@ public:
         if (!observing()) return;
         std::scoped_lock lock{mutex_};
         auto* l=list(cmd,true); if (!l) return;
-        for (auto& c:candidates_) if (c.recorded && !c.submitted && c.cmd==cmd && c.epoch==l->epoch) {
-            c.discarded=true; ++discarded_;
+        for (auto& c:candidates_) if (c.recorded && c.cmd==cmd && c.epoch==l->epoch && !c.discarded) {
+            if (!c.submitted && !c.pending_submits) { c.discarded=true; ++discarded_; }
+            else c.recording_sealed=true; // old closed commands can no longer be replayed
         }
         ++l->epoch; l->known=true; l->inside=false; l->restricted=false;
     }
@@ -115,9 +116,22 @@ public:
             cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
             std::swap(to_copy.Transition.StateBefore,to_copy.Transition.StateAfter);
             cmd->ResourceBarrier(1,&to_copy);
-            c->recorded=true; c->cmd=cmd; c->epoch=l->epoch;
+            c->recorded=true; c->cmd=cmd; c->command_list_owner=cmd; c->epoch=l->epoch;
             c->before=t.StateBefore; c->after=t.StateAfter; c->subresource=t.Subresource;
             c->capture_tick=present_tick_; ++recorded_;
+        }
+    }
+    // Freeze recording ownership before original Execute can race Reset on
+    // another CPU thread. Post-submit pairs this intent before signalling.
+    void submitting(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* lists) {
+        if (!observing() || !queue || !lists) return;
+        std::scoped_lock lock{mutex_};
+        for (auto& c:candidates_) {
+            if (!c.recorded || c.discarded || c.recording_sealed || c.signal_failed) continue;
+            bool found=false;
+            for(UINT i=0;i<n;++i) if(lists[i]==static_cast<ID3D12CommandList*>(c.cmd)) found=true;
+            auto* l=list(c.cmd,false);
+            if(found && l && l->epoch==c.epoch) ++c.pending_submits;
         }
     }
     // Invoked immediately AFTER original ExecuteCommandLists, on that queue.
@@ -127,14 +141,19 @@ public:
         std::scoped_lock lock{mutex_};
         ++submissions_;
         for (auto& c:candidates_) {
-            if (!c.recorded || c.submitted || c.discarded || c.signal_failed) continue;
+            if (!c.recorded || c.discarded || c.signal_failed || !c.pending_submits) continue;
             bool found=false;
             for (UINT i=0;i<n;++i) if (lists[i]==static_cast<ID3D12CommandList*>(c.cmd)) found=true;
             if (!found) continue;
-            auto* l=list(c.cmd,false);
-            if (!l || l->epoch!=c.epoch) { c.discarded=true; ++discarded_; continue; }
-            if (!c.fence || FAILED(queue->Signal(c.fence.Get(),1))) { c.signal_failed=true; continue; }
-            c.queue=queue; c.submitted=true; ++submitted_;
+            --c.pending_submits;
+            // A closed command list may legally execute more than once before
+            // Reset. Track the last same-queue execution; do not map until
+            // Reset seals this recording, so no later replay can rewrite it.
+            if (c.submitted && c.queue.Get()!=queue) { c.signal_failed=true; continue; }
+            const auto value=c.fence_value+1;
+            if (!c.fence || FAILED(queue->Signal(c.fence.Get(),value))) { c.signal_failed=true; continue; }
+            c.fence_value=value; c.queue=queue;
+            if (!c.submitted) { c.submitted=true; ++submitted_; }
         }
     }
     // Called from Present; no waits. Allocation is bounded and one-time.
@@ -159,10 +178,10 @@ public:
         }
         for (auto& c:candidates_) {
             if (!c.resource) continue;
-            if (c.submitted && !c.complete && c.fence) {
+            if (c.submitted && c.recording_sealed && !c.pending_submits && !c.signal_failed && !c.complete && c.fence) {
                 const auto value=c.fence->GetCompletedValue();
                 if (value==UINT64_MAX) { device_lost_=true; continue; }
-                if (value>=1) { c.complete=true; ++complete_; }
+                if (value>=c.fence_value) { c.complete=true; ++complete_; }
             }
         }
         if (Clock::now()<deadline_ && active_.load() && !device_lost_) {
@@ -221,12 +240,12 @@ private:
     };
     struct Candidate {
         Com<ID3D12Resource> resource,readback; Com<ID3D12Fence> fence;
-        Com<ID3D12CommandQueue> queue;
+        Com<ID3D12CommandQueue> queue; Com<ID3D12GraphicsCommandList> command_list_owner;
         D3D12_RESOURCE_DESC desc{}; D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
         UINT rows{}; UINT64 row_bytes{},bytes{};
-        ID3D12GraphicsCommandList* cmd{}; uint64_t epoch{},hits{},capture_tick{};
+        ID3D12GraphicsCommandList* cmd{}; uint64_t epoch{},hits{},capture_tick{},fence_value{},pending_submits{};
         D3D12_RESOURCE_STATES before{},after{}; UINT subresource{};
-        bool recorded{},submitted{},complete{},allocation_failed{},discarded{},signal_failed{};
+        bool recorded{},submitted{},complete{},allocation_failed{},discarded{},signal_failed{},recording_sealed{};
     };
     struct Tuple {
         size_t candidate{}; uintptr_t cmd{}; UINT before{},after{},subresource{},flags{}; uint64_t hits{};
@@ -264,6 +283,10 @@ private:
         else ++tuple_overflow_;
     }
     void prewarm(Candidate& c) {
+        Com<ID3D12Device> owner;
+        if (FAILED(c.resource->GetDevice(IID_PPV_ARGS(&owner))) || owner.Get()!=device_.Get()) {
+            c.allocation_failed=true; return;
+        }
         device_->GetCopyableFootprints(&c.desc,0,1,0,&c.footprint,&c.rows,&c.row_bytes,&c.bytes);
         if (!c.bytes || c.bytes>64ull*1024*1024 || allocated_bytes_+c.bytes>128ull*1024*1024) { c.allocation_failed=true; return; }
         D3D12_HEAP_PROPERTIES heap{}; heap.Type=D3D12_HEAP_TYPE_READBACK; heap.CreationNodeMask=heap.VisibleNodeMask=1;
@@ -290,6 +313,7 @@ private:
             if(comma)o<<',';comma=true;
             o<<"{\"id\":"<<i<<",\"view_role\":\"unknown\",\"resource\":"<<reinterpret_cast<uintptr_t>(c.resource.Get())<<",\"width\":"<<c.desc.Width<<",\"height\":"<<c.desc.Height
                 <<",\"format\":"<<c.desc.Format<<",\"hits\":"<<c.hits<<",\"recorded\":"<<c.recorded<<",\"submitted\":"<<c.submitted<<",\"complete\":"<<c.complete
+                <<",\"recording_sealed\":"<<c.recording_sealed<<",\"fence_value\":"<<c.fence_value<<",\"pending_submits\":"<<c.pending_submits
                 <<",\"allocation_failed\":"<<c.allocation_failed<<",\"signal_failed\":"<<c.signal_failed<<",\"discarded\":"<<c.discarded
                 <<",\"command_list\":"<<reinterpret_cast<uintptr_t>(c.cmd)<<",\"recording_epoch\":"<<c.epoch<<",\"queue\":"<<reinterpret_cast<uintptr_t>(c.queue.Get())
                 <<",\"capture_present_tick\":"<<c.capture_tick<<",\"before\":"<<c.before<<",\"after\":"<<c.after<<",\"incoming_subresource\":"<<c.subresource

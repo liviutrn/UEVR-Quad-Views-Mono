@@ -20,7 +20,7 @@ def main(root, record=None, compare=None):
     assert 'Capture depth proof (10 seconds, once per game)' in ui
     assert hook.count('void WINAPI D3D12Hook::depth_proof_execute(')==1
     execute=hook[hook.index('void WINAPI D3D12Hook::depth_proof_execute('):]
-    assert execute.index('original(queue,n,lists)')<execute.index('observer->on_command_lists_submitted(queue,n,lists)')
+    assert execute.index('observer->on_command_lists_submitting(queue,n,lists)')<execute.index('original(queue,n,lists)')<execute.index('observer->on_command_lists_submitted(queue,n,lists)')
     assert 'DuoDepthPairP1' not in cpp and 'p1_debug' not in cpp and 'stereo_preview_strength' not in cpp
     for name in ('DepthProofSession.hpp','DepthProofObserver.hpp'):
         assert (root/'src/mods/vr'/name).read_bytes()==(Path(__file__).parent/name).read_bytes()

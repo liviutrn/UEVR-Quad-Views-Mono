@@ -17,6 +17,7 @@ def apply(root):
     virtual void on_command_list_reset(ID3D12GraphicsCommandList*) {}
     virtual void on_begin_render_pass(ID3D12GraphicsCommandList*, D3D12_RENDER_PASS_FLAGS) {}
     virtual void on_end_render_pass(ID3D12GraphicsCommandList*) {}
+    virtual void on_command_lists_submitting(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*) {}
     virtual void on_command_lists_submitted(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*) {}''')
     change(root,'src/hooks/D3D12Hook.hpp',
         '    std::vector<std::unique_ptr<PointerHook>> m_resource_barrier_hooks{};',
@@ -72,6 +73,9 @@ def apply(root):
         if (auto* observer=owner->m_depth_stencil_observer.load(std::memory_order_acquire)) {{ {observe} }}
     }}'''
         body=(notify+'\n    '+original_call) if name=='begin' else (original_call+'\n    '+notify)
+        if name=='execute':
+            before=notify.replace('on_command_lists_submitted','on_command_lists_submitting')
+            body=before+'\n    '+body
         wrappers+=f'''
 {result} WINAPI D3D12Hook::depth_proof_{name}({args}) {{
     auto* owner=g_d3d12_hook;

@@ -10,6 +10,7 @@ public:
     void on_command_list_reset(ID3D12GraphicsCommandList* c) override { session.reset(c); }
     void on_begin_render_pass(ID3D12GraphicsCommandList* c,D3D12_RENDER_PASS_FLAGS f) override { session.begin_pass(c,f); }
     void on_end_render_pass(ID3D12GraphicsCommandList* c) override { session.end_pass(c); }
+    void on_command_lists_submitting(ID3D12CommandQueue* q,UINT n,ID3D12CommandList* const* c) override { session.submitting(q,n,c); }
     void on_command_lists_submitted(ID3D12CommandQueue* q,UINT n,ID3D12CommandList* const* c) override { session.submitted(q,n,c); }
 };
 }

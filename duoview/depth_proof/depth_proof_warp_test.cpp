@@ -213,13 +213,16 @@ void clear_depth_pattern(ID3D12GraphicsCommandList* command_list, const DepthTar
         kLeftDepth, 0, 1, &left_half);
 }
 
-void submit_and_wait(ID3D12CommandQueue* queue, Session& session,
-        ID3D12GraphicsCommandList* command_list, ID3D12Fence* external_fence,
-        WinEvent& completion_event, UINT64& external_value) {
+void execute_and_notify(ID3D12CommandQueue* queue, Session& session,
+        ID3D12GraphicsCommandList* command_list) {
     ID3D12CommandList* lists[] = {command_list};
+    session.submitting(queue, 1, lists);
     queue->ExecuteCommandLists(1, lists);
     session.submitted(queue, 1, lists);
+}
 
+void signal_and_wait(ID3D12CommandQueue* queue, ID3D12Fence* external_fence,
+        WinEvent& completion_event, UINT64& external_value) {
     ++external_value;
     require_hr(queue->Signal(external_fence, external_value), "ID3D12CommandQueue::Signal(test fence)");
     if (external_fence->GetCompletedValue() < external_value) {
@@ -228,6 +231,13 @@ void submit_and_wait(ID3D12CommandQueue* queue, Session& session,
         const DWORD wait = WaitForSingleObject(completion_event.value, 5000);
         require(wait == WAIT_OBJECT_0, "Timed out waiting for WARP queue fence");
     }
+}
+
+void submit_and_wait(ID3D12CommandQueue* queue, Session& session,
+        ID3D12GraphicsCommandList* command_list, ID3D12Fence* external_fence,
+        WinEvent& completion_event, UINT64& external_value) {
+    execute_and_notify(queue, session, command_list);
+    signal_and_wait(queue, external_fence, completion_event, external_value);
 }
 
 std::filesystem::path make_output_root() {
@@ -293,7 +303,8 @@ void validate_bmp(const std::filesystem::path& path) {
         "BMP gallery preview does not preserve the left/right depth boundary");
 }
 
-void validate_capture(const std::filesystem::path& folder, DXGI_FORMAT source_format) {
+void validate_capture(const std::filesystem::path& folder, DXGI_FORMAT source_format,
+        std::uint64_t expected_fence_value) {
     const auto raw_path = folder / "candidate_0.f32";
     std::ifstream raw(raw_path, std::ios::binary);
     require(raw.good(), "Missing raw depth file " + raw_path.string());
@@ -318,6 +329,10 @@ void validate_capture(const std::filesystem::path& folder, DXGI_FORMAT source_fo
     require(json_uint(manifest, "recorded") == 1, "Expected exactly one recorded depth copy");
     require(json_uint(manifest, "submitted") == 1, "Expected exactly one submitted depth copy");
     require(json_uint(manifest, "completed") == 1, "Expected exactly one completed depth copy");
+    require(json_uint(manifest, "recording_sealed") == 1,
+        "Capture recording was not sealed by successful Reset before export");
+    require(json_uint(manifest, "fence_value") == expected_fence_value,
+        "Manifest did not preserve the last same-queue replay fence value");
     require(manifest.find("\"format\":" + std::to_string(static_cast<unsigned>(source_format))) != std::string::npos,
         "Manifest does not identify the WARP source format");
     require(manifest.find("NOT verified scene depth") != std::string::npos,
@@ -375,16 +390,39 @@ void run_gpu_capture(ID3D12Device* device, ID3D12CommandQueue* queue,
         D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     observe_then_apply(session, recording.command_list.Get(), capture_depth_to_read);
     require_hr(recording.command_list->Close(), "Close capture WARP command list");
-    submit_and_wait(queue, session, recording.command_list.Get(), external_fence,
-        completion_event, external_value);
+    const bool replay_capture_list = spec.has_stencil;
+    if (replay_capture_list) {
+        // Re-execution is legal before Reset. The observer must retarget its
+        // fence to the second queue signal and wait until Reset seals this epoch.
+        execute_and_notify(queue, session, recording.command_list.Get());
+        execute_and_notify(queue, session, recording.command_list.Get());
+        signal_and_wait(queue, external_fence, completion_event, external_value);
+
+        reset_recording(recording); // Both submissions are complete before allocator reset.
+        session.reset(recording.command_list.Get()); // Seal the old recording epoch.
+        require_hr(recording.command_list->Close(), "Close reset capture command list");
+    } else {
+        // Interleave Reset between ExecuteCommandLists and the post-submit observer callback.
+        ID3D12CommandList* lists[] = {recording.command_list.Get()};
+        session.submitting(queue, 1, lists);
+        queue->ExecuteCommandLists(1, lists);
+        signal_and_wait(queue, external_fence, completion_event, external_value);
+
+        reset_recording(recording); // External fence proves the GPU no longer uses the allocator.
+        session.reset(recording.command_list.Get());
+        session.submitted(queue, 1, lists); // Pair the callback with the sealed old epoch.
+        signal_and_wait(queue, external_fence, completion_event, external_value);
+        require_hr(recording.command_list->Close(), "Close reset capture command list");
+    }
 
     // The test's external queue fence retires only after Session's per-candidate signal.
     session.service(2);
     session.finish_for_test();
     session.service(3);
     wait_for_export(session);
-    validate_capture(folder, spec.resource_format);
-    std::cout << "PASS WARP capture " << spec.name << ": candidate_0.f32 preserves the 0.25/0.75 boundary; output="
+    validate_capture(folder, spec.resource_format, replay_capture_list ? 2 : 1);
+    std::cout << "PASS WARP capture " << spec.name << ": candidate_0.f32 preserves the 0.25/0.75 boundary"
+        << (replay_capture_list ? " after same-queue replay at fence value 2" : "") << "; output="
         << folder.string() << '\n';
 }
 
