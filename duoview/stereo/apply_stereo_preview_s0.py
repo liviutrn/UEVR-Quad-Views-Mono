@@ -55,10 +55,8 @@ def apply(root):
                             const uint32_t p1_stereo_strength=p1_debug==5 ?
                                 vr->duoview_p1_stereo_preview_strength() : 0u;''')
     replace(root,"src/mods/vr/D3D12Component.cpp",
-        '''                                  depth0,depth1,p1_debug,
-                                  &recorded, &callback_attempted, &compositor_fault,''',
-        '''                                  depth0,depth1,p1_debug,p1_stereo_strength,
-                                  &recorded, &callback_attempted, &compositor_fault,''')
+        'depth0,depth1,p1_debug,',
+        'depth0,depth1,p1_debug,p1_stereo_strength,')
     replace(root,"src/mods/vr/D3D12Component.cpp",
         '''depth0.Get(),depth1.Get(),p1_debug);''',
         '''depth0.Get(),depth1.Get(),p1_debug,p1_stereo_strength);''')
