@@ -38,11 +38,13 @@ def main():
             ("PSNativeMain", "ps_5_0", "native_pixel_shader_bytecode"),
             ("PSNativeDepthProbe", "ps_5_0", "native_depth_probe_pixel_shader_bytecode"),
             ("PSNativeStereoPreview", "ps_5_0", "native_stereo_preview_pixel_shader_bytecode"),
+            ("PSNativeEyeCheck", "ps_5_0", "native_eye_check_pixel_shader_bytecode"),
         ):
             output = Path(tmp) / (name + ".cso")
             command = [str(fxc), "/nologo", "/O3", "/T", profile,
                        "/E", entry, "/I", str(source), "/Fo", str(output),
-                       str(source / ("DuoViewCenterStereoPreviewRaster.hlsl" if entry == "PSNativeStereoPreview" else
+                       str(source / ("DuoViewNativeEyeCheckRaster.hlsl" if entry == "PSNativeEyeCheck" else
+                       "DuoViewCenterStereoPreviewRaster.hlsl" if entry == "PSNativeStereoPreview" else
                        "DuoViewDepthProbeRaster.hlsl" if entry == "PSNativeDepthProbe" else
                        "DuoViewNativeCompositeRaster.hlsl" if entry == "PSNativeMain" else "DuoViewCompositeRaster.hlsl"))]
             result = subprocess.run(command, capture_output=True, text=True)
