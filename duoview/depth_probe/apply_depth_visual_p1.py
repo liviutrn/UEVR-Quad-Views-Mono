@@ -42,11 +42,8 @@ def main(root):
                             auto depth1=p1_debug ? m_duoview_p1.candidate(1) : Microsoft::WRL::ComPtr<ID3D12Resource>{};
                             ID3D12Resource* recorded_secondary=nullptr;''')
     edit(root,"src/mods/vr/D3D12Component.cpp",
-        '''                                  secondary=m_scene_capture_tex.texture, device,
-                                  &recorded, &callback_attempted, &compositor_fault,''',
-        '''                                  secondary=m_scene_capture_tex.texture, device,
-                                  depth0,depth1,p1_debug,
-                                  &recorded, &callback_attempted, &compositor_fault,''')
+        'secondary=m_scene_capture_tex.texture, device,',
+        'secondary=m_scene_capture_tex.texture, device,\n                                  depth0,depth1,p1_debug,')
     edit(root,"src/mods/vr/D3D12Component.cpp",
         '''                                         packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0);''',
         '''                                         packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0,
