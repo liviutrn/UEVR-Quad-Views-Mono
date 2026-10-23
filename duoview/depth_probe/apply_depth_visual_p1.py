@@ -45,9 +45,8 @@ def main(root):
         'secondary=m_scene_capture_tex.texture, device,',
         'secondary=m_scene_capture_tex.texture, device,\n                                  depth0,depth1,p1_debug,')
     edit(root,"src/mods/vr/D3D12Component.cpp",
-        '''                                         packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0);''',
-        '''                                         packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0,
-                                         depth0.Get(),depth1.Get(),p1_debug);''')
+        'packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0);',
+        'packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0,\n                                        depth0.Get(),depth1.Get(),p1_debug);')
     print("P1 depth visualization integrated as a separate, opt-in raw-Z shader path")
 
 if __name__=="__main__":
