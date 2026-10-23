@@ -26,6 +26,12 @@ def main(backend):
         '''    d3d12::DIBRPreview m_dibr_depth_capture{};
     uevr::duoview::dx12::DepthPairP1 m_duoview_p1{};''')
     edit(backend,"src/mods/VR.cpp",
+        '                if (ImGui::TreeNode("Depth Discovery P0 (passive; NO depth copies)")) {',
+        '                if (ImGui::TreeNode("DuoView P1 owned depth capture (experimental)")) {')
+    edit(backend,"src/mods/VR.cpp",
+        '                    ImGui::TextWrapped("This traces potential DSV/RDG depth resources only. Captured depth: UNVERIFIED for both DuoView views. No stereo synthesis, GPU depth copy or change to normal HMD output.");',
+        '                    ImGui::TextWrapped("Opt-in, one-shot GPU copies of SceneDepthZ candidates. No proven view matching or stereo synthesis. Unavailable depth always falls back to Build49 Mono.");')
+    edit(backend,"src/mods/VR.cpp",
         '                        if (ImGui::Button("Log next 200 DuoView source frames")) {',
         '''                        if (ImGui::Button("Capture TWO owned P1 depth snapshots (one shot)")) {
                             if (!d3d12().arm_duoview_p1(this))
