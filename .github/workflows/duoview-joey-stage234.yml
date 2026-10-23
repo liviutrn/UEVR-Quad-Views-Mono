@@ -11,6 +11,7 @@ on:
       - experiment/duoview-center-dibr-depth-probe-20261023
       - experiment/duoview-center-stereo-a-plus-20261023
       - fix/stereo-s0-activation-depth-discovery-20261023
+      - fix/stereo-s0-depth-survey-ui-20261023
   pull_request:
     branches:
       - build-182
@@ -103,6 +104,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'P1 capture/visual regression gates failed' }
           python workspace/duoview/stereo/apply_stereo_preview_s0.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Stereo S0 source integration failed' }
+          python workspace/duoview/stereo/apply_s0_recovery_ui.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Bounded S0 diagnostic UI integration failed' }
           python workspace/duoview/stereo/test_stereo_preview_s0.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Stereo S0 source validation failed' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
@@ -250,7 +253,14 @@ jobs:
           Build49 remains the baseline; default Mono/eye alignment/HUD/gaze unchanged.
           UEVR -> DuoView Mono quality -> Depth Discovery P0 tree:
           enable opt-in trace; Capture TWO owned P1 depth snapshots (one shot).
-          New GPU copies are produced only when SceneDepthZ has matching safe barriers.
+          P1 uses SceneDepthZ when available or an explicitly scene-sized RHI
+          candidate. Rejected small shadow/decal depth cannot activate stereo.
+          P1 status lists all surveyed extents/formats/hits and GPU copy counts.
+          If 0 copies and arm remains pending, use "Reset empty P1 attempt".
+          Stereo S0 depth preview is BLOCKED until two GPU copies are fence-ready.
+          Depth diagnostics are collapsed by default; expand to scroll a 244px pane.
+          The no-depth S0 eye check works independently and already reached PSVR2.
+          New GPU copies are produced only when a candidate has matching safe barriers.
           Raw hardware-Z view 0=Legacy Mono,1=periphery candidate,2=fovea candidate,
           3=combined,4=UNVERIFIED mismatch mask.
           NO proven per-view depth/frame association, NO linear-meters claim,
@@ -266,16 +276,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-EyeCheck-P1-Recovery-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-S0-DepthStatusUI-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-EyeCheck-P1-Recovery-${{ github.run_number }}
+          name: UEVR-DuoView-S0-DepthStatusUI-${{ github.run_number }}
           path: |
-            UEVR-DuoView-EyeCheck-P1-Recovery-*.zip
-            UEVR-DuoView-EyeCheck-P1-Recovery-*.zip.sha256
+            UEVR-DuoView-S0-DepthStatusUI-*.zip
+            UEVR-DuoView-S0-DepthStatusUI-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
