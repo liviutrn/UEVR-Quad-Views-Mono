@@ -77,7 +77,31 @@ def apply(root):
                             "S0 BLOCKED: no completed GPU depth pair (0/2 or not fence-ready).");
                         ImGui::TextWrapped("Eye Output Check is independent. Turn it OFF for depth experiments.");
                     }''')
-    print("S0 UI recovery: default-closed P1 diagnostics, 244px scrollable pane, missing-depth warning.")
+
+    # Read-only Unreal console-variable survey. Unlike the observed OpenXR
+    # swapchain extent, these numbers were NOT included in earlier Build97 logs.
+    # Never treat a missing DLSS CVar as DLSS disabled.
+    edit(root,"src/mods/VR.cpp",
+        '                ImGui::TextWrapped("This confirms two different eye images reach OpenXR. It requires no depth and is NOT a stereo-geometry test.");',
+        '''                ImGui::TextWrapped("This confirms two different eye images reach OpenXR. It requires no depth and is NOT a stereo-geometry test.");
+                if (ImGui::Button("Log UE screen percentage and DLSS CVars (read-only)")) {
+                    const float sp = get_runtime_cvar_float(L"r.ScreenPercentage").value_or(-1.f);
+                    const float secondary_sp = get_runtime_cvar_float(L"r.SecondaryScreenPercentage.GameViewport").value_or(-1.f);
+                    const int dynamic_mode = get_runtime_cvar_int(L"r.DynamicRes.OperationMode").value_or(-1);
+                    const int taa_upscale = get_runtime_cvar_int(L"r.TemporalAA.Upsampling").value_or(-1);
+                    const int dlss_enable = get_runtime_cvar_int(L"r.NGX.DLSS.Enable").value_or(-1);
+                    const int dlss_quality = get_runtime_cvar_int(L"r.NGX.DLSS.Quality").value_or(-1);
+                    const int streamline_dlss = get_runtime_cvar_int(L"r.Streamline.DLSS.Enable").value_or(-1);
+                    const int temporal_upscale = get_runtime_cvar_int(L"r.TemporalAA.Upscaler").value_or(-1);
+                    const auto* runtime = get_runtime();
+                    SPDLOG_INFO("[StereoScaleSurvey][READONLY] xr_eye={}x{} r.ScreenPercentage={} r.SecondaryScreenPercentage.GameViewport={} r.DynamicRes.OperationMode={} r.TemporalAA.Upsampling={} r.TemporalAA.Upscaler={} r.NGX.DLSS.Enable={} r.NGX.DLSS.Quality={} r.Streamline.DLSS.Enable={} (-1=unavailable, NOT disabled)",
+                        runtime ? runtime->get_width() : 0,
+                        runtime ? runtime->get_height() : 0,
+                        sp, secondary_sp, dynamic_mode, taa_upscale,
+                        temporal_upscale, dlss_enable, dlss_quality, streamline_dlss);
+                    ImGui::TextUnformatted("Logged raw UE CVars once. -1 = not exposed; no settings changed.");
+                }''')
+    print("S0 UI recovery: default-closed P1 diagnostics, 244px scrollable pane, missing-depth warning, read-only Unreal scale CVars.")
 
 if __name__=="__main__":
     ap=argparse.ArgumentParser()
