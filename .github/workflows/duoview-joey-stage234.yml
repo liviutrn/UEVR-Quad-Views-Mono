@@ -220,7 +220,7 @@ jobs:
           Stage5 reads combined calibrated PSVR2 Toolkit CAPI gaze ONCE per frame. No DLL bundled.
           If CAPI is unavailable/invalid or blinked, ID6 stays at fixed center; no OpenXR gaze layer required.
           Menu shows whether PSVR2 gaze is fresh, center fallback, or Mono quarantine.
-          The output remains monoscopic: DuoView writes the same full-FOV image to both OpenXR eye regions. Direct XR output is an experimental A/B option, OFF by default: OFF composes once and copies to both eyes; ON uses one double-wide draw when formats match. Either route may be faster on your GPU; no GPU gain is measured here. Incompatible formats retain composite-and-copy. Fallback textures remain preallocated with either route. The DuoView UI reports the route used by the last submitted frame and the physical primary/secondary source extents.
+          By DEFAULT the output remains monoscopic: DuoView writes the same full-FOV image to both OpenXR eye regions. Opt-in LIVE DIBR instead sends a two-eye warped raster. Direct XR output is an experimental A/B option, OFF by default: OFF composes once and copies to both eyes; ON uses one double-wide draw when formats match. Either route may be faster on your GPU; no GPU gain is measured here. Incompatible formats retain composite-and-copy. Fallback textures remain preallocated with either route. The DuoView UI reports the route used by the last submitted frame and the physical primary/secondary source extents.
           The compositor's SRVs and direct XR RTV are cached per fenced command slot and rewritten only when the resource pair, sampling format, or destination changes. This reduces CPU/driver descriptor work only; it does not claim a GPU-time improvement.
           Descriptor heap handles and increments are captured during prewarm and reused with those per-slot descriptors.
           The exact source pose is frozen before Native Fix invokes either renderer callback and travels with the completed packet. Brief source gaps may reuse the last successfully submitted released image with its original pose for at most 100ms; no new source pair is composed during the hold. A new scene-image acquisition, mode generation, swapchain change or submission failure invalidates continuity. Until the first valid Native pair is available, warmup keeps the XR transition loop live and waits for the next pair. A compositor fault after validation returns ID6 to original Joey Mono on the following frame.
@@ -237,41 +237,29 @@ jobs:
           Stage5 gaze requires installed PSVR2 Toolkit CAPI and still requires headset calibration validation.
           Restored engine view order and optical gaze mapping are source verified. Actual Lumen/shadow/exposure and visual parity require a headset test; no gamma correction applied.
           The eye-tracked source/compositor and first-use pacing are NOT headset verified.
-          LIVE DIBR STEREO TEST: default OFF, user opt-in, NOT calibrated.
-          NEW Build118 evidence: R32_TYPELESS scene depth 860x684 and 344x276.
-          GPU textures are copied repeatedly from safe DEPTH_WRITE to shader-read transitions.
-          S0 double-wide raster now runs a two-eye center-origin disparity warp driven by live raw-Z.
-          In DuoView Mono quality: ENABLE depth discovery, click Start LIVE DIBR depth capture,
-          then enable Experimental LIVE DIBR stereo, start with 8% strength.
-          Stay at the Build118 render settings; unmatched dimensions FALL BACK to Mono.
-          IMPORTANT: experimental GPU resource lifetime, RGB/depth pairing and projection
-          calibration still need real PSVR2 confirmation. Do not replace stable Build49.
-          To try: activate DuoView ID6, enable Depth Discovery, capture two
-          P1 depth candidates, wait for GPU queue complete, then enable
-          S0 stereo preview with 8% strength.
-          P1 snapshots are frozen, unverified and not linked to live RGB:
-          stereo preview is for static scene and pipeline tests only.
-          Reset S0 to OFF for ordinary gaming. Working Mono unchanged.
-          IMPORTANT: THIS IS A+ SOURCE-LEDGER / P1 DIAGNOSTIC BUILD. NO VERIFIED STEREO OUTPUT.
-          The feature-OFF renderer remains unchanged Build49 Mono.
-          A+ SourceLineage.hpp validates same-tick RGB-D matching contracts in Windows tests;
-          it is NOT wired to live producer evidence yet. Never infer fovea/periphery
-          identity from two depth snapshots, and do not call depth GPU-ready stereo-ready.
-          Work order: live provenance -> calibrated depth/matrices -> actual two-eye warp.
-          DEPTH PROBE P1 TEST — EXPERIMENTAL, NOT HEADSET VERIFIED
-          Build49 remains the baseline; default Mono/eye alignment/HUD/gaze unchanged.
-          UEVR -> DuoView Mono quality -> Depth Discovery P0 tree:
-          enable opt-in trace; Capture TWO owned P1 depth snapshots (one shot).
-          New GPU copies are produced only when SceneDepthZ has matching safe barriers.
-          Raw hardware-Z view 0=Legacy Mono,1=periphery candidate,2=fovea candidate,
-          3=combined,4=UNVERIFIED mismatch mask.
-          NO proven per-view depth/frame association, NO linear-meters claim,
-          NO stereo DIBR, NO automatic left/right differences.
-          P1 captures are candidate snapshots until in-game frame proof is established.
-          DEPTH FEATURE OFF is default, and normal color output remains the fallback.
-          Use SEPARATE install directory, retain your stable v186.1 Build49 CI56.
-          Collect UEVR log and SteamVR screenshot; no automatic screenshot ZIP yet.
-          Never install over the known-good v186.1 Build49 CI56 directory.
+          LIVE DIBR — EXPERIMENTAL, REQUIRES REAL PSVR2 TESTING.
+          Center-origin stereo reconstruction from the TWO existing DuoView color
+          sources and GPU-owned depth candidates. No extra Unreal scene view.
+          Build118 found nonconstant R32_TYPELESS depth at 860x684 and 344x276.
+          Live capture matches those exact formats, dimensions, and proven
+          DEPTH_WRITE->shader-read transition. Different resolution falls back
+          to original DuoView Mono; keep the same render/DLSS settings.
+          TEST: activate DuoView ID6, open DuoView Mono quality.
+          Enable Depth Discovery P0. Click Start LIVE DIBR depth capture.
+          Wait for the UI to report 2/2 candidates and GPU queue complete.
+          Enable Experimental LIVE DIBR stereo and start at 8% disparity.
+          Use a stationary scene first; compare eye outputs and stereo behavior.
+          This is a TWO-EYE DIBR shader, but current candidate-role and same-frame
+          RGB-D lineage remain hypotheses, NOT proven geometry or meters.
+          Snapshot updates are throttled to one copy per candidate every 20ms.
+          There is no depth hole filling, temporal reprojection or projection
+          matrix calibration. Watch for tearing, wrong depth, ghosted weapons,
+          shimmer, or cross-eye disparity; disable stereo immediately if seen.
+          Keep Mono Eye Alignment OFF or 0 during the first stereo evaluation.
+          Do not replace the known-good Build49 installation.
+          Normal ID6 Mono and original Joey modes 0/5 remain the OFF-path.
+          Source code passing Windows CI does NOT establish safe headset output.
+
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','duoview-stage234-hashes.json','exact-baseline-source.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
