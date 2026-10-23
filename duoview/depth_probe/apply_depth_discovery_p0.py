@@ -89,12 +89,25 @@ def apply(backend: Path):
                     count, count-1, std::memory_order_acq_rel)) {}
             if (count > 0) {
                 const auto sd = secondary != nullptr ? secondary->GetDesc() : D3D12_RESOURCE_DESC{};
+                // Pool texture identity alone is diagnostic, never accepted
+                // as proof of this exact UE pass or as a usable GPU snapshot.
+                auto pool_depth = vr->get_render_target_pool_hook()->get_texture<ID3D12Resource>(L"SceneDepthZ");
+                const auto zd = pool_depth != nullptr ? pool_depth->GetDesc() : D3D12_RESOURCE_DESC{};
+                const auto frozen = vr->duoview_state().snapshot(vr->duoview_producer_key());
                 SPDLOG_INFO(
-                    "[DuoDepthP0][UNVERIFIED] samples_left={} primary=0x{:X} {}x{} fmt={} flags={} secondary=0x{:X} {}x{} fmt={} flags={} DSV_candidate={}",
-                    count-1, reinterpret_cast<uintptr_t>(primary), pd.Width, pd.Height,
+                    "[DuoDepthP0][UNVERIFIED] remaining={} frame={} producer={}:{} pose={} foveaUE={} primary=0x{:X} {}x{} fmt={} flags={} secondary=0x{:X} {}x{} fmt={} flags={} SceneDepthZpool=0x{:X} {}x{} fmt={} flags={} samples={} DSV_candidate={}",
+                    count-1, vr->m_render_frame_count,
+                    frozen ? frozen->config.key.generation : 0,
+                    frozen ? frozen->config.key.frame : 0,
+                    frozen && frozen->mono_source_frame ? *frozen->mono_source_frame : 0,
+                    frozen ? frozen->config.settings.fovea_view : 0,
+                    reinterpret_cast<uintptr_t>(primary), pd.Width, pd.Height,
                     static_cast<unsigned>(pd.Format), static_cast<unsigned>(pd.Flags),
                     reinterpret_cast<uintptr_t>(secondary), sd.Width, sd.Height,
                     static_cast<unsigned>(sd.Format), static_cast<unsigned>(sd.Flags),
+                    reinterpret_cast<uintptr_t>(pool_depth.Get()), zd.Width, zd.Height,
+                    static_cast<unsigned>(zd.Format), static_cast<unsigned>(zd.Flags),
+                    zd.SampleDesc.Count,
                     m_dibr_depth_capture.depth_trace_summary());
             }
         }
