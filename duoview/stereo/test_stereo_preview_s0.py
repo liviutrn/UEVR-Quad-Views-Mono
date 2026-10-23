@@ -36,7 +36,7 @@ def validate(root):
     assert 'native_eye_check_pixel_shader_bytecode' in shaders
     assert 'native_eye_check_pipeline_' in gpu
     assert 'RHI depth survey' in ui
-    assert 'm_duoview_depth_survey.candidate()' in dx
+    assert 'm_duoview_depth_survey.candidate(' in dx
     assert 'const bool eye_test=depth_debug==6' in gpu
     assert 'const bool direct_xr=eye_test ||' in gpu
     assert 'DuoViewStereoS0StrengthPct"), 0, 40, 8' in vr
