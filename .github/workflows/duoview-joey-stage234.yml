@@ -1,4 +1,4 @@
-name: DuoView v186.1 P1 Owned Depth Capture (Build49-based)
+name: DuoView v186.1 Stereo S0 Test (Build49-based)
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
   push:
@@ -232,6 +232,13 @@ jobs:
           Stage5 gaze requires installed PSVR2 Toolkit CAPI and still requires headset calibration validation.
           Restored engine view order and optical gaze mapping are source verified. Actual Lumen/shadow/exposure and visual parity require a headset test; no gamma correction applied.
           The eye-tracked source/compositor and first-use pacing are NOT headset verified.
+          S0 EXPERIMENTAL STEREO: disabled by default, NOT calibrated.
+          To try: activate DuoView ID6, enable Depth Discovery, capture two
+          P1 depth candidates, wait for GPU queue complete, then enable
+          S0 stereo preview with 8% strength.
+          P1 snapshots are frozen, unverified and not linked to live RGB:
+          stereo preview is for static scene and pipeline tests only.
+          Reset S0 to OFF for ordinary gaming. Working Mono unchanged.
           IMPORTANT: THIS IS A+ SOURCE-LEDGER / P1 DIAGNOSTIC BUILD. NO VERIFIED STEREO OUTPUT.
           The feature-OFF renderer remains unchanged Build49 Mono.
           A+ SourceLineage.hpp validates same-tick RGB-D matching contracts in Windows tests;
