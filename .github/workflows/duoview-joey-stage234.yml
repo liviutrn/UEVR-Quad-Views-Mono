@@ -228,6 +228,12 @@ jobs:
           Stage5 gaze requires installed PSVR2 Toolkit CAPI and still requires headset calibration validation.
           Restored engine view order and optical gaze mapping are source verified. Actual Lumen/shadow/exposure and visual parity require a headset test; no gamma correction applied.
           The eye-tracked source/compositor and first-use pacing are NOT headset verified.
+          IMPORTANT: THIS IS A+ SOURCE-LEDGER / P1 DIAGNOSTIC BUILD. NO VERIFIED STEREO OUTPUT.
+          The feature-OFF renderer remains unchanged Build49 Mono.
+          A+ SourceLineage.hpp validates same-tick RGB-D matching contracts in Windows tests;
+          it is NOT wired to live producer evidence yet. Never infer fovea/periphery
+          identity from two depth snapshots, and do not call depth GPU-ready stereo-ready.
+          Work order: live provenance -> calibrated depth/matrices -> actual two-eye warp.
           DEPTH PROBE P1 TEST — EXPERIMENTAL, NOT HEADSET VERIFIED
           Build49 remains the baseline; default Mono/eye alignment/HUD/gaze unchanged.
           UEVR -> DuoView Mono quality -> Depth Discovery P0 tree:
@@ -248,16 +254,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-DepthProbeP1-Build49-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-StereoA-SourceLedger-P1-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-DepthProbeP1-Build49-${{ github.run_number }}
+          name: UEVR-DuoView-StereoA-SourceLedger-P1-${{ github.run_number }}
           path: |
-            UEVR-DuoView-DepthProbeP1-Build49-*.zip
-            UEVR-DuoView-DepthProbeP1-Build49-*.zip.sha256
+            UEVR-DuoView-StereoA-SourceLedger-P1-*.zip
+            UEVR-DuoView-StereoA-SourceLedger-P1-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
