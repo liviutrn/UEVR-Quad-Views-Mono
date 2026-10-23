@@ -15,6 +15,18 @@ def validate(root):
     assert 'duoview_s0_eye_test_enabled()' in vr
     assert 'S0 EYE OUTPUT CHECK (no depth' in ui
     assert 'Log UE screen percentage and DLSS CVars (read-only)' in ui
+    assert 'DuoViewP1EachEyeRawZ"), 0, 4, 0' in vr
+    assert 'm_duo_depth_eyes->value()>=1' in vr
+    assert 'P1 per-eye depth: 0=off 1=Z0 both' in ui
+    assert 'Depth eye view BLOCKED: capture 2/2' in ui
+    assert 'Cyan stripe=Z0; pink stripe=Z1' in ui
+    shader_src=(Path(__file__).resolve().parent.parent/"DuoViewDepthProbeRaster.hlsl").read_text(encoding="utf-8")
+    assert 'DebugViewMode>=17 && DebugViewMode<=20' in shader_src
+    assert 'DuoDepthCandidate0.SampleLevel(LinearClamp,uv,0)' in shader_src
+    assert 'DuoDepthCandidate1.SampleLevel(LinearClamp,uv,0)' in shader_src
+    assert '(depth_debug>=7 && depth_debug<=10)' in gpu
+    assert 'same_shape' in read("src/mods/vr/DuoDepthPairP1.hpp")
+
     assert '[StereoScaleSurvey][READONLY]' in ui
     assert 'get_runtime_cvar_float(L"r.ScreenPercentage")' in ui
     assert 'get_runtime_cvar_int(L"r.NGX.DLSS.Quality")' in ui
