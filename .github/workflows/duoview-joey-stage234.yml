@@ -263,8 +263,20 @@ jobs:
           Depth diagnostics are collapsed by default; expand to scroll a 244px pane.
           The no-depth S0 eye check works independently and already reached PSVR2.
           New GPU copies are produced only when a candidate has matching safe barriers.
-          Raw hardware-Z view 0=Legacy Mono,1=periphery candidate,2=fovea candidate,
-          3=combined,4=UNVERIFIED mismatch mask.
+          Raw hardware-Z old view 0=Legacy Mono,1=periphery candidate,
+          2=fovea candidate,3=combined,4=UNVERIFIED mismatch mask.
+          NEW: set P1 per-eye depth selector (separate from old 0..4) to:
+          0=Off/normal DuoView; 1=candidate Z0 in BOTH eyes;
+          2=candidate Z1 in BOTH eyes; 3=LEFT Z0 / RIGHT Z1;
+          4=LEFT Z1 / RIGHT Z0.
+          Cyan edge=Z0, pink edge=Z1. Stereo EyeCheck MUST be OFF.
+          First enable Depth Discovery P0, click Capture TWO owned P1
+          depth snapshots, and confirm P1 copies=2/2 and GPU queue ready=yes.
+          A capture selector cannot display depth before the GPU has two copies.
+          Does grayscale follow objects/head movement? Is Z0 same as Z1?
+          Record best choice and attach fresh UEVR logs.
+          Resolution logging: click "Log UE screen percentage and DLSS CVars".
+          DO NOT infer stereo source identity merely from appearance or size.
           NO proven per-view depth/frame association, NO linear-meters claim,
           NO stereo DIBR, NO automatic left/right differences.
           P1 captures are candidate snapshots until in-game frame proof is established.
