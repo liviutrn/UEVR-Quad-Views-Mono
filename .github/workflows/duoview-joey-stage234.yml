@@ -10,6 +10,7 @@ on:
       - fix/duoview-v49-openxr-alignment-persistence-20261022
       - experiment/duoview-center-dibr-depth-probe-20261023
       - experiment/duoview-center-stereo-a-plus-20261023
+      - fix/stereo-s0-activation-depth-discovery-20261023
   pull_request:
     branches:
       - build-182
@@ -265,16 +266,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-StereoS0-WarpPreview-P1-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-EyeCheck-P1-Recovery-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-StereoS0-WarpPreview-P1-${{ github.run_number }}
+          name: UEVR-DuoView-EyeCheck-P1-Recovery-${{ github.run_number }}
           path: |
-            UEVR-DuoView-StereoS0-WarpPreview-P1-*.zip
-            UEVR-DuoView-StereoS0-WarpPreview-P1-*.zip.sha256
+            UEVR-DuoView-EyeCheck-P1-Recovery-*.zip
+            UEVR-DuoView-EyeCheck-P1-Recovery-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
