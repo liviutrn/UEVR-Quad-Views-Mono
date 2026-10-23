@@ -46,6 +46,33 @@ float4 PSNativeDepthProbe(VertexOut i) : SV_TARGET0 {
             valid=true;
         }
     }
+    // Per-eye P1 candidate inspection. These modes do not claim that
+    // either snapshot is scene depth or belongs to a particular UE view.
+    // Unlike the original P1 cropped modes, map the *entire* depth
+    // candidate into the eye's full UV, independent of DLSS output size.
+    // DebugViewMode 17 = candidate 0 in both eyes
+    // DebugViewMode 18 = candidate 1 in both eyes
+    // DebugViewMode 19 = left 0 / right 1
+    // DebugViewMode 20 = left 1 / right 0
+    if (DebugViewMode>=17 && DebugViewMode<=20) {
+        uint d0w,d0h,d1w,d1h;
+        DuoDepthCandidate0.GetDimensions(d0w,d0h);
+        DuoDepthCandidate1.GetDimensions(d1w,d1h);
+        const bool right_eye=i.pos.x>=OutputSize.x;
+        const bool use_second=(DebugViewMode==18) ||
+            (DebugViewMode==19 && right_eye) ||
+            (DebugViewMode==20 && !right_eye);
+        const float2 uv=saturate(fullUv);
+        const float z=use_second
+            ? DuoDepthCandidate1.SampleLevel(LinearClamp,uv,0)
+            : DuoDepthCandidate0.SampleLevel(LinearClamp,uv,0);
+        // Uncalibrated reversed-Z display; help reveal terrain silhouettes.
+        const float3 shade=pow(saturate(z).xxx, float3(.22,.22,.22));
+        // Tiny identity stripe: cyan means candidate0; magenta candidate1.
+        const float3 id=use_second ? float3(1.0,.05,.66) : float3(0.0,.88,1.0);
+        const float side_x=right_eye ? i.pos.x-OutputSize.x : i.pos.x;
+        return float4(side_x<12.0 ? id : shade,1.0);
+    }
     if (DebugViewMode==14) {
         // Explicit red means candidate order has NOT been proven to match UE views.
         return float4(1,.08,.08,1);
