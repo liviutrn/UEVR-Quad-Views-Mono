@@ -52,6 +52,12 @@ public:
             }
             allocated[i]->SetName(i==0?L"DuoDepthP1 Candidate 0":L"DuoDepthP1 Candidate 1");
         }
+        Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+        if (FAILED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence)))) {
+            status_="failed to create nonblocking capture completion fence";return false;
+        }
+        fence_=std::move(fence);
+        fence_signaled_.store(false,std::memory_order_release);
         source_=scene_depth;
         snapshots_[0]=std::move(allocated[0]);
         snapshots_[1]=std::move(allocated[1]);
@@ -69,6 +75,26 @@ public:
     Resource candidate(unsigned i) const {
         std::scoped_lock lock{mutex_};
         return i<2 && captured_.load(std::memory_order_acquire)==2 ? snapshots_[i] : Resource{};
+    }
+    // Called only after a complete validated native packet has been queued.
+    // No wait; a later XR frame can sample only after the queue marker retires.
+    bool signal_after_source_submit(ID3D12CommandQueue* queue) {
+        if (!queue || captured_.load(std::memory_order_acquire)!=2 ||
+            fence_signaled_.load(std::memory_order_acquire)) return false;
+        std::scoped_lock lock{mutex_};
+        if (!fence_ || fence_signaled_.load(std::memory_order_relaxed)) return false;
+        if (FAILED(queue->Signal(fence_.Get(),1))) {
+            status_="queue Signal failed; depth remains unavailable";return false;
+        }
+        fence_signaled_.store(true,std::memory_order_release);
+        status_="copy queue marker pending; pair roles still UNVERIFIED";
+        return true;
+    }
+    bool gpu_ready() const {
+        std::scoped_lock lock{mutex_};
+        return captured_.load(std::memory_order_acquire)==2 &&
+            fence_signaled_.load(std::memory_order_acquire) && fence_ &&
+            fence_->GetCompletedValue()>=1;
     }
     void stop() { armed_.store(false,std::memory_order_release); }
     void on_depth_stencil_view_created(ID3D12Resource*,
@@ -140,6 +166,8 @@ private:
     Resource source_,snapshots_[2]{};
     D3D12_RESOURCE_DESC desc_{};
     DXGI_FORMAT source_format_{DXGI_FORMAT_UNKNOWN};
+    Microsoft::WRL::ComPtr<ID3D12Fence> fence_;
+    std::atomic<bool> fence_signaled_{false};
     std::atomic<unsigned> captured_{0};
     std::atomic<bool> armed_{false};
     std::string status_{"disabled; no GPU depth copies"};
