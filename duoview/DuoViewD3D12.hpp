@@ -154,7 +154,7 @@ public:
         // a compatible double-wide XR render target. Otherwise MONO.
         const bool stereo_preview=depth_debug==5 && stereo_preview_strength>0 &&
             depth0 && depth1 && native_stereo_preview_pipeline_ && direct_compatible;
-        const bool depth_mode=depth_debug>=1 && depth_debug<=4 &&
+        const bool depth_mode=((depth_debug>=1 && depth_debug<=4) || (depth_debug>=7 && depth_debug<=10)) &&
             depth0 && depth1 && native_depth_pipeline_;
         const bool eye_test=depth_debug==6 && native_eye_check_pipeline_ && direct_compatible;
         const bool direct_xr=eye_test || stereo_preview ||
