@@ -184,8 +184,7 @@ public:
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) ||
                 before==(D3D12_RESOURCE_STATE_DEPTH_READ|
                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|
-                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) ||
-                before==D3D12_RESOURCE_STATE_COPY_SOURCE;
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             if ((t.Transition.Subresource!=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES &&
                  t.Transition.Subresource!=0) || !can_copy_from_before) {
                 mismatched_states_.fetch_add(1,std::memory_order_relaxed);
