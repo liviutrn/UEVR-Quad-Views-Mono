@@ -57,10 +57,8 @@ void D3D12Component::reset_dibr_preview() {''')
             (duo_depth_discovery && m_duoview_p1.armed()) ? &m_duoview_p1 :
             (duo_depth_discovery ||''')
     edit(backend,"src/mods/vr/D3D12Component.cpp",
-        '''            if (submitted && recorded) {
-                                runtimes::OpenXR::PipelineState pose{};''',
-        '''            if (submitted && recorded) {
-                                // Only AFTER the validated color transaction reached
+        '''                                runtimes::OpenXR::PipelineState pose{};''',
+        '''                                // Only AFTER the validated color transaction reached
                                 // the owning submit path, enqueue a nonblocking GPU
                                 // fence marker for one-shot P1 depth copies.
                                 if (m_duoview_p1.captured()==2 && !m_duoview_p1.gpu_ready()) {
