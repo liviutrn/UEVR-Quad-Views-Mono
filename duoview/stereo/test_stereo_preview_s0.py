@@ -17,6 +17,8 @@ def validate(root):
     assert 'vr->duoview_s0_eye_test_enabled() ? 6u' in dx
     assert 'native_eye_check_pixel_shader_bytecode' in shaders
     assert 'native_eye_check_pipeline_' in gpu
+    assert 'RHI depth survey' in ui
+    assert 'm_duoview_depth_survey.candidate()' in dx
     assert 'const bool eye_test=depth_debug==6' in gpu
     assert 'const bool direct_xr=eye_test ||' in gpu
     assert 'DuoViewStereoS0StrengthPct"), 0, 40, 8' in vr
@@ -30,7 +32,7 @@ def validate(root):
     assert 'native_stereo_preview_pixel_shader_bytecode' in shaders
     assert 'native_stereo_preview_pipeline_' in gpu
     assert 'const bool stereo_preview=depth_debug==5' in gpu
-    assert 'const bool direct_xr=stereo_preview ||' in gpu
+    assert 'const bool direct_xr=eye_test || stereo_preview ||' in gpu
     assert 'if ((depth_mode || stereo_preview) && !ensure_depth_srvs' in gpu
     assert 'return record_native_gather' in gpu
     assert 'cmd->SetPipelineState(stereo_preview ? native_stereo_preview_pipeline_' in gpu
