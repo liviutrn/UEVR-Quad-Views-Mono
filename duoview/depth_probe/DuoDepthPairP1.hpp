@@ -223,11 +223,15 @@ public:
         for (const auto& e : entries_) {
             if (!e.resource || e.hits<2 || !reference_width || !reference_height)
                 continue;
-            // Reject small shadow/lighting targets; heuristic DOES NOT prove pass identity.
-            const bool shape=e.width >= (uint64_t(reference_width)*8)/10 &&
-                e.width <= (uint64_t(reference_width)*22)/10 &&
-                e.height >= (uint64_t(reference_height)*8)/10 &&
-                e.height <= (uint64_t(reference_height)*12)/10;
+            // The color target may be DLSS-upscaled. STALKER2 example:
+            // 3612x3188 color vs 1208x1064 pre-upscale Z -> ~3x per axis.
+            // Accept uniform upscaling 1x..4x, with 8% ratio tolerance.
+            // This is an UNVERIFIED candidate selector, NOT proof of scene depth.
+            const double scale_x=double(reference_width)/double(e.width);
+            const double scale_y=double(reference_height)/double(e.height);
+            const bool shape=scale_x>=0.8 && scale_x<=4.2 &&
+                scale_y>=0.8 && scale_y<=4.2 &&
+                scale_x / scale_y>=0.92 && scale_x / scale_y<=1.08;
             if (shape && (!best || e.hits>best->hits)) best=&e;
         }
         return best ? best->resource : Resource{};
