@@ -100,6 +100,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'P1 raw-Z visualizer integration failed' }
           python workspace/duoview/depth_probe/test_depth_probe_p1.py backend
           if ($LASTEXITCODE -ne 0) { throw 'P1 capture/visual regression gates failed' }
+          python workspace/duoview/stereo/apply_stereo_preview_s0.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Stereo S0 source integration failed' }
+          python workspace/duoview/stereo/test_stereo_preview_s0.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Stereo S0 source validation failed' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
       - name: Verify pinned production geometry and pair-state contracts
