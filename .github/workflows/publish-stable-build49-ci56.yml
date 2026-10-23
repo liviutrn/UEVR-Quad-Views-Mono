@@ -65,14 +65,14 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release tag already exists; refusing to overwrite a published stable release."
-            exit 1
+            echo "Release already published; preserve its assets and verify unchanged identity."
+          else
+            gh release create "$TAG" "dist/$ZIP" "dist/$ZIP.sha256" \
+              --target "$SOURCE_SHA" \
+              --title "v186.1 — MPC / HUD / Eye Alignment Persistence (Build49 / CI56)" \
+              --notes-file RELEASE_NOTES_V1861_MPC_HUD_EYEALIGNMENT_PERSIST49.md \
+              --latest
           fi
-          gh release create "$TAG" "dist/$ZIP" "dist/$ZIP.sha256" \
-            --target "$SOURCE_SHA" \
-            --title "v186.1 — MPC / HUD / Eye Alignment Persistence (Build49 / CI56)" \
-            --notes-file RELEASE_NOTES_V1861_MPC_HUD_EYEALIGNMENT_PERSIST49.md \
-            --latest
 
       - name: Verify GitHub publication and both original binary assets
         shell: bash
@@ -80,7 +80,8 @@ jobs:
           set -euo pipefail
           test "$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq .object.sha)" = "$SOURCE_SHA"
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "false"
-          gh release view "$TAG" --json assets,url,isPrerelease,isLatest \
-            --jq '{url: .url, isLatest: .isLatest, isPrerelease: .isPrerelease, assets: [.assets[].name]}'
+          test "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" = "$TAG"
+          gh release view "$TAG" --json assets,url,isPrerelease \
+            --jq '{url: .url, isPrerelease: .isPrerelease, assets: [.assets[].name]}'
           gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$ZIP"
           gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$ZIP.sha256"
