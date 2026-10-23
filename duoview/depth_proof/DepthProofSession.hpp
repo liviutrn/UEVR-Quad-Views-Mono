@@ -344,14 +344,14 @@ private:
             else std::memcpy(&v,p,4);
             values[y*width+x]=v;
             if(!std::isfinite(v) || v<0 || v>1){++invalid;continue;}
-            minimum=std::min(minimum,v);maximum=std::max(maximum,v);if(v==0)++zero;else finite.push_back(std::log2(std::max(v,1e-30f)));
+            minimum=(std::min)(minimum,v);maximum=(std::max)(maximum,v);if(v==0)++zero;else finite.push_back(std::log2((std::max)(v,1e-30f)));
         }
         std::sort(finite.begin(),finite.end());
         const float lo=finite.empty()?0:finite[finite.size()/100];
         const float hi=finite.empty()?1:finite[finite.size()*99/100];
         std::vector<unsigned char> image(values.size());
         for(size_t i=0;i<values.size();++i) {const auto v=values[i];
-            image[i]=std::isfinite(v)&&v>0&&v<=1 ? static_cast<unsigned char>(32+223*std::clamp((std::log2(std::max(v,1e-30f))-lo)/std::max(hi-lo,1e-6f),0.f,1.f)):0;}
+            image[i]=std::isfinite(v)&&v>0&&v<=1 ? static_cast<unsigned char>(32+223*std::clamp((std::log2((std::max)(v,1e-30f))-lo)/(std::max)(hi-lo,1e-6f),0.f,1.f)):0;}
         const auto prefix="candidate_"+std::to_string(id);
         std::ofstream raw(folder/(prefix+".f32"),std::ios::binary);raw.exceptions(std::ios::failbit|std::ios::badbit);
         raw.write(reinterpret_cast<const char*>(values.data()),values.size()*sizeof(float));raw.close();

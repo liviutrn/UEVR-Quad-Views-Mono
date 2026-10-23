@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
+// Keep the normal Windows min/max macros: this header must compile in
+// the same environment as the full backend, not just NOMINMAX test code.
 
 #include "DepthProofSession.hpp"
 
