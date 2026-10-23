@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(DuoViewStereoLineage LANGUAGES CXX)
+enable_testing()
+add_executable(duoview_stereo_lineage_tests test_source_lineage.cpp)
+target_compile_features(duoview_stereo_lineage_tests PRIVATE cxx_std_17)
+target_include_directories(duoview_stereo_lineage_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME duoview_stereo_lineage_tests COMMAND duoview_stereo_lineage_tests)
