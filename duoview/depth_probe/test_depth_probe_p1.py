@@ -34,6 +34,19 @@ def main(root):
     assert "D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE" in capture
     assert "D3D12_RESOURCE_STATE_DEPTH_WRITE" in capture
     assert "std::try_to_lock" in capture and "CopyTextureRegion" in capture
+    # Regression: STALKER 2 emitted 54,129 depth transitions but the previous
+    # exact NPSR->DEPTH_WRITE predicate rejected every one of them.
+    assert 'const auto before=t.Transition.StateBefore;' in capture
+    assert 'const auto after=t.Transition.StateAfter;' in capture
+    assert 'const auto can_copy_from_before' in capture
+    assert 'before==D3D12_RESOURCE_STATE_DEPTH_WRITE' in capture
+    assert 'before==D3D12_RESOURCE_STATE_DEPTH_READ' in capture
+    assert 'before==D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE' in capture
+    assert 'before,D3D12_RESOURCE_STATE_COPY_SOURCE};' in capture
+    assert 'observed_before_.store' in capture
+    assert 'example_before=' in capture and 'example_subresource=' in capture
+    assert 'D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE' not in capture
+
     assert "CreateCommittedResource" in capture
     assert 'GetCompletedValue()>=1' in capture
     assert 'bool gpu_ready() const' in capture
