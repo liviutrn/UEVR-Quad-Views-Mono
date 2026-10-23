@@ -5,22 +5,29 @@
 Texture2D<float> DuoDepthCandidate0 : register(t2);
 Texture2D<float> DuoDepthCandidate1 : register(t3);
 
-float RawDepthAt(Texture2D<float> src, float2 local, float2 active) {
-    uint w,h; src.GetDimensions(w,h);
-    if (w==0 || h==0 || active.x<1 || active.y<1) return 0;
-    const float2 limits=min(active,float2(w,h));
+float RawDepthAt0(float2 local,float2 active) {
+    uint w,h; DuoDepthCandidate0.GetDimensions(w,h);
+    if (!w || !h || active.x<1 || active.y<1) return 0;
+    const float2 limits=max(min(active,float2(w,h)),float2(1,1));
     const float2 pixel=clamp(saturate(local)*active,float2(.5,.5),limits-float2(.5,.5));
-    return src.SampleLevel(LinearClamp,pixel/float2(w,h),0);
+    return DuoDepthCandidate0.SampleLevel(LinearClamp,pixel/float2(w,h),0);
+}
+float RawDepthAt1(float2 local,float2 active) {
+    uint w,h; DuoDepthCandidate1.GetDimensions(w,h);
+    if (!w || !h || active.x<1 || active.y<1) return 0;
+    const float2 limits=max(min(active,float2(w,h)),float2(1,1));
+    const float2 pixel=clamp(saturate(local)*active,float2(.5,.5),limits-float2(.5,.5));
+    return DuoDepthCandidate1.SampleLevel(LinearClamp,pixel/float2(w,h),0);
 }
 float RawFoveaDepth(float2 local) {
     return _reserved<.5
-        ? RawDepthAt(DuoDepthCandidate0,local,FoveaRect.zw)
-        : RawDepthAt(DuoDepthCandidate1,local,FoveaRect.zw);
+        ? RawDepthAt0(local,FoveaRect.zw)
+        : RawDepthAt1(local,FoveaRect.zw);
 }
 float RawPeripheryDepth(float2 uv) {
     return _reserved<.5
-        ? RawDepthAt(DuoDepthCandidate1,uv,PeripheralRect.zw)
-        : RawDepthAt(DuoDepthCandidate0,uv,PeripheralRect.zw);
+        ? RawDepthAt1(uv,PeripheralRect.zw)
+        : RawDepthAt0(uv,PeripheralRect.zw);
 }
 float4 PSNativeDepthProbe(VertexOut i) : SV_TARGET0 {
     float2 p=i.pos.xy;
