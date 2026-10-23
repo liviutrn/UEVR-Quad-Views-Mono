@@ -107,7 +107,9 @@ public:
                 ID3D12Resource* primary, ID3D12Resource* secondary,
                 ID3D12Resource* destination, D3D12_RESOURCE_STATES primary_state,
                 D3D12_RESOURCE_STATES secondary_state, const ViewFrame& frame,
-                std::shared_ptr<const void> packet_lifetime, UINT64 frequency = 0) {
+                std::shared_ptr<const void> packet_lifetime, UINT64 frequency = 0,
+                ID3D12Resource* depth0=nullptr, ID3D12Resource* depth1=nullptr,
+                uint32_t depth_debug=0) {
         recorded_commands_=false;
         error_.clear();
         last_native_direct_xr_=false;
@@ -140,7 +142,8 @@ public:
         // Direct double-wide raster would run sharpening twice on the same
         // monoscopic foveal content. Use the existing single-Mono compose+copy
         // when fused sharpening is enabled; leave v182 behavior otherwise.
-        const bool direct_xr=frame.config.settings.direct_xr_output &&
+        const bool depth_mode=depth_debug>=1 && depth_debug<=4 && depth0 && depth1 && native_depth_pipeline_;
+        const bool direct_xr=!depth_mode && frame.config.settings.direct_xr_output &&
             frame.config.settings.sharpen_strength <= 0.0f &&
             xrd.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
             xrd.Width==static_cast<uint64_t>(width_)*2 && xrd.Height==height_ &&
@@ -204,7 +207,8 @@ public:
             {layout.u0,layout.v0,layout.u1,layout.v1},
             frame.config.settings.feather_fraction,
             frame.config.settings.debug_border ? 1u : 0u,
-            frame.config.settings.diagnostic_view, 0.f,
+            depth_mode ? 10u+depth_debug : frame.config.settings.diagnostic_view,
+            static_cast<float>(frame.config.settings.fovea_view),
             {static_cast<uint32_t>(fd.Width),fd.Height},
             {static_cast<uint32_t>(vd.Width),vd.Height},
             {0u,0u},
@@ -212,6 +216,8 @@ public:
             3u | (srgb_ ? 0u : 4u) // larger radius, edge protection, SDR conversion
         };
         ensure_srvs(device,fovea,periphery,sampling_format);
+        if (depth_mode && !ensure_depth_srvs(device,depth0,depth1))
+            return reject("P1 owned depth resource format/device not sampleable");
         // GPU lifetime remains bound to the exact retired OpenXR command slot,
         // never to whichever engine packet happens to arrive next.
         primary_reference_=primary; secondary_reference_=secondary;
@@ -225,7 +231,7 @@ public:
         ID3D12DescriptorHeap* heaps[]{srv_.Get()};
         cmd->SetDescriptorHeaps(1,heaps);
         cmd->SetGraphicsRootSignature(root_.Get());
-        cmd->SetPipelineState(native_pipeline_.Get());
+        cmd->SetPipelineState(depth_mode?native_depth_pipeline_.Get():native_pipeline_.Get());
         cmd->SetGraphicsRootDescriptorTable(0,srv_gpu_start_);
         cmd->SetGraphicsRoot32BitConstants(1,sizeof(constants)/4,&constants,0);
         auto handle=rtv_cpu_start_;
@@ -380,6 +386,46 @@ private:
         srv_cached_format_=format; srv_descriptors_valid_=true;
         ++srv_descriptor_refresh_count_;
     }
+    bool ensure_depth_srvs(ID3D12Device* device, ID3D12Resource* a, ID3D12Resource* b) {
+        if (!device || !a || !b || a==b) return false;
+        const auto da=a->GetDesc(),db=b->GetDesc();
+        auto fmt=[](DXGI_FORMAT x)->DXGI_FORMAT {
+            switch(x) {
+            case DXGI_FORMAT_R32_TYPELESS: case DXGI_FORMAT_D32_FLOAT:
+            case DXGI_FORMAT_R32_FLOAT:return DXGI_FORMAT_R32_FLOAT;
+            case DXGI_FORMAT_R16_TYPELESS: case DXGI_FORMAT_D16_UNORM:
+            case DXGI_FORMAT_R16_UNORM:return DXGI_FORMAT_R16_UNORM;
+            case DXGI_FORMAT_R24G8_TYPELESS: case DXGI_FORMAT_D24_UNORM_S8_UINT:
+                return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+            case DXGI_FORMAT_R32G8X24_TYPELESS: case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+                return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+            default:return DXGI_FORMAT_UNKNOWN;
+            }
+        };
+        const auto valid=[](const D3D12_RESOURCE_DESC& d) {
+            return d.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+                d.Width && d.Height && d.DepthOrArraySize==1 &&
+                d.MipLevels==1 && d.SampleDesc.Count==1 && d.SampleDesc.Quality==0;
+        };
+        if (!valid(da)||!valid(db)||fmt(da.Format)==DXGI_FORMAT_UNKNOWN||
+            fmt(db.Format)==DXGI_FORMAT_UNKNOWN)return false;
+        ComPtr<ID3D12Device> ad,bd;
+        if (FAILED(a->GetDevice(IID_PPV_ARGS(&ad))) ||
+            FAILED(b->GetDevice(IID_PPV_ARGS(&bd))) ||
+            ad.Get()!=device || bd.Get()!=device)return false;
+        if (srv_depth_first_reference_.Get()==a && srv_depth_second_reference_.Get()==b) return true;
+        D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+        view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;
+        view.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        view.Texture2D.MipLevels=1;
+        auto cpu=srv_cpu_start_;
+        cpu.ptr+=2*srv_descriptor_increment_;
+        view.Format=fmt(da.Format);device->CreateShaderResourceView(a,&view,cpu);
+        cpu.ptr+=srv_descriptor_increment_;
+        view.Format=fmt(db.Format);device->CreateShaderResourceView(b,&view,cpu);
+        srv_depth_first_reference_=a; srv_depth_second_reference_=b;
+        return true;
+    }
     void update_timing(bool timed, bool direct_xr) {
         if (!timed || (timing_pending_ && pending_direct_xr_!=direct_xr)) {
             timing_pending_=false;
@@ -446,9 +492,9 @@ private:
         return false;
     }
     bool prepare(ID3D12Device* device, UINT width, UINT height, bool srgb) {
-        if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
-        output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
-        srv_first_reference_.Reset(); srv_second_reference_.Reset(); xr_rtv_reference_.Reset();
+        if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && native_depth_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
+        output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); native_depth_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
+        srv_first_reference_.Reset(); srv_second_reference_.Reset(); srv_depth_first_reference_.Reset(); srv_depth_second_reference_.Reset(); xr_rtv_reference_.Reset();
         srv_descriptors_valid_=false; srv_cached_format_=DXGI_FORMAT_UNKNOWN;
         xr_rtv_format_=DXGI_FORMAT_UNKNOWN;
         srv_cpu_start_={}; srv_gpu_start_={}; rtv_cpu_start_={}; direct_xr_rtv_cpu_={};
@@ -457,7 +503,7 @@ private:
         device_ = device; width_ = width; height_ = height; srgb_ = srgb;
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 2;
+        range.NumDescriptors = 4;
         D3D12_ROOT_PARAMETER params[2]{};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[0].DescriptorTable = {1, &range};
@@ -500,6 +546,8 @@ private:
         if (!check(device->CreateGraphicsPipelineState(&graphics, IID_PPV_ARGS(&pipeline_)), "Create raster PSO")) return false;
         graphics.PS = {native_pixel_shader_bytecode, sizeof(native_pixel_shader_bytecode)};
         if (!check(device->CreateGraphicsPipelineState(&graphics, IID_PPV_ARGS(&native_pipeline_)), "Create direct Native raster PSO")) return false;
+        graphics.PS={native_depth_probe_pixel_shader_bytecode,sizeof(native_depth_probe_pixel_shader_bytecode)};
+        if (!check(device->CreateGraphicsPipelineState(&graphics,IID_PPV_ARGS(&native_depth_pipeline_)),"Create P1 raw-depth PSO")) return false;
         D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT; heap.CreationNodeMask = heap.VisibleNodeMask = 1;
         D3D12_RESOURCE_DESC texture{};
         texture.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -519,7 +567,7 @@ private:
         atlas_->SetName(L"DuoView::NativeGatherAtlasFallback");
         D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.NumDescriptors = 2; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (!check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_)), "Create RTV heap")) return false;
-        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; hd.NumDescriptors = 2;
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; hd.NumDescriptors = 4;
         if (!check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srv_)), "Create SRV heap")) return false;
         srv_cpu_start_=srv_->GetCPUDescriptorHandleForHeapStart();
         srv_gpu_start_=srv_->GetGPUDescriptorHandleForHeapStart();
@@ -533,10 +581,10 @@ private:
     }
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12Resource> output_, source_, atlas_, primary_reference_, secondary_reference_;
-    ComPtr<ID3D12Resource> srv_first_reference_, srv_second_reference_, xr_rtv_reference_;
+    ComPtr<ID3D12Resource> srv_first_reference_, srv_second_reference_, srv_depth_first_reference_, srv_depth_second_reference_, xr_rtv_reference_;
     std::shared_ptr<const void> packet_lifetime_{};
     ComPtr<ID3D12RootSignature> root_;
-    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_;
+    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_, native_depth_pipeline_;
     ComPtr<ID3D12DescriptorHeap> srv_, rtv_;
     D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_start_{}, rtv_cpu_start_{}, direct_xr_rtv_cpu_{};
     D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_start_{};
