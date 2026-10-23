@@ -1,4 +1,4 @@
-name: DuoView v186.1 Depth Discovery P0 (Build49-based)
+name: DuoView v186.1 P1 Owned Depth Capture (Build49-based)
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
   push:
@@ -93,6 +93,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Depth Discovery P0 exact-anchor patch failed' }
           python workspace/duoview/depth_probe/test_depth_discovery_p0.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Depth Discovery P0 safety validation failed' }
+          python workspace/duoview/depth_probe/apply_depth_capture_p1.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'P1 owned SceneDepthZ capture integration failed' }
+          python workspace/duoview/depth_probe/apply_depth_visual_p1.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'P1 raw-Z visualizer integration failed' }
+          python workspace/duoview/depth_probe/test_depth_probe_p1.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'P1 capture/visual regression gates failed' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
       - name: Verify pinned production geometry and pair-state contracts
@@ -211,11 +217,19 @@ jobs:
           Stage5 gaze requires installed PSVR2 Toolkit CAPI and still requires headset calibration validation.
           Restored engine view order and optical gaze mapping are source verified. Actual Lumen/shadow/exposure and visual parity require a headset test; no gamma correction applied.
           The eye-tracked source/compositor and first-use pacing are NOT headset verified.
-          Depth Discovery P0: Experimental opt-in DSV/RDG candidate tracing in DuoView only.
-          UI: Depth Discovery P0 -> toggle candidate trace -> click Log next 200 DuoView source frames.
-          The output remains the unchanged monoscopic Build49 DuoView. NO owned depth copies,
-          NO depth visualizations, NO depth/color matching, and NO stereo DIBR. A size
-          match is NOT proof of SceneDepthZ or of frame correspondence. Collect UEVR log.
+          DEPTH PROBE P1 TEST — EXPERIMENTAL, NOT HEADSET VERIFIED
+          Build49 remains the baseline; default Mono/eye alignment/HUD/gaze unchanged.
+          UEVR -> DuoView Mono quality -> Depth Discovery P0 tree:
+          enable opt-in trace; Capture TWO owned P1 depth snapshots (one shot).
+          New GPU copies are produced only when SceneDepthZ has matching safe barriers.
+          Raw hardware-Z view 0=Legacy Mono,1=periphery candidate,2=fovea candidate,
+          3=combined,4=UNVERIFIED mismatch mask.
+          NO proven per-view depth/frame association, NO linear-meters claim,
+          NO stereo DIBR, NO automatic left/right differences.
+          P1 captures are candidate snapshots until in-game frame proof is established.
+          DEPTH FEATURE OFF is default, and normal color output remains the fallback.
+          Use SEPARATE install directory, retain your stable v186.1 Build49 CI56.
+          Collect UEVR log and SteamVR screenshot; no automatic screenshot ZIP yet.
           Never install over the known-good v186.1 Build49 CI56 directory.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','duoview-stage234-hashes.json','exact-baseline-source.json')
@@ -223,16 +237,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-DepthDiscoveryP0-Build49-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-DepthProbeP1-Build49-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-DepthDiscoveryP0-Build49-${{ github.run_number }}
+          name: UEVR-DuoView-DepthProbeP1-Build49-${{ github.run_number }}
           path: |
-            UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-*.zip
-            UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-*.zip.sha256
+            UEVR-DuoView-DepthProbeP1-Build49-*.zip
+            UEVR-DuoView-DepthProbeP1-Build49-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
