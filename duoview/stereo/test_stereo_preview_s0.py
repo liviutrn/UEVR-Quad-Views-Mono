@@ -18,6 +18,18 @@ def validate(root):
     assert 'ImGuiWindowFlags_AlwaysVerticalScrollbar' in ui
     assert 'S0 BLOCKED: no completed GPU depth pair' in ui
     assert 'Reset empty P1 attempt (0 copies only)' in ui
+    # Ensure pre-DLSS depth size is not mistaken for a shadow resource
+    # solely because it is 3x smaller than the final color RT.
+    depth=read("src/mods/vr/DuoDepthPairP1.hpp")
+    assert 'const double scale_x=double(reference_width)/double(e.width)' in depth
+    assert 'const double scale_y=double(reference_height)/double(e.height)' in depth
+    def acceptable(cw,ch,dw,dh):
+        sx=cw/dw;sy=ch/dh
+        return .8<=sx<=4.2 and .8<=sy<=4.2 and .92<=sx/sy<=1.08
+    assert acceptable(3612,3188,1208,1064)
+    assert not acceptable(3612,3188,256,2048)
+    assert not acceptable(3612,3188,1208,512)
+
     assert 'required approx' in dx
     assert 'm_duoview_depth_survey.candidate(' in dx
     assert 'vr->duoview_s0_eye_test_enabled() ? 6u' in dx
