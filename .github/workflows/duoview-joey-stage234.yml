@@ -9,6 +9,7 @@ on:
       - experiment/duoview-mono-eye-alignment-hud-v48-20261022
       - fix/duoview-v49-openxr-alignment-persistence-20261022
       - experiment/duoview-center-dibr-depth-probe-20261023
+      - experiment/duoview-center-stereo-a-plus-20261023
   pull_request:
     branches:
       - build-182
@@ -113,6 +114,16 @@ jobs:
           ctest --test-dir duo_pinned_tests -C Release --output-on-failure --no-tests=error *> evidence/pinned-results.log
           $code=$LASTEXITCODE; Get-Content evidence/pinned-results.log
           if ($code -ne 0) { throw "Pinned production contract failed ($code)" }
+      - name: Verify A+ stereo RGB-D matching and reject unsafe input
+        shell: pwsh
+        run: |
+          cmake -S workspace/duoview/stereo -B duo_stereo_tests -G 'Visual Studio 17 2022' -A x64 *> evidence/stereo-lineage-config.log
+          $code=$LASTEXITCODE; if ($code -ne 0) { Get-Content evidence/stereo-lineage-config.log; throw "Stereo provenance configure failed" }
+          cmake --build duo_stereo_tests --config Release --parallel 2 *> evidence/stereo-lineage-build.log
+          $code=$LASTEXITCODE; if ($code -ne 0) { Get-Content evidence/stereo-lineage-build.log; throw "Stereo provenance build failed" }
+          ctest --test-dir duo_stereo_tests -C Release --output-on-failure *> evidence/stereo-lineage-test.log
+          $code=$LASTEXITCODE; Get-Content evidence/stereo-lineage-test.log
+          if ($code -ne 0) { throw "Stereo provenance reject-case test failed" }
       - name: Configure independent DuoView geometric, state, and GPU WARP tests
         shell: pwsh
         run: |
