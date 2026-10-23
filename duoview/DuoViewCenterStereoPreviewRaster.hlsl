@@ -8,9 +8,11 @@ Texture2D<float> StereoCandidateZ1 : register(t3); // 344x276: periphery candida
 
 float ReadZ(Texture2D<float> zTex,float2 uv,float2 active) {
     uint w,h;zTex.GetDimensions(w,h);
-    if(w<2||h<2||active.x<2||active.y<2)return 0.0;
-    float2 limit=max(float2(1,1),min(float2(w,h),active)-1.0);
-    float2 pixel=clamp(saturate(uv)*active,float2(0.5,0.5),limit);
+    if(w<2||h<2)return 0.0;
+    // Hardware Z is pre-DLSS: map normalized view UV to the native depth
+    // buffer, never to the post-upscale DuoView color rectangle.
+    float2 dims=float2(w,h);
+    float2 pixel=clamp(saturate(uv)*dims,float2(0.5,0.5),dims-float2(0.5,0.5));
     float z=zTex.SampleLevel(LinearClamp,pixel/float2(w,h),0);
     return (z>=0.0 && z<1.0)?z:0.0;
 }
