@@ -185,4 +185,94 @@ private:
     std::atomic<bool> armed_{false};
     std::string status_{"disabled; no GPU depth copies"};
 };
+// P2 diagnostic-only fallback for UE5 RDG configurations where SceneDepthZ is
+// absent from the RT pool. This does not identify fovea/periphery or copy
+// content. All allocation / GPU copying remains outside RHI callback.
+class DepthTransitionSurvey final : public D3D12DepthStencilObserver {
+public:
+    using Resource = Microsoft::WRL::ComPtr<ID3D12Resource>;
+    Resource candidate() const {
+        std::scoped_lock lock{mutex_};
+        const Entry* best=nullptr;
+        for (const auto& e : entries_) {
+            if (e.resource && e.hits >= 2 && (!best || e.hits > best->hits))
+                best=&e;
+        }
+        return best ? best->resource : Resource{};
+    }
+    unsigned total() const { return observed_.load(std::memory_order_acquire); }
+    std::string summary() const {
+        std::scoped_lock lock{mutex_};
+        unsigned best_hits=0; unsigned width=0,height=0,fmt=0;
+        for (const auto& e:entries_) if(e.resource && e.hits>best_hits){
+            best_hits=e.hits;width=static_cast<unsigned>(e.width);
+            height=e.height;fmt=static_cast<unsigned>(e.format);
+        }
+        return "depth transitions=" + std::to_string(observed_.load()) +
+            ", best_seen=" + std::to_string(best_hits) +
+            ", extent=" + std::to_string(width)+"x"+std::to_string(height)+
+            ", DXGI_format=" + std::to_string(fmt)+
+            "; role/tick UNVERIFIED; no pool lookup required";
+    }
+    void on_depth_stencil_view_created(ID3D12Resource*,
+        const D3D12_DEPTH_STENCIL_VIEW_DESC*,
+        D3D12_CPU_DESCRIPTOR_HANDLE) override {}
+    void on_resource_barriers(ID3D12GraphicsCommandList* cmd,UINT count,
+        const D3D12_RESOURCE_BARRIER* barriers) override {
+        if (!cmd || !barriers || cmd->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT)
+            return;
+        // D3D12 resource-barrier hook calls this BEFORE the original transition.
+        for (UINT i=0;i<count;++i) {
+            const auto& t=barriers[i];
+            if(t.Type!=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION ||
+                t.Transition.StateBefore!=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE ||
+                t.Transition.StateAfter!=D3D12_RESOURCE_STATE_DEPTH_WRITE ||
+                !t.Transition.pResource) continue;
+            const auto desc=t.Transition.pResource->GetDesc();
+            if(desc.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+               desc.Width<256 || desc.Height<256 || desc.Width>32768 ||
+               desc.Height>32768 || desc.DepthOrArraySize!=1 ||
+               desc.MipLevels!=1 || desc.SampleDesc.Count!=1 ||
+               !(desc.Flags&D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) ||
+               !valid_format(desc.Format))continue;
+            observed_.fetch_add(1,std::memory_order_relaxed);
+            std::unique_lock lock{mutex_,std::try_to_lock};
+            if(!lock.owns_lock())continue;
+            Entry* slot=nullptr;
+            for(auto& e:entries_) {
+                if(e.resource.Get()==t.Transition.pResource) {slot=&e;break;}
+                if(!slot && !e.resource) slot=&e;
+            }
+            if(!slot)continue; // bounded to avoid growth during rendering
+            if (!slot->resource) {
+                slot->resource=t.Transition.pResource; // holds live RHI reference
+                slot->width=desc.Width;slot->height=desc.Height;slot->format=desc.Format;
+            }
+            if(slot->hits<UINT32_MAX)++slot->hits;
+        }
+    }
+private:
+    struct Entry {
+        Resource resource{};
+        uint64_t width{};
+        unsigned height{};
+        DXGI_FORMAT format{DXGI_FORMAT_UNKNOWN};
+        uint32_t hits{};
+    };
+    static bool valid_format(DXGI_FORMAT f) {
+        switch(f) {
+        case DXGI_FORMAT_D32_FLOAT: case DXGI_FORMAT_R32_TYPELESS:
+        case DXGI_FORMAT_R32_FLOAT:
+        case DXGI_FORMAT_D24_UNORM_S8_UINT: case DXGI_FORMAT_R24G8_TYPELESS:
+        case DXGI_FORMAT_D16_UNORM: case DXGI_FORMAT_R16_TYPELESS:
+        case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+        case DXGI_FORMAT_R32G8X24_TYPELESS:return true;
+        default:return false;
+        }
+    }
+    mutable std::mutex mutex_;
+    Entry entries_[12]{};
+    std::atomic<unsigned> observed_{0};
+};
+
 } // namespace uevr::duoview::dx12
