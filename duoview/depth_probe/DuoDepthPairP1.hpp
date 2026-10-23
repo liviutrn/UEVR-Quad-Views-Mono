@@ -77,13 +77,33 @@ public:
         desc_=desc;
         source_format_=format;
         captured_.store(0,std::memory_order_release);
+        barriers_seen_.store(0,std::memory_order_release);
+        source_seen_.store(0,std::memory_order_release);
+        mismatched_states_.store(0,std::memory_order_release);
         armed_.store(true,std::memory_order_release);
         status_="armed, awaiting two qualifying SceneDepthZ transitions";
         return true;
     }
     bool armed() const { return armed_.load(std::memory_order_acquire); }
     unsigned captured() const { return captured_.load(std::memory_order_acquire); }
-    std::string status() const { std::scoped_lock lock{mutex_};return status_; }
+    bool reset_if_empty() {
+        std::scoped_lock lock{mutex_};
+        if (captured_.load(std::memory_order_acquire)!=0 ||
+            fence_signaled_.load(std::memory_order_acquire)) return false;
+        armed_.store(false,std::memory_order_release);
+        source_.Reset();
+        snapshots_[0].Reset(); snapshots_[1].Reset(); fence_.Reset();
+        barriers_seen_.store(0); source_seen_.store(0); mismatched_states_.store(0);
+        status_="no-copy attempt reset; safe to select a different depth candidate";
+        return true;
+    }
+    std::string status() const {
+        std::scoped_lock lock{mutex_};
+        return status_+" | hook_calls="+std::to_string(barriers_seen_.load())+
+            " source_transitions="+std::to_string(source_seen_.load())+
+            " wrong_state="+std::to_string(mismatched_states_.load())+
+            " copies="+std::to_string(captured_.load());
+    }
     DXGI_FORMAT srv_format() const { std::scoped_lock lock{mutex_};return source_format_; }
     Resource candidate(unsigned i) const {
         std::scoped_lock lock{mutex_};
@@ -117,16 +137,21 @@ public:
          const D3D12_RESOURCE_BARRIER* barriers) override {
         if (!armed_.load(std::memory_order_acquire) || !cmd || !barriers ||
             cmd->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT) return;
+        barriers_seen_.fetch_add(1,std::memory_order_relaxed);
         std::unique_lock lock{mutex_,std::try_to_lock};
         if (!lock.owns_lock() || !armed_.load(std::memory_order_relaxed) || !source_) return;
         for (UINT b=0;b<n;++b) {
             const auto& t=barriers[b];
             if (t.Type!=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION ||
-                t.Transition.pResource!=source_.Get() ||
-                t.Transition.Subresource!=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES &&
-                t.Transition.Subresource!=0 ||
+                t.Transition.pResource!=source_.Get()) continue;
+            source_seen_.fetch_add(1,std::memory_order_relaxed);
+            if ((t.Transition.Subresource!=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES &&
+                 t.Transition.Subresource!=0) ||
                 t.Transition.StateBefore!=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE ||
-                t.Transition.StateAfter!=D3D12_RESOURCE_STATE_DEPTH_WRITE) continue;
+                t.Transition.StateAfter!=D3D12_RESOURCE_STATE_DEPTH_WRITE) {
+                mismatched_states_.fetch_add(1,std::memory_order_relaxed);
+                continue;
+            }
             const auto index=captured_.load(std::memory_order_relaxed);
             if (index>=2) { armed_.store(false,std::memory_order_release);break; }
             auto* dst=snapshots_[index].Get();
@@ -183,6 +208,7 @@ private:
     std::atomic<bool> fence_signaled_{false};
     std::atomic<unsigned> captured_{0};
     std::atomic<bool> armed_{false};
+    std::atomic<uint64_t> barriers_seen_{0}, source_seen_{0}, mismatched_states_{0};
     std::string status_{"disabled; no GPU depth copies"};
 };
 // P2 diagnostic-only fallback for UE5 RDG configurations where SceneDepthZ is
@@ -191,12 +217,18 @@ private:
 class DepthTransitionSurvey final : public D3D12DepthStencilObserver {
 public:
     using Resource = Microsoft::WRL::ComPtr<ID3D12Resource>;
-    Resource candidate() const {
+    Resource candidate(uint32_t reference_width,uint32_t reference_height) const {
         std::scoped_lock lock{mutex_};
         const Entry* best=nullptr;
         for (const auto& e : entries_) {
-            if (e.resource && e.hits >= 2 && (!best || e.hits > best->hits))
-                best=&e;
+            if (!e.resource || e.hits<2 || !reference_width || !reference_height)
+                continue;
+            // Reject small shadow/lighting targets; heuristic DOES NOT prove pass identity.
+            const bool shape=e.width >= (uint64_t(reference_width)*8)/10 &&
+                e.width <= (uint64_t(reference_width)*22)/10 &&
+                e.height >= (uint64_t(reference_height)*8)/10 &&
+                e.height <= (uint64_t(reference_height)*12)/10;
+            if (shape && (!best || e.hits>best->hits)) best=&e;
         }
         return best ? best->resource : Resource{};
     }
@@ -208,11 +240,18 @@ public:
             best_hits=e.hits;width=static_cast<unsigned>(e.width);
             height=e.height;fmt=static_cast<unsigned>(e.format);
         }
-        return "depth transitions=" + std::to_string(observed_.load()) +
-            ", best_seen=" + std::to_string(best_hits) +
-            ", extent=" + std::to_string(width)+"x"+std::to_string(height)+
-            ", DXGI_format=" + std::to_string(fmt)+
-            "; role/tick UNVERIFIED; no pool lookup required";
+        std::string report="depth transitions="+std::to_string(observed_.load())+
+            "; most frequent "+std::to_string(width)+"x"+std::to_string(height)+
+            " format="+std::to_string(fmt)+" hits="+std::to_string(best_hits)+
+            "; candidates (UNVERIFIED):";
+        for (unsigned i=0;i<12;++i) {
+            const auto& e=entries_[i];
+            if (!e.resource) continue;
+            report+=" #"+std::to_string(i)+"="+std::to_string(e.width)+"x"+
+                std::to_string(e.height)+" fmt"+std::to_string(unsigned(e.format))+
+                " hits"+std::to_string(e.hits);
+        }
+        return report;
     }
     void on_depth_stencil_view_created(ID3D12Resource*,
         const D3D12_DEPTH_STENCIL_VIEW_DESC*,
