@@ -143,7 +143,18 @@ public:
         for (UINT b=0;b<n;++b) {
             const auto& t=barriers[b];
             if (t.Type!=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION ||
-                t.Transition.pResource!=source_.Get()) continue;
+                !t.Transition.pResource) continue;
+            // A pooled RDG SceneDepthZ allocation may rotate between frames.
+            // For research snapshots only, accept an exact-format, exact-size
+            // allocation that emits the same known-safe barrier transition.
+            const auto d=t.Transition.pResource->GetDesc();
+            const bool same_shape=(d.Dimension==desc_.Dimension &&
+                d.Width==desc_.Width && d.Height==desc_.Height &&
+                d.Format==desc_.Format && d.DepthOrArraySize==desc_.DepthOrArraySize &&
+                d.MipLevels==desc_.MipLevels &&
+                d.SampleDesc.Count==desc_.SampleDesc.Count &&
+                (d.Flags&D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)!=0);
+            if (!same_shape) continue;
             source_seen_.fetch_add(1,std::memory_order_relaxed);
             if ((t.Transition.Subresource!=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES &&
                  t.Transition.Subresource!=0) ||
@@ -158,13 +169,13 @@ public:
             if (!dst) { status_="owned copy unexpectedly missing";armed_=false;break; }
             D3D12_RESOURCE_BARRIER barriers_before[2]{};
             barriers_before[0].Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barriers_before[0].Transition={source_.Get(),D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+            barriers_before[0].Transition={t.Transition.pResource,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE};
             barriers_before[1].Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barriers_before[1].Transition={dst,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
                 sample_state(),D3D12_RESOURCE_STATE_COPY_DEST};
             cmd->ResourceBarrier(2,barriers_before);
-            D3D12_TEXTURE_COPY_LOCATION from{source_.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
+            D3D12_TEXTURE_COPY_LOCATION from{t.Transition.pResource,D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
             D3D12_TEXTURE_COPY_LOCATION to{dst,D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
             cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
             for (auto& q:barriers_before) {
@@ -173,8 +184,8 @@ public:
             }
             cmd->ResourceBarrier(2,barriers_before);
             captured_.store(index+1,std::memory_order_release);
-            status_= index==0 ? "copied candidate 0; awaiting next depth pass"
-                : "two GPU copies recorded; roles/frame still UNVERIFIED";
+            status_= index==0 ? "copied same-format candidate 0; awaiting next depth pass"
+                : "two same-shape GPU copies recorded; roles/frame still UNVERIFIED";
             if (index==1) armed_.store(false,std::memory_order_release);
             // Never intercept a second qualifying barrier in the same callback.
             // It may represent multiple resource state transitions, not a view.
