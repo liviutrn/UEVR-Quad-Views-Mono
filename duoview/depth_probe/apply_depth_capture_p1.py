@@ -20,6 +20,7 @@ def main(backend):
     unsigned duoview_p1_captured() const { return m_duoview_p1.captured(); }
     bool duoview_p1_gpu_ready() const { return m_duoview_p1.gpu_ready(); }
     std::string duoview_p1_status() const { return m_duoview_p1.status(); }
+    bool reset_duoview_p1_if_empty() { return m_duoview_p1.reset_if_empty(); }
     std::string duoview_depth_survey_summary() const { return m_duoview_depth_survey.summary(); }
     void arm_duoview_depth_discovery() {''')
     edit(backend,"src/mods/vr/D3D12Component.hpp",
@@ -35,7 +36,12 @@ def main(backend):
         '                    ImGui::TextWrapped("Opt-in, one-shot GPU copies of SceneDepthZ candidates. No proven view matching or stereo synthesis. Unavailable depth always falls back to Build49 Mono.");')
     edit(backend,"src/mods/VR.cpp",
         '                        if (ImGui::Button("Log next 200 DuoView source frames")) {',
-        '''                        if (ImGui::Button("Capture TWO owned P1 depth snapshots (one shot)")) {
+        '''                        ImGui::TextWrapped("P1 is a research capture, not live stereo. The eye output test above works even without P1.");
+                        if (ImGui::Button("Reset empty P1 attempt (0 copies only)")) {
+                            if (!d3d12().reset_duoview_p1_if_empty())
+                                SPDLOG_WARN("[DuoDepthP1] No-copy reset rejected: at least one depth copy or pending GPU work");
+                        }
+                        if (ImGui::Button("Capture TWO owned P1 depth snapshots (one shot)")) {
                             if (!d3d12().arm_duoview_p1(this))
                                 SPDLOG_WARN("[DuoDepthP1] Arm failed: {}",d3d12().duoview_p1_status());
                         }
@@ -58,9 +64,19 @@ def main(backend):
         // UE5 RDG may omit transient SceneDepthZ from the public RT pool.
         // Repeated shader-read->depth-write transitions supply provisional
         // candidate resources; their UE pass/pose identity remains unverified.
-        scene=m_duoview_depth_survey.candidate();
-        SPDLOG_INFO("[DuoDepthP1] pool MISS; barrier candidate=0x{:X}; {}",
+        const auto secondary_desc=m_scene_capture_tex.texture
+            ? m_scene_capture_tex.texture->GetDesc() : D3D12_RESOURCE_DESC{};
+        // Survey's most frequent depth is 1208x1064 on this STALKER 2 build,
+        // while the low-resolution DuoView color is 3612x3188.
+        // Do not auto-select a downsampled shadow/lighting buffer as scene depth.
+        scene=m_duoview_depth_survey.candidate(
+            static_cast<uint32_t>(secondary_desc.Width), secondary_desc.Height);
+        SPDLOG_INFO("[DuoDepthP1] pool MISS; required approx {}x{} candidate=0x{:X}; {}",
+            secondary_desc.Width,secondary_desc.Height,
             reinterpret_cast<uintptr_t>(scene.Get()),m_duoview_depth_survey.summary());
+    }
+    if (!scene) {
+        SPDLOG_WARN("[DuoDepthP1] NO scene-sized depth transition yet; do not present unrelated low-res candidate as stereo depth");
     }
     const bool armed=m_duoview_p1.arm(hook->get_device(),scene.Get());
     SPDLOG_INFO("[DuoDepthP1] arm={} source=0x{:X} state={}",
