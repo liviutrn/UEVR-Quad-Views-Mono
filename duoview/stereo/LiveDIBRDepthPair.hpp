@@ -109,8 +109,11 @@ public:
             if (!t.pResource ||
                 (t.Subresource!=0 && t.Subresource!=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES) ||
                 t.StateBefore!=D3D12_RESOURCE_STATE_DEPTH_WRITE ||
-                t.StateAfter!=(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE|
-                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE))continue;
+                (t.StateAfter!=(D3D12_RESOURCE_STATE_DEPTH_READ|
+                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) &&
+                 t.StateAfter!=(D3D12_RESOURCE_STATE_DEPTH_READ|
+                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE|
+                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)))continue;
             // Avoid copying a resource that also changes state in this barrier batch.
             bool ambiguous=false;
             for(UINT k=0;k<n;++k) if(k!=j &&
