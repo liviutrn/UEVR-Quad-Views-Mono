@@ -156,7 +156,8 @@ public:
             depth0 && depth1 && native_stereo_preview_pipeline_ && direct_compatible;
         const bool depth_mode=depth_debug>=1 && depth_debug<=4 &&
             depth0 && depth1 && native_depth_pipeline_;
-        const bool direct_xr=stereo_preview ||
+        const bool eye_test=depth_debug==6 && native_eye_check_pipeline_ && direct_compatible;
+        const bool direct_xr=eye_test || stereo_preview ||
             (!depth_mode && frame.config.settings.direct_xr_output &&
              frame.config.settings.sharpen_strength<=0.0f && direct_compatible);
         const auto& pr=frame.config.settings.fovea_view==0 ? layout.fovea : layout.periphery;
@@ -243,8 +244,9 @@ public:
         ID3D12DescriptorHeap* heaps[]{srv_.Get()};
         cmd->SetDescriptorHeaps(1,heaps);
         cmd->SetGraphicsRootSignature(root_.Get());
-        cmd->SetPipelineState(stereo_preview ? native_stereo_preview_pipeline_.Get() :
-            (depth_mode ? native_depth_pipeline_.Get() : native_pipeline_.Get()));
+        cmd->SetPipelineState(eye_test ? native_eye_check_pipeline_.Get() :
+            (stereo_preview ? native_stereo_preview_pipeline_.Get() :
+            (depth_mode ? native_depth_pipeline_.Get() : native_pipeline_.Get())));
         cmd->SetGraphicsRootDescriptorTable(0,srv_gpu_start_);
         cmd->SetGraphicsRoot32BitConstants(1,sizeof(constants)/4,&constants,0);
         auto handle=rtv_cpu_start_;
@@ -506,7 +508,7 @@ private:
     }
     bool prepare(ID3D12Device* device, UINT width, UINT height, bool srgb) {
         if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
-        output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); native_depth_pipeline_.Reset(); native_stereo_preview_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
+        output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); native_depth_pipeline_.Reset(); native_stereo_preview_pipeline_.Reset(); native_eye_check_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
         srv_first_reference_.Reset(); srv_second_reference_.Reset(); srv_depth_first_reference_.Reset(); srv_depth_second_reference_.Reset(); xr_rtv_reference_.Reset();
         srv_descriptors_valid_=false; srv_cached_format_=DXGI_FORMAT_UNKNOWN;
         xr_rtv_format_=DXGI_FORMAT_UNKNOWN;
@@ -572,6 +574,11 @@ private:
         if (FAILED(device->CreateGraphicsPipelineState(
                 &graphics,IID_PPV_ARGS(&native_stereo_preview_pipeline_))))
             native_stereo_preview_pipeline_.Reset();
+        graphics.PS={native_eye_check_pixel_shader_bytecode,
+                     sizeof(native_eye_check_pixel_shader_bytecode)};
+        if (FAILED(device->CreateGraphicsPipelineState(
+                &graphics,IID_PPV_ARGS(&native_eye_check_pipeline_))))
+            native_eye_check_pipeline_.Reset();
         D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT; heap.CreationNodeMask = heap.VisibleNodeMask = 1;
         D3D12_RESOURCE_DESC texture{};
         texture.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -608,7 +615,7 @@ private:
     ComPtr<ID3D12Resource> srv_first_reference_, srv_second_reference_, srv_depth_first_reference_, srv_depth_second_reference_, xr_rtv_reference_;
     std::shared_ptr<const void> packet_lifetime_{};
     ComPtr<ID3D12RootSignature> root_;
-    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_, native_depth_pipeline_, native_stereo_preview_pipeline_;
+    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_, native_depth_pipeline_, native_stereo_preview_pipeline_, native_eye_check_pipeline_;
     ComPtr<ID3D12DescriptorHeap> srv_, rtv_;
     D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_start_{}, rtv_cpu_start_{}, direct_xr_rtv_cpu_{};
     D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_start_{};
