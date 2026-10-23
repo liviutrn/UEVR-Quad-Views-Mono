@@ -106,6 +106,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Stereo S0 source integration failed' }
           python workspace/duoview/stereo/apply_s0_recovery_ui.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Bounded S0 diagnostic UI integration failed' }
+          python workspace/duoview/stereo/apply_depth_each_eye.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Per-eye P1 full-frame depth test integration failed' }
           python workspace/duoview/stereo/test_stereo_preview_s0.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Stereo S0 source validation failed' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
@@ -276,16 +278,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-S0-DepthStatusUI-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-P1-PerEyeDepthTest-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-S0-DepthStatusUI-${{ github.run_number }}
+          name: UEVR-DuoView-P1-PerEyeDepthTest-${{ github.run_number }}
           path: |
-            UEVR-DuoView-S0-DepthStatusUI-*.zip
-            UEVR-DuoView-S0-DepthStatusUI-*.zip.sha256
+            UEVR-DuoView-P1-PerEyeDepthTest-*.zip
+            UEVR-DuoView-P1-PerEyeDepthTest-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
