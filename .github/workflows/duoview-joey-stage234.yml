@@ -1,4 +1,4 @@
-name: DuoView v186.1 Stereo S0 Test (Build49-based)
+name: DuoView LIVE depth DIBR two-eye test (Build118 evidence)
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
   push:
@@ -10,6 +10,7 @@ on:
       - fix/duoview-v49-openxr-alignment-persistence-20261022
       - experiment/duoview-center-dibr-depth-probe-20261023
       - experiment/duoview-center-stereo-a-plus-20261023
+      - experiment/duoview-live-dibr-20261023
   pull_request:
     branches:
       - build-182
@@ -104,6 +105,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Stereo S0 source integration failed' }
           python workspace/duoview/stereo/test_stereo_preview_s0.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Stereo S0 source validation failed' }
+          python workspace/duoview/stereo/apply_live_dibr.py backend workspace
+          if ($LASTEXITCODE -ne 0) { throw 'LIVE DIBR source integration failed' }
+          python workspace/duoview/stereo/test_live_dibr.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'LIVE DIBR source regression gates failed' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
       - name: Verify pinned production geometry and pair-state contracts
@@ -232,7 +237,15 @@ jobs:
           Stage5 gaze requires installed PSVR2 Toolkit CAPI and still requires headset calibration validation.
           Restored engine view order and optical gaze mapping are source verified. Actual Lumen/shadow/exposure and visual parity require a headset test; no gamma correction applied.
           The eye-tracked source/compositor and first-use pacing are NOT headset verified.
-          S0 EXPERIMENTAL STEREO: disabled by default, NOT calibrated.
+          LIVE DIBR STEREO TEST: default OFF, user opt-in, NOT calibrated.
+          NEW Build118 evidence: R32_TYPELESS scene depth 860x684 and 344x276.
+          GPU textures are copied repeatedly from safe DEPTH_WRITE to shader-read transitions.
+          S0 double-wide raster now runs a two-eye center-origin disparity warp driven by live raw-Z.
+          In DuoView Mono quality: ENABLE depth discovery, click Start LIVE DIBR depth capture,
+          then enable Experimental LIVE DIBR stereo, start with 8% strength.
+          Stay at the Build118 render settings; unmatched dimensions FALL BACK to Mono.
+          IMPORTANT: experimental GPU resource lifetime, RGB/depth pairing and projection
+          calibration still need real PSVR2 confirmation. Do not replace stable Build49.
           To try: activate DuoView ID6, enable Depth Discovery, capture two
           P1 depth candidates, wait for GPU queue complete, then enable
           S0 stereo preview with 8% strength.
@@ -265,16 +278,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-StereoS0-WarpPreview-P1-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-LiveDIBR-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-StereoS0-WarpPreview-P1-${{ github.run_number }}
+          name: UEVR-DuoView-LiveDIBR-${{ github.run_number }}
           path: |
-            UEVR-DuoView-StereoS0-WarpPreview-P1-*.zip
-            UEVR-DuoView-StereoS0-WarpPreview-P1-*.zip.sha256
+            UEVR-DuoView-LiveDIBR-*.zip
+            UEVR-DuoView-LiveDIBR-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
