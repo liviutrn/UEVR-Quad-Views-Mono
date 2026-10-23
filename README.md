@@ -6,9 +6,9 @@ UEVR Quad Views Mono is an experimental rendering extension that prioritizes ima
 
 The goal is **higher effective resolution and better GPU efficiency** in demanding Unreal Engine games, particularly at high SteamVR render resolutions where pixel and shader workload — rather than CPU performance — is the bottleneck.
 
-**Current release:** [v186.1 — Integrated Glamarye Sharpen](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v186.1-glamayre) · **Stable baseline:** [v182](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v182) · **Current game integration:** S.T.A.L.K.E.R. 2 (DX12 / OpenXR) · **Eye tracking:** PlayStation VR2 Toolkit
+**Latest stable release:** [v186.1 — MPC / HUD / Eye Alignment Persistence (Build 49, CI56)](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v186.1-mpc-hud-eyealignment-persist49-56) · **Previous stable:** [v186.1 Glamarye](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v186.1-glamayre) · **Original stable baseline:** [v182](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v182) · **Current game integration:** S.T.A.L.K.E.R. 2 (DX12 / OpenXR) · **Eye tracking:** PlayStation VR2 Toolkit
 
-> **Current architecture: DuoView Mono, not native stereo quad views.** Version 182 renders two differently detailed Unreal Engine views from a shared monoscopic camera, blends them and presents the same resulting image to both eyes. It does **not** yet render four independent left/right focus-and-context views, implement an OpenXR quad-views extension, or provide binocular stereo depth. The project name reflects its quad-view-inspired rendering approach and direction.
+> **Current stable architecture: DuoView Mono, not native stereo quad views.** The released build renders two differently detailed Unreal Engine views from a shared monoscopic camera, blends them and presents the same resulting image to both eyes. It does **not** yet render four independent left/right focus-and-context views, implement an OpenXR quad-views extension, or provide binocular stereo depth. The project name reflects its quad-view-inspired rendering approach and direction.
 
 ## How it works
 
@@ -51,6 +51,10 @@ Unlike a simple post-processing blur or a headset-side foveation mask, DuoView w
 - **Native Stereo Fix-backed source rendering** in the dedicated DuoView pipeline, while retaining conventional UEVR rendering modes separately.
 - **OpenXR output through UEVR**, including SteamVR-based PC VR setups.
 - **Integrated Glamarye Bigger Sharpen (v186.1):** fovea-only D3D12 sharpening in the existing compositor, adjustable strength **0.0–2.0** (fresh-profile default **1.0**), with edge protection and no separate OpenXR sharpening layer. See [release notes](RELEASE_NOTES_V186_GLAMARYE.md).
+- **Foreground MPC parity (Build 45):** automatic STALKER 2 `MPC_FOV` correction while DuoView ID6 is active, fixing first-person hands and weapons appearing at different scales across foveal/peripheral views.
+- **Mono HUD optical convergence (Builds 47–48):** optional 2–200 m HUD distance, preserving apparent size and position across compatible OpenXR Quad/Cylinder layers.
+- **Mono Eye Alignment (Build 48):** optional horizontal OpenXR projection adjustment, −3% to +3% total, for Mono ID5 and DuoView ID6; OFF by default.
+- **Reset Runtime persistence (Build 49):** preserves the alignment toggle and exact percentage across OpenXR runtime reset. See the [new release notes](RELEASE_NOTES_V1861_MPC_HUD_EYEALIGNMENT_PERSIST49.md) and [changelog](CHANGELOG.md).
 
 The dedicated rendering option is **DuoView (rendering mode ID 6)**. This is distinct from Joey's standard Mono and Native Stereo modes.
 
@@ -62,7 +66,7 @@ Estimates are derived from **S.T.A.L.K.E.R. 2** testing on an **RTX 5070** at **
 
 ## Compatibility and requirements
 
-Version 186.1 uses the same pinned v182 renderer and headset stack, with integrated sharpening:
+The latest stable Build 49 / CI56 uses the pinned DuoView renderer and headset stack, with integrated sharpening and foreground/HUD/eye-alignment enhancements:
 
 - **Windows PC** with a DirectX 12-capable GPU
 - **S.T.A.L.K.E.R. 2** using the DX12 renderer
@@ -70,7 +74,7 @@ Version 186.1 uses the same pinned v182 renderer and headset stack, with integra
 - **OpenXR runtime**, including SteamVR on the tested PC VR configuration
 - **Optional PSVR2 eye tracking** via PlayStation VR2 Toolkit for gaze-driven focus; fixed-center foveation does not require gaze input
 
-Other Unreal Engine titles, headset configurations, rendering APIs and UEVR versions are not established as compatible with v182. This is an independent experimental fork, not an official UEVR feature.
+Other Unreal Engine titles, headset configurations, rendering APIs and UEVR versions are not established as compatible with this tested release. This is an independent experimental fork, not an official UEVR feature.
 
 ### Image quality and limitations
 
@@ -80,16 +84,16 @@ Foveal area, density and peripheral scale trade visual quality against rendering
 
 ## Download and use
 
-**[Download v186.1 — Integrated Glamarye Sharpen](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v186.1-glamayre)**
+**[Download latest stable — v186.1 MPC / HUD / Eye Alignment Persist49-56](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v186.1-mpc-hud-eyealignment-persist49-56)**
 
-The original [v182 baseline](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v182) is still available unchanged. Integrated sharpening can be disabled by setting strength to **0.0**.
+The original [v182 baseline](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v182) and the previous [v186.1 Glamarye release](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v186.1-glamayre) remain available unchanged. The newly promoted build is the **exact user-tested Build 49 / CI56 archive**, not a later experimental Quad Views or DIBR build.
 
-1. Download **the v186.1 Glamarye ZIP** from the release assets.
+1. Download **`UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-56.zip`** and its `.sha256` file from the release assets.
 2. Extract it into a separate directory rather than overwriting a known-good UEVR setup.
 3. Follow the included **`READ_FIRST.txt`** for the packaged build's actual installation and mode-selection instructions.
 4. Select the dedicated **DuoView / ID 6** rendering mode and tune the fovea, periphery and gaze options to suit your headset and performance target.
 
-The original v182 binary package is preserved without modification. Existing saved sharpening settings may override the new **1.0** default. Disable the separate Glamarye OpenXR layer to avoid applying sharpening twice. NVIDIA Smooth Motion was disabled in the reported smooth headset test. See [v186.1 modifications](RELEASE_NOTES_V186_GLAMARYE.md). For archive integrity and exact build identification, see [`SHA256SUMS`](SHA256SUMS) and [`PROVENANCE.json`](PROVENANCE.json).
+The older v182 and Glamarye binary packages remain preserved. Existing saved sharpening settings may override the fresh-profile **1.0** default; set it to **0.0** to disable. Disable the separate Glamarye OpenXR layer to avoid applying sharpening twice. Mono HUD Convergence and Eye Alignment default to OFF. The reported user-tested configuration used PSVR2/SteamVR and S.T.A.L.K.E.R. 2 DX12. The [Build 49 release notes](RELEASE_NOTES_V1861_MPC_HUD_EYEALIGNMENT_PERSIST49.md) document controls, compatibility and limitations. Verify the **new ZIP against its accompanying `.zip.sha256`**; the older [`SHA256SUMS`](SHA256SUMS) and [`PROVENANCE.json`](PROVENANCE.json) describe the previously published baseline assets.
 
 ## Source code and development
 
@@ -98,7 +102,9 @@ This repository carries the **DuoView implementation and integration patches**, 
 - [`duoview/`](duoview/) — foveal/peripheral layout, gaze handling, frame-state contracts, D3D12 composition shaders and Joey integration patches.
 - [`.github/workflows/duoview-joey-stage234.yml`](.github/workflows/duoview-joey-stage234.yml) — manually triggered Windows build of the pinned backend, frontend and DuoView extension.
 - [`build-182` branch](https://github.com/liviutrn/UEVR-Quad-Views-Mono/tree/build-182) — preserved v182 source baseline.
-- [`release/v186-glamayre-default-1-20261020` branch](https://github.com/liviutrn/UEVR-Quad-Views-Mono/tree/release/v186-glamayre-default-1-20261020) — v186.1 integrated sharpening source with 1.0 fresh-install default.
+- [`release/v186-glamayre-default-1-20261020` branch](https://github.com/liviutrn/UEVR-Quad-Views-Mono/tree/release/v186-glamayre-default-1-20261020) — prior v186.1 integrated sharpening source.
+- [`fix/duoview-v49-openxr-alignment-persistence-20261022` branch](https://github.com/liviutrn/UEVR-Quad-Views-Mono/tree/fix/duoview-v49-openxr-alignment-persistence-20261022) — source of the exact user-tested CI56 stable binary ([commit `60d0aae`](https://github.com/liviutrn/UEVR-Quad-Views-Mono/commit/60d0aae86949723d21266e4121a833f0191729c2)).
+- [`CHANGELOG.md`](CHANGELOG.md) — stable release history; [Build 49 release notes](RELEASE_NOTES_V1861_MPC_HUD_EYEALIGNMENT_PERSIST49.md) — details, setup and provenance.
 - [`PROVENANCE.json`](PROVENANCE.json) — exact upstream revisions and published binary provenance.
 
 Building requires authorized access to the pinned **`joeyhodge/UESDK`** dependency, supplied to GitHub Actions through the `UEVR_SOURCE_TOKEN` repository secret (or supported legacy `PAT_TOKEN`). That restricted dependency is not bundled in this repository.
