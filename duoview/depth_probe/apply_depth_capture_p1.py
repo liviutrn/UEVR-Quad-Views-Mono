@@ -20,11 +20,13 @@ def main(backend):
     unsigned duoview_p1_captured() const { return m_duoview_p1.captured(); }
     bool duoview_p1_gpu_ready() const { return m_duoview_p1.gpu_ready(); }
     std::string duoview_p1_status() const { return m_duoview_p1.status(); }
+    std::string duoview_depth_survey_summary() const { return m_duoview_depth_survey.summary(); }
     void arm_duoview_depth_discovery() {''')
     edit(backend,"src/mods/vr/D3D12Component.hpp",
         '    d3d12::DIBRPreview m_dibr_depth_capture{};',
         '''    d3d12::DIBRPreview m_dibr_depth_capture{};
-    uevr::duoview::dx12::DepthPairP1 m_duoview_p1{};''')
+    uevr::duoview::dx12::DepthPairP1 m_duoview_p1{};
+    uevr::duoview::dx12::DepthTransitionSurvey m_duoview_depth_survey{};''')
     edit(backend,"src/mods/VR.cpp",
         '                if (ImGui::TreeNode("Depth Discovery P0 (passive; NO depth copies)")) {',
         '                if (ImGui::TreeNode("DuoView P1 owned depth capture (experimental)")) {')
@@ -37,6 +39,8 @@ def main(backend):
                             if (!d3d12().arm_duoview_p1(this))
                                 SPDLOG_WARN("[DuoDepthP1] Arm failed: {}",d3d12().duoview_p1_status());
                         }
+                        const auto survey=d3d12().duoview_depth_survey_summary();
+                        ImGui::TextWrapped("RHI depth survey: %s",survey.c_str());
                         ImGui::Text("P1 depth GPU copies: %u / 2, GPU queue complete: %s",
                             d3d12().duoview_p1_captured(),d3d12().duoview_p1_gpu_ready()?"yes":"no");
                         const auto p1_status=d3d12().duoview_p1_status();
@@ -50,8 +54,16 @@ def main(backend):
     const auto& hook=g_framework->get_d3d12_hook();
     if (!hook || !hook->get_device()) return false;
     auto scene=vr->get_render_target_pool_hook()->get_texture<ID3D12Resource>(L"SceneDepthZ");
+    if (!scene) {
+        // UE5 RDG may omit transient SceneDepthZ from the public RT pool.
+        // Repeated shader-read->depth-write transitions supply provisional
+        // candidate resources; their UE pass/pose identity remains unverified.
+        scene=m_duoview_depth_survey.candidate();
+        SPDLOG_INFO("[DuoDepthP1] pool MISS; barrier candidate=0x{:X}; {}",
+            reinterpret_cast<uintptr_t>(scene.Get()),m_duoview_depth_survey.summary());
+    }
     const bool armed=m_duoview_p1.arm(hook->get_device(),scene.Get());
-    SPDLOG_INFO("[DuoDepthP1] arm={} scene_depth=0x{:X} state={}",
+    SPDLOG_INFO("[DuoDepthP1] arm={} source=0x{:X} state={}",
         armed,reinterpret_cast<uintptr_t>(scene.Get()),m_duoview_p1.status());
     return armed;
 }
@@ -61,6 +73,7 @@ void D3D12Component::reset_dibr_preview() {''')
             (duo_depth_discovery ||''',
         '''        hook->set_depth_stencil_observer(
             (duo_depth_discovery && m_duoview_p1.armed()) ? static_cast<D3D12DepthStencilObserver*>(&m_duoview_p1) :
+            duo_depth_discovery ? static_cast<D3D12DepthStencilObserver*>(&m_duoview_depth_survey) :
             (duo_depth_discovery ||''')
     edit(backend,"src/mods/vr/D3D12Component.cpp",
         '''                                runtimes::OpenXR::PipelineState pose{};''',
