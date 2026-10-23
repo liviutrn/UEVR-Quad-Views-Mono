@@ -31,27 +31,38 @@ def apply(root):
         return is_duoview_depth_discovery_enabled() &&
             m_duo_center_stereo_preview->value()
             ? static_cast<uint32_t>(m_duo_center_stereo_strength->value()) : 0u;
+    }
+    bool duoview_s0_eye_test_enabled() const {
+        return is_duoview_renderer_active() && m_duo_eye_test->value();
     }''')
     replace(root,"src/mods/VR.hpp",
         '''    const ModInt32::Ptr m_duo_depth_visual{ModSliderInt32::create(generate_name("DuoViewP1RawDepthView"), 0, 4, 0)};''',
         '''    const ModInt32::Ptr m_duo_depth_visual{ModSliderInt32::create(generate_name("DuoViewP1RawDepthView"), 0, 4, 0)};
     const ModToggle::Ptr m_duo_center_stereo_preview{ModToggle::create(generate_name("DuoViewExperimentalStereoS0"), false)};
-    const ModInt32::Ptr m_duo_center_stereo_strength{ModSliderInt32::create(generate_name("DuoViewStereoS0StrengthPct"), 0, 40, 8)};''')
+    const ModInt32::Ptr m_duo_center_stereo_strength{ModSliderInt32::create(generate_name("DuoViewStereoS0StrengthPct"), 0, 40, 8)};
+    const ModToggle::Ptr m_duo_eye_test{ModToggle::create(generate_name("DuoViewS0EyeOutputTest"), false)};''')
     replace(root,"src/mods/VR.hpp",
         '''*m_duo_debug_source, *m_duo_depth_discovery, *m_duo_depth_visual,''',
         '''*m_duo_debug_source, *m_duo_depth_discovery, *m_duo_depth_visual,
-            *m_duo_center_stereo_preview, *m_duo_center_stereo_strength,''')
+            *m_duo_center_stereo_preview, *m_duo_center_stereo_strength, *m_duo_eye_test,''')
     replace(root,"src/mods/VR.cpp",
         '''                    m_duo_depth_visual->draw("P1 raw-Z debug 0=Mono 1=Periph candidate 2=Fovea candidate 3=Both 4=UNVERIFIED mask");''',
         '''                    m_duo_depth_visual->draw("P1 raw-Z debug 0=Mono 1=Periph candidate 2=Fovea candidate 3=Both 4=UNVERIFIED mask");
                     m_duo_center_stereo_preview->draw("S0 two-eye stereo WARP TEST (unverified Z, OFF recommended)");
                     m_duo_center_stereo_strength->draw("S0 test strength: 0..40% (8% initial)");
                     ImGui::TextWrapped("STEREO S0 WARNING: copies from pooled SceneDepthZ have NOT been proven to match fovea/periphery or the current RGB frame; depth may be stale. This only tests actual L/R double-wide submission. It is NOT calibrated stereo. For comfort: start at 8%% then raise cautiously. For normal play leave OFF.");''')
+    replace(root,"src/mods/VR.cpp",
+        '                if (ImGui::TreeNode("DuoView P1 owned depth capture (experimental)")) {',
+        '''                m_duo_eye_test->draw("S0 EYE OUTPUT CHECK (no depth; cyan left / orange right)");
+                ImGui::TextWrapped("This confirms two different eye images reach OpenXR. It requires no depth and is NOT a stereo-geometry test.");
+                if (ImGui::TreeNode("DuoView P1 owned depth capture (experimental)")) {''')
     replace(root,"src/mods/vr/D3D12Component.cpp",
         '''                            const uint32_t p1_debug=m_duoview_p1.gpu_ready() ?
                                 vr->duoview_p1_depth_visual_mode() : 0u;''',
-        '''                            const uint32_t p1_debug=m_duoview_p1.gpu_ready() ?
-                                vr->duoview_p1_depth_visual_mode() : 0u;
+        '''                            const uint32_t p1_debug=vr->duoview_s0_eye_test_enabled() ? 6u :
+                                (m_duoview_p1.gpu_ready() ? vr->duoview_p1_depth_visual_mode() : 0u);
+                            if (p1_debug==6u)
+                                SPDLOG_INFO_ONCE("[StereoS0][EyeCheck] requested; no depth required");
                             const uint32_t p1_stereo_strength=p1_debug==5 ?
                                 vr->duoview_p1_stereo_preview_strength() : 0u;''')
     replace(root,"src/mods/vr/D3D12Component.cpp",
