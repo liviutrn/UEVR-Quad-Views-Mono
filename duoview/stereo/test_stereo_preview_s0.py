@@ -35,7 +35,8 @@ def validate(root):
     assert 'const bool direct_xr=eye_test || stereo_preview ||' in gpu
     assert 'if ((depth_mode || stereo_preview) && !ensure_depth_srvs' in gpu
     assert 'return record_native_gather' in gpu
-    assert 'cmd->SetPipelineState(stereo_preview ? native_stereo_preview_pipeline_' in gpu
+    assert 'cmd->SetPipelineState(eye_test ? native_eye_check_pipeline_' in gpu
+    assert '(stereo_preview ? native_stereo_preview_pipeline_' in gpu
     assert 'copy_composite_to_stereo(' in gpu
     assert 'const bool stereo_preview=' in gpu and 'direct_compatible' in gpu
     assert 'source_to_right' not in gpu
