@@ -47,7 +47,7 @@ def main(backend):
         "void D3D12Component::reset_dibr_preview() {",
         '''bool D3D12Component::arm_duoview_p1(VR* vr) {
     if (!vr || !vr->is_duoview_depth_discovery_enabled()) return false;
-    const auto hook=g_framework->get_d3d12_hook();
+    const auto& hook=g_framework->get_d3d12_hook();
     if (!hook || !hook->get_device()) return false;
     auto scene=vr->get_render_target_pool_hook()->get_texture<ID3D12Resource>(L"SceneDepthZ");
     const bool armed=m_duoview_p1.arm(hook->get_device(),scene.Get());
@@ -60,7 +60,7 @@ void D3D12Component::reset_dibr_preview() {''')
         '''        hook->set_depth_stencil_observer(
             (duo_depth_discovery ||''',
         '''        hook->set_depth_stencil_observer(
-            (duo_depth_discovery && m_duoview_p1.armed()) ? &m_duoview_p1 :
+            (duo_depth_discovery && m_duoview_p1.armed()) ? static_cast<D3D12DepthStencilObserver*>(&m_duoview_p1) :
             (duo_depth_discovery ||''')
     edit(backend,"src/mods/vr/D3D12Component.cpp",
         '''                                runtimes::OpenXR::PipelineState pose{};''',
