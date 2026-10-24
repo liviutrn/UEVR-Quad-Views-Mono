@@ -117,7 +117,9 @@ int main() try {
     constexpr UINT W = 64, H = 32;
     constexpr UINT DW = 40, DH = 24;
     constexpr UINT FW = 16, FH = 8;
-    constexpr Rect DepthRect{6, 5, 24, 12};
+    // Offset and size this rect so a full-texture UV lookup lands in the
+    // padded region instead of accidentally sampling a valid texel.
+    constexpr Rect DepthRect{4, 8, 12, 8};
     constexpr Rect FoveaDepthRect{2, 1, 12, 6};
     constexpr Rect ColorRect{4, 2, 56, 28};
     const CandidateKey selected_depth_key{77, 1, 1}; // original array slice 1
@@ -234,8 +236,7 @@ int main() try {
     if (!event) throw std::runtime_error("Could not create WARP fence event");
     uint64_t signal = 0;
     auto render = [&](float raw_depth, uint64_t frame, const std::array<float,16>& l,
-                      const std::array<float,16>& r, bool split_active_rect = false,
-                      OwnedDepthTexture* fovea_sample = nullptr) {
+                      const std::array<float,16>& r, OwnedDepthTexture* fovea_sample = nullptr) {
         projections.left = l; projections.right = r;
         check(depth_upload->Map(0, &no_read, &mapped));
         for (UINT slice = 0; slice < 2; ++slice) {
@@ -244,8 +245,7 @@ int main() try {
                 float value = .75f; // padded texels and the unselected source slice
                 if (slice == 1 && x >= DepthRect.x && x < DepthRect.x + DepthRect.width &&
                     y >= DepthRect.y && y < DepthRect.y + DepthRect.height) {
-                    value = split_active_rect ? (x < DepthRect.x + DepthRect.width / 2 + 1 ? .25f : .75f)
-                        : raw_depth;
+                    value = raw_depth;
                 }
                 std::memcpy(static_cast<uint8_t*>(mapped) + footprint.Offset +
                     y * footprint.Footprint.RowPitch + x * sizeof(float), &value, sizeof(float));
@@ -326,11 +326,12 @@ int main() try {
         "Far-plane disparity must reverse sign around the convergence plane");
 
     projections.iterations = 1;
-    const auto padded_rect_near = render(.5f, 5, stereo_left, stereo_right, true);
-    const double padded_rect_disparity = disparity(padded_rect_near,
+    const auto padded_rect_far = render(.25f, 5, stereo_left, stereo_right);
+    const double padded_rect_disparity = disparity(padded_rect_far,
         output_foot.Footprint.RowPitch, W, H);
+    std::cout << "Padded active-rect L-R=" << padded_rect_disparity << " px\n";
     require(padded_rect_disparity < -4.5 && padded_rect_disparity > -8.5,
-        "Mixed-resolution depth must honor the padded active rect and selected source slice");
+        "Mixed-resolution depth must honor the offset active rect and selected source slice");
     projections.iterations = 3;
 
     const auto reversed_z_far = render(.00001f, 6, stereo_left, stereo_right);
@@ -383,7 +384,7 @@ int main() try {
     projections.use_fovea_depth = true;
     projections.fovea_uv_rect = {.25f, .25f, .75f, .75f};
     roles.assign_fovea(selected_fovea_key);
-    const auto fused = render(.25f, invalid_frame, stereo_left, stereo_right, false, &fovea);
+    const auto fused = render(.25f, invalid_frame, stereo_left, stereo_right, &fovea);
     const double fovea_disparity = disparity_window(fused, output_foot.Footprint.RowPitch,
         W, H, 20, 45);
     const double periphery_left_disparity = disparity_window(fused, output_foot.Footprint.RowPitch,
