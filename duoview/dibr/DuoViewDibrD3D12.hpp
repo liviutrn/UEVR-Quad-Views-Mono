@@ -4,6 +4,7 @@
 #include "../DuoViewD3D12.hpp"
 #include <array>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <d3d12.h>
 #include <wrl.h>
@@ -16,6 +17,10 @@ struct OwnedDepthTexture {
     OwnedDepthSample sample{};
     ComPtr<ID3D12Resource> texture{};
     uint64_t latest_update_serial{};
+    ComPtr<ID3D12Fence> producer_fence{};
+    uint64_t producer_fence_value{};
+    std::shared_ptr<const void> lifetime{};
+    uint32_t owned_format{};
 };
 
 struct ProjectionPair {
@@ -59,19 +64,31 @@ static_assert(sizeof(ShaderConstants) == 208);
 
 class Compositor {
 public:
-    bool prewarm(ID3D12Device* device, UINT per_eye_width, UINT height, DXGI_FORMAT target_format) {
+    static constexpr size_t kSubmissionSlots = 3;
+
+    bool prewarm(ID3D12Device* device, UINT per_eye_width, UINT height, DXGI_FORMAT target_format,
+        bool output_srgb = false) {
         if (!device || !per_eye_width || !height || !supported_color(target_format) ||
             FAILED(device->GetDeviceRemovedReason())) return false;
-        const auto format = render_target_format(target_format);
+        const auto format = render_target_format(target_format, output_srgb);
+        if (format == DXGI_FORMAT_UNKNOWN) return false;
         if (device_.Get() == device && width_ == per_eye_width && height_ == height &&
-            output_format_ == format && root_ && pipeline_ && srv_heap_ && rtv_heap_) return true;
+            output_format_ == format && root_ && pipeline_) return true;
+        {
+            std::scoped_lock lock{slot_mutex_};
+            collect_slots_locked();
+            for (const auto& slot : slots_) {
+                if (slot.pending || slot.submitted || slot.orphaned) {
+                    return reject("cannot resize DIBR resources while a submission still owns descriptors or textures");
+                }
+            }
+            slots_ = {};
+        }
         device_ = device;
         width_ = per_eye_width;
         height_ = height;
         output_format_ = format;
-        root_.Reset(); pipeline_.Reset(); srv_heap_.Reset(); rtv_heap_.Reset();
-        color_reference_.Reset(); periphery_reference_.Reset(); fovea_reference_.Reset(); output_reference_.Reset();
-        rtv_valid_ = false;
+        root_.Reset(); pipeline_.Reset();
         error_.clear();
 
         D3D12_DESCRIPTOR_RANGE range{};
@@ -133,21 +150,7 @@ public:
         if (!check(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&pipeline_)),
             "create DIBR raster PSO")) return false;
 
-        D3D12_DESCRIPTOR_HEAP_DESC heap{};
-        heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        heap.NumDescriptors = 3;
-        if (!check(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&srv_heap_)),
-            "create DIBR SRV heap")) return false;
         srv_increment_ = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        srv_cpu_ = srv_heap_->GetCPUDescriptorHandleForHeapStart();
-        srv_gpu_ = srv_heap_->GetGPUDescriptorHandleForHeapStart();
-        heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        heap.NumDescriptors = 1;
-        if (!check(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&rtv_heap_)),
-            "create DIBR RTV heap")) return false;
-        rtv_cpu_ = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
         return true;
     }
 
@@ -166,10 +169,12 @@ public:
         ID3D12Resource* double_wide_output,
         D3D12_RESOURCE_STATES output_state,
         const ProjectionPair& projection,
-        std::shared_ptr<const void> packet_lifetime = {})
+        std::shared_ptr<const void> packet_lifetime = {},
+        uint64_t command_epoch = 0)
     {
         recorded_commands_ = false;
         error_.clear();
+        fallback_reason_.clear();
         auto sample_for_consumer = periphery.sample;
         apply_consumer_receipt(sample_for_consumer, consumer);
         const auto gate = validate_selected_sample(periphery.candidate, roles, sample_for_consumer,
@@ -182,6 +187,14 @@ public:
             // Periphery-only is a valid first path while the optional fovea
             // source is waiting for a current same-frame owned copy.
             use_fovea = false;
+        }
+        // A single candidate may be assigned to both roles. Treat it as the
+        // full-view source for this draw so its resource state is transitioned
+        // exactly once and its descriptor never gets a conflicting state.
+        if (use_fovea && (fovea->candidate.key == periphery.candidate.key ||
+                fovea->texture.Get() == periphery.texture.Get())) {
+            use_fovea = false;
+            fallback_reason_ = "Fovea and periphery resolve to the same depth resource; using periphery-only depth";
         }
         // Never keep a descriptor to a caller-owned optional resource when
         // this draw falls back to periphery-only. t2 always aliases a retained
@@ -214,7 +227,10 @@ public:
             color_desc.Width != width_ || color_desc.Height != height_ ||
             output_desc.Width != static_cast<uint64_t>(width_) * 2 || output_desc.Height != height_ ||
             periphery.candidate.width != periphery_desc.Width || periphery.candidate.height != periphery_desc.Height ||
-            periphery.candidate.format != static_cast<uint32_t>(periphery_desc.Format) ||
+            (periphery.owned_format && periphery.owned_format != static_cast<uint32_t>(periphery_desc.Format)) ||
+            (use_fovea && (fovea->candidate.width != fovea_desc.Width ||
+                fovea->candidate.height != fovea_desc.Height ||
+                (fovea->owned_format && fovea->owned_format != static_cast<uint32_t>(fovea_desc.Format)))) ||
             fovea_desc.Width > UINT32_MAX || fovea_desc.Height > UINT32_MAX ||
             periphery_desc.Width > UINT32_MAX || periphery_desc.Height > UINT32_MAX ||
             (color_desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE) ||
@@ -249,7 +265,7 @@ public:
             return reject("invalid frozen source-to-eye projection or depth encoding");
         if (device_.Get() != device || width_ == 0 || height_ == 0 ||
             !compatible_color_view(output_desc.Format, output_format_) || !root_ || !pipeline_ ||
-            !srv_heap_ || !rtv_heap_)
+            srv_increment_ == 0)
             return reject("DIBR adapter was not prewarmed for this output format");
 
         const auto color_view_format = color_srv_format(color_desc.Format, projection.center_color_srgb);
@@ -265,14 +281,29 @@ public:
             output_device.Get() != device || command_device.Get() != device)
             return reject("DIBR resources belong to different D3D12 devices");
 
-        ensure_rtv(device, double_wide_output, output_desc.Format);
+        std::unique_lock slot_lock{slot_mutex_};
+        collect_slots_locked();
+        auto* draw_slot = reserve_slot_locked(device);
+        if (!draw_slot) return reject("all DIBR descriptor and resource lease slots are still in flight");
+        ensure_rtv(device, double_wide_output, output_desc.Format, *draw_slot);
         create_srvs(device, center_color, color_view_format, periphery_resource, periphery_desc.Format,
-            fovea_resource, fovea_desc.Format);
-        color_reference_ = center_color;
-        periphery_reference_ = periphery_resource;
-        fovea_reference_ = use_fovea ? fovea_resource : nullptr;
-        output_reference_ = double_wide_output;
-        packet_lifetime_ = std::move(packet_lifetime);
+            fovea_resource, fovea_desc.Format, *draw_slot);
+        draw_slot->color_reference = center_color;
+        draw_slot->periphery_reference = periphery_resource;
+        draw_slot->fovea_reference = use_fovea ? fovea_resource : nullptr;
+        draw_slot->output_reference = double_wide_output;
+        draw_slot->periphery_lifetime = periphery.lifetime;
+        draw_slot->fovea_lifetime = use_fovea ? fovea->lifetime : nullptr;
+        draw_slot->packet_lifetime = std::move(packet_lifetime);
+        draw_slot->pending = true;
+        draw_slot->pending_command = reinterpret_cast<uintptr_t>(command_list);
+        draw_slot->pending_epoch = command_epoch;
+        draw_slot->record_id = ++next_record_id_;
+        if (!draw_slot->record_id) draw_slot->record_id = ++next_record_id_;
+        last_record_id_ = draw_slot->record_id;
+        last_submitted_record_id_ = 0;
+        last_submitted_order_ = 0;
+        last_record_slot_ = static_cast<size_t>(draw_slot - slots_.data());
 
         if (!(color_state & D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE))
             transition(command_list, center_color, color_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -284,13 +315,13 @@ public:
             transition(command_list, double_wide_output, output_state, D3D12_RESOURCE_STATE_RENDER_TARGET);
         recorded_commands_ = true;
 
-        ID3D12DescriptorHeap* heaps[]{srv_heap_.Get()};
+        ID3D12DescriptorHeap* heaps[]{draw_slot->srv_heap.Get()};
         command_list->SetDescriptorHeaps(1, heaps);
         command_list->SetGraphicsRootSignature(root_.Get());
         command_list->SetPipelineState(pipeline_.Get());
-        command_list->SetGraphicsRootDescriptorTable(0, srv_gpu_);
+        command_list->SetGraphicsRootDescriptorTable(0, draw_slot->srv_gpu);
         command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        command_list->OMSetRenderTargets(1, &rtv_cpu_, FALSE, nullptr);
+        command_list->OMSetRenderTargets(1, &draw_slot->rtv_cpu, FALSE, nullptr);
         const auto make_constants = [&](uint32_t eye, const std::array<float, 16>& matrix) {
             ShaderConstants constants{};
             constants.output_size[0] = width_; constants.output_size[1] = height_;
@@ -342,12 +373,96 @@ public:
         return true;
     }
 
-    void retire_after_fence() { color_reference_.Reset(); periphery_reference_.Reset(); fovea_reference_.Reset(); output_reference_.Reset(); packet_lifetime_.reset(); }
+    // The legacy helper is retained for standalone test harnesses. Production
+    // retirement is driven by the actual intercepted ExecuteCommandLists and
+    // its queue signal below; an unproven external callback cannot release a
+    // descriptor/resource lease.
+    void retire_after_fence(ID3D12Fence* completed_fence = nullptr, uint64_t completed_value = 0) {
+        std::scoped_lock lock{slot_mutex_};
+        if (!completed_fence || !completed_value || completed_fence->GetCompletedValue() < completed_value ||
+            last_record_slot_ >= slots_.size()) return;
+        auto& slot = slots_[last_record_slot_];
+        if (slot.record_id != last_record_id_ || slot.pending || slot.orphaned) return;
+        release_slot_locked(slot);
+    }
+
+    void on_command_list_close(ID3D12GraphicsCommandList* command_list, bool succeeded, uint64_t epoch) {
+        if (!command_list || succeeded) return;
+        std::scoped_lock lock{slot_mutex_};
+        const auto key = reinterpret_cast<uintptr_t>(command_list);
+        for (auto& slot : slots_) {
+            if (slot.pending && slot.pending_command == key && (!epoch || slot.pending_epoch == epoch))
+                release_slot_locked(slot);
+        }
+    }
+
+    void on_command_list_reset(ID3D12GraphicsCommandList* command_list, uint64_t new_epoch) {
+        if (!command_list) return;
+        std::scoped_lock lock{slot_mutex_};
+        const auto key = reinterpret_cast<uintptr_t>(command_list);
+        for (auto& slot : slots_) {
+            if (slot.pending && slot.pending_command == key && slot.pending_epoch < new_epoch)
+                release_slot_locked(slot);
+        }
+    }
+
+    void on_queue_execute_command_lists(ID3D12CommandQueue* queue, UINT count,
+        ID3D12CommandList* const* command_lists, uint64_t submission_order) {
+        if (!queue || !count || !command_lists || !submission_order) return;
+        std::scoped_lock lock{slot_mutex_};
+        for (auto& slot : slots_) {
+            if (!slot.pending || !slot.pending_epoch || !slot.fence) continue;
+            bool listed = false;
+            for (UINT i = 0; i < count; ++i)
+                if (reinterpret_cast<uintptr_t>(command_lists[i]) == slot.pending_command) { listed = true; break; }
+            if (!listed) continue;
+            const auto value = ++slot.next_fence_value;
+            if (!value || FAILED(queue->Signal(slot.fence.Get(), value))) {
+                slot.orphaned = true;
+                slot.pending = false;
+                continue;
+            }
+            slot.producer_queue = queue;
+            slot.fence_value = value;
+            slot.submission_order = submission_order;
+            slot.pending = false;
+            slot.submitted = true;
+            if (slot.record_id == last_record_id_) {
+                last_submitted_record_id_ = slot.record_id;
+                last_submitted_order_ = submission_order;
+            }
+        }
+        collect_slots_locked();
+    }
+
+    bool last_record_submitted() const {
+        std::scoped_lock lock{slot_mutex_};
+        return last_record_id_ != 0 && last_submitted_record_id_ == last_record_id_;
+    }
+    uint64_t last_record_submission_order() const {
+        std::scoped_lock lock{slot_mutex_};
+        return last_submitted_record_id_ == last_record_id_ ? last_submitted_order_ : 0;
+    }
     bool recorded_commands() const { return recorded_commands_; }
     GateReason gate_reason() const { return gate_reason_; }
     const std::string& error() const { return error_; }
+    const std::string& fallback_reason() const { return fallback_reason_; }
 
 private:
+    struct SubmissionSlot {
+        ComPtr<ID3D12DescriptorHeap> srv_heap{}, rtv_heap{};
+        ComPtr<ID3D12Resource> color_reference{}, periphery_reference{}, fovea_reference{}, output_reference{};
+        ComPtr<ID3D12Fence> fence{};
+        ComPtr<ID3D12CommandQueue> producer_queue{};
+        std::shared_ptr<const void> packet_lifetime{}, periphery_lifetime{}, fovea_lifetime{};
+        D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu{}, rtv_cpu{};
+        D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu{};
+        DXGI_FORMAT rtv_format{DXGI_FORMAT_UNKNOWN};
+        uintptr_t pending_command{};
+        uint64_t pending_epoch{}, next_fence_value{}, fence_value{}, submission_order{}, record_id{};
+        bool rtv_valid{}, pending{}, submitted{}, orphaned{};
+    };
+
     bool check(HRESULT hr, const char* operation) {
         if (SUCCEEDED(hr)) return true;
         error_ = std::string(operation) + " failed (HRESULT " + std::to_string(static_cast<uint32_t>(hr)) + ")";
@@ -367,9 +482,12 @@ private:
         if (f == desired) return f;
         return DXGI_FORMAT_UNKNOWN;
     }
-    static DXGI_FORMAT render_target_format(DXGI_FORMAT f) {
-        return f == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ? f :
-            (supported_color(f) ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_UNKNOWN);
+    static DXGI_FORMAT render_target_format(DXGI_FORMAT f, bool output_srgb) {
+        if (!supported_color(f)) return DXGI_FORMAT_UNKNOWN;
+        if (f == DXGI_FORMAT_B8G8R8A8_TYPELESS)
+            return output_srgb ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM;
+        if (f == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) return f;
+        return output_srgb ? DXGI_FORMAT_UNKNOWN : DXGI_FORMAT_B8G8R8A8_UNORM;
     }
     static bool compatible_color_view(DXGI_FORMAT resource_format, DXGI_FORMAT view_format) {
         if (resource_format == DXGI_FORMAT_B8G8R8A8_TYPELESS)
@@ -419,45 +537,104 @@ private:
         b.Transition = {resource, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, before, after};
         cmd->ResourceBarrier(1, &b);
     }
-    void ensure_rtv(ID3D12Device* device, ID3D12Resource* output, DXGI_FORMAT resource_format) {
-        if (rtv_valid_ && output_reference_.Get() == output && rtv_format_ == resource_format) return;
+    bool ensure_slot_heaps(ID3D12Device* device, SubmissionSlot& slot) {
+        if (slot.srv_heap && slot.rtv_heap && slot.fence) return true;
+        D3D12_DESCRIPTOR_HEAP_DESC heap{};
+        heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        heap.NumDescriptors = 3;
+        if (!check(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&slot.srv_heap)),
+            "create DIBR submission SRV heap")) return false;
+        slot.srv_cpu = slot.srv_heap->GetCPUDescriptorHandleForHeapStart();
+        slot.srv_gpu = slot.srv_heap->GetGPUDescriptorHandleForHeapStart();
+        heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        heap.NumDescriptors = 1;
+        if (!check(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&slot.rtv_heap)),
+            "create DIBR submission RTV heap")) return false;
+        slot.rtv_cpu = slot.rtv_heap->GetCPUDescriptorHandleForHeapStart();
+        if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&slot.fence))))
+            return check(E_FAIL, "create DIBR submission fence");
+        return true;
+    }
+
+    SubmissionSlot* reserve_slot_locked(ID3D12Device* device) {
+        for (auto& slot : slots_) {
+            if (slot.pending || slot.orphaned || slot.submitted) continue;
+            if (!ensure_slot_heaps(device, slot)) return nullptr;
+            return &slot;
+        }
+        return nullptr;
+    }
+
+    void release_slot_locked(SubmissionSlot& slot) {
+        slot.color_reference.Reset();
+        slot.periphery_reference.Reset();
+        slot.fovea_reference.Reset();
+        slot.output_reference.Reset();
+        slot.producer_queue.Reset();
+        slot.packet_lifetime.reset();
+        slot.periphery_lifetime.reset();
+        slot.fovea_lifetime.reset();
+        slot.pending_command = 0;
+        slot.pending_epoch = 0;
+        slot.fence_value = 0;
+        slot.submission_order = 0;
+        slot.pending = false;
+        slot.submitted = false;
+        slot.orphaned = false;
+        slot.rtv_valid = false;
+        slot.record_id = 0;
+    }
+
+    void collect_slots_locked() {
+        for (auto& slot : slots_) {
+            if (slot.submitted && slot.fence && slot.fence_value &&
+                slot.fence->GetCompletedValue() >= slot.fence_value) {
+                release_slot_locked(slot);
+            }
+        }
+    }
+
+    void ensure_rtv(ID3D12Device* device, ID3D12Resource* output, DXGI_FORMAT resource_format,
+        SubmissionSlot& slot) {
+        if (slot.rtv_valid && slot.output_reference.Get() == output && slot.rtv_format == resource_format) return;
         D3D12_RENDER_TARGET_VIEW_DESC view{};
         view.Format = output_format_;
         view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-        device->CreateRenderTargetView(output, &view, rtv_cpu_);
-        rtv_format_ = resource_format;
-        rtv_valid_ = true;
+        device->CreateRenderTargetView(output, &view, slot.rtv_cpu);
+        slot.rtv_format = resource_format;
+        slot.rtv_valid = true;
     }
     void create_srvs(ID3D12Device* device, ID3D12Resource* color, DXGI_FORMAT color_format,
         ID3D12Resource* periphery, DXGI_FORMAT periphery_format,
-        ID3D12Resource* fovea, DXGI_FORMAT fovea_format) {
+        ID3D12Resource* fovea, DXGI_FORMAT fovea_format, SubmissionSlot& slot) {
         D3D12_SHADER_RESOURCE_VIEW_DESC view{};
         view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         view.Texture2D.MipLevels = 1;
         view.Format = color_format;
-        device->CreateShaderResourceView(color, &view, srv_cpu_);
+        device->CreateShaderResourceView(color, &view, slot.srv_cpu);
         view.Format = periphery_format == DXGI_FORMAT_R32_TYPELESS ? DXGI_FORMAT_R32_FLOAT : periphery_format;
-        auto periphery_cpu = srv_cpu_; periphery_cpu.ptr += srv_increment_;
+        auto periphery_cpu = slot.srv_cpu; periphery_cpu.ptr += srv_increment_;
         device->CreateShaderResourceView(periphery, &view, periphery_cpu);
         view.Format = fovea_format == DXGI_FORMAT_R32_TYPELESS ? DXGI_FORMAT_R32_FLOAT : fovea_format;
-        auto fovea_cpu = srv_cpu_; fovea_cpu.ptr += 2 * srv_increment_;
+        auto fovea_cpu = slot.srv_cpu; fovea_cpu.ptr += 2 * srv_increment_;
         device->CreateShaderResourceView(fovea, &view, fovea_cpu);
     }
 
     ComPtr<ID3D12Device> device_{};
     ComPtr<ID3D12RootSignature> root_{};
     ComPtr<ID3D12PipelineState> pipeline_{};
-    ComPtr<ID3D12DescriptorHeap> srv_heap_{}, rtv_heap_{};
-    ComPtr<ID3D12Resource> color_reference_{}, periphery_reference_{}, fovea_reference_{}, output_reference_{};
-    std::shared_ptr<const void> packet_lifetime_{};
-    D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_{}, rtv_cpu_{};
-    D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_{};
+    mutable std::mutex slot_mutex_{};
+    std::array<SubmissionSlot, kSubmissionSlots> slots_{};
     UINT srv_increment_{};
     UINT width_{}, height_{};
-    DXGI_FORMAT output_format_{DXGI_FORMAT_UNKNOWN}, rtv_format_{DXGI_FORMAT_UNKNOWN};
-    bool rtv_valid_{}, recorded_commands_{};
+    DXGI_FORMAT output_format_{DXGI_FORMAT_UNKNOWN};
+    size_t last_record_slot_{kSubmissionSlots};
+    uint64_t next_record_id_{}, last_record_id_{}, last_submitted_record_id_{}, last_submitted_order_{};
+    bool recorded_commands_{};
     GateReason gate_reason_{GateReason::choose_full_view_depth};
-    std::string error_{};
+    std::string error_{}, fallback_reason_{};
 };
 }

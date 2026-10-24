@@ -157,11 +157,14 @@ inline bool sample_lineage_valid(
     uint64_t latest_resource_update_serial)
 {
     if (sample.key != current.key) return false;
-    if (!sample.owned_snapshot || !sample.completion_recorded || !sample.copy.valid() || !current.capture_supported) return false;
+    if (!sample.owned_snapshot || !sample.completion_recorded || !sample.copy.valid() ||
+        sample.copy.capture_serial != sample.capture_serial || !current.capture_supported) return false;
     if (sample.stage == CaptureStage::unknown || sample.stage != current.stage) return false;
     if (sample.resource_update_serial != latest_resource_update_serial ||
         sample.resource_update_serial != current.update_serial) return false;
-    if (sample.producer.generation != consumer.generation || sample.producer != consumer) return false;
+    if (!sample.producer.generation || !consumer.generation ||
+        sample.producer.generation != consumer.generation ||
+        !sample.producer.frame || !consumer.frame || sample.producer != consumer) return false;
     if (!rect_valid(sample.active_rect, current.width, current.height) ||
         !same_rect(sample.active_rect, current.active_rect)) return false;
     return queue_proven(sample.queue);
@@ -175,7 +178,8 @@ inline GateResult validate_owned_sample(
 {
     if (sample.key != current.key || sample.copy.origin_key != current.key)
         return {GateReason::source_changed};
-    if (!sample.owned_snapshot || !sample.completion_recorded || !sample.copy.valid())
+    if (!sample.owned_snapshot || !sample.completion_recorded || !sample.copy.valid() ||
+        sample.copy.capture_serial != sample.capture_serial)
         return {GateReason::sample_not_owned};
     if (!current.capture_supported) return {GateReason::unsupported_subresource};
     if (sample.stage == CaptureStage::unknown || sample.stage != current.stage)
@@ -183,9 +187,11 @@ inline GateResult validate_owned_sample(
     if (sample.resource_update_serial != latest_resource_update_serial ||
         sample.resource_update_serial != current.update_serial)
         return {GateReason::no_current_sample};
-    if (sample.producer.generation != consumer.generation)
+    if (!sample.producer.generation || !consumer.generation ||
+        sample.producer.generation != consumer.generation)
         return {GateReason::producer_generation_mismatch};
-    if (sample.producer != consumer) return {GateReason::frame_mismatch};
+    if (!sample.producer.frame || !consumer.frame || sample.producer != consumer)
+        return {GateReason::frame_mismatch};
     if (!rect_valid(sample.active_rect, current.width, current.height))
         return {GateReason::invalid_rect};
     if (!same_rect(sample.active_rect, current.active_rect))

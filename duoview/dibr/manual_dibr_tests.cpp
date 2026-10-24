@@ -39,6 +39,29 @@ int main() try {
     require(static_cast<bool>(validate_selected_sample(current, roles, live, frame, 12)),
         "Exact owned current-frame sample on a proven same queue must pass");
 
+    auto zero_identity = live;
+    zero_identity.producer.generation = 0;
+    require(validate_selected_sample(current, roles, zero_identity, frame, 12).reason ==
+        GateReason::producer_generation_mismatch &&
+        !sample_lineage_valid(current, zero_identity, frame, 12),
+        "A depth packet without a producer generation must fail both production lineage gates");
+    zero_identity = live;
+    zero_identity.producer.frame = 0;
+    require(validate_selected_sample(current, roles, zero_identity, frame, 12).reason ==
+        GateReason::frame_mismatch &&
+        !sample_lineage_valid(current, zero_identity, frame, 12),
+        "A depth packet without a producer frame must fail both production lineage gates");
+    require(validate_owned_sample(current, live, {0, 0}, 12).reason ==
+        GateReason::producer_generation_mismatch &&
+        validate_owned_sample(current, live, {frame.generation, 0}, 12).reason ==
+        GateReason::frame_mismatch,
+        "The compositor contract must reject missing consumer generation or frame identity");
+    zero_identity = live;
+    zero_identity.producer = {0, 0};
+    require(validate_owned_sample(current, zero_identity, {0, 0}, 12).reason ==
+        GateReason::producer_generation_mismatch,
+        "Zero producer and consumer identities must not validate by equality");
+
     auto stale = live;
     stale.producer.frame--;
     require(validate_selected_sample(current, roles, stale, frame, 12).reason == GateReason::frame_mismatch,
@@ -79,6 +102,16 @@ int main() try {
     stale.copy.origin_subresource = 0;
     require(validate_selected_sample(current, roles, stale, frame, 12).reason == GateReason::sample_not_owned,
         "A copy receipt must retain its exact nonzero source slice");
+    stale = live;
+    stale.copy.capture_serial++;
+    require(validate_selected_sample(current, roles, stale, frame, 12).reason == GateReason::sample_not_owned,
+        "A copy receipt from another capture serial cannot validate this sample");
+    require(!sample_lineage_valid(current, stale, frame, 12),
+        "The shared lineage predicate must reject a receipt from another capture serial");
+    stale = live;
+    stale.capture_serial++;
+    require(validate_selected_sample(current, roles, stale, frame, 12).reason == GateReason::sample_not_owned,
+        "A sample serial cannot be detached from its copy receipt");
 
     stale = live;
     stale.queue = {QueueRelation::cross_queue, 7, 9, 0, 0, 30, 29};
@@ -138,7 +171,8 @@ int main() try {
     require(!ring.reserve({3, 57}, 3), "A CPU-held completed packet still owns its slot");
     require(ring.release_cpu(*slot0), "The retained packet should release its slot");
     auto slot2 = ring.reserve({3, 57}, 3);
-    require(slot2 && *slot2 == *slot0, "Only a fully retired slot may be reused");
+    require(slot2 && *slot2 == *slot0 && ring.inspect(*slot2)->capture_serial == 3,
+        "A fully retired slot may be reused only under its new capture serial");
 
     OutputTelemetry telemetry{};
     telemetry.requested = true;

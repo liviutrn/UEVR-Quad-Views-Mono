@@ -6,8 +6,262 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 
 namespace uevr::duoview {
+
+inline constexpr uint32_t capture_role_primary = 1u << 0;
+inline constexpr uint32_t capture_role_secondary = 1u << 1;
+inline constexpr uint32_t capture_role_auxiliary = 1u << 2;
+inline constexpr uint32_t capture_role_stereo_pair = capture_role_primary | capture_role_secondary;
+
+// Source identity for the RHI-thread interval opened only by the direct
+// PreRender view-family checkpoint. Deferred Slate checkpoints deliberately do
+// not call begin_direct(), so they cannot relabel earlier depth barriers.
+struct CaptureSourceStamp {
+    uint64_t generation{};
+    uint64_t frame{};
+    uint64_t packet_serial{};
+    uint32_t role_mask{};
+    bool direct_pre_render{};
+
+    constexpr bool valid() const noexcept {
+        return generation && frame && packet_serial && direct_pre_render &&
+            (role_mask & capture_role_stereo_pair) != 0 &&
+            !(role_mask & ~capture_role_stereo_pair);
+    }
+};
+
+// The direct render-thread checkpoint is attached to one exact UE RHI command.
+// It becomes sticky only when that command executes on the RHI thread. The
+// bounded command table prevents a delayed/unexecuted callback from being
+// mistaken for a later producer packet.
+class CaptureSourceStampRegistry {
+public:
+    static constexpr size_t capacity = 32;
+    static constexpr size_t command_capacity = 64;
+
+    bool prepare_direct_command(uintptr_t command, CaptureSourceStamp stamp) {
+        if (!command) return false;
+        std::scoped_lock lock{mutex_};
+        auto* slot = find_command(command);
+        if (!stamp.valid()) {
+            if (slot) *slot = {};
+            return false;
+        }
+        if (!slot) slot = allocate_command(command);
+        if (!slot) return false;
+        slot->stamp = stamp;
+        slot->last_touch = ++clock_;
+        return true;
+    }
+
+    CaptureSourceStamp consume_direct_command(uintptr_t command) {
+        if (!command) return {};
+        std::scoped_lock lock{mutex_};
+        for (auto& slot : commands_) {
+            if (slot.command == command) {
+                const auto stamp = slot.stamp;
+                slot = {};
+                return stamp;
+            }
+        }
+        return {};
+    }
+
+    void begin_direct(uint32_t thread, CaptureSourceStamp stamp) {
+        if (!thread) return;
+        std::scoped_lock lock{mutex_};
+        auto* slot = find_or_allocate(thread);
+        if (slot) {
+            slot->stamp = stamp.valid() ? stamp : CaptureSourceStamp{};
+            slot->last_touch = ++clock_;
+        }
+    }
+
+    CaptureSourceStamp current(uint32_t thread) const {
+        if (!thread) return {};
+        std::scoped_lock lock{mutex_};
+        for (const auto& slot : slots_) {
+            if (slot.thread == thread) return slot.stamp;
+        }
+        return {};
+    }
+
+    void clear(uint32_t thread) {
+        if (!thread) return;
+        std::scoped_lock lock{mutex_};
+        for (auto& slot : slots_) {
+            if (slot.thread == thread) {
+                slot.stamp = {};
+                slot.last_touch = ++clock_;
+                return;
+            }
+        }
+    }
+
+    void clear_all() {
+        std::scoped_lock lock{mutex_};
+        for (auto& slot : slots_) slot.stamp = {};
+        for (auto& slot : commands_) slot = {};
+    }
+
+    void clear_pending_commands() {
+        std::scoped_lock lock{mutex_};
+        for (auto& slot : commands_) slot = {};
+    }
+
+private:
+    struct Slot {
+        uint32_t thread{};
+        CaptureSourceStamp stamp{};
+        uint64_t last_touch{};
+    };
+
+    struct CommandSlot {
+        uintptr_t command{};
+        CaptureSourceStamp stamp{};
+        uint64_t last_touch{};
+    };
+
+    Slot* find_or_allocate(uint32_t thread) {
+        for (auto& slot : slots_) if (slot.thread == thread) return &slot;
+        for (auto& slot : slots_) if (!slot.thread) {
+            slot.thread = thread;
+            return &slot;
+        }
+        auto* oldest = &slots_[0];
+        for (auto& slot : slots_) if (slot.last_touch < oldest->last_touch) oldest = &slot;
+        oldest->thread = thread;
+        oldest->stamp = {};
+        return oldest;
+    }
+
+    CommandSlot* find_command(uintptr_t command) {
+        for (auto& slot : commands_) if (slot.command == command) return &slot;
+        return nullptr;
+    }
+
+    CommandSlot* allocate_command(uintptr_t command) {
+        for (auto& slot : commands_) if (!slot.command) {
+            slot.command = command;
+            return &slot;
+        }
+        auto* oldest = &commands_[0];
+        for (auto& slot : commands_) if (slot.last_touch < oldest->last_touch) oldest = &slot;
+        oldest->command = command;
+        oldest->stamp = {};
+        return oldest;
+    }
+
+    mutable std::mutex mutex_{};
+    std::array<Slot, capacity> slots_{};
+    std::array<CommandSlot, command_capacity> commands_{};
+    uint64_t clock_{};
+};
+
+inline CaptureSourceStampRegistry capture_source_stamps{};
+
+// D3D12 command-list identity is only used while the COM object is retained by
+// the observer. A list must have a successful Reset and Close epoch, and must
+// be outside a render pass, before depth can be copied. This rejects open,
+// bundle, ambiguous and render-pass captures without guessing from resource
+// dimensions or a recycled native pointer.
+class CommandListEpochRegistry {
+public:
+    static constexpr size_t capacity = 128;
+
+    struct Epoch {
+        uint64_t value{};
+        bool known{};
+        bool open{};
+        bool closed{};
+        bool render_pass{};
+    };
+
+    Epoch reset(uintptr_t command) {
+        if (!command) return {};
+        std::scoped_lock lock{mutex_};
+        auto* slot = find_or_allocate(command);
+        if (!slot) return {};
+        ++slot->epoch.value;
+        if (!slot->epoch.value) ++slot->epoch.value;
+        slot->epoch.known = true;
+        slot->epoch.open = true;
+        slot->epoch.closed = false;
+        slot->epoch.render_pass = false;
+        slot->last_touch = ++clock_;
+        return slot->epoch;
+    }
+
+    void close(uintptr_t command, bool succeeded) {
+        update(command, [&](Epoch& epoch) {
+            if (succeeded && epoch.known && epoch.open) {
+                epoch.open = false;
+                epoch.closed = true;
+            } else {
+                epoch.open = false;
+                epoch.closed = false;
+            }
+        });
+    }
+
+    void begin_render_pass(uintptr_t command) {
+        update(command, [](Epoch& epoch) { if (epoch.known && epoch.open) epoch.render_pass = true; });
+    }
+
+    void end_render_pass(uintptr_t command) {
+        update(command, [](Epoch& epoch) { if (epoch.known && epoch.open) epoch.render_pass = false; });
+    }
+
+    Epoch current(uintptr_t command) const {
+        if (!command) return {};
+        std::scoped_lock lock{mutex_};
+        for (const auto& slot : slots_) if (slot.command == command) return slot.epoch;
+        return {};
+    }
+
+    bool can_capture(uintptr_t command) const {
+        const auto epoch = current(command);
+        return epoch.known && epoch.open && !epoch.closed && !epoch.render_pass;
+    }
+
+    void forget(uintptr_t command) {
+        std::scoped_lock lock{mutex_};
+        for (auto& slot : slots_) if (slot.command == command) { slot = {}; return; }
+    }
+
+private:
+    struct Slot { uintptr_t command{}; Epoch epoch{}; uint64_t last_touch{}; };
+
+    Slot* find_or_allocate(uintptr_t command) {
+        for (auto& slot : slots_) if (slot.command == command) return &slot;
+        for (auto& slot : slots_) if (!slot.command) { slot.command = command; return &slot; }
+        auto* oldest = &slots_[0];
+        for (auto& slot : slots_) if (slot.last_touch < oldest->last_touch) oldest = &slot;
+        oldest->command = command;
+        oldest->epoch = {};
+        return oldest;
+    }
+
+    template<class F>
+    void update(uintptr_t command, F&& update_epoch) {
+        if (!command) return;
+        std::scoped_lock lock{mutex_};
+        auto* slot = find_or_allocate(command);
+        if (!slot) return;
+        update_epoch(slot->epoch);
+        slot->last_touch = ++clock_;
+    }
+
+    mutable std::mutex mutex_{};
+    std::array<Slot, capacity> slots_{};
+    uint64_t clock_{};
+};
+
+using CommandListEpoch = CommandListEpochRegistry::Epoch;
+
+inline CommandListEpochRegistry command_list_epochs{};
 
 enum class SourceRole : uint8_t { primary, secondary, auxiliary };
 enum class DeliveryEvent : uint8_t { family, render, hook, duplicate, conflict, execute, select, miss, copy, submit };

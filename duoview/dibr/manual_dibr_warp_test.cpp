@@ -1,5 +1,6 @@
 #include <windows.h>
 #include "DuoViewDibrD3D12.hpp"
+#include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
 #include <algorithm>
 #include <array>
@@ -10,6 +11,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -124,9 +126,13 @@ int main() try {
     constexpr Rect ColorRect{4, 2, 56, 28};
     const CandidateKey selected_depth_key{77, 1, 1}; // original array slice 1
     const CandidateKey selected_fovea_key{88, 2, 0};
+    ComPtr<ID3D12Debug> debug;
+    const bool debug_enabled = SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)));
+    if (debug_enabled) debug->EnableDebugLayer();
     ComPtr<IDXGIFactory4> factory; check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));
     ComPtr<IDXGIAdapter> adapter; check(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter)));
     ComPtr<ID3D12Device> device; check(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)));
+    ComPtr<ID3D12InfoQueue> info_queue; (void)device.As(&info_queue);
     D3D12_COMMAND_QUEUE_DESC queue_desc{}; queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     ComPtr<ID3D12CommandQueue> queue; check(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue)));
     ComPtr<ID3D12CommandAllocator> allocator; check(device->CreateCommandAllocator(queue_desc.Type, IID_PPV_ARGS(&allocator)));
@@ -264,7 +270,7 @@ int main() try {
         command_list->CopyTextureRegion(&depth_target, 0, 0, 0, &depth_array_locations[1], nullptr);
         transition(command_list.Get(), depth_source_array.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
             D3D12_RESOURCE_STATE_COPY_DEST);
-        if (fovea_sample) {
+        if (fovea_sample && fovea_sample != &depth) {
             command_list->CopyTextureRegion(&fovea_target, 0, 0, 0, &fovea_upload_location, nullptr);
             fovea_sample->candidate.update_serial = frame;
             fovea_sample->latest_update_serial = frame;
@@ -284,15 +290,16 @@ int main() try {
             D3D12_RESOURCE_STATE_COPY_DEST, depth, D3D12_RESOURCE_STATE_COPY_DEST,
             fovea_sample, D3D12_RESOURCE_STATE_COPY_DEST, roles,
             {1, frame}, {9, frame * 2 + 1, 0}, output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
-            projections);
+            projections, {}, frame);
         if (!recorded) throw std::runtime_error("DIBR WARP production adapter rejected packet: " + compositor.error());
         command_list->CopyTextureRegion(&output_readback, 0, 0, 0, &output_source, nullptr);
         check(command_list->Close());
         ID3D12CommandList* lists[]{command_list.Get()}; queue->ExecuteCommandLists(1, lists);
+        compositor.on_queue_execute_command_lists(queue.Get(), 1, lists, frame);
         check(queue->Signal(fence.Get(), ++signal));
         check(fence->SetEventOnCompletion(signal, event));
         if (WaitForSingleObject(event, 30000) != WAIT_OBJECT_0) throw std::runtime_error("DIBR WARP GPU timeout");
-        compositor.retire_after_fence();
+        compositor.retire_after_fence(fence.Get(), signal);
         D3D12_RANGE read{0, static_cast<size_t>(output_bytes)};
         check(readback->Map(0, &read, &mapped));
         std::vector<uint8_t> pixels(static_cast<size_t>(output_foot.Footprint.RowPitch) * H);
@@ -400,6 +407,34 @@ int main() try {
     require(periphery_left_disparity < -4.5 && periphery_left_disparity > -8.5 &&
         periphery_right_disparity < -4.5 && periphery_right_disparity > -8.5,
         "Markers outside the selected fovea crop must continue to use periphery depth");
+
+    // A single CandidateKey may be assigned to both roles. Production safely
+    // drops the optional fovea for this draw and uses the periphery snapshot,
+    // which keeps state transitions unique for the aliased GPU resource.
+    projections.use_fovea_depth = false;
+    roles.clear_fovea();
+    const auto alias_baseline = render(.5f, invalid_frame++, stereo_left, stereo_right);
+    roles.assign_fovea(selected_depth_key);
+    projections.use_fovea_depth = true;
+    if (info_queue) info_queue->ClearStoredMessages();
+    const auto alias_roles = render(.5f, invalid_frame++, stereo_left, stereo_right, &depth);
+    require(alias_roles == alias_baseline,
+        "Assigning one depth candidate to both roles must safely use periphery-only depth");
+    require(compositor.fallback_reason().find("same depth resource") != std::string::npos,
+        "Aliased-role fallback must report why optional fovea depth was bypassed");
+    if (info_queue) {
+        const auto message_count = info_queue->GetNumStoredMessagesAllowedByRetrievalFilter();
+        for (UINT64 i = 0; i < message_count; ++i) {
+            SIZE_T length = 0;
+            check(info_queue->GetMessage(i, nullptr, &length));
+            std::vector<uint8_t> storage(length);
+            auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+            check(info_queue->GetMessage(i, message, &length));
+            require(message->Severity != D3D12_MESSAGE_SEVERITY_ERROR &&
+                message->Severity != D3D12_MESSAGE_SEVERITY_CORRUPTION,
+                "Aliased DIBR roles must not emit invalid duplicate state transitions");
+        }
+    }
     projections.use_fovea_depth = false;
     roles.clear_fovea();
 
@@ -451,16 +486,17 @@ int main() try {
     const auto srgb_recorded = srgb_compositor.record(device.Get(), command_list.Get(), srgb_center.Get(),
         D3D12_RESOURCE_STATE_COPY_DEST, depth, D3D12_RESOURCE_STATE_COPY_DEST,
         nullptr, D3D12_RESOURCE_STATE_COPY_DEST, roles, {1, invalid_frame}, {9, invalid_frame * 2 + 3, 0},
-        srgb_output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, projections);
+        srgb_output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, projections, {}, invalid_frame);
     if (!srgb_recorded) throw std::runtime_error("DIBR sRGB roundtrip rejected packet: " + srgb_compositor.error());
     command_list->CopyTextureRegion(&srgb_output_readback, 0, 0, 0, &srgb_output_source, nullptr);
     check(command_list->Close());
     ID3D12CommandList* srgb_lists[]{command_list.Get()}; queue->ExecuteCommandLists(1, srgb_lists);
+    srgb_compositor.on_queue_execute_command_lists(queue.Get(), 1, srgb_lists, invalid_frame);
     check(queue->Signal(fence.Get(), ++signal));
     check(fence->SetEventOnCompletion(signal, event));
     if (WaitForSingleObject(event, 30000) != WAIT_OBJECT_0)
         throw std::runtime_error("DIBR sRGB WARP GPU timeout");
-    srgb_compositor.retire_after_fence();
+    srgb_compositor.retire_after_fence(fence.Get(), signal);
     D3D12_RANGE srgb_read{0, static_cast<size_t>(srgb_output_bytes)};
     check(srgb_readback->Map(0, &srgb_read, &mapped));
     std::vector<uint8_t> srgb_pixels(static_cast<size_t>(srgb_output_foot.Footprint.RowPitch) * H);
