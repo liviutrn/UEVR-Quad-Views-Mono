@@ -135,8 +135,8 @@ def verify_feature(backend: Path) -> None:
         "D3D12_RESOURCE_STATE_RENDER_TARGET", "commands.has_commands=true",
         "m_openxr.copy(",
     ), "Live opt-in DIBR output route")
-    require_tokens(component, ("manual_dibr_compositor.prewarm(",),
-                   "DIBR swapchain/configuration prewarm")
+    require_tokens(component, ("if (!dibr->prewarm(", "manual_dibr_compositors"),
+                   "DIBR swapchain/configuration prewarm and fenced slot ownership")
     require_tokens(render_hook, (
         "capture_source_stamps.begin_direct(", "capture_source_stamp_from_command(",
         "duo_source", "view_family",
