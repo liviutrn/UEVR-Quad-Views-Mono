@@ -483,6 +483,13 @@ int main() try {
     projections.left = projections.right = same_geometry;
     check(allocator->Reset()); check(command_list->Reset(allocator.Get(), nullptr));
     command_list->CopyTextureRegion(&srgb_color_target, 0, 0, 0, &srgb_color_source, nullptr);
+    depth.candidate.update_serial = invalid_frame;
+    depth.latest_update_serial = invalid_frame;
+    depth.sample = {depth.candidate.key, {1, invalid_frame}, CaptureStage::depth_write_to_shader_read,
+        invalid_frame, invalid_frame,
+        {depth.candidate.key, depth.candidate.key.subresource, 0, invalid_frame},
+        DepthRect, true, true,
+        {QueueRelation::same_queue, 9, 9, invalid_frame * 2, 0, 0, 0}};
     const auto srgb_recorded = srgb_compositor.record(device.Get(), command_list.Get(), srgb_center.Get(),
         D3D12_RESOURCE_STATE_COPY_DEST, depth, D3D12_RESOURCE_STATE_COPY_DEST,
         nullptr, D3D12_RESOURCE_STATE_COPY_DEST, roles, {1, invalid_frame}, {9, invalid_frame * 2 + 3, 0},
@@ -509,7 +516,166 @@ int main() try {
         "Typeless Mono center sampled as sRGB must preserve the known encoded midtone");
     projections.center_color_srgb = false;
 
+    // Exercise the real stable Mono Native/Glamarye composition in UNORM
+    // mode, where the shader performs explicit sRGB decode/encode. Its bytes
+    // are copied into the typed-91 XR image, cropped back to a typeless
+    // per-eye center image, then consumed by the production DIBR PSO and
+    // rendered into the typed-91 target again.
+    const auto baseline_layout = uevr::duoview::make_layout(W, H, .5f, .5f,
+        .25f, 1.f, .5f, .5f);
+    require(baseline_layout.has_value(), "The real Mono DIBR color-pipeline layout must be valid");
+    const uint64_t baseline_frame = invalid_frame + 100;
+    uevr::duoview::ViewFrame baseline_view{};
+    baseline_view.config = {{1, baseline_frame}, *baseline_layout, {.5f, .5f}, {}, 1};
+    baseline_view.config.settings.feather_fraction = .12f;
+    baseline_view.config.settings.sharpen_strength = .4f;
+    baseline_view.config.settings.direct_xr_output = true;
+
+    const auto native_source_desc = texture(W, H, DXGI_FORMAT_B8G8R8A8_UNORM,
+        D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    auto native_fovea = resource(device.Get(), native_source_desc,
+        D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+    auto native_periphery = resource(device.Get(), native_source_desc,
+        D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT native_source_upload_foot{};
+    UINT64 native_source_upload_bytes{};
+    device->GetCopyableFootprints(&native_source_desc, 0, 1, 0, &native_source_upload_foot,
+        nullptr, nullptr, &native_source_upload_bytes);
+    auto native_source_upload = resource(device.Get(), buffer(native_source_upload_bytes),
+        D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+    check(native_source_upload->Map(0, &no_read, &mapped));
+    for (UINT y = 0; y < H; ++y) for (UINT x = 0; x < W; ++x) {
+        auto* px = static_cast<uint8_t*>(mapped) + y * native_source_upload_foot.Footprint.RowPitch + x * 4;
+        std::memcpy(px, midtone_bgra.data(), midtone_bgra.size());
+    }
+    native_source_upload->Unmap(0, nullptr);
+    D3D12_TEXTURE_COPY_LOCATION native_fovea_upload{native_source_upload.Get(),
+        D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    native_fovea_upload.PlacedFootprint = native_source_upload_foot;
+    D3D12_TEXTURE_COPY_LOCATION native_fovea_target{native_fovea.Get(),
+        D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    D3D12_TEXTURE_COPY_LOCATION native_periphery_target{native_periphery.Get(),
+        D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+
+    D3D12_RESOURCE_DESC center_from_native_desc = texture(W, H,
+        DXGI_FORMAT_B8G8R8A8_TYPELESS);
+    auto center_from_native = resource(device.Get(), center_from_native_desc,
+        D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT center_from_native_foot{};
+    UINT64 center_from_native_bytes{};
+    device->GetCopyableFootprints(&center_from_native_desc, 0, 1, 0,
+        &center_from_native_foot, nullptr, nullptr, &center_from_native_bytes);
+    auto center_from_native_readback = resource(device.Get(), buffer(center_from_native_bytes),
+        D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_TEXTURE_COPY_LOCATION center_from_native_target{center_from_native.Get(),
+        D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    D3D12_TEXTURE_COPY_LOCATION center_from_native_source{srgb_output.Get(),
+        D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    const D3D12_BOX left_eye_box{0, 0, 0, W, H, 1};
+    D3D12_TEXTURE_COPY_LOCATION center_from_native_readback_target{center_from_native_readback.Get(),
+        D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    center_from_native_readback_target.PlacedFootprint = center_from_native_foot;
+
+    uevr::duoview::dx12::Compositor native_baseline_compositor;
+    require(native_baseline_compositor.prewarm(device.Get(), W, H, false),
+        "The real Native Mono baseline compositor must prewarm in UNORM mode");
+    check(allocator->Reset()); check(command_list->Reset(allocator.Get(), nullptr));
+    command_list->CopyTextureRegion(&native_fovea_target, 0, 0, 0, &native_fovea_upload, nullptr);
+    command_list->CopyTextureRegion(&native_periphery_target, 0, 0, 0, &native_fovea_upload, nullptr);
+    transition(command_list.Get(), srgb_output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    const auto native_baseline_recorded = native_baseline_compositor.record_native(device.Get(),
+        command_list.Get(), native_fovea.Get(), native_periphery.Get(), srgb_output.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_DEST, baseline_view, {}, 0);
+    if (!native_baseline_recorded)
+        throw std::runtime_error("Real Native/Glamarye baseline rejected packet: " +
+            native_baseline_compositor.error());
+    require(!native_baseline_compositor.last_native_direct_xr(),
+        "Glamarye must keep the baseline on the single center-image plus copy path");
+    transition(command_list.Get(), srgb_output.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_COPY_SOURCE);
+    command_list->CopyTextureRegion(&center_from_native_target, 0, 0, 0,
+        &center_from_native_source, &left_eye_box);
+    transition(command_list.Get(), center_from_native.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_COPY_SOURCE);
+    D3D12_TEXTURE_COPY_LOCATION center_from_native_source_subresource{center_from_native.Get(),
+        D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    command_list->CopyTextureRegion(&center_from_native_readback_target, 0, 0, 0,
+        &center_from_native_source_subresource, nullptr);
+    transition(command_list.Get(), center_from_native.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+        D3D12_RESOURCE_STATE_COPY_DEST);
+    transition(command_list.Get(), srgb_output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+    depth.candidate.update_serial = baseline_frame;
+    depth.latest_update_serial = baseline_frame;
+    depth.sample = {depth.candidate.key, {1, baseline_frame}, CaptureStage::depth_write_to_shader_read,
+        baseline_frame, baseline_frame,
+        {depth.candidate.key, depth.candidate.key.subresource, 0, baseline_frame},
+        DepthRect, true, true,
+        {QueueRelation::same_queue, 9, 9, signal, 0, 0, 0}};
+    projections.color_rect = {0, 0, W, H};
+    projections.left = projections.right = same_geometry;
+    projections.use_fovea_depth = false;
+    projections.center_color_srgb = true;
+    const auto native_to_dibr_recorded = srgb_compositor.record(device.Get(), command_list.Get(),
+        center_from_native.Get(), D3D12_RESOURCE_STATE_COPY_DEST, depth,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, D3D12_RESOURCE_STATE_COPY_DEST, roles,
+        {1, baseline_frame}, {9, signal + 1, 0}, srgb_output.Get(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET, projections, {}, baseline_frame);
+    if (!native_to_dibr_recorded)
+        throw std::runtime_error("Real Mono-to-DIBR typed-91 roundtrip rejected packet: " +
+            srgb_compositor.error());
+    transition(command_list.Get(), srgb_output.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_COPY_SOURCE);
+    command_list->CopyTextureRegion(&srgb_output_readback, 0, 0, 0, &srgb_output_source, nullptr);
+    check(command_list->Close());
+    ID3D12CommandList* native_pipeline_lists[]{command_list.Get()};
+    queue->ExecuteCommandLists(1, native_pipeline_lists);
+    const auto native_pipeline_order = ++signal;
+    srgb_compositor.on_queue_execute_command_lists(queue.Get(), 1,
+        native_pipeline_lists, native_pipeline_order);
+    require(srgb_compositor.last_record_submitted() &&
+        srgb_compositor.last_record_submission_order() == native_pipeline_order,
+        "The typed-91 DIBR draw must retain its resources through queue submission");
+    check(queue->Signal(fence.Get(), signal));
+    check(fence->SetEventOnCompletion(signal, event));
+    if (WaitForSingleObject(event, 30000) != WAIT_OBJECT_0)
+        throw std::runtime_error("Real Mono-to-DIBR sRGB WARP GPU timeout");
+    srgb_compositor.retire_after_fence(fence.Get(), signal);
+    D3D12_RANGE baseline_center_read{0, static_cast<SIZE_T>(center_from_native_bytes)};
+    check(center_from_native_readback->Map(0, &baseline_center_read, &mapped));
+    require_pixel_near(static_cast<const uint8_t*>(mapped) + center_from_native_foot.Offset,
+        midtone_bgra, 1,
+        "The UNORM Mono/Glamarye baseline must still store sRGB-encoded center bytes");
+    const D3D12_RANGE no_write{0, 0};
+    center_from_native_readback->Unmap(0, &no_write);
+    check(srgb_readback->Map(0, &srgb_read, &mapped));
+    std::vector<uint8_t> native_dibr_pixels(static_cast<size_t>(srgb_output_foot.Footprint.RowPitch) * H);
+    std::memcpy(native_dibr_pixels.data(), mapped, native_dibr_pixels.size());
+    srgb_readback->Unmap(0, &no_write);
+    require_identical_eyes(native_dibr_pixels, srgb_output_foot.Footprint.RowPitch, W, H,
+        "Native Mono encoded center bytes must survive DIBR composition into the typed-91 XR image");
+    require_pixel_near(native_dibr_pixels.data() + 16 * srgb_output_foot.Footprint.RowPitch + 31 * 4,
+        midtone_bgra, 1,
+        "Native Mono sRGB bytes must roundtrip unchanged through typed-91 DIBR");
+    if (info_queue) {
+        const auto message_count = info_queue->GetNumStoredMessagesAllowedByRetrievalFilter();
+        for (UINT64 i = 0; i < message_count; ++i) {
+            SIZE_T length = 0;
+            check(info_queue->GetMessage(i, nullptr, &length));
+            std::vector<uint8_t> storage(length);
+            auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+            check(info_queue->GetMessage(i, message, &length));
+            require(message->Severity != D3D12_MESSAGE_SEVERITY_ERROR &&
+                message->Severity != D3D12_MESSAGE_SEVERITY_CORRUPTION,
+                "Native Mono plus DIBR typed-91 path must pass D3D12 debug validation");
+        }
+    }
+    projections.center_color_srgb = false;
+
     CloseHandle(event);
+    std::cout << "Real Mono Native/Glamarye UNORM -> typed-91 DIBR encoded-byte roundtrip PASS\n";
     std::cout << "WARP production DIBR adapter: zero baseline, convergence, mixed-resolution padded rect, selected array slice, reversed-Z endpoints, sky projection, invalid-depth fallback, cropped fovea fusion and sRGB roundtrip PASS\n";
     std::cout << "Measured near L-R=" << near_disparity << " px; far L-R=" << far_disparity
         << " px; endpoint near/far=" << reversed_z_near_disparity << "/"

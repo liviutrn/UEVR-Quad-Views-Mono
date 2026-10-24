@@ -386,6 +386,17 @@ public:
         release_slot_locked(slot);
     }
 
+    // Swapchain recreation may release RTV resources only after every DIBR
+    // draw that referenced them has completed on its actual command queue.
+    bool references_retired() {
+        std::scoped_lock lock{slot_mutex_};
+        collect_slots_locked();
+        for (const auto& slot : slots_) {
+            if (slot.pending || slot.submitted || slot.orphaned) return false;
+        }
+        return true;
+    }
+
     void on_command_list_close(ID3D12GraphicsCommandList* command_list, bool succeeded, uint64_t epoch) {
         if (!command_list || succeeded) return;
         std::scoped_lock lock{slot_mutex_};
@@ -499,15 +510,21 @@ private:
         return f == DXGI_FORMAT_R32_TYPELESS || f == DXGI_FORMAT_R32_FLOAT;
     }
     static void apply_consumer_receipt(OwnedDepthSample& sample, const ConsumerReceipt& consumer) {
+        const bool already_selected=sample.queue.consumer_queue==consumer.queue &&
+            sample.queue.consumer_order==consumer.submission_order && consumer.queue && consumer.submission_order;
+        const auto selected_wait=sample.queue.consumer_wait;
         sample.queue.consumer_queue = consumer.queue;
         sample.queue.consumer_order = consumer.submission_order;
-        sample.queue.consumer_wait = consumer.waited_producer_fence;
         if (sample.queue.producer_queue && consumer.queue && sample.queue.producer_queue == consumer.queue) {
             sample.queue.relation = QueueRelation::same_queue;
             sample.queue.consumer_wait = 0;
         } else if (sample.queue.producer_queue && consumer.queue) {
             sample.queue.relation = QueueRelation::cross_queue;
-        } else sample.queue.relation = QueueRelation::unknown;
+            sample.queue.consumer_wait = already_selected ? selected_wait : consumer.waited_producer_fence;
+        } else {
+            sample.queue.relation = QueueRelation::unknown;
+            sample.queue.consumer_wait = consumer.waited_producer_fence;
+        }
     }
     static bool matrix_valid(const std::array<float, 16>& m) {
         return std::all_of(m.begin(), m.end(), [](float v) { return std::isfinite(v); });

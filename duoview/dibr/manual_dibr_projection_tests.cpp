@@ -123,6 +123,48 @@ std::array<double, 4> project_target_direction(const NativeEyeFovAngles& fov,
     };
 }
 
+std::array<double, 4> quaternion_multiply(const std::array<double, 4>& a,
+    const std::array<double, 4>& b) {
+    return {
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    };
+}
+
+std::array<double, 3> quaternion_rotate(const std::array<double, 4>& q,
+    const std::array<double, 3>& v) {
+    const double dot = q[0] * v[0] + q[1] * v[1] + q[2] * v[2];
+    const double uu = q[0] * q[0] + q[1] * q[1] + q[2] * q[2];
+    const std::array<double, 3> cross{
+        q[1] * v[2] - q[2] * v[1],
+        q[2] * v[0] - q[0] * v[2],
+        q[0] * v[1] - q[1] * v[0],
+    };
+    return {
+        2.0 * dot * q[0] + (q[3] * q[3] - uu) * v[0] + 2.0 * q[3] * cross[0],
+        2.0 * dot * q[1] + (q[3] * q[3] - uu) * v[1] + 2.0 * q[3] * cross[1],
+        2.0 * dot * q[2] + (q[3] * q[3] - uu) * v[2] + 2.0 * q[3] * cross[2],
+    };
+}
+
+NativeEyePose native_pose(std::array<double, 4> q, std::array<double, 3> p) {
+    return {q, p};
+}
+
+NativeEyePose transformed_by_global_pose(const NativeEyePose& pose,
+    const std::array<double, 4>& global_rotation, const std::array<double, 3>& global_translation) {
+    const auto q = quaternion_multiply(global_rotation, pose.orientationXyzw);
+    auto p = quaternion_rotate(global_rotation, pose.positionMeters);
+    for (size_t axis = 0; axis != 3; ++axis) p[axis] += global_translation[axis];
+    return native_pose(q, p);
+}
+
+std::array<double, 4> yaw_quaternion(double yaw) {
+    return {0.0, std::sin(yaw * 0.5), 0.0, std::cos(yaw * 0.5)};
+}
+
 void require_close(double actual, double expected, double tolerance, const char* message) {
     if (!std::isfinite(actual) || std::abs(actual - expected) > tolerance)
         throw std::runtime_error(message);

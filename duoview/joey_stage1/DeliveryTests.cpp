@@ -14,6 +14,14 @@ using Role = uevr::duoview::SourceRole;
 using CaptureStamp = uevr::duoview::CaptureSourceStamp;
 using CaptureStampRegistry = uevr::duoview::CaptureSourceStampRegistry;
 
+struct ProducerKeyFixture { uint64_t generation{}, frame{}; };
+struct ProducerFrameFixture { struct { ProducerKeyFixture key{}; } config{}; };
+struct ProducerPacketFixture {
+    uint64_t serial{};
+    std::shared_ptr<const ProducerFrameFixture> duoview_frame{};
+};
+using ProducerDelivery = uevr::duoview::Delivery<ProducerPacketFixture>;
+
 CaptureStamp capture_stamp(uint64_t generation, uint64_t frame, uint64_t serial,
     uint32_t roles=uevr::duoview::capture_role_stereo_pair, bool direct=true) {
     return {generation,frame,serial,roles,direct};
@@ -110,6 +118,29 @@ void test_capture_source_stamp_registry() {
     assert(same_stamp(bounded.current(static_cast<uint32_t>(CaptureStampRegistry::capacity+1)),newest));
 }
 
+void test_capture_source_stamp_uses_duoview_producer_key() {
+    auto frozen_frame=std::make_shared<const ProducerFrameFixture>(ProducerFrameFixture{
+        .config={.key={.generation=7,.frame=404}}});
+    auto packet=std::make_shared<const ProducerPacketFixture>(ProducerPacketFixture{
+        .serial=901,.duoview_frame=frozen_frame});
+    ProducerDelivery::Command command;
+    const ProducerDelivery::Source primary{packet,7,100,300,812,Role::primary};
+    assert(command.attach(primary)==ProducerDelivery::Attachment::added);
+
+    const auto stamp=uevr::duoview::capture_source_stamp_from_command(command,true);
+    assert(stamp.valid());
+    assert(stamp.generation==7 && stamp.frame==404 && stamp.packet_serial==901);
+    assert(stamp.frame!=primary.frame); // Engine-family and DuoView producer clocks differ.
+
+    const auto deferred=uevr::duoview::capture_source_stamp_from_command(command,false);
+    assert(!deferred.valid());
+
+    ProducerDelivery::Command mismatched_generation;
+    const ProducerDelivery::Source wrong_generation{packet,8,100,300,813,Role::primary};
+    assert(mismatched_generation.attach(wrong_generation)==ProducerDelivery::Attachment::added);
+    assert(!uevr::duoview::capture_source_stamp_from_command(mismatched_generation,true).valid());
+}
+
 Delivery::Source source(std::shared_ptr<const Packet> p, uint32_t family, Role role, uint64_t gen=1) {
     return {p, gen, role==Role::primary ? 100u:200u, 300, family, role};
 }
@@ -124,6 +155,7 @@ void execute(Delivery& delivery, uint32_t family, Role role, uint64_t gen=1) {
 }
 int main() {
     test_capture_source_stamp_registry();
+    test_capture_source_stamp_uses_duoview_producer_key();
 
     auto delivery_storage=std::make_unique<Delivery>();
     auto& delivery=*delivery_storage;

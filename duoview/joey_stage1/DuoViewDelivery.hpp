@@ -452,6 +452,26 @@ private:
     std::array<DeliveryTrace, 8192> trace_{};
 };
 
+// Capture proof follows the immutable DuoView producer key. Delivery::Source
+// also stores an engine family frame number for RHI matching; that clock is
+// intentionally distinct and must never be used as the capture frame identity.
+template<class DeliveryCommand>
+CaptureSourceStamp capture_source_stamp_from_command(
+    const DeliveryCommand& command, bool direct_pre_render) noexcept
+{
+    if (!direct_pre_render) return {};
+    const auto owner = command.owner();
+    if (!owner || !owner.packet || !owner.packet->serial || !owner.generation ||
+        !owner.frame || !owner.packet->duoview_frame)
+        return {};
+    const auto& key = owner.packet->duoview_frame->config.key;
+    if (!key.generation || !key.frame || owner.generation != key.generation) return {};
+    uint32_t role_mask = 0;
+    if (command.sources[0]) role_mask |= capture_role_primary;
+    if (command.sources[1]) role_mask |= capture_role_secondary;
+    return {key.generation, key.frame, owner.packet->serial, role_mask, true};
+}
+
 template<class ReadNext>
 std::optional<uintptr_t> command_tail(uintptr_t root, ReadNext&& read_next) {
     constexpr size_t maximum_commands = 65536;
