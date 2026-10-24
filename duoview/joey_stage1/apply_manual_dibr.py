@@ -601,18 +601,19 @@ thread_local int32_t g_resize_buffers_depth = 0;''',
     # Instrument just the real executed OpenXR command lists. Depth-capture
     # previews consume a bounded asynchronous copy only when picker is open.
     replace_exact(dx12_cpp,
-        '''    texture_ctx->commands.execute();
-    bool stalker_enqueued = false;''',
-        '''    // Depth previews are recorded only on explicitly opened manual
-    // picker pages, never on the default stable DuoView path.
+        '''    const bool duo_copy=vr->is_duoview_renderer_active() &&
+        swapchain_idx==(uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE;''',
+        '''    // Preview copies are recorded onto the same acquired OpenXR command
+    // slot only when the user has explicitly opened the depth picker. The
+    // later verified queue execution signals their private readback fence.
     if (vr->is_duoview_renderer_active() && vr->manual_dibr_picker_open() &&
         swapchain_idx == (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE)
         manual_dibr_capture.record_preview_readbacks(
             binding.device,texture_ctx->commands.cmd_list.Get(),binding.queue,
             uevr::duoview::command_list_epochs.current(
                 reinterpret_cast<uintptr_t>(texture_ctx->commands.cmd_list.Get())).value);
-    texture_ctx->commands.execute();
-    bool stalker_enqueued = false;''',
+    const bool duo_copy=vr->is_duoview_renderer_active() &&
+        swapchain_idx==(uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE;''',
         "Asynchronous readback with current DX12 command epoch")
 
     # Bind compositor slot resources to their actual command-list submission
