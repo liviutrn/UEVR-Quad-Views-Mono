@@ -206,7 +206,7 @@ def main() -> None:
     const bool dibr_stereo = vr->manual_dibr_stereo_requested();
     m_openxr.manual_dibr_capture.set_requested(dibr_picker, dibr_stereo);
     m_openxr.manual_dibr_observer.capture = &m_openxr.manual_dibr_capture;
-    if (auto* hook = g_framework->get_d3d12_hook(); hook)
+    if (auto* hook = g_framework->get_d3d12_hook().get(); hook)
         hook->set_depth_stencil_observer(
             (dibr_picker || dibr_stereo) && vr->get_runtime()->is_openxr()
                 ? &m_openxr.manual_dibr_observer : nullptr);
