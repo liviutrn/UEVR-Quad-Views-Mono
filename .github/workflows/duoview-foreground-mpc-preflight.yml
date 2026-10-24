@@ -1,0 +1,85 @@
+name: DuoView v186.1 Minimal MPC Source Preflight
+on:
+  push:
+    branches:
+      - fix/duoview-v1861-foreground-mpc-minimal-20261022
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: joeyhodge/UEVR
+          ref: 5ac7edc207866569334175e4ed8a7517971547f6
+          path: backend
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: joeyhodge/uevr-frontend
+          ref: 60be4b0f9a646109fd9fdf448bacd41477234091
+          path: frontend
+          persist-credentials: false
+      - name: Verify exact release ancestry and Python syntax
+        run: |
+          python -m py_compile workspace/duoview/joey_stage1/apply_stage1.py
+          python -m py_compile workspace/duoview/joey_stage1/apply_stage234.py
+          python -m py_compile workspace/duoview/joey_stage1/apply_foreground_mpc_minimal.py
+          git -C workspace merge-base --is-ancestor 12986083d2706a0a3351006cd6323dd4970505d6 HEAD
+      - name: Reconstruct unchanged Glamayre and apply the sole MPC patch
+        run: |
+          mkdir -p evidence
+          python workspace/duoview/joey_stage1/apply_stage1.py backend frontend evidence
+          python workspace/duoview/joey_stage1/apply_stage234.py backend frontend workspace/duoview
+          cp backend/src/mods/VR.cpp evidence/stable_vr.cpp
+          cp backend/src/mods/VR.hpp evidence/stable_vr.hpp
+          cp backend/src/mods/vr/D3D12Component.cpp evidence/stable_d3d12.cpp
+          cp backend/src/mods/vr/OverlayComponent.cpp evidence/stable_overlay.cpp
+          cp backend/src/mods/vr/FFakeStereoRenderingHook.cpp evidence/stable_fakestereo.cpp
+          python workspace/duoview/joey_stage1/apply_foreground_mpc_minimal.py backend
+      - name: Prove only VR.cpp changed and old code is preserved
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          main=Path("backend/src/mods/VR.cpp").read_text(encoding="utf-8")
+          original=Path("evidence/stable_vr.cpp").read_text(encoding="utf-8")
+          start=main.index("    // STALKER 2 DuoView foreground parity.")
+          end=main.index("    // Some Supermassive camera paths rewrite",start)
+          assert main[:start]+main[end:]==original, "Non-MPC source diff introduced"
+          for path,saved in (
+             ("backend/src/mods/VR.hpp","stable_vr.hpp"),
+             ("backend/src/mods/vr/D3D12Component.cpp","stable_d3d12.cpp"),
+             ("backend/src/mods/vr/OverlayComponent.cpp","stable_overlay.cpp"),
+             ("backend/src/mods/vr/FFakeStereoRenderingHook.cpp","stable_fakestereo.cpp")):
+              assert Path(path).read_bytes()==Path("evidence",saved).read_bytes(),path
+          block=main[start:end]
+          for token in ("is_duoview_renderer_active()","IsFOVEnabled","DepthScale",
+                        "sdk::is_current_object","read(L\"IsFOVEnabled\"",
+                        "read(L\"DepthScale\"","write(L\"IsFOVEnabled\"",
+                        "write(L\"DepthScale\"","fg.original_enabled","fg.original_depth",
+                        "if (!requested)","std::abs(current_enabled - wanted_enabled)"):
+              assert token in block,token
+          assert "UI_DuoView_Convergence" not in main
+          assert "DuoViewStalker2ForegroundMPC" not in main
+          assert original.count("    // Some Supermassive camera paths rewrite")==1
+          print("PASS: exact v186.1 source, VR.cpp ONLY, safe live-object cache, conditional setters, restoration.")
+          PY
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1861-foreground-minimal-source-evidence
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30

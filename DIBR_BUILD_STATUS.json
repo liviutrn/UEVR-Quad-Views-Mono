@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "release_base": "60d0aae86949723d21266e4121a833f0191729c2",
+  "windows_production_build_verified": false,
+  "cpu_contract_tests_verified": false,
+  "dx12_warp_output_geometry_verified": false,
+  "stalker2_live_depth_acquisition_verified": false,
+  "stalker2_live_rgbd_pairing_verified": false,
+  "psvr2_steamvr_headset_output_verified": false,
+  "comfort_and_stability_verified": false,
+  "performance_or_image_quality_gain_claimed": false,
+  "notes": "Flags only change when corresponding evidence is recorded. CI success can verify build and WARP fields only; live acquisition and headset fields remain false until hardware testing."
+}

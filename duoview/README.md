@@ -1,17 +1,7 @@
-# DuoView Mono for UEVR
+# DuoView manual-depth DIBR test branch
 
-Experimental dual-view monoscopic foveated rendering for STALKER 2, DX12, OpenXR and PSVR2 Toolkit.
+This branch develops an experimental manual-depth stereo path on top of the accepted v186.1 Build49 source. The stable renderer remains the default path. Manual depth selection must never bypass producer-frame, GPU-ordering, resource-lifetime or output-layout checks.
 
-- Two internal Unreal views share one final camera position and rotation, retaining native 6DoF head tracking.
-- A reduced-resolution full-FOV peripheral view and a high-density cropped foveal view are composited into one Mono image for both headset eyes.
-- Native PSVR2 Toolkit gaze uses the calibrated common Mono optical projection, with no spatial smoothing or deadzone.
-- Frame settings, gaze, view rectangles and optical projection are frozen for the pair; incomplete or mismatched packets are rejected.
-- Crop width/height, foveal density, peripheral scale, feather, gaze/fixed center, debug border and source view are configurable and persistent.
-- Original Mono (ID 5), DuoView Mono (ID 6) and Native Stereo remain distinct selections.
-- Public UEVR/UESDK sources, strict pinned transformations, Windows Actions injector packaging and independent policy/production WARP GPU tests.
+The first delivery is a Windows test artifact, labeled `UEVR-DuoView-ManualDepthDIBR-Test-<run>`. It is packaged only after the pinned Joey backend and frontend build, existing regression suites pass, and the DIBR CPU and DX12 WARP tests pass. Those checks validate the software renderer route; they do not verify STALKER 2 depth acquisition, live RGB-depth pairing, PSVR2/SteamVR headset output, comfort, or performance.
 
-This is not OpenXR quad views. Different UE rectangles request less rendering work, but actual game shading savings, temporal stability and headset output require STALKER 2 testing. Standalone WARP execution and full DLL compilation are separate milestones. No gameplay performance gain is claimed.
-
-Use the **DuoView public backend Windows injector** Actions workflow. Download the complete injector artifact from a successful current run; build-log artifacts do not contain an installable injector. Follow [TESTING.md](TESTING.md).
-
-The public-backend port retains Joey's calibrated Mono approach, but excludes newer private-SDK compatibility hooks and DIBR modes. See [WORK_LOG.md](WORK_LOG.md) for verified development evidence and [HANDOFF_CHATGPT_WORK.md](HANDOFF_CHATGPT_WORK.md) for the inherited handoff.
+See [`DIBR_BUILD_STATUS.md`](../DIBR_BUILD_STATUS.md) for current evidence.

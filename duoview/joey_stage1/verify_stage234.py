@@ -6,6 +6,7 @@ from pathlib import Path
 EDITED_BACKEND = {
  "src/mods/vr/MonoRenderingPolicy.hpp", "src/mods/vr/CompatibilityPolicy.hpp",
  "src/mods/VR.hpp", "src/mods/VR.cpp",
+ "src/mods/vr/OverlayComponent.hpp", "src/mods/vr/OverlayComponent.cpp",
  "src/mods/vr/FFakeStereoRenderingHook.cpp", "src/mods/vr/FFakeStereoRenderingHook.hpp",
  "src/mods/vr/runtimes/OpenXR.cpp", "src/mods/vr/runtimes/OpenXR.hpp",
  "src/mods/vr/D3D12Component.hpp", "src/mods/vr/D3D12Component.cpp", "tests/MonoRenderingTests.hpp",

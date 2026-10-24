@@ -16,8 +16,10 @@ struct ShaderConstants {
     float reserved;
     uint32_t fovea_source_size[2], peripheral_source_size[2];
     uint32_t output_offset[2];
+    float sharpen_strength, sharpen_max_change, sharpen_fxaa_bias;
+    uint32_t sharpen_flags;
 };
-static_assert(sizeof(ShaderConstants) == 104);
+static_assert(sizeof(ShaderConstants) == 120);
 
 class Compositor {
 public:
@@ -135,7 +137,11 @@ public:
         // old compositor+copy fallback for incompatible swapchain formats.
         if (!stereo_destination_valid(xrd,width_,height_))
             return reject("Invalid Mono XR output dimensions, format, or render-target flags");
+        // Direct double-wide raster would run sharpening twice on the same
+        // monoscopic foveal content. Use the existing single-Mono compose+copy
+        // when fused sharpening is enabled; leave v182 behavior otherwise.
         const bool direct_xr=frame.config.settings.direct_xr_output &&
+            frame.config.settings.sharpen_strength <= 0.0f &&
             xrd.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
             xrd.Width==static_cast<uint64_t>(width_)*2 && xrd.Height==height_ &&
             xrd.DepthOrArraySize==1 && xrd.MipLevels==1 &&
@@ -200,7 +206,10 @@ public:
             frame.config.settings.debug_border ? 1u : 0u,
             frame.config.settings.diagnostic_view, 0.f,
             {static_cast<uint32_t>(fd.Width),fd.Height},
-            {static_cast<uint32_t>(vd.Width),vd.Height}
+            {static_cast<uint32_t>(vd.Width),vd.Height},
+            {0u,0u},
+            frame.config.settings.sharpen_strength, 0.10f, 0.02f,
+            3u | (srgb_ ? 0u : 4u) // larger radius, edge protection, SDR conversion
         };
         ensure_srvs(device,fovea,periphery,sampling_format);
         // GPU lifetime remains bound to the exact retired OpenXR command slot,
@@ -348,6 +357,9 @@ public:
     const std::string& error() const { return error_; }
     bool recorded_commands() const { return recorded_commands_; }
     float gpu_milliseconds() const { return gpu_ms_; }
+    // The fenced, full-resolution mono color producer used by the opt-in DIBR raster.
+    // Remains owned by this per-OpenXR-command-slot compositor, never by the caller.
+    ID3D12Resource* mono_output() const { return output_.Get(); }
     bool last_native_direct_xr() const { return last_native_direct_xr_; }
     uint64_t last_native_source_extents() const { return last_native_source_extents_; }
     uint64_t srv_descriptor_refresh_count() const { return srv_descriptor_refresh_count_; }

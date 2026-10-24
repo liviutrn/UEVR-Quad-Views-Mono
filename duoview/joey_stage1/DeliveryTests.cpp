@@ -11,6 +11,136 @@
 struct Packet { uint64_t serial; uint32_t immutable_pose; };
 using Delivery = uevr::duoview::Delivery<Packet>;
 using Role = uevr::duoview::SourceRole;
+using CaptureStamp = uevr::duoview::CaptureSourceStamp;
+using CaptureStampRegistry = uevr::duoview::CaptureSourceStampRegistry;
+
+struct ProducerKeyFixture { uint64_t generation{}, frame{}; };
+struct ProducerFrameFixture { struct { ProducerKeyFixture key{}; } config{}; };
+struct ProducerPacketFixture {
+    uint64_t serial{};
+    std::shared_ptr<const ProducerFrameFixture> duoview_frame{};
+};
+using ProducerDelivery = uevr::duoview::Delivery<ProducerPacketFixture>;
+
+CaptureStamp capture_stamp(uint64_t generation, uint64_t frame, uint64_t serial,
+    uint32_t roles=uevr::duoview::capture_role_stereo_pair, bool direct=true) {
+    return {generation,frame,serial,roles,direct};
+}
+bool same_stamp(const CaptureStamp& a, const CaptureStamp& b) {
+    return a.generation==b.generation && a.frame==b.frame && a.packet_serial==b.packet_serial &&
+        a.role_mask==b.role_mask && a.direct_pre_render==b.direct_pre_render;
+}
+
+void test_capture_source_stamp_registry() {
+    CaptureStampRegistry registry;
+    const auto first=capture_stamp(7,31,901);
+    const auto second=capture_stamp(7,32,902);
+    assert(first.valid() && second.valid());
+
+    // RHI thread slots are independent; losing a direct checkpoint or seeing
+    // a deferred/auxiliary family clears only the affected thread's evidence.
+    registry.begin_direct(101,first);
+    registry.begin_direct(202,second);
+    assert(same_stamp(registry.current(101),first));
+    assert(same_stamp(registry.current(202),second));
+    auto lost_checkpoint=first;
+    lost_checkpoint.frame=0;
+    assert(!lost_checkpoint.valid());
+    registry.begin_direct(101,lost_checkpoint);
+    assert(!registry.current(101).valid());
+    assert(same_stamp(registry.current(202),second));
+
+    registry.begin_direct(101,first);
+    auto deferred_or_present=first;
+    deferred_or_present.direct_pre_render=false;
+    assert(!deferred_or_present.valid());
+    registry.begin_direct(101,deferred_or_present);
+    assert(!registry.current(101).valid());
+    assert(same_stamp(registry.current(202),second));
+
+    registry.begin_direct(202,second);
+    const auto auxiliary_only=capture_stamp(7,33,903,uevr::duoview::capture_role_auxiliary);
+    assert(!auxiliary_only.valid());
+    registry.begin_direct(202,auxiliary_only);
+    assert(!registry.current(202).valid());
+    assert(!registry.prepare_direct_command(0x200,auxiliary_only));
+    assert(!registry.consume_direct_command(0x200).valid());
+    auto stereo_with_aux=first;
+    stereo_with_aux.role_mask|=uevr::duoview::capture_role_auxiliary;
+    assert(!stereo_with_aux.valid());
+    assert(!registry.prepare_direct_command(0x202,stereo_with_aux));
+    const auto primary_only=capture_stamp(7,34,904,uevr::duoview::capture_role_primary);
+    const auto secondary_only=capture_stamp(7,34,904,uevr::duoview::capture_role_secondary);
+    assert(primary_only.valid() && secondary_only.valid());
+    assert(registry.prepare_direct_command(0x201,primary_only));
+    assert(same_stamp(registry.consume_direct_command(0x201),primary_only));
+    assert(registry.prepare_direct_command(0x203,secondary_only));
+    assert(same_stamp(registry.consume_direct_command(0x203),secondary_only));
+    auto unknown_role=first;
+    unknown_role.role_mask|=1u<<31;
+    assert(!unknown_role.valid());
+
+    // An exact command association is consumed once; an invalid/deferred
+    // checkpoint cannot be attached to a later UE command.
+    assert(registry.prepare_direct_command(0x100,first));
+    assert(same_stamp(registry.consume_direct_command(0x100),first));
+    assert(!registry.consume_direct_command(0x100).valid());
+    assert(!registry.prepare_direct_command(0x101,deferred_or_present));
+    assert(!registry.consume_direct_command(0x101).valid());
+    assert(registry.prepare_direct_command(0x104,first));
+    assert(!registry.prepare_direct_command(0x104,deferred_or_present));
+    assert(!registry.consume_direct_command(0x104).valid()); // Invalid reuse clears stale proof.
+    assert(!registry.prepare_direct_command(0,first));
+
+    registry.begin_direct(101,first);
+    registry.begin_direct(202,second);
+    assert(registry.prepare_direct_command(0x102,second));
+    registry.clear(101);
+    assert(!registry.current(101).valid());
+    assert(same_stamp(registry.current(202),second));
+    assert(same_stamp(registry.consume_direct_command(0x102),second));
+    assert(registry.prepare_direct_command(0x103,first));
+    registry.clear_all(); // Render-thread retirement/restart clears every proof.
+    assert(!registry.current(101).valid() && !registry.current(202).valid());
+    assert(!registry.consume_direct_command(0x103).valid());
+
+    // The thread ledger is bounded and evicts the least-recently refreshed
+    // interval instead of retaining an evicted thread's producer evidence.
+    CaptureStampRegistry bounded;
+    for (uint32_t thread=1; thread<=CaptureStampRegistry::capacity; ++thread)
+        bounded.begin_direct(thread,capture_stamp(9,thread,1000+thread));
+    const auto refreshed=capture_stamp(9,100,1100);
+    bounded.begin_direct(1,refreshed);
+    const auto newest=capture_stamp(9,101,1101);
+    bounded.begin_direct(static_cast<uint32_t>(CaptureStampRegistry::capacity+1),newest);
+    assert(same_stamp(bounded.current(1),refreshed));
+    assert(!bounded.current(2).valid());
+    assert(same_stamp(bounded.current(static_cast<uint32_t>(CaptureStampRegistry::capacity+1)),newest));
+}
+
+void test_capture_source_stamp_uses_duoview_producer_key() {
+    auto frozen_frame=std::make_shared<const ProducerFrameFixture>(ProducerFrameFixture{
+        .config={.key={.generation=7,.frame=404}}});
+    auto packet=std::make_shared<const ProducerPacketFixture>(ProducerPacketFixture{
+        .serial=901,.duoview_frame=frozen_frame});
+    ProducerDelivery::Command command;
+    const ProducerDelivery::Source primary{packet,7,100,300,812,Role::primary};
+    assert(command.attach(primary)==ProducerDelivery::Attachment::added);
+
+    const auto stamp=uevr::duoview::capture_source_stamp_from_command(command,true);
+    assert(stamp.valid());
+    assert(stamp.generation==7 && stamp.frame==404 && stamp.packet_serial==901);
+    assert(stamp.frame!=primary.frame); // Engine-family and DuoView producer clocks differ.
+
+    const auto deferred=uevr::duoview::capture_source_stamp_from_command(command,false);
+    assert(!deferred.valid());
+
+    ProducerDelivery::Command mismatched_generation;
+    const ProducerDelivery::Source wrong_generation{packet,8,100,300,813,Role::primary};
+    assert(mismatched_generation.attach(wrong_generation)==ProducerDelivery::Attachment::added);
+    assert(!uevr::duoview::capture_source_stamp_from_command(mismatched_generation,true).valid());
+}
+
 Delivery::Source source(std::shared_ptr<const Packet> p, uint32_t family, Role role, uint64_t gen=1) {
     return {p, gen, role==Role::primary ? 100u:200u, 300, family, role};
 }
@@ -24,6 +154,9 @@ void execute(Delivery& delivery, uint32_t family, Role role, uint64_t gen=1) {
     delivery.executed(s,family+1000,3);
 }
 int main() {
+    test_capture_source_stamp_registry();
+    test_capture_source_stamp_uses_duoview_producer_key();
+
     auto delivery_storage=std::make_unique<Delivery>();
     auto& delivery=*delivery_storage;
     auto a=std::make_shared<const Packet>(Packet{1,700});
@@ -75,6 +208,23 @@ int main() {
     assert(reverse_slate.attach(secondary)==Delivery::Attachment::added);
     assert(reverse_slate.attach(primary)==Delivery::Attachment::added);
     assert(reverse_slate.sources[1].frame==21 && reverse_slate.owner().frame==21);
+
+    auto split_tail_storage=std::make_unique<Delivery>();
+    auto& split_tail=*split_tail_storage;
+    auto split_packet=std::make_shared<const Packet>(Packet{4,706});
+    bind(split_tail,split_packet,80);
+    const auto split_primary=split_tail.render(1,80,100,300,2);
+    const auto split_secondary=split_tail.render(1,81,200,300,2);
+    Delivery::Command primary_tail,secondary_tail;
+    assert(primary_tail.attach(split_primary)==Delivery::Attachment::added);
+    assert(primary_tail.sources[0] && !primary_tail.sources[1]);
+    assert(secondary_tail.attach(split_secondary)==Delivery::Attachment::added);
+    assert(!secondary_tail.sources[0] && secondary_tail.sources[1]);
+    assert(primary_tail.owner().packet==split_packet && secondary_tail.owner().packet==split_packet);
+    split_tail.executed(primary_tail.sources[0],0xA001,3);
+    assert(!split_tail.select(1,3)); // One direct command tail cannot prove the pair alone.
+    split_tail.executed(secondary_tail.sources[1],0xA002,3);
+    assert(split_tail.select(1,3)==split_packet); // Distinct tails join only through the same packet.
 
     std::unordered_map<uintptr_t,uintptr_t> links{{1,2},{2,3},{3,0}};
     const auto read=[&](uintptr_t p)->std::optional<uintptr_t>{
