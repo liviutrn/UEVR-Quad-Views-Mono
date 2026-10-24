@@ -8,6 +8,7 @@ on:
       - experiment/duoview-v1861-mpc-hud-mono-convergence-20261022
       - experiment/duoview-mono-eye-alignment-hud-v48-20261022
       - fix/duoview-v49-openxr-alignment-persistence-20261022
+      - feature/v1861-xyz-headscale-keybinds-20261024
   pull_request:
     branches:
       - build-182
@@ -88,6 +89,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Build49 Mono eye alignment reset persistence patch failed' }
           python workspace/duoview/joey_stage1/test_runtime_eye_alignment_persistence_build49.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Build49 Mono eye alignment persistence regression failed' }
+          python workspace/duoview/joey_stage1/apply_xyz_head_scaling.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling patch failed to match pinned release source' }
+          python workspace/duoview/joey_stage1/test_xyz_head_scaling.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling settings/keybind/pose contract failed' }
+          git -C backend diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling patch contains whitespace errors' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
       - name: Verify pinned production geometry and pair-state contracts
