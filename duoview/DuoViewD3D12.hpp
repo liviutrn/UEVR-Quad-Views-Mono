@@ -357,6 +357,9 @@ public:
     const std::string& error() const { return error_; }
     bool recorded_commands() const { return recorded_commands_; }
     float gpu_milliseconds() const { return gpu_ms_; }
+    // The fenced, full-resolution mono color producer used by the opt-in DIBR raster.
+    // Remains owned by this per-OpenXR-command-slot compositor, never by the caller.
+    ID3D12Resource* mono_output() const { return output_.Get(); }
     bool last_native_direct_xr() const { return last_native_direct_xr_; }
     uint64_t last_native_source_extents() const { return last_native_source_extents_; }
     uint64_t srv_descriptor_refresh_count() const { return srv_descriptor_refresh_count_; }
