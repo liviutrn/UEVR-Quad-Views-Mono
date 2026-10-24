@@ -18,7 +18,6 @@ spec.loader.exec_module(stable)
 # Keep every original stable semantic check. Extend its exact backend path sets
 # only for files installed or edited by this reviewed feature patch.
 stable.EDITED_BACKEND |= {
-    "src/Framework.hpp",
     "src/hooks/D3D12Hook.cpp",
     "src/hooks/D3D12Hook.hpp",
 }
@@ -26,6 +25,9 @@ stable.ADDED_BACKEND |= {
     "src/mods/vr/dibr/ManualDibrContract.hpp",
     "src/mods/vr/dibr/DuoViewDibrD3D12.hpp",
     "src/mods/vr/d3d12/ManualDibrCapture.hpp",
+    "src/mods/vr/dibr/ManualDibrPreview.hpp",
+    "src/mods/vr/dibr/ManualDibrProjection.hpp",
+    "src/mods/vr/dibr/ManualDibrUi.hpp",
 }
 
 
@@ -68,15 +70,18 @@ def verify_feature(backend: Path) -> None:
     ui = (backend / "src/mods/VR.cpp").read_text(encoding="utf-8")
     shaders = (backend / "src/mods/vr/DuoViewShaderSource.hpp").read_text(encoding="utf-8")
 
-    for relative in (
-        "dibr/ManualDibrContract.hpp",
-        "dibr/DuoViewDibrD3D12.hpp",
-        "d3d12/ManualDibrCapture.hpp",
+    for source_relative, installed_relative in (
+        ("dibr/ManualDibrContract.hpp", "dibr/ManualDibrContract.hpp"),
+        ("dibr/DuoViewDibrD3D12.hpp", "dibr/DuoViewDibrD3D12.hpp"),
+        ("dibr/ManualDibrPreview.hpp", "dibr/ManualDibrPreview.hpp"),
+        ("dibr/ManualDibrProjection.hpp", "dibr/ManualDibrProjection.hpp"),
+        ("dibr/ManualDibrUi.hpp", "dibr/ManualDibrUi.hpp"),
+        ("dibr/ManualDibrCapture.hpp", "d3d12/ManualDibrCapture.hpp"),
     ):
-        source_header = (ROOT / relative).read_bytes()
-        installed_header = (backend / "src/mods/vr" / relative).read_bytes()
+        source_header = (ROOT / source_relative).read_bytes()
+        installed_header = (backend / "src/mods/vr" / installed_relative).read_bytes()
         if installed_header != source_header:
-            raise RuntimeError(f"Installed backend header differs from reviewed source: {relative}")
+            raise RuntimeError(f"Installed backend header differs from reviewed source: {source_relative}")
     if "UEVR-backend-pinned-clean" in capture:
         raise RuntimeError("DIBR capture must not include a local clone path in the Windows build")
 
@@ -86,7 +91,7 @@ def verify_feature(backend: Path) -> None:
         "CopyReceipt", "origin_subresource", "owned_subresource", "validate_owned_sample",
     ), "Manual DIBR frame contract")
     require_tokens(capture, (
-        "D3D12DepthStencilObserver", "D3D12_RESOURCE_STATE_DEPTH_WRITE",
+        "D3D12_RESOURCE_STATE_DEPTH_WRITE",
         "D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE", "resource_generation",
         "active_rect", "CaptureStage", "queue",
     ), "Manual DIBR producer capture")
@@ -99,37 +104,51 @@ def verify_feature(backend: Path) -> None:
     if "ID3D12Resource* mono_output() const" not in mono_compositor:
         raise RuntimeError("DIBR adapter cannot read the fenced center-color compositor output")
     require_tokens(component_header, (
-        "register_duoview_source_target", "manual_dibr_compositor", "manual_dibr_capture",
-    ), "Manual DIBR production state")
-    require_tokens(hook, ("D3D12DepthStencilObserver", "observe_resource", "manual_dibr"),
-                   "Manual DIBR observer mux")
+        "D3D12DepthStencilObserver", "manual_dibr_compositors", "manual_dibr_capture",
+        "on_depth_stencil_view_created", "on_resource_barriers",
+        "on_command_list_reset", "on_execute_command_lists",
+    ), "Manual DIBR producer capture and submission state")
+    require_tokens(hook, (
+        "manual_dibr_reset(", "manual_dibr_close(", "manual_dibr_execute(",
+        "on_command_list_reset(", "on_command_list_close(", "on_execute_command_lists(",
+        "m_depth_stencil_observer",
+    ), "Manual DIBR real D3D12 lifetime hooks")
 
-    # The new adapter must be called by the real OpenXR scene-copy path, after
-    # the center compositor records and before the command batch is submitted.
-    copy_path = required_region(
+    # Exact live OpenXR rendering callsite: in Joey this is the pre_commands
+    # callback passed to OpenXR::copy() by D3D12Component::on_frame(), not in
+    # the body of the generic copy helper. Require the same callback to own
+    # Mono composition, current-frame depth, eye matrices and DIBR recording.
+    scene_path = required_region(
         component,
-        "bool D3D12Component::OpenXR::copy(",
-        "void D3D12Component::OpenXR::process_ui_alpha(",
-        "OpenXR scene-copy",
+        "vr::EVRCompositorError D3D12Component::on_frame(VR* vr)",
+        "void D3D12Component::on_reset(",
+        "DuoView XR recording path",
     )
-    require_ordered(copy_path, (
+    require_ordered(scene_path, (
         "compositor.record_native(",
         "manual_dibr_compositor.record(",
-        "commands.has_commands = true",
-    ), "OpenXR production DIBR output route")
-    require_tokens(copy_path, (
-        "DIBR", "mono_output()", "manual_dibr_capture",
-    ), "OpenXR DIBR activation and output route")
+        "if (manual_dibr_compositor.recorded_commands())",
+    ), "OpenXR producer color then depth-consumer then submission-flag order")
+    require_tokens(scene_path, (
+        "manual_dibr_capture", "mono_output()", "selected_periphery(",
+        "build_native_eye_target_from_source(", "build_manual_dibr_clip_transform(",
+        "D3D12_RESOURCE_STATE_RENDER_TARGET", "commands.has_commands=true",
+        "m_openxr.copy(",
+    ), "Live opt-in DIBR output route")
     require_tokens(component, ("manual_dibr_compositor.prewarm(",),
                    "DIBR swapchain/configuration prewarm")
     require_tokens(render_hook, (
-        "register_duoview_source_target(", "duo_source", "view_family",
-    ), "DuoView producer-role registration")
-    require_tokens(ui, (
-        "Enable DuoView Stereo", "Full-view / Periphery depth", "Fovea depth",
+        "capture_source_stamps.begin_direct(", "capture_source_stamp_from_command(",
+        "duo_source", "view_family",
+    ), "Immutable direct RHI producer identity")
+    manual_ui = (backend / "src/mods/vr/dibr/ManualDibrUi.hpp").read_text(encoding="utf-8")
+    require_tokens(manual_ui, (
+        "Enable DuoView Stereo", "Full view / Periphery depth", "Fovea depth",
         "Choose full-view depth", "Selected; timing unverified",
-        "Waiting for current RGB-D packet", "Stereo submitted", "Mono fallback",
-    ), "Manual DIBR user controls and status")
+    ), "Manual DIBR depth selection UI")
+    require_tokens(ui, ("ManualDibrUi.hpp", "m_duo_dibr_stereo", "manual_dibr_capture",
+        "ui::draw(", "Mono fallback", "Waiting",
+    ), "Connected opt-in DIBR UI and fallback status")
     require_tokens(shaders, ("dibr_vertex_shader_bytecode[]", "dibr_pixel_shader_bytecode[]"),
                    "Precompiled DIBR shaders")
     if "D3DCompile(" in compositor:
