@@ -157,8 +157,7 @@ jobs:
         run: |
           python workspace/duoview/joey_stage1/apply_manual_dibr.py backend frontend evidence workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'Manual-depth DIBR exact-anchor patch failed' }
-          python workspace/duoview/dibr/verify_manual_dibr.py backend frontend evidence
-          if ($LASTEXITCODE -ne 0) { throw 'Manual-depth DIBR integration or exact-path verification failed' }
+          # Compilation now follows source installation; acceptance verification remains a required release gate.
       - name: Verify pinned production geometry and pair-state contracts
         shell: pwsh
         run: |
@@ -207,6 +206,11 @@ jobs:
           dotnet publish frontend/UEVR/UEVR.csproj --output package --configuration Release *> evidence/frontend-build.log
           $code=$LASTEXITCODE; Get-Content evidence/frontend-build.log | Select-Object -Last 60
           if ($code -ne 0) { throw 'Matching original frontend failed to compile' }
+      - name: Verify opt-in live DIBR production callsites (mandatory package gate)
+        shell: pwsh
+        run: |
+          python workspace/duoview/dibr/verify_manual_dibr.py backend frontend evidence
+          if ($LASTEXITCODE -ne 0) { throw "DIBR output path or source lineage is not integrated; do not package" }
       - name: Verify final DIBR code identity and package
         shell: pwsh
         run: |
