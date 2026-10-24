@@ -309,35 +309,35 @@ inline bool build_native_eye_target_from_source(
     // OpenXR native view space is +X right, +Y up, -Z forward. S converts
     // vectors to the projection helper's +Z-forward camera basis. Conjugating
     // the relative rotation by S preserves proper handedness.
-    const auto rotate_ue_basis = [&](Vec3 value) {
+    const auto rotate_ue_basis = [&](manual_dibr_pose_detail::Vec3 value) {
         const auto rotated = rotate(target_from_source_native, {value.x, value.y, -value.z});
-        return Vec3{rotated.x, rotated.y, -rotated.z};
+        return manual_dibr_pose_detail::Vec3{rotated.x, rotated.y, -rotated.z};
     };
 
     std::array<double, 16> candidate{};
     for (size_t column = 0; column != 3; ++column) {
-        Vec3 basis{};
+        manual_dibr_pose_detail::Vec3 basis{};
         if (column == 0) basis.x = 1.0;
         else if (column == 1) basis.y = 1.0;
         else basis.z = 1.0;
-        const Vec3 transformed = rotate_ue_basis(basis);
+        const manual_dibr_pose_detail::Vec3 transformed = rotate_ue_basis(basis);
         candidate[column * 4] = transformed.x;
         candidate[column * 4 + 1] = transformed.y;
         candidate[column * 4 + 2] = transformed.z;
         candidate[column * 4 + 3] = 0.0;
     }
 
-    const Vec3 source_center{
+    const manual_dibr_pose_detail::Vec3 source_center{
         source_left.positionMeters[0] * 0.5 + source_right.positionMeters[0] * 0.5,
         source_left.positionMeters[1] * 0.5 + source_right.positionMeters[1] * 0.5,
         source_left.positionMeters[2] * 0.5 + source_right.positionMeters[2] * 0.5,
     };
-    const Vec3 center_delta{
+    const manual_dibr_pose_detail::Vec3 center_delta{
         source_center.x - target.positionMeters[0],
         source_center.y - target.positionMeters[1],
         source_center.z - target.positionMeters[2],
     };
-    const Vec3 target_translation_native = rotate(target_inverse, center_delta);
+    const manual_dibr_pose_detail::Vec3 target_translation_native = rotate(target_inverse, center_delta);
     candidate[12] = target_translation_native.x * worldToMeters;
     candidate[13] = target_translation_native.y * worldToMeters;
     candidate[14] = -target_translation_native.z * worldToMeters;
