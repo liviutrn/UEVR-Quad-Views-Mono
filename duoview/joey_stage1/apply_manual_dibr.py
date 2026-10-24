@@ -425,6 +425,196 @@ thread_local int32_t g_resize_buffers_depth = 0;''',
                 ID3D12GraphicsCommandList* list, UINT count,
                 const D3D12_RESOURCE_BARRIER* barriers) override {''',
         "Record actual Reset/Close/queue submission proof")
+    # Freeze native source frame identity when its direct RHI marker executes.
+    # Frame identity MUST be the immutable DuoView generation/frame, not the
+    # separately progressing UE family frame number.
+    render_hook = backend / "src/mods/vr/FFakeStereoRenderingHook.cpp"
+    replace_exact(render_hook,
+        '''        const auto duo_source = duo_command.owner();''',
+        '''        const auto duo_source = duo_command.owner();
+        if (vr->is_duoview_renderer_active() && duo_source) {
+            const auto stamp = uevr::duoview::capture_source_stamp_from_command(duo_command, true);
+            uevr::duoview::capture_source_stamps.begin_direct(GetCurrentThreadId(), stamp);
+        }''',
+        "Bind producer identity to real direct RHI checkpoint")
+    replace_exact(dx12_header,
+        '#include "dibr/DuoViewDibrD3D12.hpp"',
+        '#include "dibr/DuoViewDibrD3D12.hpp"\n#include "dibr/ManualDibrProjection.hpp"',
+        "DIBR native eye projection bridge")
+
+    # A DIBR texture and descriptor set belongs to the same fenced OpenXR
+    # image/command slot as its working Mono compositor. No per-frame PSO or
+    # descriptor creation is allowed inside the XR scene-copy callback.
+    replace_exact(dx12_cpp,
+        '''                if (comp->prewarm(device, vr->get_hmd_width(), vr->get_hmd_height(), srgb, frequency))
+                    ++prepared;''',
+        '''                if (comp->prewarm(device, vr->get_hmd_width(), vr->get_hmd_height(), srgb, frequency))
+                    ++prepared;
+                if (vr->manual_dibr_stereo_requested()) {
+                    auto& dibr=m_openxr.manual_dibr_compositors[&tc->commands];
+                    if (!dibr) dibr=std::make_unique<uevr::duoview::dibr::dx12::Compositor>();
+                    if (!dibr->prewarm(device,vr->get_hmd_width(),vr->get_hmd_height(),
+                        DXGI_FORMAT_B8G8R8A8_UNORM))
+                        SPDLOG_WARNING_EVERY_N_SEC(2,"[DuoView][DIBR] Unable to prewarm native stereo raster");
+                }''',
+        "Prewarm DIBR raster on DuoView activation")
+    replace_exact(dx12_cpp,
+        '''                if (!comp->prewarm(device, vr->get_hmd_width(), vr->get_hmd_height(), duo_srgb, duo_frequency)) {
+                    SPDLOG_WARNING_EVERY_N_SEC(2,
+                        "[DuoView] DX12 prewarm failed; guarded compositing/fallback remains available");
+                }''',
+        '''                if (!comp->prewarm(device, vr->get_hmd_width(), vr->get_hmd_height(), duo_srgb, duo_frequency)) {
+                    SPDLOG_WARNING_EVERY_N_SEC(2,
+                        "[DuoView] DX12 prewarm failed; guarded compositing/fallback remains available");
+                }
+                if (vr->manual_dibr_stereo_requested()) {
+                    auto& dibr=this->manual_dibr_compositors[&tc->commands];
+                    if (!dibr) dibr=std::make_unique<uevr::duoview::dibr::dx12::Compositor>();
+                    if (!dibr->prewarm(device,vr->get_hmd_width(),vr->get_hmd_height(),
+                        DXGI_FORMAT_B8G8R8A8_UNORM))
+                        SPDLOG_WARNING_EVERY_N_SEC(2,"[DuoView][DIBR] XR swapchain stereo raster prewarm unavailable");
+                }''',
+        "Prewarm on OpenXR swapchain recreation")
+
+    replace_exact(dx12_cpp,
+        '''                            bool recorded = false;
+                            bool callback_attempted = false;''',
+        '''                            bool recorded = false;
+                            bool manual_dibr_recorded = false;
+                            bool callback_attempted = false;''',
+        "Track actual stereo warp recording separately from stable Mono")
+    replace_exact(dx12_cpp,
+        '''                                 &recorded, &callback_attempted, &compositor_fault,
+                                 &output_direct, &source_extents, &recorded_secondary, &recorded_target](''',
+        '''                                 &recorded, &manual_dibr_recorded, &callback_attempted, &compositor_fault,
+                                 &output_direct, &source_extents, &recorded_secondary, &recorded_target](''',
+        "Preserve stereo state through XR copy callback")
+    replace_exact(dx12_cpp,
+        '''                                    recorded = compositor.record_native(device, commands.cmd_list.Get(),
+                                        source.Get(), secondary.Get(), destination,
+                                        D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                        D3D12_RESOURCE_STATE_RENDER_TARGET, *packet_frame,
+                                        std::static_pointer_cast<const void>(packet),
+                                        packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0);''',
+        '''                                    auto mono_frame=*packet_frame;
+                                    if (vr->manual_dibr_stereo_requested()) {
+                                        // A true stereo draw consumes the private Mono
+                                        // render target. Never bypass it with a direct
+                                        // double-wide Mono raster in this mode.
+                                        mono_frame.config.settings.direct_xr_output=false;
+                                    }
+                                    recorded = compositor.record_native(device, commands.cmd_list.Get(),
+                                        source.Get(), secondary.Get(), destination,
+                                        D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                        D3D12_RESOURCE_STATE_RENDER_TARGET, mono_frame,
+                                        std::static_pointer_cast<const void>(packet),
+                                        packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0);''',
+        "Preserve exact Mono raster for DIBR source before stereo reprojection")
+
+    replace_exact(dx12_cpp,
+        '''                                    if (compositor.recorded_commands()) commands.has_commands = true;''',
+        '''                                    if (compositor.recorded_commands()) commands.has_commands = true;
+                                    if (recorded && vr->manual_dibr_stereo_requested() &&
+                                        packet->duoview_pose_valid && packet_frame &&
+                                        compositor.mono_output() && !compositor.last_native_direct_xr()) {
+                                        // A valid DIBR result needs a current, owned
+                                        // depth snapshot from this exact DuoView
+                                        // producer packet. Missing samples do not
+                                        // prevent the proven Mono path from submitting.
+                                        auto& cap=m_openxr.manual_dibr_capture;
+                                        const uevr::duoview::dibr::ProducerKey producer{
+                                            packet_frame->config.key.generation,packet_frame->config.key.frame};
+                                        const auto* queue=g_framework->get_d3d12_hook()->get_command_queue();
+                                        const auto order=m_openxr.manual_dibr_observer.executed_order.load(
+                                            std::memory_order_acquire)+1;
+                                        auto periphery=cap.selected_periphery(producer,const_cast<ID3D12CommandQueue*>(queue),order);
+                                        if (periphery) {
+                                            using namespace uevr::duoview::dibr;
+                                            using DibrRaster=uevr::duoview::dibr::dx12::Compositor;
+                                            const auto make_pose=[](const XrView& view) {
+                                                return NativeEyePose{
+                                                    {view.pose.orientation.x,view.pose.orientation.y,
+                                                     view.pose.orientation.z,view.pose.orientation.w},
+                                                    {view.pose.position.x,view.pose.position.y,view.pose.position.z}};
+                                            };
+                                            const auto make_fov=[](const XrView& view) {
+                                                return NativeEyeFovAngles{
+                                                    view.fov.angleLeft,view.fov.angleRight,
+                                                    view.fov.angleUp,view.fov.angleDown};
+                                            };
+                                            const auto native_left=make_pose(packet->duoview_views[0]);
+                                            const auto native_right=make_pose(packet->duoview_views[1]);
+                                            auto build_eye=[&](size_t eye,std::array<float,16>& matrix) {
+                                                std::array<double,16> target_from_source{};
+                                                if (!build_native_eye_target_from_source(native_left,native_right,
+                                                    eye==0 ? native_left : native_right,vr->get_world_to_meters(),
+                                                    target_from_source)) return false;
+                                                ManualDibrProjectionInput input{};
+                                                for (size_t i=0;i<16;++i)
+                                                    input.sourceProjectionColumnMajor[i]=packet_frame->projection[i];
+                                                input.targetFov=make_fov(packet->duoview_views[eye]);
+                                                input.targetFromSourceColumnMajor=target_from_source;
+                                                ManualDibrClipTransform clip{};
+                                                if (!build_manual_dibr_clip_transform(input,clip)) return false;
+                                                matrix=clip.sourceClipToTargetClipRowMajor;
+                                                return true;
+                                            };
+                                            uevr::duoview::dibr::dx12::ProjectionPair projections{};
+                                            auto color_desc=compositor.mono_output()->GetDesc();
+                                            if (color_desc.Width<=UINT32_MAX && color_desc.Height<=UINT32_MAX &&
+                                                build_eye(0,projections.left) && build_eye(1,projections.right)) {
+                                                projections.color_rect={0,0,
+                                                    static_cast<uint32_t>(color_desc.Width),color_desc.Height};
+                                                const auto& l=packet_frame->config.layout;
+                                                projections.fovea_uv_rect={l.u0,l.v0,l.u1,l.v1};
+                                                auto fovea=cap.selected_fovea(producer,
+                                                    const_cast<ID3D12CommandQueue*>(queue),order);
+                                                projections.use_fovea_depth=fovea.has_value();
+                                                auto selected_roles=cap.assignments();
+                                                auto found=m_openxr.manual_dibr_compositors.find(&commands);
+                                                if (found!=m_openxr.manual_dibr_compositors.end() &&
+                                                    found->second && queue) {
+                                                    auto& manual_dibr_compositor=*found->second;
+                                                    manual_dibr_recorded=manual_dibr_compositor.record(
+                                                        device,commands.cmd_list.Get(),compositor.mono_output(),
+                                                        D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                                        *periphery,D3D12_RESOURCE_STATE_COPY_DEST,
+                                                        fovea ? &*fovea : nullptr,D3D12_RESOURCE_STATE_COPY_DEST,
+                                                        selected_roles,producer,
+                                                        {reinterpret_cast<uint64_t>(queue),order,0},
+                                                        destination,D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                                        projections,std::static_pointer_cast<const void>(packet),
+                                                        uevr::duoview::command_list_epochs.current(
+                                                            reinterpret_cast<uintptr_t>(commands.cmd_list.Get())).value);
+                                                    if (manual_dibr_compositor.recorded_commands())
+                                                        commands.has_commands=true;
+                                                    if (!manual_dibr_recorded)
+                                                        SPDLOG_WARNING_EVERY_N_SEC(2,
+                                                            "[DuoView][DIBR] Stereo rejected; guarded Mono stays: {}",
+                                                            manual_dibr_compositor.error());
+                                                }
+                                            }
+                                        }
+                                    }''',
+        "Real live DIBR reprojection after native Mono composite")
+
+    # Instrument just the real executed OpenXR command lists. Depth-capture
+    # previews consume a bounded asynchronous copy only when picker is open.
+    replace_exact(dx12_cpp,
+        '''    texture_ctx->commands.execute();
+    bool stalker_enqueued = false;''',
+        '''    // Depth previews are recorded only on explicitly opened manual
+    // picker pages, never on the default stable DuoView path.
+    if (vr->is_duoview_renderer_active() && vr->manual_dibr_picker_open() &&
+        swapchain_idx == (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE)
+        manual_dibr_capture.record_preview_readbacks(
+            binding.device,texture_ctx->commands.cmd_list.Get(),binding.queue,
+            uevr::duoview::command_list_epochs.current(
+                reinterpret_cast<uintptr_t>(texture_ctx->commands.cmd_list.Get())).value);
+    texture_ctx->commands.execute();
+    bool stalker_enqueued = false;''',
+        "Asynchronous readback with current DX12 command epoch")
+
     # Only the already accepted DuoView paths are installed here. The separate
     # production callsites / GPU fence hooks are still mandatory and are
     # rejected by verify_manual_dibr.py until actually implemented.
