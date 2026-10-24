@@ -377,7 +377,9 @@ int main() try {
         if ((x >= 8 && x <= 10) || (x >= 53 && x <= 55)) {
             px[0] = 32; px[1] = 48; px[2] = 64;
         }
-        if (x >= 30 && x <= 32) { px[0] = 64; px[1] = 96; px[2] = 128; }
+        if (x >= 30 && x <= 32 && y >= 10 && y <= 22) {
+            px[0] = 64; px[1] = 96; px[2] = 128;
+        }
         px[3] = 255;
     }
     color_upload->Unmap(0, nullptr);
@@ -391,6 +393,8 @@ int main() try {
         W, H, 0, 20);
     const double periphery_right_disparity = disparity_window(fused, output_foot.Footprint.RowPitch,
         W, H, 45, W);
+    std::cout << "Fovea/periphery L-R=" << fovea_disparity << "/"
+        << periphery_left_disparity << "/" << periphery_right_disparity << " px\n";
     require(fovea_disparity > 4.5 && fovea_disparity < 8.5,
         "The selected fovea depth must control markers inside its full-view crop");
     require(periphery_left_disparity < -4.5 && periphery_left_disparity > -8.5 &&
