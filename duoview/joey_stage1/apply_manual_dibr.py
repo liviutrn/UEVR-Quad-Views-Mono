@@ -162,6 +162,56 @@ def main() -> None:
                 }''',
         "Manual DIBR picker & explicit truthful Mono fallback UI")
 
+    # Attach a small opt-in D3D12 observation adapter. The underlying stable
+    # DX12 hook already reports DSV creation and resource barriers. A command
+    # is eligible for copying only with proven epoch/frame ownership; never
+    # invent a current frame when the hook did not see one.
+    replace_exact(dx12_header,
+        '#include "d3d12/ManualDibrCapture.hpp"',
+        '#include "d3d12/ManualDibrCapture.hpp"\n'
+        '#include "../../hooks/D3D12Hook.hpp"',
+        "DIBR observer type")
+    replace_exact(dx12_header,
+        '        uevr::duoview::dibr::dx12::ManualDibrCapture manual_dibr_capture{};',
+        '''        uevr::duoview::dibr::dx12::ManualDibrCapture manual_dibr_capture{};
+        struct ManualDibrHookObserver final : D3D12DepthStencilObserver {
+            uevr::duoview::dibr::dx12::ManualDibrCapture* capture{};
+            void on_depth_stencil_view_created(
+                ID3D12Resource* resource, const D3D12_DEPTH_STENCIL_VIEW_DESC* desc,
+                D3D12_CPU_DESCRIPTOR_HANDLE handle) override {
+                if (capture && capture->requested())
+                    capture->on_depth_stencil_view_created(resource, desc, handle);
+            }
+            void on_resource_barriers(
+                ID3D12GraphicsCommandList* list, UINT count,
+                const D3D12_RESOURCE_BARRIER* barriers) override {
+                if (!capture || !capture->requested() || !list) return;
+                const auto stamp = uevr::duoview::capture_source_stamps.current(GetCurrentThreadId());
+                const auto epoch = uevr::duoview::command_list_epochs.current(
+                    reinterpret_cast<uintptr_t>(list));
+                capture->on_resource_barriers_scoped(list, count, barriers, stamp, epoch);
+            }
+        } manual_dibr_observer{};
+        // The observer is owned by the OpenXR backend, not by the game resource.
+        // DIBR remains disabled unless the picker or stereo is explicitly selected.''',
+        "Bounded DIBR depth-stencil observer")
+
+    dx12_cpp = backend / "src/mods/vr/D3D12Component.cpp"
+    replace_exact(dx12_cpp,
+        'vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {\n',
+        '''vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+    // No DIBR hook work in any other original Joey mode. The stable
+    // Mono/DuoView render path remains bit-for-bit the same while off.
+    const bool dibr_picker = vr->manual_dibr_picker_open();
+    const bool dibr_stereo = vr->manual_dibr_stereo_requested();
+    m_openxr.manual_dibr_capture.set_requested(dibr_picker, dibr_stereo);
+    m_openxr.manual_dibr_observer.capture = &m_openxr.manual_dibr_capture;
+    if (auto* hook = g_framework->get_d3d12_hook(); hook)
+        hook->set_depth_stencil_observer(
+            (dibr_picker || dibr_stereo) && vr->get_runtime()->is_openxr()
+                ? &m_openxr.manual_dibr_observer : nullptr);
+''',
+        "Opt-in DSV/ResourceBarrier capture registration")
     # Only the already accepted DuoView paths are installed here. The separate
     # production callsites / GPU fence hooks are still mandatory and are
     # rejected by verify_manual_dibr.py until actually implemented.
