@@ -99,7 +99,7 @@ def verify_feature(backend: Path) -> None:
         "validate_selected_sample", "ConsumerReceipt", "D3D12_RESOURCE_STATE_RENDER_TARGET",
         "DrawInstanced(3, 1, 0, 0)", "retire_after_fence", "range.NumDescriptors = 3",
         "const OwnedDepthTexture* fovea", "projection.use_fovea_depth",
-        "validate_owned_sample", "fovea_reference_",
+        "validate_owned_sample", "draw_slot->fovea_reference",
     ), "Manual DIBR production adapter")
     if "ID3D12Resource* mono_output() const" not in mono_compositor:
         raise RuntimeError("DIBR adapter cannot read the fenced center-color compositor output")
@@ -144,7 +144,7 @@ def verify_feature(backend: Path) -> None:
     manual_ui = (backend / "src/mods/vr/dibr/ManualDibrUi.hpp").read_text(encoding="utf-8")
     require_tokens(manual_ui, (
         "Enable DuoView Stereo", "Full view / Periphery depth", "Fovea depth",
-        "Choose full-view depth", "Selected; timing unverified",
+        "Use for full view / Periphery", "Timing unverified",
     ), "Manual DIBR depth selection UI")
     require_tokens(ui, ("ManualDibrUi.hpp", "m_duo_dibr_stereo", "manual_dibr_capture",
         "ui::draw(", "Mono fallback", "Waiting",
