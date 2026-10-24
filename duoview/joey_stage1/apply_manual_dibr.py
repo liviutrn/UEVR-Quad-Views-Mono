@@ -432,7 +432,7 @@ thread_local int32_t g_resize_buffers_depth = 0;''',
     replace_exact(render_hook,
         '''        const auto duo_source = duo_command.owner();''',
         '''        const auto duo_source = duo_command.owner();
-        if (vr->is_duoview_renderer_active() && duo_source) {
+        if (N == correct_execute_index && VR::get()->is_duoview_renderer_active() && duo_source) {
             const auto stamp = uevr::duoview::capture_source_stamp_from_command(duo_command, true);
             uevr::duoview::capture_source_stamps.begin_direct(GetCurrentThreadId(), stamp);
         }''',
