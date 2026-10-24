@@ -162,7 +162,7 @@ public:
         std::scoped_lock lock{mutex_};
         if (!requested()) return;
         for (uint32_t slice = 0; slice < slice_count; ++slice) {
-            const auto subresource = D3D12CalcSubresource(mip, first_slice + slice, 0,
+            const auto subresource = calc_subresource(mip, first_slice + slice, 0,
                 source.MipLevels, source.DepthOrArraySize);
             register_resource_locked(resource, subresource, source);
         }
@@ -203,7 +203,7 @@ public:
             // plane. A D32S8 plane-1 subresource is stencil, never depth.
             const uint32_t depth_plane_count = static_cast<uint32_t>(source_desc.DepthOrArraySize);
             for (uint32_t array_slice = 0; array_slice < depth_plane_count; ++array_slice) {
-                const uint32_t subresource = D3D12CalcSubresource(0, array_slice, 0,
+                const uint32_t subresource = calc_subresource(0, array_slice, 0,
                     source_desc.MipLevels, source_desc.DepthOrArraySize);
                 if (barrier.Transition.Subresource != D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES &&
                     barrier.Transition.Subresource != subresource)
@@ -458,6 +458,11 @@ private:
     static bool depth_plane_supported(DXGI_FORMAT format) {
         return format == DXGI_FORMAT_R32_TYPELESS || format == DXGI_FORMAT_R32_FLOAT ||
             format == DXGI_FORMAT_R32G8X24_TYPELESS;
+    }
+
+    static constexpr uint32_t calc_subresource(uint32_t mip, uint32_t array_slice,
+        uint32_t plane, uint32_t mip_levels, uint32_t array_size) {
+        return mip + array_slice * mip_levels + plane * mip_levels * array_size;
     }
 
     static bool supported_resource_shape(const D3D12_RESOURCE_DESC& desc, uint32_t subresource) {

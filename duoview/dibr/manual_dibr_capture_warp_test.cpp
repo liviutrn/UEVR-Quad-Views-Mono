@@ -416,9 +416,32 @@ int main() try {
     require_gradient(copy_owned_depth(harness, fourth_packet->texture.Get()), .55f, .65f,
         "The reused snapshot slot must contain only the new producer frame");
 
-    // Reset while consumers still hold packet leases. The candidate must stay
-    // alive until an actual queue consumer finishes and every CPU hold drops.
+    // Reset after the GPU accepted a capture list but before the observer
+    // processes its ExecuteCommandLists event. The in-flight slot still needs
+    // its private fence receipt even though reset has disabled new capture.
+    fourth_packet.reset();
+    harness.open_list();
+    harness.record_live_depth_transition(source.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        105, .65f, .60f, selected_dsv);
+    harness.close_list();
+    ID3D12CommandList* in_flight_lists[]{harness.command_list.Get()};
+    harness.queue->ExecuteCommandLists(1, in_flight_lists);
+    ++harness.queue_order;
     harness.capture.reset();
+    harness.capture.on_queue_execute_command_lists(harness.queue.Get(), 1, in_flight_lists,
+        harness.queue_order);
+    ++harness.test_fence_value;
+    check(harness.queue->Signal(harness.test_fence.Get(), harness.test_fence_value),
+        "Signal post-reset capture completion fence");
+    wait_for_fence(harness.test_fence.Get(), harness.test_fence_value, harness.event,
+        "post-reset capture submission");
+    const auto after_flight_reset = harness.capture.candidates();
+    require(after_flight_reset.size() == 1 && after_flight_reset[0].candidate.update_serial == 5,
+        "An already-submitted capture must receive its fence/sample receipt after reset");
+
+    // Keep the earlier consumer packet leased through its post-reset GPU copy.
+    // Candidate storage must remain alive until that consumer fence completes
+    // and every CPU packet hold is released.
     require(harness.capture.candidates().size() == 1,
         "Reset must retain candidate resources while immutable packet leases are held");
     require(!harness.capture.selected_periphery({kGeneration, 104},
