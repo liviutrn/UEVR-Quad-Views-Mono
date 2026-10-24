@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "repository": "liviutrn/UEVR-Quad-Views-Mono",
+  "release_tag": "v186.1-mpc-hud-eyealignment-persist49-56",
+  "release_commit": "60d0aae86949723d21266e4121a833f0191729c2",
+  "implementation_branch": "feature/duoview-dibr-manual-depth-luna-20261024",
+  "release_verified_on": "2026-10-24",
+  "release_asset_sha256": "23c0d0b005c55d4379df3079e6652016d93ea3e178140988be864183a394a7bc",
+  "upstream_backend_commit": "5ac7edc207866569334175e4ed8a7517971547f6",
+  "upstream_sdk_commit": "3cffbc82429b6165ceec2714f0f0d9ae48f55596",
+  "upstream_frontend_commit": "60be4b0f9a646109fd9fdf448bacd41477234091",
+  "provenance_policy": "Fresh changes from this release; no later experimental merges or cherry-picks."
+}

@@ -6,9 +6,9 @@ UEVR Quad Views Mono is an experimental rendering extension that prioritizes ima
 
 The goal is **higher effective resolution and better GPU efficiency** in demanding Unreal Engine games, particularly at high SteamVR render resolutions where pixel and shader workload — rather than CPU performance — is the bottleneck.
 
-**Current release:** [v186.1 — Integrated Glamarye Sharpen](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v186.1-glamayre) · **Stable baseline:** [v182](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v182) · **Current game integration:** S.T.A.L.K.E.R. 2 (DX12 / OpenXR) · **Eye tracking:** PlayStation VR2 Toolkit
+**Accepted stable source release:** [v186.1-mpc-hud-eyealignment-persist49-56](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v186.1-mpc-hud-eyealignment-persist49-56) · **Stable baseline:** [v182](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v182) · **DIBR development branch:** manual depth selection and synthetic stereo, not yet verified in a live game or headset.
 
-> **Current architecture: DuoView Mono, not native stereo quad views.** Version 182 renders two differently detailed Unreal Engine views from a shared monoscopic camera, blends them and presents the same resulting image to both eyes. It does **not** yet render four independent left/right focus-and-context views, implement an OpenXR quad-views extension, or provide binocular stereo depth. The project name reflects its quad-view-inspired rendering approach and direction.
+> **Stable-release behavior:** v186.1 renders two differently detailed Unreal Engine views from a shared monoscopic camera, blends them and presents the same resulting image to both eyes. The current development branch adds a manual-depth DIBR test path. Its source integration, live depth acquisition and headset output remain unverified until the matching build and hardware evidence are available. Neither branch implements four independent left/right focus-and-context views or an OpenXR quad-views extension.
 
 ## How it works
 
@@ -56,9 +56,9 @@ The dedicated rendering option is **DuoView (rendering mode ID 6)**. This is dis
 
 ## Performance
 
-Under favorable high-resolution, GPU-bound conditions, DuoView could deliver **up to 50% higher FPS than standard Mono** and **up to 85% higher FPS than Native Stereo**.
+Historical estimates for the stable Mono renderer reported potential gains under favorable GPU-bound conditions. They were extrapolated from GPU utilization under a frame cap, not directly measured uncapped results, and do not apply to the DIBR development branch.
 
-Estimates are derived from **S.T.A.L.K.E.R. 2** testing on an **RTX 5070** at **3136 × 2768** and **4060 × 3584**, using **DLSS Performance**, a **50% × 50% eye-tracked foveal crop**, and **0.20× peripheral resolution**; the FPS gains are extrapolated from GPU utilization under a 40 FPS cap, not directly measured uncapped results.
+The earlier estimates used **S.T.A.L.K.E.R. 2** on an **RTX 5070** at **3136 × 2768** and **4060 × 3584**, with **DLSS Performance**, a **50% × 50% eye-tracked foveal crop**, and **0.20× peripheral resolution**. They are not DIBR measurements or a performance claim for this branch.
 
 ## Compatibility and requirements
 
@@ -91,12 +91,15 @@ The original [v182 baseline](https://github.com/liviutrn/UEVR-Quad-Views-Mono/re
 
 The original v182 binary package is preserved without modification. Existing saved sharpening settings may override the new **1.0** default. Disable the separate Glamarye OpenXR layer to avoid applying sharpening twice. NVIDIA Smooth Motion was disabled in the reported smooth headset test. See [v186.1 modifications](RELEASE_NOTES_V186_GLAMARYE.md). For archive integrity and exact build identification, see [`SHA256SUMS`](SHA256SUMS) and [`PROVENANCE.json`](PROVENANCE.json).
 
+Manual-depth DIBR builds are separate test artifacts named `UEVR-DuoView-ManualDepthDIBR-Test-<run>`. Use one only after its Windows workflow run succeeds, and read the included `READ_FIRST.txt` and `BUILD_STATUS.json`; those files distinguish CI renderer tests from game and headset validation.
+
 ## Source code and development
 
-This repository carries the **DuoView implementation and integration patches**, alongside a reproducible build workflow based on pinned upstream UEVR components.
+This repository carries the stable Mono implementation and a separate manual-depth DIBR development patch, alongside a reproducible build workflow based on pinned upstream UEVR components. The DIBR candidate is not a release until its Windows build, CPU contracts and DX12 WARP geometry route pass. Game depth acquisition, live RGB-depth pairing and headset output require separate verification.
 
 - [`duoview/`](duoview/) — foveal/peripheral layout, gaze handling, frame-state contracts, D3D12 composition shaders and Joey integration patches.
-- [`.github/workflows/duoview-joey-stage234.yml`](.github/workflows/duoview-joey-stage234.yml) — manually triggered Windows build of the pinned backend, frontend and DuoView extension.
+- [`.github/workflows/duoview-joey-stage234.yml`](.github/workflows/duoview-joey-stage234.yml) — feature-branch pushes run the independent DIBR CPU/DX12 WARP acceptance; PRs or an opted-in manual dispatch run the pinned backend build and package path.
+- [`DIBR_BUILD_STATUS.md`](DIBR_BUILD_STATUS.md) and [`DIBR_BUILD_STATUS.json`](DIBR_BUILD_STATUS.json) — current evidence boundary for the DIBR development branch.
 - [`build-182` branch](https://github.com/liviutrn/UEVR-Quad-Views-Mono/tree/build-182) — preserved v182 source baseline.
 - [`PROVENANCE.json`](PROVENANCE.json) — exact upstream revisions and published binary provenance.
 

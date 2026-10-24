@@ -27,20 +27,28 @@ def format_array(name, payload):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
+    parser.add_argument("--include-dibr", action="store_true",
+                        help="also embed the manual DIBR adapter shaders after the stable baseline patch")
     args = parser.parse_args()
     source = Path(__file__).resolve().parent
     fxc = fxc_executable()
     sections = []
+    shaders = [
+        ("VSMain", "vs_5_0", "vertex_shader_bytecode", "DuoViewCompositeRaster.hlsl"),
+        ("PSMain", "ps_5_0", "pixel_shader_bytecode", "DuoViewCompositeRaster.hlsl"),
+        ("PSNativeMain", "ps_5_0", "native_pixel_shader_bytecode", "DuoViewNativeCompositeRaster.hlsl"),
+    ]
+    if args.include_dibr:
+        shaders.extend([
+            ("VSMain", "vs_5_0", "dibr_vertex_shader_bytecode", "dibr/DuoViewDibrRaster.hlsl"),
+            ("PSMain", "ps_5_0", "dibr_pixel_shader_bytecode", "dibr/DuoViewDibrRaster.hlsl"),
+        ])
     with tempfile.TemporaryDirectory(prefix="duoview-shader-") as tmp:
-        for entry, profile, name in (
-            ("VSMain", "vs_5_0", "vertex_shader_bytecode"),
-            ("PSMain", "ps_5_0", "pixel_shader_bytecode"),
-            ("PSNativeMain", "ps_5_0", "native_pixel_shader_bytecode"),
-        ):
+        for entry, profile, name, shader_source in shaders:
             output = Path(tmp) / (name + ".cso")
             command = [str(fxc), "/nologo", "/O3", "/T", profile,
                        "/E", entry, "/I", str(source), "/Fo", str(output),
-                       str(source / ("DuoViewNativeCompositeRaster.hlsl" if entry == "PSNativeMain" else "DuoViewCompositeRaster.hlsl"))]
+                       str(source / shader_source)]
             result = subprocess.run(command, capture_output=True, text=True)
             if result.returncode:
                 raise RuntimeError(f"Shader {entry} failed compilation: {result.stdout}\n{result.stderr}")
