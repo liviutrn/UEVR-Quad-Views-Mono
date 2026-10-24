@@ -615,6 +615,77 @@ thread_local int32_t g_resize_buffers_depth = 0;''',
     bool stalker_enqueued = false;''',
         "Asynchronous readback with current DX12 command epoch")
 
+    # Bind compositor slot resources to their actual command-list submission
+    # and GPU fences. Never recycle descriptors or OpenXR render targets by
+    # frame index alone.
+    replace_exact(dx12_header,
+        '''        struct ManualDibrHookObserver final : D3D12DepthStencilObserver {
+            uevr::duoview::dibr::dx12::ManualDibrCapture* capture{};''',
+        '''        struct ManualDibrHookObserver final : D3D12DepthStencilObserver {
+            OpenXR* owner{};
+            uevr::duoview::dibr::dx12::ManualDibrCapture* capture{};''',
+        "Bind DIBR queue observer to XR texture slots")
+    replace_exact(dx12_header,
+        '''                if (epoch.known) capture->on_command_list_reset(list,epoch.value);
+            }''',
+        '''                if (epoch.known) capture->on_command_list_reset(list,epoch.value);
+                if (owner) {
+                    std::scoped_lock lock{owner->mtx};
+                    for (auto& [command, compositor] : owner->manual_dibr_compositors)
+                        if (compositor) compositor->on_command_list_reset(list,epoch.value);
+                }
+            }''',
+        "Retire abandoned DIBR descriptors on command reset")
+    replace_exact(dx12_header,
+        '''                capture->on_command_list_close(list,succeeded,epoch.value);
+            }''',
+        '''                capture->on_command_list_close(list,succeeded,epoch.value);
+                if (owner) {
+                    std::scoped_lock lock{owner->mtx};
+                    for (auto& [command, compositor] : owner->manual_dibr_compositors)
+                        if (compositor) compositor->on_command_list_close(list,succeeded,epoch.value);
+                }
+            }''',
+        "Preserve only successful DIBR command-list recordings")
+    replace_exact(dx12_header,
+        '''                capture->on_queue_execute_command_lists(queue,count,lists,order);
+            }''',
+        '''                capture->on_queue_execute_command_lists(queue,count,lists,order);
+                if (owner) {
+                    std::scoped_lock lock{owner->mtx};
+                    for (auto& [command, compositor] : owner->manual_dibr_compositors)
+                        if (compositor) compositor->on_queue_execute_command_lists(queue,count,lists,order);
+                }
+            }''',
+        "Signal per-slot DIBR GPU fences only after actual queue submission")
+    replace_exact(dx12_cpp,
+        '''    m_openxr.manual_dibr_observer.capture = &m_openxr.manual_dibr_capture;''',
+        '''    m_openxr.manual_dibr_observer.capture = &m_openxr.manual_dibr_capture;
+    m_openxr.manual_dibr_observer.owner = &m_openxr;
+    if (dibr_picker || dibr_stereo) m_openxr.manual_dibr_capture.resume();''',
+        "Initialize DIBR capture before connecting game hooks")
+
+    replace_exact(dx12_cpp,
+        '''    vr->get_openxr_runtime()->invalidate_duoview_scene();
+    this->duoview_compositors.clear();''',
+        '''    for (auto& [command, compositor] : this->manual_dibr_compositors) {
+        if (compositor && !compositor->references_retired()) {
+            spdlog::error("[DuoView][DIBR] XR swapchain retained: stereo descriptors still GPU-owned");
+            return;
+        }
+    }
+    vr->get_openxr_runtime()->invalidate_duoview_scene();
+    this->manual_dibr_compositors.clear();
+    this->manual_dibr_capture.reset();
+    this->duoview_compositors.clear();''',
+        "Prevent XR swapchain/descriptor release with live stereo commands")
+    replace_exact(dx12_cpp,
+        '''    this->duoview_compositors.clear();
+    this->contexts.clear();''',
+        '''    this->manual_dibr_compositors.clear();
+    this->duoview_compositors.clear();
+    this->contexts.clear();''',
+        "Clear retired DIBR slots alongside stable DuoView slots")
     # Only the already accepted DuoView paths are installed here. The separate
     # production callsites / GPU fence hooks are still mandatory and are
     # rejected by verify_manual_dibr.py until actually implemented.
