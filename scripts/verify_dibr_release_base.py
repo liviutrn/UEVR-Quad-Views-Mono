@@ -13,6 +13,8 @@ EXPECTED_RELEASE_TAG = "v186.1-mpc-hud-eyealignment-persist49-56"
 EXPECTED_RELEASE_COMMIT = "60d0aae86949723d21266e4121a833f0191729c2"
 EXPECTED_RELEASE_ASSET_SHA256 = "23c0d0b005c55d4379df3079e6652016d93ea3e178140988be864183a394a7bc"
 EXPECTED_BRANCH = "feature/duoview-dibr-manual-depth-luna-20261024"
+# Recovery is a strictly linear descendant of the same release, never a merge.
+ALLOWED_CI_BRANCHES = frozenset((EXPECTED_BRANCH, "build/dibr-production-recovery-20261024"))
 EXPECTED_UPSTREAM_COMMITS = {
     "backend": "5ac7edc207866569334175e4ed8a7517971547f6",
     "sdk": "3cffbc82429b6165ceec2714f0f0d9ae48f55596",
@@ -48,8 +50,8 @@ def main():
             raise RuntimeError(f"DIBR release policy changed its pinned {key}")
     if os.environ.get("GITHUB_ACTIONS") == "true":
         branch = os.environ.get("GITHUB_HEAD_REF") or os.environ.get("GITHUB_REF_NAME")
-        if branch != EXPECTED_BRANCH:
-            raise RuntimeError(f"CI build ref {branch!r} is not the fresh DIBR branch {EXPECTED_BRANCH}")
+        if branch not in ALLOWED_CI_BRANCHES:
+            raise RuntimeError(f"Unexpected DIBR build ref {branch!r}; allowed: {sorted(ALLOWED_CI_BRANCHES)}")
     base = EXPECTED_RELEASE_COMMIT
     head = git(root, "rev-parse", "HEAD")
     tag = policy["release_tag"]
