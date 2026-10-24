@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/duoview-dibr-manual-depth-luna-20261024
+      - build/dibr-production-recovery-20261024
   pull_request:
     branches:
       - build-182
