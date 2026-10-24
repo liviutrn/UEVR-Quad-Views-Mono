@@ -1,7 +1,7 @@
 #pragma once
 
-#include "DuoViewDibrD3D12.hpp"
-#include "ManualDibrPreview.hpp"
+#include "../dibr/DuoViewDibrD3D12.hpp"
+#include "../dibr/ManualDibrPreview.hpp"
 #if __has_include("../joey_stage1/DuoViewDelivery.hpp")
 #include "../joey_stage1/DuoViewDelivery.hpp"
 #else
