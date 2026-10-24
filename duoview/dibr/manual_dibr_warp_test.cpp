@@ -14,6 +14,8 @@
 
 using Microsoft::WRL::ComPtr;
 using namespace uevr::duoview::dibr;
+using namespace uevr::duoview::dibr::dx12;
+using uevr::duoview::Rect;
 
 static void check(HRESULT h) {
     if (FAILED(h)) throw std::runtime_error("D3D12 failure " + std::to_string(static_cast<uint32_t>(h)));
