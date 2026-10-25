@@ -1,9 +1,10 @@
-name: DuoView independent offline depth proof (Build49)
+name: DuoView Build118 Stock DIBR Frozen-Depth Probe
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
   push:
     branches:
       - experiment/duoview-depth-offline-proof-20261023
+      - experiment/depthproof118-stock-dibr-20261025
       - feature/v182-fovea-glamayre-fused
       - fix/duoview-v1861-foreground-mpc-minimal-20261022
       - experiment/duoview-v1861-mpc-hud-mono-convergence-20261022
@@ -95,6 +96,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Independent depth proof patch failed' }
           python workspace/duoview/depth_proof/test_depth_proof_patch.py backend --compare evidence/protected-renderer-hashes.json
           if ($LASTEXITCODE -ne 0) { throw 'Depth proof altered protected rendering source' }
+      - name: Wire completed GPU depth into Joey stock DIBR after DuoView Mono
+        shell: pwsh
+        run: |
+          python workspace/duoview/depth_proof/apply_stock_dibr_proof.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Build118 stock DIBR patch failed; do not package' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
       - name: Verify real D3D12 depth readback and rejection paths on WARP
@@ -188,7 +194,10 @@ jobs:
           Stable baseline: v186.1 Build49 / 60d0aae86949723d21266e4121a833f0191729c2.
           Preserve your stable installation. Extract into a SEPARATE TEST DIRECTORY.
           Source renderers, compositor, gaze, HUD/eye alignment, and shaders are unchanged.
-          This is NOT stereo. The prior P1/S0 depth/preview code is absent.
+          Experimental frozen-depth stereo using Joey stock DIBRPreview.
+          After capture, select a completed candidate 1/4/5/6/9, then Test Joey DIBR.
+          This is NOT live stereo. Depth freezes; no RGB-D synchronization or comfort proof.
+          Prior P1/S0 depth preview source and Build123 code are absent.
           Test: activate DuoView ID6, open DuoView Mono quality -> Depth proof to disk.
           Click Capture depth proof (10 seconds, once per game). Remain in a loaded scene.
           After about 10 seconds plus export, read the explicit Saved / NO DEPTH IMAGE / FAILED status.
@@ -198,7 +207,8 @@ jobs:
           and candidate_N.f32 raw float32 Z,
           manifest.json transition/rejection/submission metadata, image_results.json.
           Zip the COMPLETE timestamp folder and fresh UEVR log, including failures.
-          No extra controls, HMD viewer, or stereo switch. Ordinary Mono output continues.
+          Use Test Joey DIBR or STOP stock DIBR test / MONO in the depth-proof menu.
+          Normal DuoView Mono remains default and is never replaced unless explicitly selected.
           Each capture is anonymous: roles, scene identity, RGB correspondence, frame/pose
           matching and metric depth remain unverified. First inspect geometry in the files.
           GPU completion is based on the EXACT recorded command-list submission queue.
@@ -216,16 +226,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-OfflineDepthProof-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-StockDIBR-Proof118-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-OfflineDepthProof-${{ github.run_number }}
+          name: UEVR-DuoView-StockDIBR-Proof118-${{ github.run_number }}
           path: |
-            UEVR-DuoView-OfflineDepthProof-*.zip
-            UEVR-DuoView-OfflineDepthProof-*.zip.sha256
+            UEVR-DuoView-StockDIBR-Proof118-*.zip
+            UEVR-DuoView-StockDIBR-Proof118-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
