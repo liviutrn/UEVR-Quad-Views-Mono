@@ -7,7 +7,8 @@ def run(args):
 source=(root/'src/mods/vr/d3d12/DIBRPreview.cpp').read_text()
 shader=''.join(re.findall(r'R"DIBR\((.*?)\)DIBR"',source,re.S))
 assert shader and shader.count('float ReadDepth(')==1
-(out/'production_shader.hpp').write_text('const char* shader = R"TEST('+shader+')TEST";\n')
+(out/'production_shader.hpp').write_text('const char* shader =\n'+
+    '\n'.join(json.dumps(shader[i:i+8000]) for i in range(0,len(shader),8000))+';\n')
 header=(root/'src/mods/vr/d3d12/DIBRPreview.hpp').read_text()
 constants=re.search(r'    struct alignas\(256\) Constants \{.*?\n    \};',header,re.S).group().replace('Constants','TestConstants')
 (out/'production_constants.hpp').write_text(constants+'\nstatic_assert(sizeof(TestConstants)==256);\n')
