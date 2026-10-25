@@ -98,7 +98,7 @@ class DepthCapture final : public D3D12DepthStencilObserver {
         default: return DXGI_FORMAT_UNKNOWN;
         }
     }
-    static bool near(double value, double expected) {
+    static bool close_extent(double value, double expected) {
         return std::isfinite(value) && std::abs(value - expected) <= 8.0;
     }
     static bool primary_slice(const D3D12_DEPTH_STENCIL_VIEW_DESC* dsv) {
@@ -111,19 +111,19 @@ class DepthCapture final : public D3D12DepthStencilObserver {
     }
     bool main_viewport_shape(const D3D12_VIEWPORT& v) const {
         if (!width || !height || !(v.Width > 0.0f) || !(v.Height > 0.0f) ||
-            !near(v.TopLeftX, 0.0) || !near(v.TopLeftY, 0.0)) return false;
+            !close_extent(v.TopLeftX, 0.0) || !close_extent(v.TopLeftY, 0.0)) return false;
         const double scale = double(v.Height) / double(height);
         if (scale < 0.20 || scale > 1.01) return false;
         const double eye_width = double(width / 2) * scale;
         const double packed_width = double(width) * scale;
-        return near(v.Width, eye_width) || near(v.Width, packed_width);
+        return close_extent(v.Width, eye_width) || close_extent(v.Width, packed_width);
     }
     bool viewport_matches_source(const D3D12_VIEWPORT& v,
         const D3D12_RESOURCE_DESC& depth, Layout kind) const {
-        if (!near(v.TopLeftX, 0.0) || !near(v.TopLeftY, 0.0) ||
-            !near(v.Height, double(depth.Height))) return false;
-        const bool eye_view = near(v.Width, double(depth.Width) / (kind == Layout::Packed ? 2.0 : 1.0));
-        const bool full_packed_view = kind == Layout::Packed && near(v.Width, double(depth.Width));
+        if (!close_extent(v.TopLeftX, 0.0) || !close_extent(v.TopLeftY, 0.0) ||
+            !close_extent(v.Height, double(depth.Height))) return false;
+        const bool eye_view = close_extent(v.Width, double(depth.Width) / (kind == Layout::Packed ? 2.0 : 1.0));
+        const bool full_packed_view = kind == Layout::Packed && close_extent(v.Width, double(depth.Width));
         return eye_view || full_packed_view;
     }
     void remember_main_bindings(ListState& state) {
@@ -339,6 +339,17 @@ public:
                 (b.Transition.StateAfter & Read) == 0) continue;
             auto* source = b.Transition.pResource;
             if (!source) continue;
+            // The whole barrier batch has executed. A later transition or
+            // aliasing operation can invalidate this entry's apparent state.
+            bool superseded{};
+            for (UINT j = i + 1; j < count; ++j) {
+                const auto& later = barriers[j];
+                if (later.Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION && later.Transition.pResource == source) superseded = true;
+                if (later.Type == D3D12_RESOURCE_BARRIER_TYPE_ALIASING &&
+                    (!later.Aliasing.pResourceBefore || !later.Aliasing.pResourceAfter ||
+                     later.Aliasing.pResourceBefore == source || later.Aliasing.pResourceAfter == source)) superseded = true;
+            }
+            if (superseded) continue;
             const auto desc = source->GetDesc();
             const auto kind = stock_dibr::layout(desc.Width, desc.Height, width, height);
             const auto format = storage(desc.Format);
@@ -347,6 +358,11 @@ public:
                 (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) == 0 ||
                 format == DXGI_FORMAT_UNKNOWN || kind == Layout::Invalid ||
                 !has_recorded_main_binding(source, desc, kind)) { ++rejected; continue; }
+            Ptr<IUnknown> source_device, command_device, expected_device;
+            if (FAILED(source->GetDevice(IID_PPV_ARGS(&source_device))) ||
+                FAILED(cmd->GetDevice(IID_PPV_ARGS(&command_device))) ||
+                FAILED(device.As(&expected_device)) || source_device.Get() != expected_device.Get() ||
+                command_device.Get() != expected_device.Get()) { ++rejected; continue; }
             // Source is the left camera: slice zero, plane zero only. Never
             // copy the right slice or a stencil-only transition.
             if (b.Transition.Subresource != D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES &&
