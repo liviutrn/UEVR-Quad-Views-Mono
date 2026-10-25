@@ -1,0 +1,194 @@
+name: Joey stock DIBR build
+
+on:
+  push:
+    branches:
+      - fix/joey-stock-dibr-stalker2-20261025
+
+permissions:
+  contents: read
+
+env:
+  BUILD_TYPE: Release
+  BACKEND_SHA: 5ac7edc207866569334175e4ed8a7517971547f6
+  UESDK_SHA: 3cffbc82429b6165ceec2714f0f0d9ae48f55596
+  FRONTEND_SHA: 60be4b0f9a646109fd9fdf448bacd41477234091
+
+jobs:
+  stock-dibr:
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out the patch repository
+        uses: actions/checkout@v4
+
+      - name: Check out pinned Joey backend and submodules
+        uses: actions/checkout@v4
+        with:
+          repository: joeyhodge/UEVR
+          ref: ${{ env.BACKEND_SHA }}
+          path: backend
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the SDK source credential
+        shell: pwsh
+        env:
+          SDK_SOURCE_TOKEN: ${{ secrets.UEVR_SOURCE_TOKEN || secrets.PAT_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SDK_SOURCE_TOKEN)) {
+            throw 'Add the repository Actions secret UEVR_SOURCE_TOKEN using a token with access to joeyhodge/UESDK; PAT_TOKEN is accepted as a legacy fallback.'
+          }
+          'SDK source credential is configured.'
+
+      - name: Check out the exact restricted UESDK gitlink
+        uses: actions/checkout@v4
+        with:
+          repository: joeyhodge/UESDK
+          ref: ${{ env.UESDK_SHA }}
+          token: ${{ secrets.UEVR_SOURCE_TOKEN || secrets.PAT_TOKEN }}
+          path: backend/dependencies/submodules/UESDK
+          persist-credentials: false
+
+      - name: Check out matching injector frontend
+        uses: actions/checkout@v4
+        with:
+          repository: joeyhodge/uevr-frontend
+          ref: ${{ env.FRONTEND_SHA }}
+          path: frontend
+          persist-credentials: false
+
+      - name: Verify source pins
+        shell: pwsh
+        run: |
+          git -C backend submodule update --init --depth 1 -- dependencies/submodules/glm dependencies/submodules/imgui dependencies/submodules/spdlog
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned public submodule checkout failed' }
+          $backend = (git -C backend rev-parse HEAD).Trim()
+          $uesdk = (git -C backend/dependencies/submodules/UESDK rev-parse HEAD).Trim()
+          $frontend = (git -C frontend rev-parse HEAD).Trim()
+          if ($backend -ne $env:BACKEND_SHA) { throw "Backend pin mismatch: $backend" }
+          if ($uesdk -ne $env:UESDK_SHA) { throw "UESDK pin mismatch: $uesdk" }
+          if ($frontend -ne $env:FRONTEND_SHA) { throw "Frontend pin mismatch: $frontend" }
+          New-Item -ItemType Directory -Path evidence -Force | Out-Null
+          @(
+            "backend=$backend"
+            "uesdk=$uesdk"
+            "frontend=$frontend"
+            "overlay_commit=$((git rev-parse HEAD).Trim())"
+            "workflow_run=$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          ) | Set-Content evidence/source-pins.txt
+
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up .NET 6
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 6.0.x
+
+      - name: Apply stock single-pass DIBR overlay
+        run: python stock_dibr/apply.py backend
+
+      - name: Run stock DIBR policy and WARP tests
+        shell: pwsh
+        run: |
+          python stock_dibr/run_tests.py backend evidence *> evidence/stock-dibr-tests.log
+          $code = $LASTEXITCODE
+          Get-Content evidence/stock-dibr-tests.log
+          if ($code -ne 0) { throw "Stock DIBR tests failed ($code)" }
+
+      - name: Configure CMake
+        run: cmake -S backend -B backend/build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DUEVR_BUILD_COMPATIBILITY_TESTS=ON
+
+      - name: Build original compatibility test suite
+        shell: pwsh
+        run: |
+          cmake --build backend/build --config ${{ env.BUILD_TYPE }} --parallel 2 --target compatibility-policy-tests steam-frame-input-tests stock-frame-migration-tests gamepad-recovery-tests kananlib-decode-window-tests diagnostic-safety-tests prospi-camera-trace-tests prospi-camera-framing-tests prospi-celebration-framing-tests prospi-roof-visibility-tests hifi-hook-memory-tests nascar-hook-compatibility-tests input-hook-installation-tests mono-d3d11-tests mono-d3d12-tests ui-alpha-tests ui-alpha-lifecycle-tests ui-composition-tests lua-fname-binding-tests lua-context-dispatch-tests lua-controller-input-tests stalker2-native-policy-tests stalker2-native-d3d12-tests *> evidence/compatibility-build.log
+          $code = $LASTEXITCODE
+          Get-Content evidence/compatibility-build.log | Select-Object -Last 100
+          if ($code -ne 0) { throw "Original compatibility test targets failed to build ($code)" }
+
+      - name: Run original compatibility test suite
+        run: ctest --test-dir backend/build -C ${{ env.BUILD_TYPE }} --output-on-failure --no-tests=error --output-log evidence/ctest.log
+
+      - name: Build UEVR backend
+        shell: pwsh
+        run: |
+          cmake --build backend/build --config ${{ env.BUILD_TYPE }} --parallel 2 --target uevr *> evidence/backend-build.log
+          $code = $LASTEXITCODE
+          Get-Content evidence/backend-build.log | Select-Object -Last 100
+          if ($code -ne 0) { throw "UEVR backend build failed ($code)" }
+
+      - name: Build plugin nullifier
+        shell: pwsh
+        run: |
+          cmake --build backend/build --config ${{ env.BUILD_TYPE }} --parallel 2 --target vr-plugin-nullifier *> evidence/nullifier-build.log
+          $code = $LASTEXITCODE
+          Get-Content evidence/nullifier-build.log | Select-Object -Last 80
+          if ($code -ne 0) { throw "Plugin nullifier build failed ($code)" }
+
+      - name: Build Lua API
+        shell: pwsh
+        run: |
+          cmake --build backend/build --config ${{ env.BUILD_TYPE }} --parallel 2 --target LuaVR *> evidence/luavr-build.log
+          $code = $LASTEXITCODE
+          Get-Content evidence/luavr-build.log | Select-Object -Last 80
+          if ($code -ne 0) { throw "Lua API build failed ($code)" }
+
+      - name: Test frontend rendering IDs
+        shell: pwsh
+        run: |
+          dotnet run --project frontend/tests/RenderingModes --configuration Release *> evidence/frontend-tests.log
+          $code = $LASTEXITCODE
+          Get-Content evidence/frontend-tests.log
+          if ($code -ne 0) { throw "Frontend rendering-ID tests failed ($code)" }
+
+      - name: Publish injector frontend
+        shell: pwsh
+        run: |
+          dotnet publish frontend/UEVR/UEVR.csproj --output backend/build/bin/uevr --configuration Release *> evidence/frontend-build.log
+          $code = $LASTEXITCODE
+          Get-Content evidence/frontend-build.log | Select-Object -Last 80
+          if ($code -ne 0) { throw "Injector frontend publish failed ($code)" }
+
+      - name: Assemble installable package and evidence
+        shell: pwsh
+        run: |
+          $packageRoot = Join-Path $env:GITHUB_WORKSPACE "dist/UEVR-Joey-Stock-DIBR"
+          New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+          Copy-Item "backend/build/bin/uevr/*" $packageRoot -Recurse -Force
+          Copy-Item "backend/build/bin/vr-plugin-nullifier/UEVRPluginNullifier.dll" $packageRoot -Force
+          Copy-Item "backend/build/bin/LuaVR/LuaVR.dll" $packageRoot -Force
+          Copy-Item "stock_dibr/README.txt" (Join-Path $packageRoot "README.txt") -Force
+          @(
+            "backend=$env:BACKEND_SHA"
+            "uesdk=$env:UESDK_SHA"
+            "frontend=$env:FRONTEND_SHA"
+            "overlay_commit=$((git rev-parse HEAD).Trim())"
+            "workflow_run=$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            "backend_status=$((git -C backend status --short --untracked-files=all) -join '; ')"
+          ) | Set-Content evidence/build-evidence.txt
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE "dist/UEVR-Joey-Stock-DIBR.zip"
+          Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zipPath -Force
+          $hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
+          Set-Content "$zipPath.sha256" $hash
+
+      - name: Upload installable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: joey-stock-dibr-package
+          path: |
+            dist/UEVR-Joey-Stock-DIBR.zip
+            dist/UEVR-Joey-Stock-DIBR.zip.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload build and test evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: joey-stock-dibr-evidence
+          path: evidence/**
+          if-no-files-found: warn
+          retention-days: 90
