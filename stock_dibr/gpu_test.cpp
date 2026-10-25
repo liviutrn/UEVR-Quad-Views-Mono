@@ -41,6 +41,16 @@ int main() try {
     constexpr auto read=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     stock_dibr::DepthCapture capture;capture.configure(dev.Get(),q.Get(),64,32,true);
     auto depth=make(dev.Get(),tex(32,16,DXGI_FORMAT_R32_TYPELESS,D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_DESCRIPTOR_HEAP_DESC dsv_heap_desc{};dsv_heap_desc.Type=D3D12_DESCRIPTOR_HEAP_TYPE_DSV;dsv_heap_desc.NumDescriptors=1;
+    ComPtr<ID3D12DescriptorHeap> dsv_heap;check(dev->CreateDescriptorHeap(&dsv_heap_desc,IID_PPV_ARGS(&dsv_heap)));
+    auto dsv_handle=dsv_heap->GetCPUDescriptorHandleForHeapStart();D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc{};dsv_desc.Format=DXGI_FORMAT_D32_FLOAT;dsv_desc.ViewDimension=D3D12_DSV_DIMENSION_TEXTURE2D;
+    dev->CreateDepthStencilView(depth.Get(),&dsv_desc,dsv_handle);capture.on_depth_stencil_view_created(depth.Get(),&dsv_desc,dsv_handle);
+    auto main_binding=[&](){
+        D3D12_VIEWPORT vp{0,0,16,16,0,1};cmd->RSSetViewports(1,&vp);capture.on_viewports(cmd.Get(),1,&vp);
+        cmd->OMSetRenderTargets(0,nullptr,FALSE,&dsv_handle);capture.on_render_targets(cmd.Get(),0,dsv_handle);
+        // Final barriers are often recorded after unbinding the render pass.
+        cmd->OMSetRenderTargets(0,nullptr,FALSE,nullptr);capture.on_render_targets(cmd.Get(),0,{});
+    };
     auto color=make(dev.Get(),tex(32,32,DXGI_FORMAT_R8G8B8A8_UNORM),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
     auto output=make(dev.Get(),tex(64,32,DXGI_FORMAT_R8G8B8A8_UNORM,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     std::vector<ComPtr<ID3D12Resource>> uploads;
@@ -54,7 +64,7 @@ int main() try {
     upload(depth.Get(),[](UINT x,UINT){return x<16?.5f:0.f;});
     upload(color.Get(),[](UINT x,UINT y){return (x*8)|((y*8)<<8)|(64<<16);}); // alpha deliberately zero
     auto b=barrier(depth.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_DEPTH_WRITE);cmd->ResourceBarrier(1,&b);
-    b=barrier(depth.Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);capture.on_post_resource_barriers(cmd.Get(),1,&b);
+    main_binding();b=barrier(depth.Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);capture.on_post_resource_barriers(cmd.Get(),1,&b);
     b=barrier(color.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);cmd->ResourceBarrier(1,&b);
     require(!capture.acquire(),"unsubmitted capture accepted");check(cmd->Close());ID3D12CommandList* lists[]{cmd.Get()};q->ExecuteCommandLists(1,lists);capture.on_command_lists_executed(q.Get(),1,lists);
     auto snapshot=capture.acquire();require(snapshot!=nullptr,"submitted live depth rejected");wait(q.Get());check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
@@ -93,10 +103,29 @@ int main() try {
     require(pixel(56,16)[0]>pixel(24,16)[0]+15,"packed left depth not used on right side of image");readback->Unmap(0,nullptr);
     require(!capture.acquire(),"stale depth reused in next interval");
 
+    // A later frame must carry new pixels, not a frozen successful snapshot.
+    check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
+    b=barrier(depth.Get(),read,D3D12_RESOURCE_STATE_COPY_DEST);cmd->ResourceBarrier(1,&b);
+    upload(depth.Get(),[](UINT x,UINT){return x<16?.25f:.75f;});
+    b=barrier(depth.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_DEPTH_WRITE);cmd->ResourceBarrier(1,&b);
+    main_binding();b=barrier(depth.Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);capture.on_post_resource_barriers(cmd.Get(),1,&b);
+    check(cmd->Close());q->ExecuteCommandLists(1,lists);capture.on_command_lists_executed(q.Get(),1,lists);
+    snapshot=capture.acquire();require(snapshot!=nullptr,"next-frame live update missing");wait(q.Get());
+    check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
+    auto sd=snapshot->GetDesc();D3D12_PLACED_SUBRESOURCE_FOOTPRINT df{};UINT64 db{};dev->GetCopyableFootprints(&sd,0,1,0,&df,nullptr,nullptr,&db);
+    auto depth_readback=make(dev.Get(),buf(db),D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
+    b=barrier(snapshot.Get(),read,D3D12_RESOURCE_STATE_COPY_SOURCE);cmd->ResourceBarrier(1,&b);
+    from.pResource=snapshot.Get();to.pResource=depth_readback.Get();to.PlacedFootprint=df;cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+    b=barrier(snapshot.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,read);cmd->ResourceBarrier(1,&b);
+    check(cmd->Close());q->ExecuteCommandLists(1,lists);capture.on_command_lists_executed(q.Get(),1,lists);capture.finish_frame();wait(q.Get());
+    check(depth_readback->Map(0,nullptr,&mapped));float value{};std::memcpy(&value,mapped,4);require(value==.25f,"depth froze at an earlier frame");depth_readback->Unmap(0,nullptr);
+    require(!capture.acquire(),"updated depth reused after interval ended");
+
     // A reset/discard must never publish a recording that was not executed.
     check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
     b=barrier(depth.Get(),read,D3D12_RESOURCE_STATE_DEPTH_WRITE);cmd->ResourceBarrier(1,&b);
-    b=barrier(depth.Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);capture.on_post_resource_barriers(cmd.Get(),1,&b);
+    main_binding();b=barrier(depth.Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);capture.on_post_resource_barriers(cmd.Get(),1,&b);
     check(cmd->Close());check(cmd->Reset(allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());require(!capture.acquire(),"discarded list was published");check(cmd->Close());
-    std::cout<<"PASS: actual live capture header + production shader on WARP; DLSS-sized packed depth, submitted-list gate, distinct eyes, opaque alpha, stale rejection, discarded-list reset. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
+    ComPtr<ID3D12InfoQueue> info;if(SUCCEEDED(dev.As(&info)))for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size{};info->GetMessage(i,nullptr,&size);std::vector<char> data(size);auto* message=reinterpret_cast<D3D12_MESSAGE*>(data.data());check(info->GetMessage(i,message,&size));if(message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)throw std::runtime_error(message->pDescription);}
+    std::cout<<"PASS: actual live capture header + production shader on WARP; DLSS-sized packed depth, submitted-list gate, distinct eyes, opaque alpha, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
 } catch(const std::exception& e) {std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}

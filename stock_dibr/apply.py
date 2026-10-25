@@ -136,6 +136,23 @@ edit(dc,old,'''    if (output_desc.Width != present_desc.Width || output_desc.He
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
 ''')
+edit(dc,'''                    if (vr->is_using_mono()) {
+                        bool recorded = false;''','''                    if (m_stock_dibr_scope && vr->is_dibr_single_view_requested() && !dibr_preview_succeeded) {
+                        // A failed depth/output frame cannot retroactively
+                        // render its missing eye. Copy the current source to
+                        // both eyes while readiness requests two views again.
+                        bool recorded = false;
+                        m_openxr.copy((uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE, nullptr,
+                            [source = backbuffer, scene_source_state, device, &recorded](
+                                d3d12::CommandContext& commands, ID3D12Resource* destination) {
+                                if (!commands.ready()) return;
+                                recorded = uevr::mono::dx12::copy_scene(commands.cmd_list.Get(), device,
+                                    source.Get(), destination, scene_source_state, D3D12_RESOURCE_STATE_RENDER_TARGET);
+                                if (recorded) commands.has_commands = true;
+                            }, std::nullopt, scene_source_state, nullptr, std::nullopt, backbuffer.Get());
+                        SPDLOG_WARNING_EVERY_N_SEC(2, "[StockDIBR] Current-frame Mono safety fallback; stereo NOT active. copy={}", recorded);
+                    } else if (vr->is_using_mono()) {
+                        bool recorded = false;''')
 dp='src/mods/vr/d3d12/DIBRPreview.cpp'
 edit(dp,'#include "DIBRPreview.hpp"','#include "DIBRPreview.hpp"\n#include "DepthPolicy.hpp"')
 edit(dp,'''    if (depth_desc.Height != color_desc.Height ||

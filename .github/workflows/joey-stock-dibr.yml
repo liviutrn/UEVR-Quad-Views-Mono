@@ -90,6 +90,9 @@ jobs:
       - name: Apply stock single-pass DIBR overlay
         run: python stock_dibr/apply.py backend
 
+      - name: Correlate live DSV bindings and viewports
+        run: python stock_dibr/apply_provenance.py backend
+
       - name: Run stock DIBR policy and WARP tests
         shell: pwsh
         run: |
