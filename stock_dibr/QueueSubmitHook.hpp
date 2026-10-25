@@ -24,15 +24,10 @@ private:
     static Registry& registry() { static Registry state; return state; }
     std::unordered_map<void**, Microsoft::WRL::ComPtr<ID3D12CommandQueue>> slots;
     Callback callback{};
-    inline static thread_local unsigned forwarding_depth{};
+    inline static thread_local bool notifying{};
 
     static void WINAPI execute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists) {
         auto& state = registry();
-        const bool outer = forwarding_depth == 0;
-        // clear() drains all outer calls, including their observer callbacks.
-        // Nested proxy forwarding uses its outer call's activity lock.
-        std::shared_lock<std::shared_mutex> activity;
-        if (outer) activity = std::shared_lock{state.activity};
         Callback original{};
         {
             std::shared_lock lock{state.metadata};
@@ -42,12 +37,24 @@ private:
         // Every installed slot publishes its original before this function is
         // callable. Originals remain available after the slot is restored.
         if (!original) return;
-        struct ForwardingScope {
-            ForwardingScope() { ++forwarding_depth; }
-            ~ForwardingScope() { --forwarding_depth; }
-        } scope;
         original(queue, count, lists);
-        if (outer && state.callback) state.callback(queue, count, lists);
+        // Observe every forwarding layer: a proxy can replace the list array,
+        // and only the native layer may match the recorded COM identities.
+        // Matching slots become non-pending, so later outer callbacks cannot
+        // publish the same capture twice. Drain observer calls during clear,
+        // without holding an activity lock across arbitrary driver/proxy code.
+        // Our observer signals fences. If a driver implements that using a
+        // private nested Execute call, forward it without reentering the
+        // observer's capture mutex. Ordinary proxy forwarding remains visible.
+        if (notifying) return;
+        std::shared_lock activity{state.activity};
+        if (state.callback) {
+            struct NotifyScope {
+                NotifyScope() { notifying = true; }
+                ~NotifyScope() { notifying = false; }
+            } scope;
+            state.callback(queue, count, lists);
+        }
     }
 public:
     explicit QueueSubmitHook(Callback fn) : callback{fn} {}

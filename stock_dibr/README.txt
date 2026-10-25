@@ -58,6 +58,7 @@ but zero submitted/consumed captures. Its submission hook covered only the
 temporary setup queue's vtable. R3 also hooks each actual presentation queue
 discovered from the live swapchain and uses the correct original function for
 each distinct slot. It accepts COM interface aliases of the same queue,
+observes both outer and native inner queue forwarding layers,
 matches command-list aliases by COM identity, and supports another direct
 scene queue through a producer fence and a presentation-queue GPU wait.
 It still requires binding/viewport proof from that same producer queue.
@@ -70,7 +71,8 @@ queue vtable to reproduce the setup-only coverage gap before installing the
 live hook. It also verifies COM command-list aliases, a deliberately delayed
 alternate producer with GPU fence handoff, rejection of proof from the wrong
 producer, rejection of a later bind on the same list, safe forwarding after
-hook teardown, reset after submission, and a real pixel change at stereo strength
+hook teardown, native lists hidden by opaque outer wrappers, exactly-once
+publication, reset after submission, and a real pixel change at stereo strength
 1 versus 0. Resource-barrier and viewport observation are still manually
 delivered by this standalone fixture; STALKER 2 itself remains the required
 end-to-end headset test.

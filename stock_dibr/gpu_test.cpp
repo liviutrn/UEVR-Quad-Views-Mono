@@ -36,6 +36,9 @@ stock_dibr::DepthCapture* g_capture{};
 uint64_t g_submit_callbacks{};
 ID3D12CommandQueue* g_last_submit_queue{};
 UINT g_last_submit_count{};
+ID3D12CommandQueue* g_opaque_outer_queue{};
+uint64_t g_proxy_execute_calls{};
+ID3D12CommandList* g_observer_private_probe{};
 
 // A valid COM interface can have a different address but the same IUnknown.
 // The real queue receives native lists; the observer sees equivalent aliases.
@@ -43,9 +46,18 @@ UINT g_last_submit_count{};
 // a synthetic command-list implementation.
 class SubmissionAlias final : public ID3D12CommandList {
     ComPtr<ID3D12CommandList> inner;
+    bool opaque;
 public:
-    explicit SubmissionAlias(ID3D12CommandList* p):inner{p} {}
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** out) override { return inner->QueryInterface(iid,out); }
+    explicit SubmissionAlias(ID3D12CommandList* p,bool separate=false):inner{p},opaque{separate} {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** out) override {
+        if(!opaque)return inner->QueryInterface(iid,out);
+        if(!out)return E_POINTER;*out=nullptr;
+        if(iid==__uuidof(IUnknown)||iid==__uuidof(ID3D12Object)||
+           iid==__uuidof(ID3D12DeviceChild)||iid==__uuidof(ID3D12CommandList)) {
+            *out=static_cast<ID3D12CommandList*>(this);AddRef();return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
     ULONG STDMETHODCALLTYPE AddRef() override { return inner->AddRef(); }
     ULONG STDMETHODCALLTYPE Release() override { return inner->Release(); }
     HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID g,UINT* n,void* p) override { return inner->GetPrivateData(g,n,p); }
@@ -60,11 +72,15 @@ void WINAPI forward_queue_submit(ID3D12CommandQueue* queue,UINT count,ID3D12Comm
     ++g_submit_callbacks;
     g_last_submit_queue=queue;
     g_last_submit_count=count;
+    if(g_observer_private_probe) {
+        auto* private_list=g_observer_private_probe;g_observer_private_probe=nullptr;
+        queue->ExecuteCommandLists(1,&private_list);
+    }
     if(g_capture) {
         std::vector<std::unique_ptr<SubmissionAlias>> aliases;
         std::vector<ID3D12CommandList*> alias_lists;
         for(UINT i=0;i<count;++i) {
-            aliases.push_back(std::make_unique<SubmissionAlias>(lists[i]));
+            aliases.push_back(std::make_unique<SubmissionAlias>(lists[i],queue==g_opaque_outer_queue));
             alias_lists.push_back(aliases.back().get());
             require(alias_lists.back()!=lists[i],"alias fixture did not produce a distinct pointer");
         }
@@ -81,6 +97,7 @@ class QueueProxy final : public ID3D12CommandQueue {
     stock_dibr::QueueSubmitHook::Callback native_execute;
     std::atomic<ULONG> references{1};
 public:
+    bool forward_via_virtual{};
     explicit QueueProxy(ID3D12CommandQueue* q):inner{q},
         native_execute{reinterpret_cast<stock_dibr::QueueSubmitHook::Callback>((*(void***)q)[10])} {}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** out) override {
@@ -106,7 +123,11 @@ public:
     void STDMETHODCALLTYPE CopyTileMappings(ID3D12Resource* d,const D3D12_TILED_RESOURCE_COORDINATE* dc,
         ID3D12Resource* r,const D3D12_TILED_RESOURCE_COORDINATE* rc,const D3D12_TILE_REGION_SIZE* z,
         D3D12_TILE_MAPPING_FLAGS flags) override {inner->CopyTileMappings(d,dc,r,rc,z,flags);}
-    void STDMETHODCALLTYPE ExecuteCommandLists(UINT n,ID3D12CommandList* const* lists) override {native_execute(inner.Get(),n,lists);}
+    void STDMETHODCALLTYPE ExecuteCommandLists(UINT n,ID3D12CommandList* const* lists) override {
+        ++g_proxy_execute_calls;
+        if(forward_via_virtual)inner->ExecuteCommandLists(n,lists);
+        else native_execute(inner.Get(),n,lists);
+    }
     void STDMETHODCALLTYPE SetMarker(UINT m,const void* p,UINT n) override {inner->SetMarker(m,p,n);}
     void STDMETHODCALLTYPE BeginEvent(UINT m,const void* p,UINT n) override {inner->BeginEvent(m,p,n);}
     void STDMETHODCALLTYPE EndEvent() override {inner->EndEvent();}
@@ -128,11 +149,14 @@ int main() try {
     ComPtr<ID3D12CommandQueue> q,native_queue,other;
     check(dev->CreateCommandQueue(&qd,IID_PPV_ARGS(&native_queue)));
     check(dev->CreateCommandQueue(&qd,IID_PPV_ARGS(&other)));
-    q.Attach(new QueueProxy(native_queue.Get()));
+    auto* proxy=new QueueProxy(native_queue.Get());q.Attach(proxy);
     ComPtr<ID3D12CommandAllocator> allocator;check(dev->CreateCommandAllocator(qd.Type,IID_PPV_ARGS(&allocator)));
     ComPtr<ID3D12GraphicsCommandList> cmd;check(dev->CreateCommandList(0,qd.Type,allocator.Get(),nullptr,IID_PPV_ARGS(&cmd)));
     ComPtr<ID3D12CommandAllocator> probe_allocator;check(dev->CreateCommandAllocator(qd.Type,IID_PPV_ARGS(&probe_allocator)));
     ComPtr<ID3D12GraphicsCommandList> probe;check(dev->CreateCommandList(0,qd.Type,probe_allocator.Get(),nullptr,IID_PPV_ARGS(&probe)));check(probe->Close());
+    ComPtr<ID3D12CommandAllocator> private_allocator;check(dev->CreateCommandAllocator(qd.Type,IID_PPV_ARGS(&private_allocator)));
+    ComPtr<ID3D12GraphicsCommandList> private_probe;check(dev->CreateCommandList(0,qd.Type,private_allocator.Get(),nullptr,IID_PPV_ARGS(&private_probe)));check(private_probe->Close());
+    g_observer_private_probe=private_probe.Get();
     ComPtr<ID3D12Fence> done;check(dev->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&done)));UINT64 signal{};
     auto wait=[&](ID3D12CommandQueue* queue){check(queue->Signal(done.Get(),++signal));HANDLE e=CreateEventW(nullptr,FALSE,FALSE,nullptr);check(done->SetEventOnCompletion(signal,e));require(WaitForSingleObject(e,30000)==WAIT_OBJECT_0,"GPU timeout");CloseHandle(e);};
     constexpr auto read=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -249,6 +273,10 @@ int main() try {
 
 
     std::cout<<"STAGE next-frame depth and stale rejection\n";
+    // This time the outer proxy callback sees opaque list wrappers with a
+    // distinct IUnknown. The native inner callback must still publish exactly
+    // once, and the output must contain this frame's new depth pixels.
+    proxy->forward_via_virtual=true;g_opaque_outer_queue=q.Get();
     // A later frame must carry new pixels, not a frozen successful snapshot.
     check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
     b=barrier(depth.Get(),read,D3D12_RESOURCE_STATE_COPY_DEST);cmd->ResourceBarrier(1,&b);
@@ -256,7 +284,9 @@ int main() try {
     b=barrier(depth.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_DEPTH_WRITE);cmd->ResourceBarrier(1,&b);
     main_binding();b=barrier(depth.Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);capture.on_post_resource_barriers(cmd.Get(),1,&b);
     check(cmd->Close());q->ExecuteCommandLists(1,lists);
-    snapshot=capture.acquire();require(snapshot!=nullptr,"next-frame live update missing");wait(q.Get());
+    snapshot=capture.acquire();require(snapshot!=nullptr,"native inner queue callback was hidden by opaque outer wrappers");
+    require(capture.summary().find(" submitted=2 ")!=std::string::npos,"nested callbacks published a capture twice");
+    wait(q.Get());
     check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
     auto sd=snapshot->GetDesc();D3D12_PLACED_SUBRESOURCE_FOOTPRINT df{};UINT64 db{};dev->GetCopyableFootprints(&sd,0,1,0,&df,nullptr,nullptr,&db);
     auto depth_readback=make(dev.Get(),buf(db),D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
@@ -304,8 +334,10 @@ int main() try {
     // A CPU thread can cache the target immediately before slot restoration.
     // Calling it after clear must still submit real work and skip the retired
     // observer. It must not dereference the destroyed hook instance.
+    const auto original_calls_before_clear=g_proxy_execute_calls;
     cached_detour(q.Get(),1,probe_lists);wait(q.Get());
+    require(g_proxy_execute_calls==original_calls_before_clear+1,"cached detour dropped real submission after clear");
     require(g_submit_callbacks==callbacks_before_clear,"retired hook still invoked its observer");
     ComPtr<ID3D12InfoQueue> info;if(SUCCEEDED(dev.As(&info)))for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size{};info->GetMessage(i,nullptr,&size);std::vector<char> data(size);auto* message=reinterpret_cast<D3D12_MESSAGE*>(data.data());check(info->GetMessage(i,message,&size));if(message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)throw std::runtime_error(message->pDescription);}
-    std::cout<<"PASS: actual queue-submit hook covers distinct dummy/proxy vtables and cached native dispatch, canonical command-list aliases, alternate direct-queue GPU wait, wrong-producer/late-bind rejection, teardown forwarding, automatic captured-list submission, immediate reset preservation, actual live capture header + production shader on WARP; actual UE5 format19 D32+S8 depth plane, padded allocation with DLSS-sized viewport, distinct eyes, strength1-vs0 pixel change, opaque alpha, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
+    std::cout<<"PASS: actual queue-submit hook covers distinct dummy/proxy vtables and cached native dispatch, observer reentrancy guard, canonical command-list aliases, native inner callback under opaque outer wrappers, exactly-once publication, alternate direct-queue GPU wait, wrong-producer/late-bind rejection, teardown forwarding, automatic captured-list submission, immediate reset preservation, actual live capture header + production shader on WARP; actual UE5 format19 D32+S8 depth plane, padded allocation with DLSS-sized viewport, distinct eyes, strength1-vs0 pixel change, opaque alpha, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
 } catch(const std::exception& e) {std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}
