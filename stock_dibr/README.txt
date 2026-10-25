@@ -34,3 +34,13 @@ The CI workflow builds the depth-policy checks, Windows WARP checks, Joey's
 original compatibility suite, and the injector package. Those checks do not
 verify STALKER 2 runtime behavior or headset stability. This package has not
 been verified in-game unless separate runtime testing is recorded.
+
+Revision 2: first headset-test corrections
+------------------------------------------
+The first test produced no depth and showed a misaligned duplicated-eye
+fallback. Revision 2 preserves original two-view stereo during warmup,
+hooks binding/viewport/reset methods on all queried D3D12 command-list
+interfaces, and samples the observed valid viewport inside reused or padded
+depth allocations. Its log reports exact rejection categories and binding
+hook counts. DIBR tuning sliders affect the image only after synthesis is ready.
+No game input code was changed.

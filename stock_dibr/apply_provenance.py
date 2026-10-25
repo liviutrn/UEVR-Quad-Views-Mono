@@ -60,22 +60,84 @@ edit(hdr, """    static void WINAPI end_render_pass(ID3D12GraphicsCommandList4*)
     std::unique_ptr<PointerHook> m_stock_execute_hook{}, m_stock_reset_hook{}, m_stock_begin_hook{}, m_stock_end_hook{};""", """    static void WINAPI end_render_pass(ID3D12GraphicsCommandList4*);
     static void WINAPI set_render_targets(ID3D12GraphicsCommandList*, UINT, const D3D12_CPU_DESCRIPTOR_HANDLE*, BOOL, const D3D12_CPU_DESCRIPTOR_HANDLE*);
     static void WINAPI set_viewports(ID3D12GraphicsCommandList*, UINT, const D3D12_VIEWPORT*);
-    std::unique_ptr<PointerHook> m_stock_execute_hook{}, m_stock_reset_hook{}, m_stock_begin_hook{}, m_stock_end_hook{};
-    std::unique_ptr<PointerHook> m_stock_render_targets_hook{}, m_stock_viewports_hook{};""")
+    std::unique_ptr<PointerHook> m_stock_execute_hook{}, m_stock_begin_hook{}, m_stock_end_hook{};
+    std::vector<std::unique_ptr<PointerHook>> m_stock_reset_hooks{}, m_stock_render_targets_hooks{}, m_stock_viewports_hooks{};
+    std::unordered_map<uintptr_t, PointerHook*> m_stock_reset_hook_lookup{}, m_stock_render_targets_hook_lookup{}, m_stock_viewports_hook_lookup{};""")
 
+# These three command-list methods are inherited by the queried interfaces,
+# but the concrete COM object can expose distinct vtables. Hook each unique
+# slot and dispatch to its own original implementation.
+edit(cpp, """        std::unordered_set<uintptr_t> set_pipeline_state_slots{};
+        std::unordered_set<uintptr_t> resource_barrier_slots{};""", """        std::unordered_set<uintptr_t> set_pipeline_state_slots{};
+        std::unordered_set<uintptr_t> resource_barrier_slots{};
+        std::unordered_set<uintptr_t> reset_slots{};
+        std::unordered_set<uintptr_t> render_targets_slots{};
+        std::unordered_set<uintptr_t> viewports_slots{};""")
+edit(cpp, """        const std::array<IUnknown*, 7> command_list_interfaces{
+            command_list1.Get(),
+            command_list2.Get(),
+            command_list3.Get(),
+            command_list4.Get(),
+            command_list5.Get(),
+            command_list6.Get(),
+            command_list7.Get()
+        };""", """        const std::array<IUnknown*, 8> command_list_interfaces{
+            command_list,
+            command_list1.Get(),
+            command_list2.Get(),
+            command_list3.Get(),
+            command_list4.Get(),
+            command_list5.Get(),
+            command_list6.Get(),
+            command_list7.Get()
+        };""")
+edit(cpp, """            add_unique_pointer_hook(
+                iface,
+                RESOURCE_BARRIER_VTABLE_INDEX,
+                reinterpret_cast<void*>(&D3D12Hook::resource_barrier),
+                m_resource_barrier_hooks,
+                m_resource_barrier_hook_lookup,
+                resource_barrier_slots
+            );
+        }""", """            add_unique_pointer_hook(
+                iface,
+                RESOURCE_BARRIER_VTABLE_INDEX,
+                reinterpret_cast<void*>(&D3D12Hook::resource_barrier),
+                m_resource_barrier_hooks,
+                m_resource_barrier_hook_lookup,
+                resource_barrier_slots
+            );
+            add_unique_pointer_hook(iface, 10,
+                reinterpret_cast<void*>(&D3D12Hook::reset_command_list),
+                m_stock_reset_hooks, m_stock_reset_hook_lookup, reset_slots);
+            add_unique_pointer_hook(iface, 46,
+                reinterpret_cast<void*>(&D3D12Hook::set_render_targets),
+                m_stock_render_targets_hooks, m_stock_render_targets_hook_lookup, render_targets_slots);
+            add_unique_pointer_hook(iface, 21,
+                reinterpret_cast<void*>(&D3D12Hook::set_viewports),
+                m_stock_viewports_hooks, m_stock_viewports_hook_lookup, viewports_slots);
+        }""")
 edit(cpp, """        auto& reset_slot = (*(void***)command_list)[10];
         m_stock_reset_hook = std::make_unique<PointerHook>(&reset_slot, (void*)&D3D12Hook::reset_command_list);
-        if (command_list4 != nullptr) {""", """        auto& reset_slot = (*(void***)command_list)[10];
-        m_stock_reset_hook = std::make_unique<PointerHook>(&reset_slot, (void*)&D3D12Hook::reset_command_list);
-        auto& render_targets_slot = (*(void***)command_list)[46];
-        m_stock_render_targets_hook = std::make_unique<PointerHook>(&render_targets_slot, (void*)&D3D12Hook::set_render_targets);
-        auto& viewports_slot = (*(void***)command_list)[21];
-        m_stock_viewports_hook = std::make_unique<PointerHook>(&viewports_slot, (void*)&D3D12Hook::set_viewports);
-        if (command_list4 != nullptr) {""")
+        if (command_list4 != nullptr) {""", """        if (command_list4 != nullptr) {""")
 edit(cpp, """    m_stock_execute_hook.reset(); m_stock_reset_hook.reset();
-    m_stock_begin_hook.reset(); m_stock_end_hook.reset();""", """    m_stock_execute_hook.reset(); m_stock_reset_hook.reset();
+    m_stock_begin_hook.reset(); m_stock_end_hook.reset();""", """    m_stock_execute_hook.reset();
     m_stock_begin_hook.reset(); m_stock_end_hook.reset();
-    m_stock_render_targets_hook.reset(); m_stock_viewports_hook.reset();""")
+    m_stock_reset_hooks.clear(); m_stock_render_targets_hooks.clear(); m_stock_viewports_hooks.clear();
+    m_stock_reset_hook_lookup.clear(); m_stock_render_targets_hook_lookup.clear(); m_stock_viewports_hook_lookup.clear();""")
+
+edit(cpp, """HRESULT WINAPI D3D12Hook::reset_command_list(ID3D12GraphicsCommandList* list, ID3D12CommandAllocator* allocator, ID3D12PipelineState* pso) {
+    auto* self = g_d3d12_hook;
+    if (!self || !self->m_stock_reset_hook) return E_FAIL;
+    const auto result = self->m_stock_reset_hook->get_original<decltype(&D3D12Hook::reset_command_list)>()(list, allocator, pso);""", """HRESULT WINAPI D3D12Hook::reset_command_list(ID3D12GraphicsCommandList* list, ID3D12CommandAllocator* allocator, ID3D12PipelineState* pso) {
+    auto* self = g_d3d12_hook;
+    if (!self || list == nullptr) return E_FAIL;
+    const auto slot = &(*(void***)list)[10];
+    const auto found = self->m_stock_reset_hook_lookup.find(reinterpret_cast<uintptr_t>(slot));
+    auto* hook = found != self->m_stock_reset_hook_lookup.end() ? found->second : nullptr;
+    auto original = hook != nullptr ? hook->get_original<decltype(&D3D12Hook::reset_command_list)>() : nullptr;
+    if (original == nullptr) return E_FAIL;
+    const auto result = original(list, allocator, pso);""")
 
 edit(cpp, "void WINAPI D3D12Hook::create_render_target_view(", """void D3D12Hook::set_depth_stencil_observer(D3D12DepthStencilObserver* observer) {
     auto* previous = m_depth_stencil_observer.exchange(observer, std::memory_order_acq_rel);
@@ -150,9 +212,13 @@ edit(cpp, """    if (auto* observer = self->m_depth_stencil_observer.load(std::m
 edit(cpp, """thread_local int32_t g_resize_buffers_depth = 0;""", """void WINAPI D3D12Hook::set_render_targets(ID3D12GraphicsCommandList* list, UINT n,
     const D3D12_CPU_DESCRIPTOR_HANDLE* rtvs, BOOL single_range, const D3D12_CPU_DESCRIPTOR_HANDLE* dsv) {
     auto* self = g_d3d12_hook;
-    if (!self || !self->m_stock_render_targets_hook) return;
-    self->m_stock_render_targets_hook->get_original<decltype(&D3D12Hook::set_render_targets)>()(
-        list, n, rtvs, single_range, dsv);
+    if (!self || list == nullptr) return;
+    const auto slot = &(*(void***)list)[46];
+    const auto found = self->m_stock_render_targets_hook_lookup.find(reinterpret_cast<uintptr_t>(slot));
+    auto* hook = found != self->m_stock_render_targets_hook_lookup.end() ? found->second : nullptr;
+    auto original = hook != nullptr ? hook->get_original<decltype(&D3D12Hook::set_render_targets)>() : nullptr;
+    if (original == nullptr) return;
+    original(list, n, rtvs, single_range, dsv);
     if (auto* observer = self->m_depth_stencil_observer.load(std::memory_order_acquire)) {
         D3D12_CPU_DESCRIPTOR_HANDLE bound_dsv{};
         if (dsv) bound_dsv = *dsv;
@@ -162,8 +228,13 @@ edit(cpp, """thread_local int32_t g_resize_buffers_depth = 0;""", """void WINAPI
 
 void WINAPI D3D12Hook::set_viewports(ID3D12GraphicsCommandList* list, UINT n, const D3D12_VIEWPORT* viewports) {
     auto* self = g_d3d12_hook;
-    if (!self || !self->m_stock_viewports_hook) return;
-    self->m_stock_viewports_hook->get_original<decltype(&D3D12Hook::set_viewports)>()(list, n, viewports);
+    if (!self || list == nullptr) return;
+    const auto slot = &(*(void***)list)[21];
+    const auto found = self->m_stock_viewports_hook_lookup.find(reinterpret_cast<uintptr_t>(slot));
+    auto* hook = found != self->m_stock_viewports_hook_lookup.end() ? found->second : nullptr;
+    auto original = hook != nullptr ? hook->get_original<decltype(&D3D12Hook::set_viewports)>() : nullptr;
+    if (original == nullptr) return;
+    original(list, n, viewports);
     if (auto* observer = self->m_depth_stencil_observer.load(std::memory_order_acquire))
         observer->on_viewports(list, n, viewports);
 }

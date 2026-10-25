@@ -93,6 +93,9 @@ jobs:
       - name: Correlate live DSV bindings and viewports
         run: python stock_dibr/apply_provenance.py backend
 
+      - name: Apply first headset-test corrections
+        run: python stock_dibr/apply_runtime_fix.py backend
+
       - name: Run stock DIBR policy and WARP tests
         shell: pwsh
         run: |

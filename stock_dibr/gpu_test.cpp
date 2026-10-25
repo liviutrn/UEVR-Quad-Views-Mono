@@ -40,7 +40,7 @@ int main() try {
     auto wait=[&](ID3D12CommandQueue* queue){check(queue->Signal(done.Get(),++signal));HANDLE e=CreateEventW(nullptr,FALSE,FALSE,nullptr);check(done->SetEventOnCompletion(signal,e));require(WaitForSingleObject(e,30000)==WAIT_OBJECT_0,"GPU timeout");CloseHandle(e);};
     constexpr auto read=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     stock_dibr::DepthCapture capture;capture.configure(dev.Get(),q.Get(),64,32,true);
-    auto depth=make(dev.Get(),tex(32,16,DXGI_FORMAT_R32_TYPELESS,D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+    auto depth=make(dev.Get(),tex(48,24,DXGI_FORMAT_R32_TYPELESS,D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
     D3D12_DESCRIPTOR_HEAP_DESC dsv_heap_desc{};dsv_heap_desc.Type=D3D12_DESCRIPTOR_HEAP_TYPE_DSV;dsv_heap_desc.NumDescriptors=1;
     ComPtr<ID3D12DescriptorHeap> dsv_heap;check(dev->CreateDescriptorHeap(&dsv_heap_desc,IID_PPV_ARGS(&dsv_heap)));
     auto dsv_handle=dsv_heap->GetCPUDescriptorHandleForHeapStart();D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc{};dsv_desc.Format=DXGI_FORMAT_D32_FLOAT;dsv_desc.ViewDimension=D3D12_DSV_DIMENSION_TEXTURE2D;
@@ -67,7 +67,7 @@ int main() try {
     main_binding();b=barrier(depth.Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);capture.on_post_resource_barriers(cmd.Get(),1,&b);
     b=barrier(color.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);cmd->ResourceBarrier(1,&b);
     require(!capture.acquire(),"unsubmitted capture accepted");check(cmd->Close());ID3D12CommandList* lists[]{cmd.Get()};q->ExecuteCommandLists(1,lists);capture.on_command_lists_executed(q.Get(),1,lists);
-    auto snapshot=capture.acquire();require(snapshot!=nullptr,"submitted live depth rejected");wait(q.Get());check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
+    auto snapshot=capture.acquire();require(snapshot!=nullptr,"submitted live depth rejected");const auto depth_uv=capture.sample_uv();require(std::abs(depth_uv[0]-1.f/3.f)<.0001f && std::abs(depth_uv[1]-2.f/3.f)<.0001f,"padded allocation viewport mapping incorrect");wait(q.Get());check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
 
     ComPtr<ID3DBlob> bytecode,error;const auto compiled=D3DCompile(shader,std::strlen(shader),"production DIBR",nullptr,nullptr,"main","cs_5_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&bytecode,&error);
     if(FAILED(compiled)){if(error)std::cerr<<static_cast<const char*>(error->GetBufferPointer());check(compiled);}
@@ -87,7 +87,7 @@ int main() try {
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};uav.ViewDimension=D3D12_UAV_DIMENSION_TEXTURE2D;uav.Format=DXGI_FORMAT_R8G8B8A8_UNORM;dev->CreateUnorderedAccessView(output.Get(),nullptr,&uav,cpu);
     auto cb=make(dev.Get(),buf(256),D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);TestConstants constants{};
     constants.output_width=64;constants.output_height=constants.source_eye_width=constants.source_height=32;
-    constants.depth_width=32;constants.depth_height=16;constants.depth_is_double_wide=1;constants.reversed_depth=1;
+    constants.depth_width=48;constants.depth_height=24;std::memcpy(constants.depth_uv_scale_bias,depth_uv.data(),sizeof(constants.depth_uv_scale_bias));constants.depth_is_double_wide=1;constants.reversed_depth=1;
     constants.use_true_reprojection=1;constants.true_reprojection_strength=1;
     constants.source_to_right[0]=constants.source_to_right[5]=constants.source_to_right[10]=constants.source_to_right[15]=1;
     constants.source_to_right[8]=-.5f;void* mapped{};check(cb->Map(0,nullptr,&mapped));std::memcpy(mapped,&constants,256);cb->Unmap(0,nullptr);
@@ -127,5 +127,5 @@ int main() try {
     main_binding();b=barrier(depth.Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);capture.on_post_resource_barriers(cmd.Get(),1,&b);
     check(cmd->Close());check(cmd->Reset(allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());require(!capture.acquire(),"discarded list was published");check(cmd->Close());
     ComPtr<ID3D12InfoQueue> info;if(SUCCEEDED(dev.As(&info)))for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size{};info->GetMessage(i,nullptr,&size);std::vector<char> data(size);auto* message=reinterpret_cast<D3D12_MESSAGE*>(data.data());check(info->GetMessage(i,message,&size));if(message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)throw std::runtime_error(message->pDescription);}
-    std::cout<<"PASS: actual live capture header + production shader on WARP; DLSS-sized packed depth, submitted-list gate, distinct eyes, opaque alpha, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
+    std::cout<<"PASS: actual live capture header + production shader on WARP; padded RDG allocation with DLSS-sized viewport, submitted-list gate, distinct eyes, opaque alpha, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
 } catch(const std::exception& e) {std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}

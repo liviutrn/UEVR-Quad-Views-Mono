@@ -36,6 +36,7 @@ class DepthCapture final : public D3D12DepthStencilObserver {
         uint64_t epoch{}, serial{}, fence{};
         bool pending{}, leased{};
         Layout layout{Layout::Invalid};
+        D3D12_VIEWPORT viewport{};
     };
     struct ListState {
         Ptr<ID3D12GraphicsCommandList> owner;
@@ -86,6 +87,9 @@ class DepthCapture final : public D3D12DepthStencilObserver {
     std::unordered_set<ID3D12GraphicsCommandList*> render_passes;
     std::string last{"waiting for the first scene extent"};
     uint64_t captured{}, submitted{}, consumed{}, exhausted{}, rejected{};
+    uint64_t dsv_events{}, bind_events{}, viewport_events{}, read_windows{};
+    std::array<uint64_t, 7> reject_reasons{};
+    std::string observed{"none"};
 
     static DXGI_FORMAT storage(DXGI_FORMAT f) {
         switch (f) {
@@ -119,12 +123,12 @@ class DepthCapture final : public D3D12DepthStencilObserver {
         return close_extent(v.Width, eye_width) || close_extent(v.Width, packed_width);
     }
     bool viewport_matches_source(const D3D12_VIEWPORT& v,
-        const D3D12_RESOURCE_DESC& depth, Layout kind) const {
-        if (!close_extent(v.TopLeftX, 0.0) || !close_extent(v.TopLeftY, 0.0) ||
-            !close_extent(v.Height, double(depth.Height))) return false;
-        const bool eye_view = close_extent(v.Width, double(depth.Width) / (kind == Layout::Packed ? 2.0 : 1.0));
-        const bool full_packed_view = kind == Layout::Packed && close_extent(v.Width, double(depth.Width));
-        return eye_view || full_packed_view;
+        const D3D12_RESOURCE_DESC& depth, Layout) const {
+        // RDG can retain an oversized allocation after a resolution change.
+        // The bound viewport, not the allocation, defines current scene pixels.
+        return main_viewport_shape(v) && v.TopLeftX >= 0 && v.TopLeftY >= 0 &&
+            double(v.TopLeftX) + v.Width <= double(depth.Width) + 0.01 &&
+            double(v.TopLeftY) + v.Height <= double(depth.Height) + 0.01;
     }
     void remember_main_bindings(ListState& state) {
         if (!state.bound_dsv_resource) return;
@@ -148,19 +152,22 @@ class DepthCapture final : public D3D12DepthStencilObserver {
             state.proofs[state.proof_count++] = {state.bound_dsv_resource, state.bound_dsv_handle, viewport};
         }
     }
-    bool has_recorded_main_binding(ID3D12Resource* resource,
-        const D3D12_RESOURCE_DESC& depth, Layout kind) const {
+    bool recorded_viewport(ID3D12Resource* resource,
+        const D3D12_RESOURCE_DESC& depth, D3D12_VIEWPORT& selected) const {
+        double best{};
+        const auto consider = [&](ID3D12Resource* r, const D3D12_VIEWPORT& vp) {
+            if (r == resource && viewport_matches_source(vp, depth, Layout::Eye) &&
+                double(vp.Width) * vp.Height > best) {
+                selected = vp; best = double(vp.Width) * vp.Height;
+            }
+        };
         for (const auto& [cmd, state] : lists) {
             (void)cmd;
-            for (UINT i = 0; i < state.proof_count; ++i) {
-                const auto& proof = state.proofs[i];
-                if (proof.resource == resource && viewport_matches_source(proof.viewport, depth, kind)) return true;
-            }
+            for (UINT i = 0; i < state.proof_count; ++i) consider(state.proofs[i].resource, state.proofs[i].viewport);
         }
         for (const auto& proof : executed_proofs)
-            if (proof.epoch == epoch && proof.resource == resource &&
-                viewport_matches_source(proof.viewport, depth, kind)) return true;
-        return false;
+            if (proof.epoch == epoch) consider(proof.resource, proof.viewport);
+        return best > 0;
     }
     bool has_executed_main_binding(ID3D12Resource* resource, const D3D12_RESOURCE_DESC& depth,
         Layout kind, uint64_t batch, UINT list_index) const {
@@ -250,6 +257,7 @@ public:
         const D3D12_DEPTH_STENCIL_VIEW_DESC* dsv, D3D12_CPU_DESCRIPTOR_HANDLE descriptor) override {
         if (!descriptor.ptr) return;
         std::scoped_lock lock{mutex};
+        ++dsv_events;
         const auto key = descriptor.ptr;
         const bool primary = resource && primary_slice(dsv);
         const auto existing = dsv_resources.find(key);
@@ -297,6 +305,7 @@ public:
         if (!cmd) return;
         std::scoped_lock lock{mutex};
         auto& state = list_state(cmd);
+        ++bind_events;
         state.bound_dsv_handle = dsv.ptr;
         const auto found = dsv_resources.find(dsv.ptr);
         const auto primary = dsv_primary_slice.find(dsv.ptr);
@@ -308,6 +317,7 @@ public:
         if (!cmd) return;
         std::scoped_lock lock{mutex};
         auto& state = list_state(cmd);
+        ++viewport_events;
         state.viewport_count = viewports && count <= ViewportCapacity ? count : 0;
         for (UINT i = 0; i < state.viewport_count; ++i) state.viewports[i] = viewports[i];
         remember_main_bindings(state);
@@ -330,15 +340,15 @@ public:
         if (!cmd || !barriers || cmd->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) return;
         std::scoped_lock lock{mutex};
         if (!enabled || !width || !height || recorded_this_interval >= Capacity || render_passes.contains(cmd)) return;
-        if (lists.empty()) return;
         for (UINT i = 0; i < count; ++i) {
             const auto& b = barriers[i];
             if (b.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION ||
                 b.Flags != D3D12_RESOURCE_BARRIER_FLAG_NONE ||
-                (b.Transition.StateBefore & D3D12_RESOURCE_STATE_DEPTH_WRITE) == 0 ||
+                (b.Transition.StateBefore & (D3D12_RESOURCE_STATE_DEPTH_WRITE | D3D12_RESOURCE_STATE_DEPTH_READ)) == 0 ||
                 (b.Transition.StateAfter & Read) == 0) continue;
             auto* source = b.Transition.pResource;
             if (!source) continue;
+            ++read_windows;
             // The whole barrier batch has executed. A later transition or
             // aliasing operation can invalidate this entry's apparent state.
             bool superseded{};
@@ -349,24 +359,32 @@ public:
                     (!later.Aliasing.pResourceBefore || !later.Aliasing.pResourceAfter ||
                      later.Aliasing.pResourceBefore == source || later.Aliasing.pResourceAfter == source)) superseded = true;
             }
-            if (superseded) continue;
+            if (superseded) { ++reject_reasons[0]; continue; }
             const auto desc = source->GetDesc();
-            const auto kind = stock_dibr::layout(desc.Width, desc.Height, width, height);
+            D3D12_VIEWPORT source_viewport{};
             const auto format = storage(desc.Format);
             if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
                 desc.SampleDesc.Count != 1 || desc.MipLevels != 1 || !desc.DepthOrArraySize ||
                 (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) == 0 ||
-                format == DXGI_FORMAT_UNKNOWN || kind == Layout::Invalid ||
-                !has_recorded_main_binding(source, desc, kind)) { ++rejected; continue; }
+                desc.Width > 32768 || desc.Height > 32768 || format == DXGI_FORMAT_UNKNOWN) {
+                ++rejected; ++reject_reasons[1]; continue;
+            }
+            observed = std::to_string(desc.Width) + "x" + std::to_string(desc.Height) + " fmt=" + std::to_string(desc.Format);
+            if (!recorded_viewport(source, desc, source_viewport)) {
+                ++rejected; ++reject_reasons[2]; continue;
+            }
+            const auto kind = stock_dibr::layout(static_cast<uint64_t>(std::lround(source_viewport.Width)),
+                static_cast<uint32_t>(std::lround(source_viewport.Height)), width, height);
+            if (kind == Layout::Invalid) { ++rejected; ++reject_reasons[3]; continue; }
             Ptr<IUnknown> source_device, command_device, expected_device;
             if (FAILED(source->GetDevice(IID_PPV_ARGS(&source_device))) ||
                 FAILED(cmd->GetDevice(IID_PPV_ARGS(&command_device))) ||
                 FAILED(device.As(&expected_device)) || source_device.Get() != expected_device.Get() ||
-                command_device.Get() != expected_device.Get()) { ++rejected; continue; }
+                command_device.Get() != expected_device.Get()) { ++rejected; ++reject_reasons[4]; continue; }
             // Source is the left camera: slice zero, plane zero only. Never
             // copy the right slice or a stencil-only transition.
             if (b.Transition.Subresource != D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES &&
-                b.Transition.Subresource != 0) continue;
+                b.Transition.Subresource != 0) { ++reject_reasons[5]; continue; }
             auto it = std::find_if(slots.begin(), slots.end(), [&](const Slot& s) { return retire_ready(s, fence.Get()); });
             if (it == slots.end()) { ++exhausted; return; }
             auto& s = *it;
@@ -397,7 +415,7 @@ public:
             std::swap(copy[1].Transition.StateBefore, copy[1].Transition.StateAfter);
             cmd->ResourceBarrier(2, copy);
             s.source = source; s.list = cmd; s.epoch = epoch; s.serial = ++serial;
-            s.pending = true; s.fence = 0; s.layout = kind;
+            s.pending = true; s.fence = 0; s.layout = kind; s.viewport = source_viewport;
             ++recorded_this_interval; ++captured;
             if (recorded_this_interval >= Capacity) return;
         }
@@ -436,7 +454,7 @@ public:
                 found = true;
             }
             s.pending = false; s.fence = signal;
-            if (!provenance_ok) { s.epoch = 0; ++rejected; last = "capture rejected: no prior same-queue main DSV/viewport proof"; }
+            if (!provenance_ok) { s.epoch = 0; ++rejected; ++reject_reasons[6]; last = "capture rejected: no prior same-queue main DSV/viewport proof"; }
             else ++submitted;
         }
         submit_retired(q, count, submitted_lists);
@@ -448,9 +466,8 @@ public:
         Slot* best{};
         for (auto& s : slots) {
             if (s.pending || !s.fence || s.epoch != epoch || s.leased) continue;
-            if (!best || s.texture->GetDesc().Width * s.texture->GetDesc().Height >
-                    best->texture->GetDesc().Width * best->texture->GetDesc().Height ||
-                (s.texture->GetDesc().Width == best->texture->GetDesc().Width && s.serial > best->serial)) best = &s;
+            if (!best || double(s.viewport.Width) * s.viewport.Height > double(best->viewport.Width) * best->viewport.Height ||
+                (s.viewport.Width == best->viewport.Width && s.serial > best->serial)) best = &s;
         }
         if (!best) { last = "no new submitted main-view depth in this Present interval"; return {}; }
         best->leased = true; leased = static_cast<size_t>(best - slots.data()); ++consumed;
@@ -458,6 +475,14 @@ public:
         last = "live main-view " + std::to_string(d.Width) + "x" + std::to_string(d.Height) +
             (best->layout == Layout::Packed ? " packed" : " eye") + " copy=" + std::to_string(best->serial);
         return best->texture;
+    }
+    std::array<float, 4> sample_uv() const {
+        std::scoped_lock lock{mutex};
+        if (leased >= Capacity) return {};
+        const auto& s = slots[leased]; const auto d = s.texture->GetDesc();
+        const auto left_width = s.viewport.Width / (s.layout == Layout::Packed ? 2.0f : 1.0f);
+        return {left_width / float(d.Width), s.viewport.Height / float(d.Height),
+            s.viewport.TopLeftX / float(d.Width), s.viewport.TopLeftY / float(d.Height)};
     }
     void finish_frame() {
         std::scoped_lock lock{mutex};
@@ -476,7 +501,12 @@ public:
         return last + " | captured=" + std::to_string(captured) + " submitted=" +
             std::to_string(submitted) + " consumed=" + std::to_string(consumed) +
             " busy=" + std::to_string(exhausted) + " rejected=" + std::to_string(rejected) +
-            " retired=" + std::to_string(retired.size());
+            " retired=" + std::to_string(retired.size()) +
+            " hooks[dsv/bind/vp]=" + std::to_string(dsv_events) + "/" + std::to_string(bind_events) + "/" + std::to_string(viewport_events) +
+            " windows=" + std::to_string(read_windows) + " rejects[batch/shape/binding/layout/device/slice/order]=" +
+            std::to_string(reject_reasons[0]) + "/" + std::to_string(reject_reasons[1]) + "/" + std::to_string(reject_reasons[2]) + "/" +
+            std::to_string(reject_reasons[3]) + "/" + std::to_string(reject_reasons[4]) + "/" + std::to_string(reject_reasons[5]) + "/" + std::to_string(reject_reasons[6]) +
+            " observed=" + observed;
     }
     void reset() {
         std::scoped_lock lock{mutex};
