@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <memory>
+#include <atomic>
 #include <algorithm>
 #include "production_shader.hpp"
 #include "production_constants.hpp"
@@ -72,24 +73,53 @@ void WINAPI forward_queue_submit(ID3D12CommandQueue* queue,UINT count,ID3D12Comm
     }
 }
 
-// Give the live test queue its own vtable, so a hook installed on `other`
-// cannot accidentally cover it just because WARP shares an implementation.
-struct ClonedQueueVtable {
-    static constexpr size_t EntryCount=19;
-    void*** object_vtable{};
-    void** original{};
-    std::array<void*,EntryCount> entries{};
-    explicit ClonedQueueVtable(ID3D12CommandQueue* queue)
-        : object_vtable(reinterpret_cast<void***>(queue)),original(*object_vtable) {
-        std::copy_n(original,entries.size(),entries.begin());
-        *object_vtable=entries.data();
+// A genuine COM proxy has an independent public vtable without modifying
+// any native runtime object's private implementation layout. Its cached
+// native Execute target also reproduces calls that bypass a dummy slot hook.
+class QueueProxy final : public ID3D12CommandQueue {
+    ComPtr<ID3D12CommandQueue> inner;
+    stock_dibr::QueueSubmitHook::Callback native_execute;
+    std::atomic<ULONG> references{1};
+public:
+    explicit QueueProxy(ID3D12CommandQueue* q):inner{q},
+        native_execute{reinterpret_cast<stock_dibr::QueueSubmitHook::Callback>((*(void***)q)[10])} {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** out) override {
+        if(!out)return E_POINTER;*out=nullptr;
+        if(iid==__uuidof(IUnknown)||iid==__uuidof(ID3D12Object)||iid==__uuidof(ID3D12DeviceChild)||
+           iid==__uuidof(ID3D12Pageable)||iid==__uuidof(ID3D12CommandQueue)) {
+            *out=static_cast<ID3D12CommandQueue*>(this);AddRef();return S_OK;
+        }
+        return E_NOINTERFACE;
     }
-    ~ClonedQueueVtable() { *object_vtable=original; }
-    ClonedQueueVtable(const ClonedQueueVtable&)=delete;
-    ClonedQueueVtable& operator=(const ClonedQueueVtable&)=delete;
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
+    ULONG STDMETHODCALLTYPE Release() override {const auto n=--references;if(!n)delete this;return n;}
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID g,UINT* n,void* p) override {return inner->GetPrivateData(g,n,p);}
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID g,UINT n,const void* p) override {return inner->SetPrivateData(g,n,p);}
+    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID g,const IUnknown* p) override {return inner->SetPrivateDataInterface(g,p);}
+    HRESULT STDMETHODCALLTYPE SetName(LPCWSTR n) override {return inner->SetName(n);}
+    HRESULT STDMETHODCALLTYPE GetDevice(REFIID iid,void** out) override {return inner->GetDevice(iid,out);}
+    void STDMETHODCALLTYPE UpdateTileMappings(ID3D12Resource* r,UINT n,const D3D12_TILED_RESOURCE_COORDINATE* c,
+        const D3D12_TILE_REGION_SIZE* z,ID3D12Heap* h,UINT ranges,const D3D12_TILE_RANGE_FLAGS* f,
+        const UINT* offsets,const UINT* counts,D3D12_TILE_MAPPING_FLAGS flags) override {
+        inner->UpdateTileMappings(r,n,c,z,h,ranges,f,offsets,counts,flags);
+    }
+    void STDMETHODCALLTYPE CopyTileMappings(ID3D12Resource* d,const D3D12_TILED_RESOURCE_COORDINATE* dc,
+        ID3D12Resource* r,const D3D12_TILED_RESOURCE_COORDINATE* rc,const D3D12_TILE_REGION_SIZE* z,
+        D3D12_TILE_MAPPING_FLAGS flags) override {inner->CopyTileMappings(d,dc,r,rc,z,flags);}
+    void STDMETHODCALLTYPE ExecuteCommandLists(UINT n,ID3D12CommandList* const* lists) override {native_execute(inner.Get(),n,lists);}
+    void STDMETHODCALLTYPE SetMarker(UINT m,const void* p,UINT n) override {inner->SetMarker(m,p,n);}
+    void STDMETHODCALLTYPE BeginEvent(UINT m,const void* p,UINT n) override {inner->BeginEvent(m,p,n);}
+    void STDMETHODCALLTYPE EndEvent() override {inner->EndEvent();}
+    HRESULT STDMETHODCALLTYPE Signal(ID3D12Fence* f,UINT64 n) override {return inner->Signal(f,n);}
+    HRESULT STDMETHODCALLTYPE Wait(ID3D12Fence* f,UINT64 n) override {return inner->Wait(f,n);}
+    HRESULT STDMETHODCALLTYPE GetTimestampFrequency(UINT64* n) override {return inner->GetTimestampFrequency(n);}
+    HRESULT STDMETHODCALLTYPE GetClockCalibration(UINT64* g,UINT64* c) override {return inner->GetClockCalibration(g,c);}
+    D3D12_COMMAND_QUEUE_DESC STDMETHODCALLTYPE GetDesc() override {return inner->GetDesc();}
 };
 }
 int main() try {
+    std::cout<<std::unitbuf;std::cerr<<std::unitbuf;
+    std::cout<<"STAGE create device and proxy queues\n";
     ComPtr<ID3D12Debug> debug; if(SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) debug->EnableDebugLayer();
     ComPtr<IDXGIFactory4> factory;check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));
     ComPtr<IDXGIAdapter> adapter;check(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter)));
@@ -106,6 +136,7 @@ int main() try {
     constexpr auto read=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     stock_dibr::DepthCapture capture;capture.configure(dev.Get(),q.Get(),64,32,true);g_capture=&capture;
     stock_dibr::QueueSubmitHook queue_submit_hook{&forward_queue_submit};
+    std::cout<<"STAGE dummy-only hook coverage\n";
     require(queue_submit_hook.install(other.Get()),"dummy queue submit hook install failed");
     require(queue_submit_hook.size()==1,"dummy queue hook count incorrect");
     ID3D12CommandList* probe_lists[]{probe.Get()};
@@ -115,12 +146,14 @@ int main() try {
     require(g_submit_callbacks==1 && g_last_submit_queue==other.Get() && g_last_submit_count==1,
         "dummy queue submit callback was not observed");
     check(probe_allocator->Reset());check(probe->Reset(probe_allocator.Get(),nullptr));check(probe->Close());
+    std::cout<<"STAGE register actual proxy queue\n";
     require(queue_submit_hook.install(q.Get()),"live queue submit hook install failed");
     require(queue_submit_hook.size()==2,"distinct live queue vtable was not registered");
     q->ExecuteCommandLists(1,probe_lists);wait(q.Get());
     require(g_submit_callbacks==2 && g_last_submit_queue==q.Get() && g_last_submit_count==1,
         "live queue submit callback was not observed");
     check(probe_allocator->Reset());check(probe->Reset(probe_allocator.Get(),nullptr));check(probe->Close());
+    std::cout<<"STAGE record depth on delayed producer\n";
     static_assert(DXGI_FORMAT_R32G8X24_TYPELESS==19 && DXGI_FORMAT_R32_TYPELESS==39);
     auto depth=make(dev.Get(),tex(48,24,DXGI_FORMAT_R32G8X24_TYPELESS,D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
     D3D12_DESCRIPTOR_HEAP_DESC dsv_heap_desc{};dsv_heap_desc.Type=D3D12_DESCRIPTOR_HEAP_TYPE_DSV;dsv_heap_desc.NumDescriptors=1;
@@ -156,12 +189,14 @@ int main() try {
     // copy must survive reset, and acquire must enqueue a consumer GPU wait.
     ComPtr<ID3D12CommandAllocator> post_submit_allocator;check(dev->CreateCommandAllocator(qd.Type,IID_PPV_ARGS(&post_submit_allocator)));
     check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
+    std::cout<<"STAGE acquire after reset with GPU handoff\n";
     auto snapshot=capture.acquire();require(snapshot!=nullptr,"alternate submitted depth was lost on immediate list reset");
     require(capture.summary().find("crossQueueUsed=1")!=std::string::npos,"cross-queue wait path not exercised");
     const auto depth_uv=capture.sample_uv();require(std::abs(depth_uv[0]-1.f/3.f)<.0001f && std::abs(depth_uv[1]-2.f/3.f)<.0001f,"padded allocation viewport mapping incorrect");
     // No CPU wait on other: the production Wait is the ordering dependency
     // that makes the next compute dispatch see this queue's depth pixels.
 
+    std::cout<<"STAGE production shader dispatch\n";
     ComPtr<ID3DBlob> bytecode,error;const auto compiled=D3DCompile(shader,std::strlen(shader),"production DIBR",nullptr,nullptr,"main","cs_5_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&bytecode,&error);
     if(FAILED(compiled)){if(error)std::cerr<<static_cast<const char*>(error->GetBufferPointer());check(compiled);}
     D3D12_DESCRIPTOR_RANGE ranges[2]{};ranges[0]={D3D12_DESCRIPTOR_RANGE_TYPE_SRV,3,0,0,0};ranges[1]={D3D12_DESCRIPTOR_RANGE_TYPE_UAV,1,0,0,0};
@@ -196,6 +231,7 @@ int main() try {
     require(pixel(56,16)[0]>pixel(24,16)[0]+15,"packed left depth not used on right side of image");readback->Unmap(0,nullptr);
     require(!capture.acquire(),"stale depth reused in next interval");
 
+    std::cout<<"STAGE strength control pixel effect\n";
     // The UI's physical stereo-strength control must change actual pixels.
     check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
     constants.true_reprojection_strength=0;check(cb->Map(0,nullptr,&mapped));std::memcpy(mapped,&constants,256);cb->Unmap(0,nullptr);
@@ -210,6 +246,7 @@ int main() try {
     readback->Unmap(0,nullptr);require(zero_strength_different==0,"Reprojection Strength 0 did not change the production output");
 
 
+    std::cout<<"STAGE next-frame depth and stale rejection\n";
     // A later frame must carry new pixels, not a frozen successful snapshot.
     check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
     b=barrier(depth.Get(),read,D3D12_RESOURCE_STATE_COPY_DEST);cmd->ResourceBarrier(1,&b);
@@ -233,6 +270,7 @@ int main() try {
     b=barrier(depth.Get(),read,D3D12_RESOURCE_STATE_DEPTH_WRITE);cmd->ResourceBarrier(1,&b);
     main_binding();b=barrier(depth.Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);capture.on_post_resource_barriers(cmd.Get(),1,&b);
     check(cmd->Close());check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());require(!capture.acquire(),"discarded list was published");check(cmd->Close());
+    std::cout<<"STAGE wrong producer and late binding rejection\n";
     // A binding executed on another producer queue cannot validate a later
     // capture-only list on q. This deliberately constructs a matching shape
     // with incorrect queue provenance and must remain rejected.
@@ -257,6 +295,7 @@ int main() try {
     require(!capture.acquire(),"late bind on same list validated an earlier capture");
     require(g_alias_callbacks>0,"COM command-list aliases were not tested");
     require(queue_submit_hook.size()==2,"queue hook registry lost an installed queue");
+    std::cout<<"STAGE teardown forwarding\n";
     const auto cached_detour=reinterpret_cast<stock_dibr::QueueSubmitHook::Callback>((*(void***)q.Get())[10]);
     const auto callbacks_before_clear=g_submit_callbacks;
     queue_submit_hook.clear();g_capture=nullptr;
@@ -266,5 +305,5 @@ int main() try {
     cached_detour(q.Get(),1,probe_lists);wait(q.Get());
     require(g_submit_callbacks==callbacks_before_clear,"retired hook still invoked its observer");
     ComPtr<ID3D12InfoQueue> info;if(SUCCEEDED(dev.As(&info)))for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size{};info->GetMessage(i,nullptr,&size);std::vector<char> data(size);auto* message=reinterpret_cast<D3D12_MESSAGE*>(data.data());check(info->GetMessage(i,message,&size));if(message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)throw std::runtime_error(message->pDescription);}
-    std::cout<<"PASS: actual queue-submit hook covers distinct dummy/live vtables, canonical command-list aliases, alternate direct-queue GPU wait, wrong-producer/late-bind rejection, teardown forwarding, automatic captured-list submission, immediate reset preservation, actual live capture header + production shader on WARP; actual UE5 format19 D32+S8 depth plane, padded allocation with DLSS-sized viewport, distinct eyes, strength1-vs0 pixel change, opaque alpha, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
+    std::cout<<"PASS: actual queue-submit hook covers distinct dummy/proxy vtables and cached native dispatch, canonical command-list aliases, alternate direct-queue GPU wait, wrong-producer/late-bind rejection, teardown forwarding, automatic captured-list submission, immediate reset preservation, actual live capture header + production shader on WARP; actual UE5 format19 D32+S8 depth plane, padded allocation with DLSS-sized viewport, distinct eyes, strength1-vs0 pixel change, opaque alpha, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
 } catch(const std::exception& e) {std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}
