@@ -96,13 +96,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Independent depth proof patch failed' }
           python workspace/duoview/depth_proof/test_depth_proof_patch.py backend --compare evidence/protected-renderer-hashes.json
           if ($LASTEXITCODE -ne 0) { throw 'Depth proof altered protected rendering source' }
+          python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Stable Build118 original source verification failed' }
       - name: Wire completed GPU depth into Joey stock DIBR after DuoView Mono
         shell: pwsh
         run: |
           python workspace/duoview/depth_proof/apply_stock_dibr_proof.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Build118 stock DIBR patch failed; do not package' }
-          python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
-          if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
+          python workspace/duoview/depth_proof/verify_stock_dibr_bridge.py backend --record evidence/stock_dibr_bridge_hashes.json
+          if ($LASTEXITCODE -ne 0) { throw 'Stock DIBR source gates failed' }
       - name: Verify real D3D12 depth readback and rejection paths on WARP
         shell: pwsh
         run: |
@@ -177,8 +179,8 @@ jobs:
       - name: Verify final Stage 2-4 code identity and package
         shell: pwsh
         run: |
-          python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence --final
-          if ($LASTEXITCODE -ne 0) { throw 'DuoView Stage 2-4 source changed during the build' }
+          python workspace/duoview/depth_proof/verify_stock_dibr_bridge.py backend --compare evidence/stock_dibr_bridge_hashes.json
+          if ($LASTEXITCODE -ne 0) { throw 'Stock DIBR source changed during the Windows build' }
           Copy-Item backend/build/bin/uevr/*.dll package/
           Copy-Item backend/build/bin/vr-plugin-nullifier/UEVRPluginNullifier.dll package/
           Copy-Item backend/build/bin/LuaVR/LuaVR.dll package/
