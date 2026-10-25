@@ -35,6 +35,19 @@ public:
         status_="Collecting anonymous depth candidates for 10 seconds";
         return true;
     }
+    // Build118's completed one-shot depth capture is retained as a read-only
+    // GPU texture for the experimental stock-DIBR adapter. A candidate is
+    // exposed ONLY after the exact submission fence and command reset seal.
+    // This intentionally freezes depth: it is a stereo plumbing test, NOT live DIBR.
+    Com<ID3D12Resource> completed_gpu_snapshot(size_t candidate_id) const {
+        std::scoped_lock lock{mutex_};
+        if (candidate_id >= candidates_.size()) return {};
+        const auto& c = candidates_[candidate_id];
+        if (!c.complete || !c.recording_sealed || c.signal_failed ||
+            !c.gpu_snapshot || !c.fence || c.fence->GetCompletedValue() < c.fence_value)
+            return {};
+        return c.gpu_snapshot;
+    }
     bool started() const { std::scoped_lock lock{mutex_}; return started_; }
     bool observing() const { return active_.load(std::memory_order_acquire); }
     std::string status() const { std::scoped_lock lock{mutex_}; return status_; }
@@ -114,6 +127,21 @@ public:
             D3D12_TEXTURE_COPY_LOCATION to{}; to.pResource=c->readback.Get();
             to.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; to.PlacedFootprint=c->footprint;
             cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+            if (c->gpu_snapshot) {
+                // Same verified DSV barrier as the successful offline image.
+                // Record once, never update a resource while OpenXR consumes it.
+                D3D12_TEXTURE_COPY_LOCATION gpu{};
+                gpu.pResource=c->gpu_snapshot.Get();
+                gpu.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                gpu.SubresourceIndex=0;
+                cmd->CopyTextureRegion(&gpu,0,0,0,&from,nullptr);
+                D3D12_RESOURCE_BARRIER ready{};
+                ready.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                ready.Transition={c->gpu_snapshot.Get(),0,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+                cmd->ResourceBarrier(1,&ready);
+            }
             std::swap(to_copy.Transition.StateBefore,to_copy.Transition.StateAfter);
             cmd->ResourceBarrier(1,&to_copy);
             c->recorded=true; c->cmd=cmd; c->command_list_owner=cmd; c->epoch=l->epoch;
@@ -239,7 +267,7 @@ private:
         bool known{},inside{},restricted{};
     };
     struct Candidate {
-        Com<ID3D12Resource> resource,readback; Com<ID3D12Fence> fence;
+        Com<ID3D12Resource> resource,readback,gpu_snapshot; Com<ID3D12Fence> fence;
         Com<ID3D12CommandQueue> queue; Com<ID3D12GraphicsCommandList> command_list_owner;
         D3D12_RESOURCE_DESC desc{}; D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
         UINT rows{}; UINT64 row_bytes{},bytes{};
@@ -295,6 +323,24 @@ private:
         buffer.SampleDesc.Count=1; buffer.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         if (FAILED(device_->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&buffer,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&c.readback))) ||
             FAILED(device_->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&c.fence)))) { c.readback.Reset(); c.fence.Reset(); c.allocation_failed=true; return; }
+        // Only the verified R32_TYPELESS candidate family (IDs 1/6 in the
+        // STALKER 2 proof) enters the stereo proof. Existing diagnostics still
+        // record all other formats without changing the game's DSV.
+        if (c.desc.Format==DXGI_FORMAT_R32_TYPELESS ||
+            c.desc.Format==DXGI_FORMAT_D32_FLOAT) {
+            D3D12_HEAP_PROPERTIES gpu_heap{};
+            gpu_heap.Type=D3D12_HEAP_TYPE_DEFAULT;
+            gpu_heap.CreationNodeMask=gpu_heap.VisibleNodeMask=1;
+            auto gpu_desc=c.desc;
+            gpu_desc.Format=DXGI_FORMAT_R32_TYPELESS;
+            gpu_desc.Flags=D3D12_RESOURCE_FLAG_NONE;
+            gpu_desc.Layout=D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            if (FAILED(device_->CreateCommittedResource(&gpu_heap,D3D12_HEAP_FLAG_NONE,
+                    &gpu_desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,
+                    IID_PPV_ARGS(&c.gpu_snapshot)))) {
+                c.gpu_snapshot.Reset();
+            }
+        }
         allocated_bytes_+=c.bytes;
     }
     void stop_locked(const char* message) { active_.store(false,std::memory_order_release); status_=message; }
