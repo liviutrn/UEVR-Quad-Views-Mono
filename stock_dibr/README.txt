@@ -30,8 +30,10 @@ Test setup
    increasing while the game renders. Both readings are needed to confirm
    that the one-view path is running.
 
-The CI workflow runs the depth-policy checks, Windows WARP checks, Joey's
-41-test compatibility suite, and builds the injector package. These checks do
+The CI workflow runs the depth-policy checks, Windows WARP checks, and builds
+the injector package. All 41 unchanged Joey compatibility tests passed in run
+40230813932; the final hook/logging corrections use the production WARP test
+instead of repeating that unchanged suite. These checks do
 not verify STALKER 2 runtime behavior or headset stability. This package has
 not been verified in-game unless separate runtime testing is recorded.
 

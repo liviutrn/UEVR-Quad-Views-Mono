@@ -11,6 +11,7 @@ def edit(path, old, new):
 shutil.copyfile(here/'QueueSubmitHook.hpp', root/'src/hooks/QueueSubmitHook.hpp')
 hdr = 'src/hooks/D3D12Hook.hpp'
 cpp = 'src/hooks/D3D12Hook.cpp'
+edit(cpp, '#include "D3D12Hook.hpp"', '#include "D3D12Hook.hpp"\n#include "utility/Logging.hpp"')
 edit(hdr, '#include "D3D12DepthStencilObserver.hpp"',
      '#include "D3D12DepthStencilObserver.hpp"\n#include "QueueSubmitHook.hpp"')
 edit(hdr, '    std::unique_ptr<PointerHook> m_stock_execute_hook{}, m_stock_begin_hook{}, m_stock_end_hook{};',
