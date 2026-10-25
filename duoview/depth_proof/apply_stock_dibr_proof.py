@@ -144,11 +144,11 @@ def apply(root):
                                                         proof_id,proof_z->GetDesc().Width,proof_z->GetDesc().Height,
                                                         stereo_desc.Width,stereo_desc.Height);
                                                 } else {
-                                                    SPDLOG_WARN_EVERY_N_SEC(2,
+                                                    SPDLOG_WARNING_EVERY_N_SEC(2,
                                                         "[DepthProof118][StockDIBR] REJECT output format/extent mismatch");
                                                 }
                                             } else {
-                                                SPDLOG_WARN_EVERY_N_SEC(2,
+                                                SPDLOG_WARNING_EVERY_N_SEC(2,
                                                     "[DepthProof118][StockDIBR] REJECT synthesize: {}",
                                                     slot->failure_reason());
                                             }
