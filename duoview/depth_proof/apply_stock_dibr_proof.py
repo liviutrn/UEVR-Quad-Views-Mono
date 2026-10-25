@@ -101,7 +101,11 @@ def apply(root):
                                             if (!slot) slot=std::make_unique<d3d12::DIBRPreview>();
                                             d3d12::DIBRPreview::Parameters params{};
                                             params.reversed_depth=true;
-                                            params.disparity_pixels=18.0f;
+                                            // Build118 sampled reversed-Z is ~0.006.
+                                            // Stock defaults (18px * rawZ) would be subpixel
+                                            // and look identical to Mono even when working.
+                                            params.disparity_pixels=30.0f;
+                                            params.legacy_depth_curve=0.20f;
                                             params.use_true_reprojection=false; // frozen diagnostic only
                                             params.allow_depth_resolution_mismatch_for_proof=true;
                                             const bool synthesized=slot->synthesize(
