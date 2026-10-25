@@ -125,8 +125,10 @@ int main() try {
     ComPtr<IDXGIAdapter> adapter;check(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter)));
     ComPtr<ID3D12Device> dev;check(D3D12CreateDevice(adapter.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&dev)));
     D3D12_COMMAND_QUEUE_DESC qd{};qd.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
-    ComPtr<ID3D12CommandQueue> q,other;check(dev->CreateCommandQueue(&qd,IID_PPV_ARGS(&q)));check(dev->CreateCommandQueue(&qd,IID_PPV_ARGS(&other)));
-    [[maybe_unused]] ClonedQueueVtable cloned_live_queue{q.Get()};
+    ComPtr<ID3D12CommandQueue> q,native_queue,other;
+    check(dev->CreateCommandQueue(&qd,IID_PPV_ARGS(&native_queue)));
+    check(dev->CreateCommandQueue(&qd,IID_PPV_ARGS(&other)));
+    q.Attach(new QueueProxy(native_queue.Get()));
     ComPtr<ID3D12CommandAllocator> allocator;check(dev->CreateCommandAllocator(qd.Type,IID_PPV_ARGS(&allocator)));
     ComPtr<ID3D12GraphicsCommandList> cmd;check(dev->CreateCommandList(0,qd.Type,allocator.Get(),nullptr,IID_PPV_ARGS(&cmd)));
     ComPtr<ID3D12CommandAllocator> probe_allocator;check(dev->CreateCommandAllocator(qd.Type,IID_PPV_ARGS(&probe_allocator)));
