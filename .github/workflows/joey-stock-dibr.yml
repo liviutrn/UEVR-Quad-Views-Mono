@@ -96,6 +96,9 @@ jobs:
       - name: Apply first headset-test corrections
         run: python stock_dibr/apply_runtime_fix.py backend
 
+      - name: Hook the actual presentation queue submission
+        run: python stock_dibr/apply_queue_fix.py backend
+
       - name: Run stock DIBR policy and WARP tests
         shell: pwsh
         run: |
@@ -108,9 +111,6 @@ jobs:
         run: cmake -S backend -B backend/build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DUEVR_BUILD_COMPATIBILITY_TESTS=ON
 
       - name: Build original compatibility test suite
-        # The unchanged 41-test suite passed in run 40198571708. This format
-        # correction is covered by the actual-format production GPU test above.
-        if: ${{ false }}
         shell: pwsh
         run: |
           cmake --build backend/build --config ${{ env.BUILD_TYPE }} --parallel 2 --target compatibility-policy-tests steam-frame-input-tests stock-frame-migration-tests gamepad-recovery-tests kananlib-decode-window-tests diagnostic-safety-tests prospi-camera-trace-tests prospi-camera-framing-tests prospi-celebration-framing-tests prospi-roof-visibility-tests hifi-hook-memory-tests nascar-hook-compatibility-tests input-hook-installation-tests mono-d3d11-tests mono-d3d12-tests ui-alpha-tests ui-alpha-lifecycle-tests ui-composition-tests lua-fname-binding-tests lua-context-dispatch-tests lua-controller-input-tests stalker2-native-policy-tests stalker2-native-d3d12-tests *> evidence/compatibility-build.log
@@ -119,7 +119,6 @@ jobs:
           if ($code -ne 0) { throw "Original compatibility test targets failed to build ($code)" }
 
       - name: Run original compatibility test suite
-        if: ${{ false }}
         run: ctest --test-dir backend/build -C ${{ env.BUILD_TYPE }} --output-on-failure --no-tests=error --output-log evidence/ctest.log
 
       - name: Build UEVR backend

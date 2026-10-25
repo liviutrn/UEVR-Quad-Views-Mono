@@ -15,7 +15,8 @@
 #include <vector>
 
 namespace stock_dibr {
-// All copies and consumers must be on the swapchain's direct queue. A slot
+// Captures use a verified direct producer queue; alternate queues require an
+// explicit producer fence and a GPU wait on the presentation queue. A slot
 // belongs to its recording list until actual ExecuteCommandLists, and then to
 // its fence until both capture and consumer have retired. No historical image
 // is returned when a Present interval contains no newly submitted depth.
@@ -33,13 +34,17 @@ class DepthCapture final : public D3D12DepthStencilObserver {
     struct Slot {
         Ptr<ID3D12Resource> texture, source;
         Ptr<ID3D12CommandList> list;
-        uint64_t epoch{}, serial{}, fence{};
+        Ptr<IUnknown> list_identity;
+        uint64_t epoch{}, serial{}, fence{}, capture_event{};
         bool pending{}, leased{};
+        Ptr<ID3D12Fence> foreign_fence;
+        bool quarantined{};
         Layout layout{Layout::Invalid};
         D3D12_VIEWPORT viewport{};
     };
     struct ListState {
         Ptr<ID3D12GraphicsCommandList> owner;
+        Ptr<IUnknown> identity;
         SIZE_T bound_dsv_handle{};
         ID3D12Resource* bound_dsv_resource{}; // non-owning; compared only, never dereferenced
         std::array<D3D12_VIEWPORT, ViewportCapacity> viewports{};
@@ -48,10 +53,11 @@ class DepthCapture final : public D3D12DepthStencilObserver {
             ID3D12Resource* resource{}; // non-owning; compared only, never dereferenced
             SIZE_T handle{};
             D3D12_VIEWPORT viewport{};
+            uint64_t event{};
         };
         std::array<BindingProof, BindingProofCapacity> proofs{};
         UINT proof_count{};
-        uint64_t touch{};
+        uint64_t touch{}, event{};
     };
     struct RetiredGeneration {
         Ptr<ID3D12Device> device;
@@ -63,7 +69,8 @@ class DepthCapture final : public D3D12DepthStencilObserver {
     struct ExecutedProof {
         ID3D12Resource* resource{}; // non-owning; compared only, never dereferenced
         D3D12_VIEWPORT viewport{};
-        uint64_t epoch{}, batch{};
+        Ptr<IUnknown> queue_identity, list_identity;
+        uint64_t epoch{}, batch{}, event{};
         UINT list_index{};
     };
 
@@ -79,15 +86,16 @@ class DepthCapture final : public D3D12DepthStencilObserver {
     std::unordered_map<SIZE_T, ID3D12Resource*> dsv_resources;
     std::unordered_map<SIZE_T, bool> dsv_primary_slice;
     std::deque<SIZE_T> dsv_order;
-    std::unordered_map<ID3D12GraphicsCommandList*, ListState> lists;
+    std::unordered_map<IUnknown*, ListState> lists;
     std::vector<RetiredGeneration> retired;
     std::deque<ExecutedProof> executed_proofs;
     uint64_t list_touch{};
     uint64_t execute_batch{};
-    std::unordered_set<ID3D12GraphicsCommandList*> render_passes;
+    std::unordered_set<IUnknown*> render_passes;
     std::string last{"waiting for the first scene extent"};
     uint64_t captured{}, submitted{}, consumed{}, exhausted{}, rejected{};
     uint64_t dsv_events{}, bind_events{}, viewport_events{}, read_windows{};
+    uint64_t execute_events{}, same_queue_events{}, matched_lists{}, foreign_matches{}, reset_discards{}, cross_queue_consumed{};
     std::array<uint64_t, 7> reject_reasons{};
     std::string observed{"none"};
 
@@ -151,7 +159,7 @@ class DepthCapture final : public D3D12DepthStencilObserver {
                 std::move(state.proofs.begin() + 1, state.proofs.end(), state.proofs.begin());
                 --state.proof_count;
             }
-            state.proofs[state.proof_count++] = {state.bound_dsv_resource, state.bound_dsv_handle, viewport};
+            state.proofs[state.proof_count++] = {state.bound_dsv_resource, state.bound_dsv_handle, viewport, state.event};
         }
     }
     bool recorded_viewport(ID3D12Resource* resource,
@@ -172,19 +180,29 @@ class DepthCapture final : public D3D12DepthStencilObserver {
         return best > 0;
     }
     bool has_executed_main_binding(ID3D12Resource* resource, const D3D12_RESOURCE_DESC& depth,
-        Layout kind, uint64_t batch, UINT list_index) const {
+        Layout kind, IUnknown* producer, IUnknown* capture_list, uint64_t capture_event, uint64_t batch, UINT list_index) const {
         for (const auto& proof : executed_proofs) {
-            if (proof.epoch != epoch || proof.resource != resource ||
+            if (proof.epoch != epoch || proof.resource != resource || proof.queue_identity.Get() != producer ||
                 proof.batch > batch || (proof.batch == batch && proof.list_index > list_index)) continue;
+            if (proof.batch == batch && proof.list_index == list_index &&
+                proof.list_identity.Get() == capture_list && proof.event > capture_event) continue;
             if (viewport_matches_source(proof.viewport, depth, kind)) return true;
         }
         return false;
     }
     bool retire_ready(const Slot& s, ID3D12Fence* f) const {
+        if (s.quarantined || s.pending || s.leased) return false;
+        if (s.foreign_fence && !completed(s.foreign_fence->GetCompletedValue(), 1)) return false;
         return !s.pending && !s.leased && (!s.fence || (f && completed(f->GetCompletedValue(), s.fence)));
     }
+    static Ptr<IUnknown> object_identity(IUnknown* object) {
+        Ptr<IUnknown> result;
+        if (object) object->QueryInterface(IID_PPV_ARGS(&result));
+        return result;
+    }
     ListState& list_state(ID3D12GraphicsCommandList* cmd) {
-        auto found = lists.find(cmd);
+        auto identity = object_identity(cmd);
+        auto found = lists.find(identity.Get());
         if (found != lists.end()) { found->second.touch = ++list_touch; return found->second; }
         if (lists.size() >= ListCapacity) {
             auto oldest = lists.begin();
@@ -193,9 +211,10 @@ class DepthCapture final : public D3D12DepthStencilObserver {
             render_passes.erase(oldest->first);
             lists.erase(oldest);
         }
-        auto [it, inserted] = lists.emplace(cmd, ListState{});
+        auto [it, inserted] = lists.emplace(identity.Get(), ListState{});
         (void)inserted;
         it->second.owner = cmd;
+        it->second.identity = std::move(identity);
         it->second.touch = ++list_touch;
         return it->second;
     }
@@ -211,29 +230,44 @@ class DepthCapture final : public D3D12DepthStencilObserver {
         }
     }
     void reset_pending_list(std::array<Slot, Capacity>& slots_to_check, ID3D12GraphicsCommandList* cmd) {
-        for (auto& s : slots_to_check) if (s.pending && s.list.Get() == cmd) {
+        for (auto& s : slots_to_check) if (s.pending && !s.quarantined && s.list_identity.Get() == object_identity(cmd).Get()) {
             s.pending = false; s.epoch = 0; s.fence = 0;
         }
     }
     static bool submitted_by(const Slot& s, UINT count, ID3D12CommandList* const* submitted_lists) {
         if (!s.pending || !submitted_lists) return false;
-        for (UINT i = 0; i < count; ++i) if (submitted_lists[i] == s.list.Get()) return true;
+        for (UINT i = 0; i < count; ++i) if (submitted_lists[i] == s.list.Get() ||
+            (s.list_identity && object_identity(submitted_lists[i]).Get() == s.list_identity.Get())) return true;
         return false;
+    }
+    static bool same_queue(ID3D12CommandQueue* a, ID3D12CommandQueue* b) {
+        if (!a || !b) return false;
+        if (a == b) return true;
+        Ptr<IUnknown> left, right;
+        return SUCCEEDED(a->QueryInterface(IID_PPV_ARGS(&left))) &&
+            SUCCEEDED(b->QueryInterface(IID_PPV_ARGS(&right))) && left.Get() == right.Get();
     }
     void submit_retired(ID3D12CommandQueue* q, UINT count, ID3D12CommandList* const* submitted_lists) {
         for (auto& generation : retired) {
-            bool needs_signal{};
-            for (const auto& s : generation.slots)
-                if (submitted_by(s, count, submitted_lists) && q == generation.queue.Get()) needs_signal = true;
-            uint64_t value{};
-            if (needs_signal && SUCCEEDED(generation.queue->Signal(generation.fence.Get(), value = ++generation.signal))) {
-                for (auto& s : generation.slots) if (submitted_by(s, count, submitted_lists)) {
-                    s.pending = false; s.fence = value;
+            for (auto& s : generation.slots) if (submitted_by(s, count, submitted_lists)) {
+                s.epoch = 0;
+                if (same_queue(q, generation.queue.Get())) {
+                    const auto value = ++generation.signal;
+                    if (SUCCEEDED(q->Signal(generation.fence.Get(), value))) {
+                        s.pending = false; s.fence = value;
+                    } else s.quarantined = true;
+                } else {
+                    Ptr<ID3D12Device> producer_device;
+                    if (SUCCEEDED(s.source->GetDevice(IID_PPV_ARGS(&producer_device))) &&
+                        SUCCEEDED(producer_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&s.foreign_fence))) &&
+                        SUCCEEDED(q->Signal(s.foreign_fence.Get(), 1))) {
+                        s.pending = false; s.fence = 0;
+                    } else s.quarantined = true;
                 }
             }
-            // A list executed on a foreign queue stays quarantined until reset.
         }
     }
+
 public:
     bool accepts_cached_dsv_metadata() const override { return true; }
     void configure(ID3D12Device* dev, ID3D12CommandQueue* q, uint64_t w, uint32_t h, bool active) {
@@ -298,6 +332,7 @@ public:
             }
             if (state.bound_dsv_handle == key) {
                 state.bound_dsv_resource = primary ? resource : nullptr;
+                ++state.event;
                 remember_main_bindings(state);
             }
         }
@@ -307,7 +342,7 @@ public:
         if (!cmd) return;
         std::scoped_lock lock{mutex};
         auto& state = list_state(cmd);
-        ++bind_events;
+        ++bind_events; ++state.event;
         state.bound_dsv_handle = dsv.ptr;
         const auto found = dsv_resources.find(dsv.ptr);
         const auto primary = dsv_primary_slice.find(dsv.ptr);
@@ -319,20 +354,21 @@ public:
         if (!cmd) return;
         std::scoped_lock lock{mutex};
         auto& state = list_state(cmd);
-        ++viewport_events;
+        ++viewport_events; ++state.event;
         state.viewport_count = viewports && count <= ViewportCapacity ? count : 0;
         for (UINT i = 0; i < state.viewport_count; ++i) state.viewports[i] = viewports[i];
         remember_main_bindings(state);
     }
     void on_render_pass(ID3D12GraphicsCommandList* cmd, bool begin) override {
         std::scoped_lock lock{mutex};
-        if (begin) { (void)list_state(cmd); render_passes.insert(cmd); }
-        else render_passes.erase(cmd);
+        if (begin) { (void)list_state(cmd); render_passes.insert(object_identity(cmd).Get()); }
+        else render_passes.erase(object_identity(cmd).Get());
     }
     void on_command_list_reset(ID3D12GraphicsCommandList* cmd) override {
         std::scoped_lock lock{mutex};
-        render_passes.erase(cmd);
-        lists.erase(cmd);
+        for (const auto& s : slots) if (s.pending && s.list_identity.Get() == object_identity(cmd).Get()) ++reset_discards;
+        render_passes.erase(object_identity(cmd).Get());
+        lists.erase(object_identity(cmd).Get());
         reset_pending_list(slots, cmd);
         for (auto& generation : retired) reset_pending_list(generation.slots, cmd);
         collect_retired();
@@ -341,7 +377,8 @@ public:
         const D3D12_RESOURCE_BARRIER* barriers) override {
         if (!cmd || !barriers || cmd->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) return;
         std::scoped_lock lock{mutex};
-        if (!enabled || !width || !height || recorded_this_interval >= Capacity || render_passes.contains(cmd)) return;
+        if (!enabled || !width || !height || recorded_this_interval >= Capacity || render_passes.contains(object_identity(cmd).Get())) return;
+        const auto capture_event = ++list_state(cmd).event;
         for (UINT i = 0; i < count; ++i) {
             const auto& b = barriers[i];
             if (b.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION ||
@@ -390,6 +427,7 @@ public:
             auto it = std::find_if(slots.begin(), slots.end(), [&](const Slot& s) { return retire_ready(s, fence.Get()); });
             if (it == slots.end()) { ++exhausted; return; }
             auto& s = *it;
+            s.foreign_fence.Reset();
             if (!s.texture || s.texture->GetDesc().Width != desc.Width ||
                 s.texture->GetDesc().Height != desc.Height || s.texture->GetDesc().Format != format) {
                 auto dst = desc; dst.Format = format; dst.DepthOrArraySize = 1;
@@ -416,8 +454,8 @@ public:
             std::swap(copy[0].Transition.StateBefore, copy[0].Transition.StateAfter);
             std::swap(copy[1].Transition.StateBefore, copy[1].Transition.StateAfter);
             cmd->ResourceBarrier(2, copy);
-            s.source = source; s.list = cmd; s.epoch = epoch; s.serial = ++serial;
-            s.pending = true; s.fence = 0; s.layout = kind; s.viewport = source_viewport;
+            s.source = source; s.list = cmd; s.list_identity = object_identity(cmd); s.epoch = epoch; s.serial = ++serial;
+            s.pending = true; s.fence = 0; s.capture_event = capture_event; s.layout = kind; s.viewport = source_viewport;
             ++recorded_this_interval; ++captured;
             if (recorded_this_interval >= Capacity) return;
         }
@@ -425,18 +463,25 @@ public:
     void on_command_lists_executed(ID3D12CommandQueue* q, UINT count, ID3D12CommandList* const* submitted_lists) override {
         std::scoped_lock lock{mutex};
         if (!q || !submitted_lists) return;
-        const bool current_queue = fence && q == queue.Get();
-        const auto batch = current_queue ? ++execute_batch : execute_batch;
-        if (current_queue) {
+        ++execute_events;
+        const bool current_queue = fence && same_queue(q, queue.Get());
+        if (current_queue) ++same_queue_events;
+        const auto producer_identity = object_identity(q);
+        Ptr<IUnknown> producer_device, expected_device;
+        const bool valid_producer = device && q->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT &&
+            SUCCEEDED(q->GetDevice(IID_PPV_ARGS(&producer_device))) &&
+            SUCCEEDED(device.As(&expected_device)) && producer_device.Get() == expected_device.Get();
+        const auto batch = ++execute_batch;
+        if (valid_producer) {
             for (UINT i = 0; i < count; ++i) {
                 if (submitted_lists[i] == nullptr || submitted_lists[i]->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT)
                     continue;
-                auto* graphics = static_cast<ID3D12GraphicsCommandList*>(submitted_lists[i]);
-                const auto found = lists.find(graphics);
+                const auto identity = object_identity(submitted_lists[i]);
+                const auto found = lists.find(identity.Get());
                 if (found == lists.end()) continue;
                 for (UINT j = 0; j < found->second.proof_count; ++j) {
                     const auto& proof = found->second.proofs[j];
-                    executed_proofs.push_back({proof.resource, proof.viewport, epoch, batch, i});
+                    executed_proofs.push_back({proof.resource, proof.viewport, producer_identity, identity, epoch, batch, proof.event, i});
                     if (executed_proofs.size() > ExecutedProofCapacity) executed_proofs.pop_front();
                 }
             }
@@ -444,18 +489,38 @@ public:
         bool found{};
         for (auto& s : slots) {
             if (!submitted_by(s, count, submitted_lists)) continue;
-            if (!fence || q != queue.Get()) { s.epoch = 0; continue; }
+            ++matched_lists;
             UINT capture_index{};
             for (; capture_index < count; ++capture_index)
-                if (submitted_lists[capture_index] == s.list.Get()) break;
+                if (submitted_lists[capture_index] == s.list.Get() ||
+                    object_identity(submitted_lists[capture_index]).Get() == s.list_identity.Get()) break;
             const auto desc = s.source->GetDesc();
-            const bool provenance_ok = enabled && has_executed_main_binding(
-                s.source.Get(), desc, s.layout, batch, capture_index);
-            if (!found) {
-                if (FAILED(q->Signal(fence.Get(), ++signal))) { enabled = false; last = "depth submission signal failed"; return; }
-                found = true;
+            const bool provenance_ok = enabled && valid_producer && has_executed_main_binding(
+                s.source.Get(), desc, s.layout, producer_identity.Get(), s.list_identity.Get(), s.capture_event, batch, capture_index);
+            if (current_queue) {
+                if (!found) {
+                    if (FAILED(q->Signal(fence.Get(), ++signal))) { enabled = false; last = "depth submission signal failed"; return; }
+                    found = true;
+                }
+                s.pending = false; s.fence = signal;
+            } else {
+                // Alternate direct scene queues are supported only after a real
+                // submission and producer-local DSV/viewport ordering proof.
+                // Give this owned copy a producer fence; acquire adds a GPU
+                // wait on the presentation queue before the synthesis dispatch.
+                ++foreign_matches; s.fence = 0;
+                if (SUCCEEDED(s.source->GetDevice(IID_PPV_ARGS(&producer_device))) &&
+                    SUCCEEDED(q->GetDevice(IID_PPV_ARGS(&expected_device))) &&
+                    producer_device.Get() == expected_device.Get() &&
+                    SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&s.foreign_fence))) &&
+                    SUCCEEDED(q->Signal(s.foreign_fence.Get(), 1))) {
+                    s.pending = false;
+                } else {
+                    s.epoch = 0; s.quarantined = true;
+                    last = "alternate queue submission could not be fenced; slot quarantined";
+                    continue;
+                }
             }
-            s.pending = false; s.fence = signal;
             if (!provenance_ok) { s.epoch = 0; ++rejected; ++reject_reasons[6]; last = "capture rejected: no prior same-queue main DSV/viewport proof"; }
             else ++submitted;
         }
@@ -467,11 +532,17 @@ public:
         collect_retired();
         Slot* best{};
         for (auto& s : slots) {
-            if (s.pending || !s.fence || s.epoch != epoch || s.leased) continue;
+            if (s.pending || (!s.fence && !s.foreign_fence) || s.epoch != epoch || s.leased || s.quarantined) continue;
             if (!best || double(s.viewport.Width) * s.viewport.Height > double(best->viewport.Width) * best->viewport.Height ||
                 (s.viewport.Width == best->viewport.Width && s.serial > best->serial)) best = &s;
         }
         if (!best) { last = "no new submitted main-view depth in this Present interval"; return {}; }
+        if (best->foreign_fence) {
+            if (!queue || FAILED(queue->Wait(best->foreign_fence.Get(), 1))) {
+                best->epoch = 0; last = "alternate queue consumer wait failed"; return {};
+            }
+            ++cross_queue_consumed;
+        }
         best->leased = true; leased = static_cast<size_t>(best - slots.data()); ++consumed;
         const auto d = best->texture->GetDesc();
         last = "live main-view " + std::to_string(d.Width) + "x" + std::to_string(d.Height) +
@@ -505,6 +576,10 @@ public:
             " busy=" + std::to_string(exhausted) + " rejected=" + std::to_string(rejected) +
             " retired=" + std::to_string(retired.size()) +
             " hooks[dsv/bind/vp]=" + std::to_string(dsv_events) + "/" + std::to_string(bind_events) + "/" + std::to_string(viewport_events) +
+            " exec[all/same/matched/alternate/resetDiscard]=" + std::to_string(execute_events) + "/" +
+            std::to_string(same_queue_events) + "/" + std::to_string(matched_lists) + "/" +
+            std::to_string(foreign_matches) + "/" + std::to_string(reset_discards) +
+            " crossQueueUsed=" + std::to_string(cross_queue_consumed) +
             " windows=" + std::to_string(read_windows) + " rejects[batch/shape/binding/layout/device/slice/order]=" +
             std::to_string(reject_reasons[0]) + "/" + std::to_string(reject_reasons[1]) + "/" + std::to_string(reject_reasons[2]) + "/" +
             std::to_string(reject_reasons[3]) + "/" + std::to_string(reject_reasons[4]) + "/" + std::to_string(reject_reasons[5]) + "/" + std::to_string(reject_reasons[6]) +

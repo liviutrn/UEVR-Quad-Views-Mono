@@ -30,12 +30,10 @@ Test setup
    increasing while the game renders. Both readings are needed to confirm
    that the one-view path is running.
 
-The CI workflow builds the depth-policy checks, Windows WARP checks and the
-injector package. Joey's unchanged 41-test compatibility suite passed in the
-previous full run 40198571708. Current format corrections use the actual-format
-production GPU test rather than repeating that unchanged suite. These checks do not
-verify STALKER 2 runtime behavior or headset stability. This package has not
-been verified in-game unless separate runtime testing is recorded.
+The CI workflow runs the depth-policy checks, Windows WARP checks, Joey's
+41-test compatibility suite, and builds the injector package. These checks do
+not verify STALKER 2 runtime behavior or headset stability. This package has
+not been verified in-game unless separate runtime testing is recorded.
 
 Revision 2: first headset-test corrections
 ------------------------------------------
@@ -52,3 +50,27 @@ its format-21 depth-plane SRV. Earlier documentation misidentified format 19
 as plain R32_TYPELESS (which is format 39); that caused valid depth to be rejected.
 The GPU test now uses padded R32G8X24_TYPELESS / D32_FLOAT_S8X24_UINT resources,
 including full depth-plane copy and live frame updates, under the debug layer.
+
+Revision 3: actual presentation queue submission
+-----------------------------------------------
+R2's game log recorded 35,772 depth copies from 3616x1436 format-19 resources,
+but zero submitted/consumed captures. Its submission hook covered only the
+temporary setup queue's vtable. R3 also hooks each actual presentation queue
+discovered from the live swapchain and uses the correct original function for
+each distinct slot. It accepts COM interface aliases of the same queue,
+matches command-list aliases by COM identity, and supports another direct
+scene queue through a producer fence and a presentation-queue GPU wait.
+It still requires binding/viewport proof from that same producer queue.
+New exec[all/same/matched/alternate/resetDiscard] counters distinguish missing
+submission callbacks from queue mismatch and discarded recordings.
+
+The Windows GPU regression now uses the production queue-hook helper to
+deliver actual ExecuteCommandLists callbacks. It creates a distinct live
+queue vtable to reproduce the setup-only coverage gap before installing the
+live hook. It also verifies COM command-list aliases, a deliberately delayed
+alternate producer with GPU fence handoff, rejection of proof from the wrong
+producer, rejection of a later bind on the same list, safe forwarding after
+hook teardown, reset after submission, and a real pixel change at stereo strength
+1 versus 0. Resource-barrier and viewport observation are still manually
+delivered by this standalone fixture; STALKER 2 itself remains the required
+end-to-end headset test.
