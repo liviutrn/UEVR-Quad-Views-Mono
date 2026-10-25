@@ -38,6 +38,7 @@ ID3D12CommandQueue* g_last_submit_queue{};
 UINT g_last_submit_count{};
 ID3D12CommandQueue* g_opaque_outer_queue{};
 uint64_t g_proxy_execute_calls{};
+uint64_t g_native_unwrap_queries{};
 ID3D12CommandList* g_observer_private_probe{};
 
 // A valid COM interface can have a different address but the same IUnknown.
@@ -102,6 +103,9 @@ public:
         native_execute{reinterpret_cast<stock_dibr::QueueSubmitHook::Callback>((*(void***)q)[10])} {}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** out) override {
         if(!out)return E_POINTER;*out=nullptr;
+        if(iid==stock_dibr::StreamlineNativeInterface) {
+            ++g_native_unwrap_queries;return inner->QueryInterface(__uuidof(IUnknown),out);
+        }
         if(iid==__uuidof(IUnknown)||iid==__uuidof(ID3D12Object)||iid==__uuidof(ID3D12DeviceChild)||
            iid==__uuidof(ID3D12Pageable)||iid==__uuidof(ID3D12CommandQueue)) {
             *out=static_cast<ID3D12CommandQueue*>(this);AddRef();return S_OK;
@@ -174,7 +178,8 @@ int main() try {
     check(probe_allocator->Reset());check(probe->Reset(probe_allocator.Get(),nullptr));check(probe->Close());
     std::cout<<"STAGE register actual proxy queue\n";
     require(queue_submit_hook.install(q.Get()),"live queue submit hook install failed");
-    require(queue_submit_hook.size()==2,"distinct live queue vtable was not registered");
+    require(g_native_unwrap_queries>0,"documented native-interface discovery was not used");
+    require(queue_submit_hook.size()>=2 && queue_submit_hook.size()<=3,"proxy/native queue vtables were not registered");
     q->ExecuteCommandLists(1,probe_lists);wait(q.Get());
     require(g_submit_callbacks==2 && g_last_submit_queue==q.Get() && g_last_submit_count==1,
         "live queue submit callback was not observed");
@@ -326,7 +331,7 @@ int main() try {
     check(cmd->Close());q->ExecuteCommandLists(1,lists);wait(q.Get());
     require(!capture.acquire(),"late bind on same list validated an earlier capture");
     require(g_alias_callbacks>0,"COM command-list aliases were not tested");
-    require(queue_submit_hook.size()==2,"queue hook registry lost an installed queue");
+    require(queue_submit_hook.size()>=2 && queue_submit_hook.size()<=3,"queue hook registry lost an installed queue");
     std::cout<<"STAGE teardown forwarding\n";
     const auto cached_detour=reinterpret_cast<stock_dibr::QueueSubmitHook::Callback>((*(void***)q.Get())[10]);
     const auto callbacks_before_clear=g_submit_callbacks;

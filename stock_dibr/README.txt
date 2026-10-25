@@ -58,6 +58,8 @@ but zero submitted/consumed captures. Its submission hook covered only the
 temporary setup queue's vtable. R3 also hooks each actual presentation queue
 discovered from the live swapchain and uses the correct original function for
 each distinct slot. It accepts COM interface aliases of the same queue,
+uses NVIDIA's documented Streamline native-interface QueryInterface GUID
+to hook underlying native queues as well as their wrappers,
 observes both outer and native inner queue forwarding layers,
 matches command-list aliases by COM identity, and supports another direct
 scene queue through a producer fence and a presentation-queue GPU wait.

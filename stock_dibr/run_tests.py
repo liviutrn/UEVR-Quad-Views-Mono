@@ -25,7 +25,7 @@ else:
     run([out/'policy-tests'])
     print('Windows WARP tests require Windows; not executed here.',flush=True)
 (out/'test-scope.json').write_text(json.dumps({'production_shader':True,'production_capture_header':True,
-    'queue_submit_hook_distinct_proxy_vtables':sys.platform=='win32',
+    'queue_submit_hook_distinct_proxy_vtables':sys.platform=='win32','streamline_native_interface_discovery':sys.platform=='win32',
     'cross_queue_gpu_wait':sys.platform=='win32','wrong_producer_rejected':sys.platform=='win32',
     'com_list_aliases':sys.platform=='win32','nested_wrapper_native_callback':sys.platform=='win32','observer_reentrancy_guard':sys.platform=='win32','strength_changes_pixels':sys.platform=='win32',
     'late_binding_rejected':sys.platform=='win32','teardown_forwarding':sys.platform=='win32',

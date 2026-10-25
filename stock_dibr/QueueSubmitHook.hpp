@@ -5,8 +5,13 @@
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
+#include <utility>
 
 namespace stock_dibr {
+// NVIDIA Streamline's documented QueryInterface route for third-party
+// overlays to obtain an underlying native interface without linking its SDK.
+inline constexpr GUID StreamlineNativeInterface{
+    0xadec44e2, 0x61f0, 0x45c3, {0xad, 0x9f, 0x1b, 0x37, 0x37, 0x92, 0x84, 0xff}};
 // The temporary setup queue does not establish coverage of live queue
 // interfaces. Each slot has its own original; forwarding metadata outlives
 // hook instances so an already-entered detour can still forward during unhook.
@@ -56,13 +61,7 @@ private:
             state.callback(queue, count, lists);
         }
     }
-public:
-    explicit QueueSubmitHook(Callback fn) : callback{fn} {}
-    QueueSubmitHook(const QueueSubmitHook&) = delete;
-    QueueSubmitHook& operator=(const QueueSubmitHook&) = delete;
-    ~QueueSubmitHook() { clear(); }
-
-    bool install(ID3D12CommandQueue* queue) {
+    bool install_slot(ID3D12CommandQueue* queue) {
         if (!queue) return false;
         auto& state = registry();
         std::unique_lock activity{state.activity};
@@ -85,6 +84,28 @@ public:
         InterlockedExchangePointer(reinterpret_cast<void* volatile*>(slot), reinterpret_cast<void*>(&execute));
         DWORD ignored{}; VirtualProtect(slot, sizeof(void*), protection, &ignored);
         return true;
+    }
+public:
+    explicit QueueSubmitHook(Callback fn) : callback{fn} {}
+    QueueSubmitHook(const QueueSubmitHook&) = delete;
+    QueueSubmitHook& operator=(const QueueSubmitHook&) = delete;
+    ~QueueSubmitHook() { clear(); }
+
+    bool install(ID3D12CommandQueue* queue) {
+        Microsoft::WRL::ComPtr<ID3D12CommandQueue> current{queue};
+        ID3D12CommandQueue* visited[8]{};
+        for (size_t depth = 0; current && depth < 8; ++depth) {
+            for (size_t i = 0; i < depth; ++i) if (visited[i] == current.Get()) return true;
+            visited[depth] = current.Get();
+            if (!install_slot(current.Get())) return false;
+            Microsoft::WRL::ComPtr<IUnknown> native;
+            if (FAILED(current->QueryInterface(StreamlineNativeInterface,
+                reinterpret_cast<void**>(native.GetAddressOf()))) || !native) return true;
+            Microsoft::WRL::ComPtr<ID3D12CommandQueue> native_queue;
+            if (FAILED(native.As(&native_queue))) return true;
+            current = std::move(native_queue);
+        }
+        return queue != nullptr;
     }
     size_t size() const { std::shared_lock lock{registry().activity}; return slots.size(); }
     void clear() {
