@@ -14,6 +14,17 @@ edit(dc,'''if (m_stock_dibr_scope && vr->is_dibr_single_view_requested() && !dib
 edit(dc,'''    if (parameters.spatial_repair) {''','''    if (m_stock_dibr_scope) parameters.depth_uv_scale_bias = m_stock_dibr_depth.sample_uv();
     if (parameters.spatial_repair) {''')
 h='src/mods/vr/d3d12/DIBRPreview.hpp';cpp='src/mods/vr/d3d12/DIBRPreview.cpp'
+edit(cpp,'''DXGI_FORMAT DIBRPreview::depth_srv_format(DXGI_FORMAT format) {
+    switch (format) {''','''DXGI_FORMAT DIBRPreview::depth_srv_format(DXGI_FORMAT format) {
+    switch (format) {
+    case DXGI_FORMAT_R32G8X24_TYPELESS:
+    case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+        return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;''')
+edit(cpp,'''    auto destination_desc = source_desc;
+    // The source may be a two-eye texture array.''','''    auto destination_desc = source_desc;
+    if (destination_desc.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT)
+        destination_desc.Format = DXGI_FORMAT_R32G8X24_TYPELESS;
+    // The source may be a two-eye texture array.''')
 edit(h,'    struct Parameters {','    struct Parameters {\n        std::array<float, 4> depth_uv_scale_bias{};')
 edit(h,'        float padding[21]{};','''        float depth_rect_alignment{};
         float depth_uv_scale_bias[4]{};
