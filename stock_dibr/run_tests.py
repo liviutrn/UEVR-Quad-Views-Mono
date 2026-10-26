@@ -28,6 +28,6 @@ else:
     'queue_submit_hook_distinct_proxy_vtables':sys.platform=='win32','streamline_native_interface_discovery':sys.platform=='win32',
     'cross_queue_gpu_wait':sys.platform=='win32','wrong_producer_rejected':sys.platform=='win32',
     'com_list_aliases':sys.platform=='win32','nested_wrapper_native_callback':sys.platform=='win32','observer_reentrancy_guard':sys.platform=='win32','strength_changes_pixels':sys.platform=='win32',
-    'late_binding_rejected':sys.platform=='win32','teardown_forwarding':sys.platform=='win32',
+    'viewport_producer_rectangle':sys.platform=='win32','strength_full_range_monotonic':sys.platform=='win32','late_binding_rejected':sys.platform=='win32','teardown_forwarding':sys.platform=='win32',
     'immediate_reset_after_submit':sys.platform=='win32','manual_submit_callback':False,
     'windows_warp_executed':sys.platform=='win32','game_tested':False,'headset_tested':False},indent=2))

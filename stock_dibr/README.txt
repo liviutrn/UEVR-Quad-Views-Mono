@@ -30,11 +30,9 @@ Test setup
    increasing while the game renders. Both readings are needed to confirm
    that the one-view path is running.
 
-The CI workflow runs the depth-policy checks, Windows WARP checks, and builds
-the injector package. All 41 unchanged Joey compatibility tests passed in run
-40230813932; the final hook/logging corrections use the production WARP test
-instead of repeating that unchanged suite. These checks do
-not verify STALKER 2 runtime behavior or headset stability. This package has
+The CI workflow runs the depth-policy checks, Windows WARP checks, the full
+original Joey compatibility suite, and builds the injector package. These
+checks do not verify STALKER 2 runtime behavior or headset stability. This package has
 not been verified in-game unless separate runtime testing is recorded.
 
 Revision 2: first headset-test corrections
@@ -80,3 +78,15 @@ publication, reset after submission, and a real pixel change at stereo strength
 1 versus 0. Resource-barrier and viewport observation are still manually
 delivered by this standalone fixture; STALKER 2 itself remains the required
 end-to-end headset test.
+
+Revision 4: independent review corrections
+------------------------------------------
+Publication now selects the exact most recent DSV/viewport binding executed
+before the depth copy on its actual producer queue. A larger binding on an
+unsubmitted list cannot change the sampled rectangle; A -> B -> A bindings
+retain the final A. The Windows GPU test reproduces both cases.
+
+Reprojection strength now scales the mapping being solved. Previously, the
+second solver iteration could undo stereo at strength 2. The production
+shader is checked at strengths 0, 0.5, 1, 1.5, and 2 against exact plane
+displacement, with matching strength in the spatial-repair residual.

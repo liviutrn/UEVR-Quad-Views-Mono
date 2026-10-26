@@ -146,13 +146,15 @@ class DepthCapture final : public D3D12DepthStencilObserver {
             const auto& viewport = state.viewports[i];
             if (!main_viewport_shape(viewport)) continue;
             bool exists{};
-            for (UINT j = 0; j < state.proof_count; ++j) {
-                const auto& proof = state.proofs[j];
-                if (proof.resource == state.bound_dsv_resource && proof.handle == state.bound_dsv_handle &&
+            // Collapse consecutive equal bindings only. A -> B -> A must
+            // retain the last A so publication sees the current rectangle.
+            for (UINT j = state.proof_count; j > 0; --j) {
+                const auto& proof = state.proofs[j - 1];
+                if (proof.resource != state.bound_dsv_resource) continue;
+                exists = proof.handle == state.bound_dsv_handle &&
                     proof.viewport.TopLeftX == viewport.TopLeftX && proof.viewport.TopLeftY == viewport.TopLeftY &&
-                    proof.viewport.Width == viewport.Width && proof.viewport.Height == viewport.Height) {
-                    exists = true; break;
-                }
+                    proof.viewport.Width == viewport.Width && proof.viewport.Height == viewport.Height;
+                break;
             }
             if (exists) continue;
             if (state.proof_count == BindingProofCapacity) {
@@ -179,16 +181,24 @@ class DepthCapture final : public D3D12DepthStencilObserver {
             if (proof.epoch == epoch) consider(proof.resource, proof.viewport);
         return best > 0;
     }
-    bool has_executed_main_binding(ID3D12Resource* resource, const D3D12_RESOURCE_DESC& depth,
-        Layout kind, IUnknown* producer, IUnknown* capture_list, uint64_t capture_event, uint64_t batch, UINT list_index) const {
+    bool select_executed_main_binding(ID3D12Resource* resource, const D3D12_RESOURCE_DESC& depth,
+        IUnknown* producer, IUnknown* capture_list, uint64_t capture_event, uint64_t batch, UINT list_index,
+        D3D12_VIEWPORT& selected) const {
+        const ExecutedProof* latest{};
         for (const auto& proof : executed_proofs) {
             if (proof.epoch != epoch || proof.resource != resource || proof.queue_identity.Get() != producer ||
                 proof.batch > batch || (proof.batch == batch && proof.list_index > list_index)) continue;
             if (proof.batch == batch && proof.list_index == list_index &&
                 proof.list_identity.Get() == capture_list && proof.event > capture_event) continue;
-            if (viewport_matches_source(proof.viewport, depth, kind)) return true;
+            if (!viewport_matches_source(proof.viewport, depth, Layout::Eye)) continue;
+            if (!latest || proof.batch > latest->batch ||
+                (proof.batch == latest->batch && proof.list_index > latest->list_index) ||
+                (proof.batch == latest->batch && proof.list_index == latest->list_index && proof.event > latest->event))
+                latest = &proof;
         }
-        return false;
+        if (!latest) return false;
+        selected = latest->viewport;
+        return true;
     }
     bool retire_ready(const Slot& s, ID3D12Fence* f) const {
         if (s.quarantined || s.pending || s.leased) return false;
@@ -495,8 +505,15 @@ public:
                 if (submitted_lists[capture_index] == s.list.Get() ||
                     object_identity(submitted_lists[capture_index]).Get() == s.list_identity.Get()) break;
             const auto desc = s.source->GetDesc();
-            const bool provenance_ok = enabled && valid_producer && has_executed_main_binding(
-                s.source.Get(), desc, s.layout, producer_identity.Get(), s.list_identity.Get(), s.capture_event, batch, capture_index);
+            // Recording-time metadata only establishes whether a copy is worth
+            // recording. Its viewport may belong to an unsubmitted list. Use
+            // the actual ordered producer proof for the published sample rect.
+            const bool provenance_ok = enabled && valid_producer && select_executed_main_binding(
+                s.source.Get(), desc, producer_identity.Get(), s.list_identity.Get(), s.capture_event,
+                batch, capture_index, s.viewport);
+            if (provenance_ok) s.layout = stock_dibr::layout(
+                static_cast<uint64_t>(std::lround(s.viewport.Width)),
+                static_cast<uint32_t>(std::lround(s.viewport.Height)), width, height);
             if (current_queue) {
                 if (!found) {
                     if (FAILED(q->Signal(fence.Get(), ++signal))) { enabled = false; last = "depth submission signal failed"; return; }

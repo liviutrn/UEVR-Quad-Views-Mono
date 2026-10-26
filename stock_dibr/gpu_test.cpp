@@ -191,9 +191,19 @@ int main() try {
     ComPtr<ID3D12DescriptorHeap> dsv_heap;check(dev->CreateDescriptorHeap(&dsv_heap_desc,IID_PPV_ARGS(&dsv_heap)));
     auto dsv_handle=dsv_heap->GetCPUDescriptorHandleForHeapStart();D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc{};dsv_desc.Format=DXGI_FORMAT_D32_FLOAT_S8X24_UINT;dsv_desc.ViewDimension=D3D12_DSV_DIMENSION_TEXTURE2D;
     dev->CreateDepthStencilView(depth.Get(),&dsv_desc,dsv_handle);capture.on_depth_stencil_view_created(depth.Get(),&dsv_desc,dsv_handle);
+    // A larger valid viewport for the same allocation exists only on an
+    // unsubmitted list. It must not change the submitted capture's sample UV.
+    ComPtr<ID3D12CommandAllocator> decoy_allocator;check(dev->CreateCommandAllocator(qd.Type,IID_PPV_ARGS(&decoy_allocator)));
+    ComPtr<ID3D12GraphicsCommandList> decoy;check(dev->CreateCommandList(0,qd.Type,decoy_allocator.Get(),nullptr,IID_PPV_ARGS(&decoy)));
+    D3D12_VIEWPORT decoy_vp{0,0,24,24,0,1};decoy->RSSetViewports(1,&decoy_vp);capture.on_viewports(decoy.Get(),1,&decoy_vp);
+    decoy->OMSetRenderTargets(0,nullptr,FALSE,&dsv_handle);capture.on_render_targets(decoy.Get(),0,dsv_handle);check(decoy->Close());
     auto main_binding=[&](){
         D3D12_VIEWPORT vp{0,0,16,16,0,1};cmd->RSSetViewports(1,&vp);capture.on_viewports(cmd.Get(),1,&vp);
         cmd->OMSetRenderTargets(0,nullptr,FALSE,&dsv_handle);capture.on_render_targets(cmd.Get(),0,dsv_handle);
+        // A -> B -> A must retain the final A, not deduplicate it against
+        // the earlier A and incorrectly publish the intervening rectangle.
+        D3D12_VIEWPORT intermediate_vp{0,0,24,24,0,1};cmd->RSSetViewports(1,&intermediate_vp);capture.on_viewports(cmd.Get(),1,&intermediate_vp);
+        cmd->RSSetViewports(1,&vp);capture.on_viewports(cmd.Get(),1,&vp);
         // Final barriers are often recorded after unbinding the render pass.
         cmd->OMSetRenderTargets(0,nullptr,FALSE,nullptr);capture.on_render_targets(cmd.Get(),0,{});
     };
@@ -223,7 +233,7 @@ int main() try {
     std::cout<<"STAGE acquire after reset with GPU handoff\n";
     auto snapshot=capture.acquire();require(snapshot!=nullptr,"alternate submitted depth was lost on immediate list reset");
     require(capture.summary().find("crossQueueUsed=1")!=std::string::npos,"cross-queue wait path not exercised");
-    const auto depth_uv=capture.sample_uv();require(std::abs(depth_uv[0]-1.f/3.f)<.0001f && std::abs(depth_uv[1]-2.f/3.f)<.0001f,"padded allocation viewport mapping incorrect");
+    const auto depth_uv=capture.sample_uv();require(std::abs(depth_uv[0]-1.f/3.f)<.0001f && std::abs(depth_uv[1]-2.f/3.f)<.0001f,"published viewport borrowed a larger unsubmitted binding instead of the actual producer rectangle");
     // No CPU wait on other: the production Wait is the ordering dependency
     // that makes the next compute dispatch see this queue's depth pixels.
 
@@ -262,19 +272,27 @@ int main() try {
     require(pixel(56,16)[0]>pixel(24,16)[0]+15,"packed left depth not used on right side of image");readback->Unmap(0,nullptr);
     require(!capture.acquire(),"stale depth reused in next interval");
 
-    std::cout<<"STAGE strength control pixel effect\n";
-    // The UI's physical stereo-strength control must change actual pixels.
-    check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
-    constants.true_reprojection_strength=0;check(cb->Map(0,nullptr,&mapped));std::memcpy(mapped,&constants,256);cb->Unmap(0,nullptr);
-    b=barrier(output.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);cmd->ResourceBarrier(1,&b);
-    cmd->SetDescriptorHeaps(1,heaps);cmd->SetComputeRootSignature(rs.Get());cmd->SetPipelineState(pso.Get());
-    gpu=descriptors->GetGPUDescriptorHandleForHeapStart();cmd->SetComputeRootDescriptorTable(0,gpu);gpu.ptr+=stride*3;cmd->SetComputeRootDescriptorTable(1,gpu);cmd->SetComputeRootConstantBufferView(2,cb->GetGPUVirtualAddress());cmd->Dispatch(8,4,1);
-    b=barrier(output.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);cmd->ResourceBarrier(1,&b);
-    from.pResource=output.Get();to.pResource=readback.Get();to.PlacedFootprint=footprint;cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
-    check(cmd->Close());q->ExecuteCommandLists(1,lists);wait(q.Get());
-    check(readback->Map(0,nullptr,&mapped));unsigned zero_strength_different{};
-    for(UINT y=0;y<32;++y)for(UINT x=0;x<32;++x)zero_strength_different+=pixel(x,y)[0]!=pixel(x+32,y)[0];
-    readback->Unmap(0,nullptr);require(zero_strength_different==0,"Reprojection Strength 0 did not change the production output");
+    std::cout<<"STAGE monotonic strength control pixel effect\n";
+    // A constant-depth plane and linear red ramp give an exact displacement
+    // oracle away from the image edge: strength 1 moves four source pixels.
+    int previous_red=-1;
+    for (const float strength : {0.f, .5f, 1.f, 1.5f, 2.f}) {
+        check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
+        constants.true_reprojection_strength=strength;check(cb->Map(0,nullptr,&mapped));std::memcpy(mapped,&constants,256);cb->Unmap(0,nullptr);
+        b=barrier(output.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);cmd->ResourceBarrier(1,&b);
+        cmd->SetDescriptorHeaps(1,heaps);cmd->SetComputeRootSignature(rs.Get());cmd->SetPipelineState(pso.Get());
+        gpu=descriptors->GetGPUDescriptorHandleForHeapStart();cmd->SetComputeRootDescriptorTable(0,gpu);gpu.ptr+=stride*3;cmd->SetComputeRootDescriptorTable(1,gpu);cmd->SetComputeRootConstantBufferView(2,cb->GetGPUVirtualAddress());cmd->Dispatch(8,4,1);
+        b=barrier(output.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);cmd->ResourceBarrier(1,&b);
+        from.pResource=output.Get();to.pResource=readback.Get();to.PlacedFootprint=footprint;cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+        check(cmd->Close());q->ExecuteCommandLists(1,lists);wait(q.Get());
+        check(readback->Map(0,nullptr,&mapped));
+        const int red=pixel(40,16)[0];
+        require(std::abs(red-int(64+32*strength))<=1,"strength does not scale known plane displacement linearly");
+        require(red>previous_red,"strength above 1 reverses or collapses stereo");previous_red=red;
+        if(strength==0) for(UINT y=0;y<32;++y)for(UINT x=0;x<32;++x)
+            require(pixel(x,y)[0]==pixel(x+32,y)[0],"strength zero is not neutral");
+        readback->Unmap(0,nullptr);
+    }
 
 
     std::cout<<"STAGE next-frame depth and stale rejection\n";
@@ -344,5 +362,5 @@ int main() try {
     require(g_proxy_execute_calls==original_calls_before_clear+1,"cached detour dropped real submission after clear");
     require(g_submit_callbacks==callbacks_before_clear,"retired hook still invoked its observer");
     ComPtr<ID3D12InfoQueue> info;if(SUCCEEDED(dev.As(&info)))for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size{};info->GetMessage(i,nullptr,&size);std::vector<char> data(size);auto* message=reinterpret_cast<D3D12_MESSAGE*>(data.data());check(info->GetMessage(i,message,&size));if(message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)throw std::runtime_error(message->pDescription);}
-    std::cout<<"PASS: actual queue-submit hook covers distinct dummy/proxy vtables and cached native dispatch, observer reentrancy guard, canonical command-list aliases, native inner callback under opaque outer wrappers, exactly-once publication, alternate direct-queue GPU wait, wrong-producer/late-bind rejection, teardown forwarding, automatic captured-list submission, immediate reset preservation, actual live capture header + production shader on WARP; actual UE5 format19 D32+S8 depth plane, padded allocation with DLSS-sized viewport, distinct eyes, strength1-vs0 pixel change, opaque alpha, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
+    std::cout<<"PASS: actual queue-submit hook covers distinct dummy/proxy vtables and cached native dispatch, observer reentrancy guard, canonical command-list aliases, native inner callback under opaque outer wrappers, exactly-once publication, alternate direct-queue GPU wait, wrong-producer/late-bind rejection, teardown forwarding, automatic captured-list submission, immediate reset preservation, actual live capture header + production shader on WARP; actual UE5 format19 D32+S8 depth plane, padded allocation with DLSS-sized viewport, distinct eyes, strength0-through2 monotonic known-plane displacement, opaque alpha, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
 } catch(const std::exception& e) {std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}
