@@ -21,7 +21,6 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             uintptr_t world_id{};
             std::optional<sdk::object_liveness::Identity> world_identity{};
             uintptr_t pawn_id{};
-            std::optional<sdk::object_liveness::Identity> pawn_identity{};
             sdk::UObject* collection{};
             std::optional<sdk::object_liveness::Identity> collection_identity{};
             sdk::UObject* library{};
@@ -112,21 +111,13 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
                 auto* pawn = controller != nullptr
                     ? controller->get_acknowledged_pawn() : nullptr;
                 const uintptr_t current_pawn_id = reinterpret_cast<uintptr_t>(pawn);
-                const auto observed_pawn = pawn != nullptr
-                    ? sdk::observe_uobject(static_cast<sdk::UObjectBase*>(pawn))
-                    : std::nullopt;
-                if (pawn == nullptr || (observed_pawn &&
-                    sdk::is_current_object(observed_pawn->identity))) {
-                    const bool pawn_replaced =
-                        fg.active && (fg.pawn_id != current_pawn_id ||
-                         (fg.pawn_identity &&
-                          !sdk::is_current_object(*fg.pawn_identity)));
-                    if (pawn_replaced)
-                        invalidate_bindings("player pawn lifecycle changed during save reload");
-                    fg.pawn_id = current_pawn_id;
-                    fg.pawn_identity = observed_pawn
-                        ? std::optional{observed_pawn->identity} : std::nullopt;
-                }
+                // Only the pawn pointer is compared; APawn is forward-
+                // declared here, so no unsafe UObject cast or dereference.
+                const bool pawn_replaced =
+                    fg.active && fg.pawn_id != current_pawn_id;
+                if (pawn_replaced)
+                    invalidate_bindings("player pawn lifecycle changed during save reload");
+                fg.pawn_id = current_pawn_id;
             }
 
             // Revalidate cached UObject identity each tick: cached pointers
