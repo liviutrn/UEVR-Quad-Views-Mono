@@ -12,7 +12,7 @@ b=Path(sys.argv[1])
 h=(b/"src/mods/VR.hpp").read_text(encoding="utf-8-sig")
 c=(b/"src/mods/VR.cpp").read_text(encoding="utf-8-sig")
 f=(b/"src/mods/vr/FFakeStereoRenderingHook.cpp").read_text(encoding="utf-8-sig")
-xr=(b/"src/mods/runtimes/OpenXR.cpp").read_text(encoding="utf-8-sig")
+xr=(b/"src/mods/vr/runtimes/OpenXR.cpp").read_text(encoding="utf-8-sig")
 oh=(b/"src/mods/vr/OverlayComponent.hpp").read_text(encoding="utf-8-sig")
 for name in ("DuoViewCropWidth","DuoViewCropHeight","DuoViewPeripheralScale",
              "DuoViewFovealDensity","DuoViewFeather","DuoViewGlamaryeFoveaStrength",
@@ -27,8 +27,8 @@ assert "eye_offset * world_scale" in f
 assert "UI_MonoHudConvergence" in oh
 assert "UI_MonoHudOpticalDistance" in oh
 assert "mono_hud_optical" in (b/"src/mods/vr/OverlayComponent.cpp").read_text(encoding="utf-8-sig")
-assert "OpenXR_MonoEyeAlignmentEnabled" in (b/"src/mods/runtimes/OpenXR.hpp").read_text(encoding="utf-8-sig")
-assert "OpenXR_MonoEyeAlignmentPercent" in (b/"src/mods/runtimes/OpenXR.hpp").read_text(encoding="utf-8-sig")
+assert "OpenXR_MonoEyeAlignmentEnabled" in (b/"src/mods/vr/runtimes/OpenXR.hpp").read_text(encoding="utf-8-sig")
+assert "OpenXR_MonoEyeAlignmentPercent" in (b/"src/mods/vr/runtimes/OpenXR.hpp").read_text(encoding="utf-8-sig")
 assert "Restored Mono Eye Alignment after runtime reset" in h
 assert "m_foreground_mpc_runtime_epoch.fetch_add(1" in h
 # A world-load event should NOT deactivate or reset an active user setting.
