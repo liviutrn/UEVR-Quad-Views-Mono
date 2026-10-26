@@ -81,6 +81,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 source anchors did not match original Joey' }
           python workspace/duoview/joey_stage1/apply_foreground_mpc_minimal.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Minimal STALKER 2 foreground MPC patch failed' }
+          python workspace/duoview/joey_stage1/apply_save_reload_duoview_recovery.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Save reload one-time quarantine recovery patch failed' }
           python workspace/duoview/joey_stage1/apply_mono_hud_convergence.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Opt-in single-quad Mono HUD convergence patch failed' }
           python workspace/duoview/joey_stage1/apply_mono_alignment_build48.py backend
@@ -95,6 +97,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling settings/keybind/pose contract failed' }
           python workspace/duoview/joey_stage1/test_foreground_mpc_rebind.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Foreground MPC load/reset lifecycle regression failed after epoch and XYZ integration' }
+          python workspace/duoview/joey_stage1/test_save_reload_all_features.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Save reload multi-feature continuity regression failed' }
           python workspace/duoview/joey_stage1/test_runtime_eye_alignment_persistence_build49.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Build49 Mono eye alignment persistence regression failed' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
@@ -206,6 +210,7 @@ jobs:
           DXBC shaders are precompiled during CI; per-XR-image PSOs/textures are prewarmed on swapchain setup.
           Build45 preserved: STALKER 2 ID6 uses cached, conditional MPC_FOV IsFOVEnabled=0 and DepthScale=1; restores original values on exit.
           Build48 repairs the HUD Optical Convergence toggle: default OFF, effective in Mono ID5 and DuoView ID6 for both OpenXR game Quad and Cylinder layers (view-following ON or OFF, per-eye UI composition ON or OFF). HUD layer optical distance range 2..200m preserves apparent size and offset. If HUD is baked into the game scene, quad-only HUD control does not affect that embedded content.
+          Save reload recovery: manual save, quicksave, and autosave reloads are treated as the same world/pawn lifecycle. A quarantined ID6 renderer is rearmed only once after a detected new scene and at least 3 stable playable ticks, with its pending source/pose cache retired. No user preferences or keybinds are changed. Recovery is bounded; persistent hard faults remain quarantined and logged. In-game verification still required.
           Preserved exactly from successful XYZ head-scaling branch: independent X/Y/Z gains, opt-in enable, persistent config, toggle hotkey and hold-to-bypass hotkey. Only the HMD head translation lane is scaled; world scale, IPD, eye numbering, GPU and shaders remain unchanged.
           Foreground reload/reset fix (2026-10-26): preserves the Build45 two-scalar MPC_FOV fix, but invalidates stale MPC/reflection bindings after failed reads/writes or Mono/OpenXR generation changes. It reacquires on the next engine tick and readback-verifies writes; one-time explicit reassertion after rebind. GPU compositor, fovea, HUD, eye alignment, and rendering mode unchanged. In-headset save/load and Reset Runtime verification still required.
           Build49: preserves the live Mono Eye Alignment enabled toggle and exact percentage (for example -1.25%) when selecting Reset Runtime; restores before returning from OpenXR reinitialization, including repeated resets. Adds reset-log confirmation. No rendering, HUD, shader, gaze, frame timing or SteamVR layer modifications.
