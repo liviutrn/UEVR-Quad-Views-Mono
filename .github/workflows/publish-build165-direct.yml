@@ -1,0 +1,63 @@
+name: Publish verified Build165 rollback ZIP as direct GitHub release
+on:
+  push:
+    branches:
+      - support/build165-direct-release-20261027
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish-rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Retrieve already-built Build165 artifact
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 40107251464
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-165
+          path: artifacts
+      - name: Verify original ZIP integrity and prepare fixed-named asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          find artifacts -maxdepth 2 -type f -print
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, zipfile, shutil
+          root=Path("artifacts")
+          archives=list(root.glob("*.zip"))
+          assert len(archives)==1, archives
+          z=archives[0]
+          checks=list(root.glob("*.sha256"))
+          assert len(checks)==1,checks
+          actual=hashlib.sha256(z.read_bytes()).hexdigest()
+          expected=checks[0].read_text().strip().split()[0].lower()
+          assert actual==expected,(actual,expected)
+          with zipfile.ZipFile(z) as src:
+              assert src.testzip() is None
+              for n in ("UEVRBackend.dll","UEVRInjector.exe","LuaVR.dll","openxr_loader.dll"):
+                  assert n in src.namelist(),n
+          dst=Path("UEVR-v186.1-Build165-XYZ-Verified.zip")
+          shutil.copyfile(z,dst)
+          Path(str(dst)+".sha256").write_text(actual+"  "+dst.name+"\n")
+          print("Verified Build165 ZIP:",dst,dst.stat().st_size,actual)
+          PY
+      - name: Publish rollback/test prerelease with direct anonymous asset links
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="v186.1-build165-xyz-rollback"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" UEVR-v186.1-Build165-XYZ-Verified.zip UEVR-v186.1-Build165-XYZ-Verified.zip.sha256 --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" UEVR-v186.1-Build165-XYZ-Verified.zip UEVR-v186.1-Build165-XYZ-Verified.zip.sha256 \
+              --repo "$GITHUB_REPOSITORY" --target 7a5cfd17084e82fb6c04908dd4915e8bd1eee01c \
+              --title "Build165 XYZ Head Scaling — rollback / comparison" \
+              --notes "Exact previously compiled Build165 Windows package, verified against original Actions artifact and SHA256. Use for A/B comparison against experimental Build166 cursor overlay. NOT a cursor fix; headset behavior remains unverified." \
+              --prerelease
+          fi
