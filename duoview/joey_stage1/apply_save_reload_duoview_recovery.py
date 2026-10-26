@@ -25,7 +25,6 @@ block=r'''    // SAVE RELOAD RECOVERY. A transient compositor fault during quick
             uintptr_t world_id{};
             uintptr_t pawn_id{};
             std::optional<sdk::object_liveness::Identity> world_identity{};
-            std::optional<sdk::object_liveness::Identity> pawn_identity{};
             std::chrono::steady_clock::time_point last_tick{};
             std::chrono::steady_clock::time_point retry_until{};
             uint32_t stable_ticks{};
@@ -46,14 +45,10 @@ block=r'''    // SAVE RELOAD RECOVERY. A transient compositor fault during quick
                     controller->get_acknowledged_pawn() : nullptr;
                 const auto observed_world = sdk::observe_uobject(
                     static_cast<sdk::UObjectBase*>(world));
-                const auto observed_pawn = pawn != nullptr ?
-                    sdk::observe_uobject(static_cast<sdk::UObjectBase*>(pawn)) :
-                    std::nullopt;
+                // APawn is only forward-declared in this source unit.
+                // We compare its opaque pointer identity without dereference.
                 if (observed_world &&
-                    sdk::is_current_object(observed_world->identity) &&
-                    (pawn == nullptr ||
-                     (observed_pawn &&
-                      sdk::is_current_object(observed_pawn->identity)))) {
+                    sdk::is_current_object(observed_world->identity)) {
                     const auto world_id = reinterpret_cast<uintptr_t>(world);
                     const auto pawn_id = reinterpret_cast<uintptr_t>(pawn);
                     const bool world_changed = reload.initialized &&
@@ -61,9 +56,7 @@ block=r'''    // SAVE RELOAD RECOVERY. A transient compositor fault during quick
                          (reload.world_identity &&
                           !sdk::is_current_object(*reload.world_identity)));
                     const bool pawn_changed = reload.initialized &&
-                        (reload.pawn_id != pawn_id ||
-                         (reload.pawn_identity &&
-                          !sdk::is_current_object(*reload.pawn_identity)));
+                        reload.pawn_id != pawn_id;
                     const bool resumed_after_loading = reload.initialized &&
                         reload.last_tick.time_since_epoch().count() != 0 &&
                         now - reload.last_tick > std::chrono::seconds(1);
@@ -79,8 +72,6 @@ block=r'''    // SAVE RELOAD RECOVERY. A transient compositor fault during quick
                     reload.world_id = world_id;
                     reload.pawn_id = pawn_id;
                     reload.world_identity = observed_world->identity;
-                    reload.pawn_identity = observed_pawn ?
-                        std::optional{observed_pawn->identity} : std::nullopt;
                     reload.initialized = true;
                     reload.last_tick = now;
                     // Three resumed playable game ticks, not transient load
