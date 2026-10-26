@@ -26,6 +26,10 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             std::optional<sdk::object_liveness::Identity> library_identity{};
             sdk::UFunction* getter{};
             sdk::UFunction* setter{};
+            std::optional<sdk::object_liveness::Identity> getter_identity{};
+            std::optional<sdk::object_liveness::Identity> setter_identity{};
+            uint64_t mono_generation{};
+            bool needs_recovery_log{};
             float original_enabled{};
             float original_depth{};
             bool active{};
@@ -47,12 +51,38 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             }
             if (!requested && !fg.active) return;
 
+            // Do not discard original scalar values for a still-live UWorld.
+            // A savegame reload may replace the material collection instance
+            // while keeping the collection UObject and/or UWorld alive.
+            const auto invalidate_bindings = [&](const char* reason) {
+                fg.collection = nullptr;
+                fg.collection_identity.reset();
+                fg.library = nullptr;
+                fg.library_identity.reset();
+                fg.getter = nullptr;
+                fg.setter = nullptr;
+                fg.getter_identity.reset();
+                fg.setter_identity.reset();
+                fg.needs_recovery_log = true;
+                SPDLOG_WARNING_EVERY_N_SEC(5,
+                    "[DuoView][Foreground] MPC cache invalidated: {}", reason);
+            };
+
+            // OpenXR Reset Runtime can keep the same UWorld and MPC asset.
+            // Rebind even in that case; never assume the old runtime's cached
+            // reflection targets or parameter instance remain usable.
+            const auto current_generation = mono_generation();
+            if (fg.active && fg.mono_generation != current_generation) {
+                invalidate_bindings("Mono/OpenXR generation changed");
+                fg.mono_generation = current_generation;
+            }
+
             // Revalidate cached UObject identity each tick: cached pointers
             // must never be used after GC, including an in-world asset reload.
             if (fg.collection &&
                 (!fg.collection_identity ||
                  !sdk::is_current_object(*fg.collection_identity))) {
-                fg = {};
+                invalidate_bindings("MPC_FOV UObject identity changed");
             }
             if (!requested && !fg.active) return;
             if (!fg.collection) {
@@ -68,7 +98,11 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
                         unique_collection = object;
                     }
                 }
-                if (!unique_collection) return;
+                if (!unique_collection) {
+                    SPDLOG_WARNING_EVERY_N_SEC(5,
+                        "[DuoView][Foreground] MPC_FOV missing after load/reset; retrying");
+                    return;
+                }
                 const auto observed_world = sdk::observe_uobject(
                     static_cast<sdk::UObjectBase*>(world));
                 const auto observed_collection = sdk::observe_uobject(
@@ -85,20 +119,37 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             // Reflection method lookups are also cached per activation;
             // only cheap UObject identity checks remain on the fast path.
             if (!fg.library || !fg.library_identity ||
-                !sdk::is_current_object(*fg.library_identity)) {
+                !sdk::is_current_object(*fg.library_identity) ||
+                !fg.getter || !fg.getter_identity ||
+                !sdk::is_current_object(*fg.getter_identity) ||
+                !fg.setter || !fg.setter_identity ||
+                !sdk::is_current_object(*fg.setter_identity)) {
                 auto* klass = sdk::find_uobject<sdk::UClass>(
                     L"Class /Script/Engine.KismetMaterialLibrary");
                 auto* library = klass != nullptr ? klass->get_class_default_object() : nullptr;
                 auto* getter = klass != nullptr ? klass->find_function(L"GetScalarParameterValue") : nullptr;
                 auto* setter = klass != nullptr ? klass->find_function(L"SetScalarParameterValue") : nullptr;
-                if (!library || !getter || !setter) return;
+                if (!library || !getter || !setter) {
+                    SPDLOG_WARNING_EVERY_N_SEC(5,
+                        "[DuoView][Foreground] MPC reflection unavailable; retrying");
+                    return;
+                }
                 const auto observed = sdk::observe_uobject(
                     static_cast<sdk::UObjectBase*>(library));
-                if (!observed || !sdk::is_current_object(observed->identity)) return;
+                const auto observed_getter = sdk::observe_uobject(
+                    static_cast<sdk::UObjectBase*>(getter));
+                const auto observed_setter = sdk::observe_uobject(
+                    static_cast<sdk::UObjectBase*>(setter));
+                if (!observed || !observed_getter || !observed_setter ||
+                    !sdk::is_current_object(observed->identity) ||
+                    !sdk::is_current_object(observed_getter->identity) ||
+                    !sdk::is_current_object(observed_setter->identity)) return;
                 fg.library = library;
                 fg.library_identity = observed->identity;
                 fg.getter = getter;
                 fg.setter = setter;
+                fg.getter_identity = observed_getter->identity;
+                fg.setter_identity = observed_setter->identity;
             }
 
             const auto read = [&](std::wstring_view parameter, float& value) {
@@ -121,12 +172,16 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
 
             float current_enabled{}, current_depth{};
             if (!read(L"IsFOVEnabled", current_enabled) ||
-                !read(L"DepthScale", current_depth)) return;
+                !read(L"DepthScale", current_depth)) {
+                invalidate_bindings("MPC read failed; stale world/instance or reflection");
+                return;
+            }
 
             if (requested && !fg.active) {
                 // Preserve the live baseline for restoration on mode exit.
                 fg.original_enabled = current_enabled;
                 fg.original_depth = current_depth;
+                fg.mono_generation = current_generation;
                 fg.active = true;
                 SPDLOG_INFO("[DuoView][Foreground] MPC_FOV activated; cached asset; "
                             "conditional updates only (original IsFOVEnabled={}, DepthScale={})",
@@ -144,9 +199,31 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             const bool depth_ok = std::abs(current_depth - wanted_depth) <= epsilon ||
                                   write(L"DepthScale", wanted_depth);
             if (!enabled_ok || !depth_ok) {
-                SPDLOG_WARNING_EVERY_N_SEC(5,
-                    "[DuoView][Foreground] MPC_FOV reconciliation failed; preserving baseline");
+                invalidate_bindings("MPC setter failed; retrying after reacquisition");
                 return;
+            }
+
+            // SetScalarParameterValue invocation succeeding is not proof the
+            // replacement world's collection instance accepted the values.
+            // Verify only after a write to avoid extra per-frame RPC overhead.
+            const bool attempted_write =
+                std::abs(current_enabled - wanted_enabled) > epsilon ||
+                std::abs(current_depth - wanted_depth) > epsilon;
+            if (attempted_write) {
+                float confirmed_enabled{}, confirmed_depth{};
+                if (!read(L"IsFOVEnabled", confirmed_enabled) ||
+                    !read(L"DepthScale", confirmed_depth) ||
+                    std::abs(confirmed_enabled - wanted_enabled) > epsilon ||
+                    std::abs(confirmed_depth - wanted_depth) > epsilon) {
+                    invalidate_bindings("MPC write did not survive readback");
+                    return;
+                }
+            }
+            if (fg.needs_recovery_log) {
+                SPDLOG_INFO("[DuoView][Foreground] MPC_FOV rebound successfully; world={}, "
+                            "generation={}, IsFOVEnabled={}, DepthScale={}",
+                            world_id, current_generation, wanted_enabled, wanted_depth);
+                fg.needs_recovery_log = false;
             }
             if (!requested) {
                 fg = {};
