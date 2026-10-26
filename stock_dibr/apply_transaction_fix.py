@@ -394,3 +394,45 @@ edit(component_cpp,
 """)
 
 print("Applied transactional DIBR preparation, checked submission, retirement, and alpha-consumer fixes")
+
+# The packed presentation texture is read after synthesis by the spectator and
+# runtime copy paths. Extend the slot's retirement marker at every function
+# exit, after those downstream consumers have been enqueued on the same queue.
+edit(component_cpp,
+    """    if (m_stock_dibr_scope) m_stock_dibr_depth.finish_frame();
+
+    if (dibr_preview_succeeded) {""",
+    """    if (m_stock_dibr_scope) m_stock_dibr_depth.finish_frame();
+
+    utility::ScopeGuard dibr_consumer_retirement{[&]() {
+        if (!dibr_preview_succeeded || m_dibr_active_present_tex == nullptr) return;
+        for (auto& slot : m_dibr_slots) {
+            if (&slot.present_tex != m_dibr_active_present_tex) continue;
+            if (!slot.commands.extend_submission_retirement()) {
+                // The submitted consumers remain owned by this slot until a
+                // later recovery fence proves retirement. Re-warm single view.
+                note_dibr_single_view_preview_result(false, nullptr);
+            }
+            break;
+        }
+    }};
+
+    if (dibr_preview_succeeded) {""")
+print("Applied presentation-consumer tail retirement on normal and early frame exits")
+
+# on_reset destroys the shared SpriteBatch/GraphicsMemory owners immediately
+# after reset_dibr_preview. Preserve them if a failed tail signal left any
+# submitted slot without a retirement proof.
+edit(component_cpp,
+    """    m_backbuffer_batch.reset();
+    m_game_batch.reset();
+    m_sw_zero_company_scene_conversion_batch.reset();""",
+    """    m_backbuffer_batch.reset();
+    if (std::any_of(m_dibr_slots.begin(), m_dibr_slots.end(), [](auto& slot) {
+        return !slot.commands.references_retired();
+    })) {
+        d3d12::dibr_transaction::retain_untracked_unique(m_game_batch);
+        d3d12::dibr_transaction::retain_untracked_unique(m_graphics_memory);
+    }
+    m_game_batch.reset();
+    m_sw_zero_company_scene_conversion_batch.reset();""")

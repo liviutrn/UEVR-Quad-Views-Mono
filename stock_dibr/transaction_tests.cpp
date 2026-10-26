@@ -235,6 +235,64 @@ void test_discard_open_recording(ID3D12Device* device) {
     check(list->Close(), "Close list created by discard recovery");
 }
 
+void test_tail_retirement_behind_delayed_consumer(ID3D12Device* device) {
+    D3D12_COMMAND_QUEUE_DESC queue_desc{};
+    queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    ComPtr<ID3D12CommandQueue> queue{};
+    check(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue)), "Create tail test queue");
+
+    ComPtr<ID3D12Fence> frame_fence{};
+    ComPtr<ID3D12Fence> consumer_gate{};
+    check(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&frame_fence)), "Create tail frame fence");
+    check(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&consumer_gate)), "Create delayed consumer gate");
+
+    // Complete the producer fence first and leave its auto-reset notification
+    // signaled. The tail helper must clear that old notification and poll its
+    // new value while a downstream consumer remains behind the GPU-side wait.
+    check(queue->Signal(frame_fence.Get(), 1), "Signal producer fence");
+    wait_for_fence(frame_fence.Get(), 1);
+    HANDLE event_handle = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    require(event_handle != nullptr, "CreateEventW returned null for tail test");
+    check(frame_fence->SetEventOnCompletion(1, event_handle), "Arm producer event");
+    require(WaitForSingleObject(event_handle, 0) == WAIT_OBJECT_0, "producer event was not signaled");
+
+    ComPtr<ID3D12Resource> upload{};
+    ComPtr<ID3D12Resource> readback{};
+    check(create_buffer(device, 512, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ, &upload),
+        "Create delayed consumer upload");
+    check(create_buffer(device, 512, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, &readback),
+        "Create delayed consumer readback");
+    fill_upload(upload.Get(), 0x6B);
+    auto consumer = record_copy(device, upload.Get(), readback.Get(), 512);
+    check(consumer.list->Close(), "Close delayed consumer list");
+
+    check(queue->Wait(consumer_gate.Get(), 1), "Queue delayed consumer gate wait");
+    ID3D12CommandList* const lists[] = {consumer.list.Get()};
+    queue->ExecuteCommandLists(1, lists);
+
+    OutputWriteState tail_output{};
+    require(tail_output.begin_after_preparation(true), "tail output transaction did not begin");
+    const auto tail_result = d3d12::dibr_transaction::extend_queue_retirement(
+        [&] { return ResetEvent(event_handle) != FALSE; },
+        [&] { return queue->Signal(frame_fence.Get(), 2); });
+    require(tail_result == d3d12::dibr_transaction::RetirementExtendResult::TrackedNeedsPolling,
+        "tail fence was not marked for polling");
+
+    const auto completed_value = frame_fence->GetCompletedValue();
+    require(completed_value >= 1 && completed_value < 2,
+        "producer completion incorrectly retired delayed downstream work");
+    require(WaitForSingleObject(event_handle, 0) == WAIT_TIMEOUT,
+        "producer's old event notification was reused for the new tail fence");
+    require(!tail_output.output_written(), "tail output was published before its consumer retired");
+
+    check(consumer_gate->Signal(1), "Release delayed consumer gate");
+    wait_for_fence(frame_fence.Get(), 2);
+    tail_output.commit();
+    require(tail_output.output_written(), "tail output did not commit after consumer retirement");
+    verify_fill(readback.Get(), 0x6B, "delayed downstream consumer did not complete before the tail fence");
+    CloseHandle(event_handle);
+}
+
 void test_warp_transactions() {
     ComPtr<IDXGIFactory6> factory{};
     check(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)), "CreateDXGIFactory2");
@@ -244,6 +302,7 @@ void test_warp_transactions() {
     ComPtr<ID3D12Device> device{};
     check(D3D12CreateDevice(warp_adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)), "D3D12CreateDevice");
     test_discard_open_recording(device.Get());
+    test_tail_retirement_behind_delayed_consumer(device.Get());
 
     D3D12_COMMAND_QUEUE_DESC queue_desc{};
     queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;

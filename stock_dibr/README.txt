@@ -129,3 +129,9 @@ The Windows tests cover production shader/capture/hooks and shared transaction
 helpers; they do not execute STALKER 2, a headset, or the entire production
 component's failure paths. An in-game test is still needed to establish that
 this exact package works on the target runtime.
+
+The slot retirement marker now follows all spectator and runtime consumers,
+including early frame exits. Resize and mode exit retain presentation textures
+and descriptor heaps until those consumers retire. Optional UI snapshots have
+an independent checked producer submission and lifetime; a failed DIBR frame
+cannot release a UI snapshot whose copy is still in flight.

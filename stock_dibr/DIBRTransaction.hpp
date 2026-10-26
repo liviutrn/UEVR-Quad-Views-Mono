@@ -18,6 +18,12 @@ enum class ExecuteResult : unsigned char {
     SubmittedUntracked,
 };
 
+enum class RetirementExtendResult : unsigned char {
+    Tracked,
+    TrackedNeedsPolling,
+    SubmittedUntracked,
+};
+
 // This is the production phase ordering used by CommandContext's checked DIBR
 // path. `submit` runs only after Close succeeds. Once it runs, a failed fence
 // signal must be treated as an in-flight, untracked submission.
@@ -52,6 +58,23 @@ bool discard_open_recording(Close&& close, ResetAllocator&& reset_allocator, Res
         return recreate();
     }
     return true;
+}
+
+// Advance a queue retirement fence at the end of a transaction. D3D12 cannot
+// cancel an older SetEventOnCompletion registration, so tail fences are always
+// polled: the producer's old event may wake early while downstream work is in
+// flight. A signal failure leaves submitted work untracked.
+template <typename ResetNotification, typename Signal>
+RetirementExtendResult extend_queue_retirement(
+    ResetNotification&& reset_notification,
+    Signal&& signal)
+{
+    reset_notification();
+    if (FAILED(signal())) {
+        return RetirementExtendResult::SubmittedUntracked;
+    }
+
+    return RetirementExtendResult::TrackedNeedsPolling;
 }
 
 class OutputWriteState {

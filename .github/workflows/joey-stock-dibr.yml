@@ -108,6 +108,9 @@ jobs:
       - name: Apply adversarial hook and lifecycle fixes
         run: python stock_dibr/apply_adversarial_hooks.py backend
 
+      - name: Protect optional UI snapshot producer lifetime
+        run: python stock_dibr/apply_ui_retirement_fix.py backend
+
       - name: Run stock DIBR policy and WARP tests
         shell: pwsh
         run: |
@@ -118,6 +121,14 @@ jobs:
 
       - name: Configure CMake
         run: cmake -S backend -B backend/build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DUEVR_BUILD_COMPATIBILITY_TESTS=ON
+
+      - name: Build UEVR backend
+        shell: pwsh
+        run: |
+          cmake --build backend/build --config ${{ env.BUILD_TYPE }} --parallel 2 --target uevr *> evidence/backend-build.log
+          $code = $LASTEXITCODE
+          Get-Content evidence/backend-build.log | Select-Object -Last 100
+          if ($code -ne 0) { throw "UEVR backend build failed ($code)" }
 
       - name: Build original compatibility test suite
         # Run the full original compatibility suite in current verification so
@@ -132,14 +143,6 @@ jobs:
       - name: Run original compatibility test suite
         # Keep the full CTest results with the build and DIBR evidence.
         run: ctest --test-dir backend/build -C ${{ env.BUILD_TYPE }} --output-on-failure --no-tests=error --output-log evidence/ctest.log
-
-      - name: Build UEVR backend
-        shell: pwsh
-        run: |
-          cmake --build backend/build --config ${{ env.BUILD_TYPE }} --parallel 2 --target uevr *> evidence/backend-build.log
-          $code = $LASTEXITCODE
-          Get-Content evidence/backend-build.log | Select-Object -Last 100
-          if ($code -ne 0) { throw "UEVR backend build failed ($code)" }
 
       - name: Build plugin nullifier
         shell: pwsh

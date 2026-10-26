@@ -354,9 +354,12 @@ bool CommandContext::wait(uint32_t ms) {
         return this->ready();
     }
 
-    if (this->fence_event == nullptr || this->fence == nullptr || this->cmd_allocator == nullptr || this->cmd_list == nullptr) {
+    if (this->fence == nullptr || this->cmd_allocator == nullptr || this->cmd_list == nullptr) {
         this->poisoned = true;
         return false;
+    }
+    if (this->fence_event == nullptr) {
+        this->fence_event_armed = false;
     }
 
     DWORD wait_result = WAIT_OBJECT_0;
@@ -392,7 +395,9 @@ bool CommandContext::wait(uint32_t ms) {
         return false;
     }
 
-    ResetEvent(this->fence_event);
+    if (this->fence_event != nullptr) {
+        ResetEvent(this->fence_event);
+    }
     this->waiting_for_fence = false;
     this->fence_event_armed = false;
     this->submission_queue.Reset();
@@ -436,8 +441,10 @@ bool CommandContext::try_wait() {
         }
 
         const auto next_fence_value = this->fence_value + 1;
-        const auto signal_result = command_queue->Signal(this->fence.Get(), next_fence_value);
-        if (FAILED(signal_result)) {
+        const auto retirement_result = dibr_transaction::extend_queue_retirement(
+            [&] { return this->fence_event != nullptr && ResetEvent(this->fence_event) != FALSE; },
+            [&] { return command_queue->Signal(this->fence.Get(), next_fence_value); });
+        if (retirement_result == dibr_transaction::RetirementExtendResult::SubmittedUntracked) {
             if (checked_submission_device_removed(this->fence.Get())) {
                 this->untracked_submission = false;
                 this->device_removed_after_untracked = true;
@@ -454,8 +461,7 @@ bool CommandContext::try_wait() {
         this->poisoned = false;
         this->untracked_submission = false;
         this->device_removed_after_untracked = false;
-        const auto event_result = this->fence->SetEventOnCompletion(this->fence_value, this->fence_event);
-        this->fence_event_armed = SUCCEEDED(event_result);
+        this->fence_event_armed = false;
     }
 
     if (this->poisoned && !this->waiting_for_fence) {
@@ -496,6 +502,47 @@ bool CommandContext::try_wait() {
     this->poisoned = false;
     return true;
 }
+
+bool CommandContext::extend_submission_retirement() {
+    std::scoped_lock _{this->mtx};
+
+    if (this->fence == nullptr || this->submission_queue == nullptr ||
+        (!this->waiting_for_fence && !this->untracked_submission)) {
+        return false;
+    }
+
+    const auto next_fence_value = this->fence_value + 1;
+    HRESULT signal_result{E_FAIL};
+    const auto retirement_result = dibr_transaction::extend_queue_retirement(
+        [&] { return this->fence_event != nullptr && ResetEvent(this->fence_event) != FALSE; },
+        [&] {
+            signal_result = this->submission_queue->Signal(this->fence.Get(), next_fence_value);
+            return signal_result;
+        });
+
+    this->has_commands = false;
+    if (retirement_result == dibr_transaction::RetirementExtendResult::SubmittedUntracked) {
+        this->waiting_for_fence = false;
+        this->fence_event_armed = false;
+        this->untracked_submission = true;
+        this->device_removed_after_untracked = false;
+        this->poisoned = true;
+        spdlog::error(
+            "[VR] DIBR tail retirement signal failed; retaining resources until a later queue fence succeeds. ({}, hr=0x{:08x})",
+            utility::narrow(this->internal_name),
+            static_cast<uint32_t>(signal_result));
+        return false;
+    }
+
+    this->fence_value = next_fence_value;
+    this->waiting_for_fence = true;
+    this->fence_event_armed = false;
+    this->untracked_submission = false;
+    this->device_removed_after_untracked = false;
+    this->poisoned = false;
+    return true;
+}
+
 void CommandContext::copy(ID3D12Resource* src, ID3D12Resource* dst, D3D12_RESOURCE_STATES src_state, D3D12_RESOURCE_STATES dst_state) {
     std::scoped_lock _{this->mtx};
 
@@ -907,7 +954,7 @@ dibr_transaction::ExecuteResult CommandContext::execute_checked() {
         return dibr_transaction::ExecuteResult::NoWork;
     }
 
-    auto hook = g_framework != nullptr ? g_framework->get_d3d12_hook() : nullptr;
+    auto* hook = g_framework != nullptr ? g_framework->get_d3d12_hook().get() : nullptr;
     auto command_queue = hook != nullptr ? hook->get_command_queue() : nullptr;
     if (command_queue == nullptr) {
         this->has_commands = false;

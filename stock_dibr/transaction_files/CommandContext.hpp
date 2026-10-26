@@ -26,6 +26,9 @@ struct CommandContext {
     bool try_wait();
     // Nonblocking and non-mutating; an unused context has no GPU references.
     bool references_retired();
+    // Extend this submission's retirement point past work subsequently queued
+    // on the original queue (for example, spectator/OpenXR consumers).
+    bool extend_submission_retirement();
     void copy(ID3D12Resource* src, ID3D12Resource* dst, 
         D3D12_RESOURCE_STATES src_state = D3D12_RESOURCE_STATE_PRESENT,
         D3D12_RESOURCE_STATES dst_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
