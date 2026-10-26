@@ -20,7 +20,9 @@ required = (
     'const bool requested = is_duoview_renderer_active();',
     'const auto current_generation = mono_generation();',
     'fg.mono_generation != current_generation',
-    'invalidate_bindings("Mono/OpenXR generation changed")',
+    'fg.runtime_epoch != current_runtime_epoch',
+    'const auto current_runtime_epoch = foreground_mpc_runtime_epoch();',
+    'invalidate_bindings("rendering generation or OpenXR reset epoch changed")',
     'invalidate_bindings("MPC_FOV UObject identity changed")',
     'invalidate_bindings("MPC read failed;',
     'invalidate_bindings("MPC setter failed;',
@@ -53,6 +55,11 @@ assert block.index('const bool attempted_write') < block.index('if (attempted_wr
 assert block.index('if (attempted_write)') < block.index('fg.force_reassert = false;')
 assert block.index('if (fg.needs_recovery_log)') < block.index('if (!requested) {\n                fg = {};')
 assert 'if (!get_runtime()->loaded || !is_hmd_active()) {' in s
+h = (backend / "src/mods/VR.hpp").read_text(encoding="utf-8-sig")
+assert h.count('m_foreground_mpc_runtime_epoch{0}') == 1
+assert h.count('m_foreground_mpc_runtime_epoch.fetch_add(1, std::memory_order_acq_rel)') == 1
+assert h.count('uint64_t foreground_mpc_runtime_epoch() const') == 1
+assert 'Restored Mono Eye Alignment after runtime reset' in h
 
 print("PASS: exact Build45 FOV targets, world/generation invalidation, one-time forced reassert,")
 print("      readback recovery, live reflection identities and conditional fast path.")
