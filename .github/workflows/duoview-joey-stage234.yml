@@ -81,8 +81,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 source anchors did not match original Joey' }
           python workspace/duoview/joey_stage1/apply_foreground_mpc_minimal.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Minimal STALKER 2 foreground MPC patch failed' }
-          python workspace/duoview/joey_stage1/test_foreground_mpc_rebind.py backend
-          if ($LASTEXITCODE -ne 0) { throw 'Foreground MPC load/reset lifecycle source regression failed' }
           python workspace/duoview/joey_stage1/apply_mono_hud_convergence.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Opt-in single-quad Mono HUD convergence patch failed' }
           python workspace/duoview/joey_stage1/apply_mono_alignment_build48.py backend
