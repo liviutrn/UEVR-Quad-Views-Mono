@@ -9,6 +9,7 @@ on:
       - experiment/duoview-mono-eye-alignment-hud-v48-20261022
       - fix/duoview-v49-openxr-alignment-persistence-20261022
       - feature/v1861-xyz-headscale-keybinds-20261024
+      - feature/build166-stalker2-duoview-cursor-20261026
   pull_request:
     branches:
       - build-182
@@ -93,6 +94,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling patch failed to match pinned release source' }
           python workspace/duoview/joey_stage1/test_xyz_head_scaling.py backend
           if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling settings/keybind/pose contract failed' }
+          python workspace/duoview/joey_stage1/apply_stalker2_cursor_build166.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Build166 cursor source patch failed' }
+          python workspace/duoview/joey_stage1/test_stalker2_cursor_build166.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Build166 cursor plane / opt-in regression tests failed' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling patch contains whitespace errors' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
