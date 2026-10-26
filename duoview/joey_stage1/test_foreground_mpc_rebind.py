@@ -28,6 +28,8 @@ required = (
     'invalidate_bindings("MPC setter failed;',
     'invalidate_bindings("MPC write did not survive readback")',
     'fg.force_reassert = true;',
+    'tick_now - fg.last_tick > std::chrono::seconds(1)',
+    'long game-tick pause; ',
     'const bool write_enabled = fg.force_reassert ||',
     'const bool write_depth = fg.force_reassert ||',
     'fg.force_reassert = false;',
