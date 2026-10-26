@@ -30,6 +30,7 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             std::optional<sdk::object_liveness::Identity> setter_identity{};
             uint64_t mono_generation{};
             bool needs_recovery_log{};
+            bool force_reassert{};
             float original_enabled{};
             float original_depth{};
             bool active{};
@@ -64,6 +65,7 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
                 fg.getter_identity.reset();
                 fg.setter_identity.reset();
                 fg.needs_recovery_log = true;
+                fg.force_reassert = true;
                 SPDLOG_WARNING_EVERY_N_SEC(5,
                     "[DuoView][Foreground] MPC cache invalidated: {}", reason);
             };
@@ -182,6 +184,7 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
                 fg.original_enabled = current_enabled;
                 fg.original_depth = current_depth;
                 fg.mono_generation = current_generation;
+                fg.force_reassert = true;
                 fg.active = true;
                 SPDLOG_INFO("[DuoView][Foreground] MPC_FOV activated; cached asset; "
                             "conditional updates only (original IsFOVEnabled={}, DepthScale={})",
@@ -194,9 +197,17 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             // No setter calls once the game values are already correct.
             // If STALKER 2 rewrites either value every tick, correct it in
             // this SAME tick to preserve the proven v186.1 foreground fix.
-            const bool enabled_ok = std::abs(current_enabled - wanted_enabled) <= epsilon ||
+            // A newly created world/MPC instance can report the desired
+            // value through an inherited/default collection yet have no
+            // explicit value set on its live instance. Reassert once after
+            // activation/rebind even when the getter reports a match.
+            const bool write_enabled = fg.force_reassert ||
+                std::abs(current_enabled - wanted_enabled) > epsilon;
+            const bool write_depth = fg.force_reassert ||
+                std::abs(current_depth - wanted_depth) > epsilon;
+            const bool enabled_ok = !write_enabled ||
                                     write(L"IsFOVEnabled", wanted_enabled);
-            const bool depth_ok = std::abs(current_depth - wanted_depth) <= epsilon ||
+            const bool depth_ok = !write_depth ||
                                   write(L"DepthScale", wanted_depth);
             if (!enabled_ok || !depth_ok) {
                 invalidate_bindings("MPC setter failed; retrying after reacquisition");
@@ -206,9 +217,7 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             // SetScalarParameterValue invocation succeeding is not proof the
             // replacement world's collection instance accepted the values.
             // Verify only after a write to avoid extra per-frame RPC overhead.
-            const bool attempted_write =
-                std::abs(current_enabled - wanted_enabled) > epsilon ||
-                std::abs(current_depth - wanted_depth) > epsilon;
+            const bool attempted_write = write_enabled || write_depth;
             if (attempted_write) {
                 float confirmed_enabled{}, confirmed_depth{};
                 if (!read(L"IsFOVEnabled", confirmed_enabled) ||
@@ -219,6 +228,7 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
                     return;
                 }
             }
+            fg.force_reassert = false;
             if (fg.needs_recovery_log) {
                 SPDLOG_INFO("[DuoView][Foreground] MPC_FOV rebound successfully; world={}, "
                             "generation={}, IsFOVEnabled={}, DepthScale={}",
