@@ -19,9 +19,10 @@ Test setup
 1. Extract this package into a new, separate test folder. Keep any known-good
    UEVR installation untouched.
 2. Launch STALKER 2 in DX12 with the OpenXR runtime selected in the injector.
-3. In UEVR, turn Native Stereo Fix off and turn Use Same Stereo Pass off.
-   Select method 3 first. Enable “Enable DSV/RDG Depth Capture (Experimental)”
-   in the DIBR section.
+3. In UEVR, turn Native Stereo Fix off and select method 3 first. The saved
+   Use Same Stereo Pass preference stays unchanged and is inactive while Native
+   Stereo Fix is off. Enable “Enable DSV/RDG Depth Capture (Experimental)” in
+   the DIBR section.
 4. Start with DLAA in the game. After the DIBR depth capture and output look
    stable, repeat the test with DLSS enabled and note any change in the
    reported depth dimensions or behavior.
@@ -29,6 +30,50 @@ Test setup
    “Single-view status: active”, and “Suppressed engine-view frames” must keep
    increasing while the game renders. Both readings are needed to confirm
    that the one-view path is running.
+
+For a first R6 comparison, keep True Reprojection Strength at its existing
+default of 1.0. The optional “Max stereo strength (2.0)” button is an explicit
+change and should only be used when exaggerated stereo is wanted. Switching
+between Native Stereo, Sequential (Alternating), and DIBR uses the normal full
+mode transition and warmup; it is not a same-frame A/B comparison. DIBR requires
+Native Stereo Fix to be off, and the comparison controls leave that preference,
+convergence, DIBR calibration, and strength unchanged.
+
+R6 depth inspector and calibration
+----------------------------------
+The STALKER 2 DX12/OpenXR DIBR panel includes normal stereo, raw depth, readable
+depth, depth edges, depth-over-color, and reprojection-confidence views. Raw
+and readable depth are shown equally to both eyes. Confidence describes the
+inverse reprojection solve and is not a visibility buffer or hole mask.
+
+Depth Sampling defaults to R5 linear. Point and edge-aware sampling are
+available as opt-in alternatives. Edge-aware sampling falls back to point
+sampling at a depth discontinuity. Isolated-spike repair is off by default. Its optional median
+repair only changes an isolated outlier when the surrounding samples are
+coherent; the threshold uses raw device-Z and does not represent metres. The
+Depth Scale default of 1.0 leaves captured device depth unchanged. Display
+exposure changes visualization only. These controls do not provide a metric
+depth calibration.
+
+Preserve Stereo Strength is enabled by default in the STALKER 2 scope. It
+bypasses saved edge stabilization, UI edge/footprint blends, and legacy color
+repair that can reduce local disparity; it keeps the existing reprojection
+strength value. The saved legacy controls are retained for other scopes.
+“Reset depth calibration” restores depth sampling, repair, threshold, exposure,
+scale, and inspector view while retaining reprojection strength, selected depth
+candidate, and comparison mode.
+
+Depth candidates are bounded IDs for resources that passed the capture and
+producer-proof checks. IDs and their size/format metadata do not identify a
+semantic camera. Availability is a current-frame status; selecting a known ID
+waits for a fresh verified slot and does not fall back to an unrelated source.
+The registry can replace its least-recently-seen older nonselected entry; if
+all entries are current or manually selected, a new identity is rejected
+instead of evicting one. A manual selection fails closed while its candidate
+is unavailable. A capture reset invalidates its IDs and returns selection to
+automatic mode; IDs are not reused. Shape, queue, and viewport proof still
+cannot establish camera identity, so an in-game review of the selected source
+remains necessary.
 
 The CI workflow runs the depth-policy checks, Windows WARP checks, the full
 original Joey compatibility suite, and builds the injector package. These
@@ -135,3 +180,13 @@ including early frame exits. Resize and mode exit retain presentation textures
 and descriptor heaps until those consumers retire. Optional UI snapshots have
 an independent checked producer submission and lifetime; a failed DIBR frame
 cannot release a UI snapshot whose copy is still in flight.
+
+Revision 6: inspector and candidate tools
+-----------------------------------------
+The R6 workflow applies the inspector/calibration shader stage after all eight
+R5 stages, then applies the comparison and inspector UI stage before tests and
+builds. The shader stage also copies the portable candidate policy header into
+the generated backend. Portable candidate-policy tests run on Linux and
+Windows; Windows WARP, the pinned backend build, the full compatibility suite,
+and headset validation must be read from the matching workflow run. No R6
+headset validation is recorded here.

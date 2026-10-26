@@ -14,6 +14,7 @@
 #include <memory>
 #include <atomic>
 #include <algorithm>
+#include <cmath>
 #include "production_shader.hpp"
 #include "production_constants.hpp"
 using Microsoft::WRL::ComPtr;
@@ -296,6 +297,137 @@ int main() try {
     }
 
 
+    std::cout<<"STAGE R6 production inspector, sampling, repair and preserve controls\n";
+    // Exercise the production bytecode directly with a padded producer rect.
+    // Poison outside that rect makes accidental allocation-wide loads visible.
+    auto fixture_depth=make(dev.Get(),tex(48,24,DXGI_FORMAT_R32_FLOAT),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+    auto fixture_ui=make(dev.Get(),tex(32,32,DXGI_FORMAT_R8G8B8A8_UNORM),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+    auto fixture_cpu=descriptors->GetCPUDescriptorHandleForHeapStart();fixture_cpu.ptr+=stride;
+    srv.Format=DXGI_FORMAT_R32_FLOAT;dev->CreateShaderResourceView(fixture_depth.Get(),&srv,fixture_cpu);
+    fixture_cpu.ptr+=stride;srv.Format=DXGI_FORMAT_R8G8B8A8_UNORM;dev->CreateShaderResourceView(fixture_ui.Get(),&srv,fixture_cpu);
+    bool fixture_ready=false;
+    using Image=std::vector<uint8_t>;
+    auto fixture=[&](auto value) {
+        std::vector<float> values(48*24,.99f);
+        for(UINT y=0;y<16;++y)for(UINT x=0;x<16;++x)values[(y+4)*48+x+8]=value(x,y);
+        return values;
+    };
+    auto run_fixture=[&](TestConstants c,const std::vector<float>* values=nullptr) {
+        check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
+        if(values) {
+            if(fixture_ready){b=barrier(fixture_depth.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);cmd->ResourceBarrier(1,&b);}
+            upload(fixture_depth.Get(),[&](UINT x,UINT y){return (*values)[y*48+x];});
+            b=barrier(fixture_depth.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);cmd->ResourceBarrier(1,&b);
+        }
+        if(!fixture_ready) {
+            require(values!=nullptr,"first R6 dispatch needs a depth fixture");
+            upload(fixture_ui.Get(),[](UINT x,UINT){return x<16?0xff000000u:0u;});
+            b=barrier(fixture_ui.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);cmd->ResourceBarrier(1,&b);
+            fixture_ready=true;
+        }
+        check(cb->Map(0,nullptr,&mapped));std::memcpy(mapped,&c,256);cb->Unmap(0,nullptr);
+        b=barrier(output.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);cmd->ResourceBarrier(1,&b);
+        cmd->SetDescriptorHeaps(1,heaps);cmd->SetComputeRootSignature(rs.Get());cmd->SetPipelineState(pso.Get());
+        gpu=descriptors->GetGPUDescriptorHandleForHeapStart();cmd->SetComputeRootDescriptorTable(0,gpu);gpu.ptr+=stride*3;cmd->SetComputeRootDescriptorTable(1,gpu);cmd->SetComputeRootConstantBufferView(2,cb->GetGPUVirtualAddress());cmd->Dispatch(8,4,1);
+        b=barrier(output.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);cmd->ResourceBarrier(1,&b);
+        from.pResource=output.Get();to.pResource=readback.Get();to.PlacedFootprint=footprint;cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+        check(cmd->Close());q->ExecuteCommandLists(1,lists);wait(q.Get());
+        Image result(64*32*4);check(readback->Map(0,nullptr,&mapped));
+        for(UINT y=0;y<32;++y)std::memcpy(result.data()+y*64*4,pixel(0,y),64*4);
+        readback->Unmap(0,nullptr);return result;
+    };
+    auto channel=[](const Image& image,UINT x,UINT y,UINT c=0){return int(image[(y*64+x)*4+c]);};
+    auto binocular=[&](const Image& image) {
+        for(UINT y=0;y<32;++y)for(UINT x=0;x<32;++x) {
+            for(UINT c=0;c<4;++c)require(channel(image,x,y,c)==channel(image,x+32,y,c),"inspector differs between eyes");
+            require(channel(image,x,y,3)==255,"inspector alpha is not opaque");
+        }
+    };
+    TestConstants r6=constants;r6.true_reprojection_strength=1;
+    r6.depth_uv_scale_bias[0]=16.f/48;r6.depth_uv_scale_bias[1]=16.f/24;
+    r6.depth_uv_scale_bias[2]=8.f/48;r6.depth_uv_scale_bias[3]=4.f/24;
+    auto plane=fixture([](UINT,UINT){return .5f;});
+    const auto legacy_plane=run_fixture(r6,&plane);
+    r6.depth_scale=1;require(run_fixture(r6)==legacy_plane,"calibration 1 is not neutral against zero-initialized R5 controls");
+    r6.depth_display_gain=8;require(run_fixture(r6)==legacy_plane,"display exposure changed normal stereo");r6.depth_display_gain=0;
+    r6.depth_scale=2;auto scaled=run_fixture(r6);
+    require(std::abs(channel(scaled,40,16)-128)<=1,"calibration 2 did not double reversed near-device depth displacement");
+    r6.depth_scale=1;r6.reversed_depth=0;
+    auto conventional=fixture([](UINT,UINT){return .75f;});
+    r6.depth_scale=2;auto forward_scaled=run_fixture(r6,&conventional);
+    require(std::abs(channel(forward_scaled,40,16)-96)<=1,"calibration scaled forward device Z instead of near-device depth");
+    r6.reversed_depth=1;r6.depth_scale=1;
+    auto boundary=fixture([](UINT x,UINT){return x<8?.25f:.75f;});
+    r6.use_true_reprojection=0;r6.disparity_pixels=8;r6.legacy_depth_curve=1;r6.legacy_near_depth_cap=1;
+    r6.depth_sampling_mode=0;auto linear_boundary=run_fixture(r6,&boundary);
+    r6.depth_sampling_mode=1;auto point_boundary=run_fixture(r6);
+    r6.depth_sampling_mode=2;r6.depth_repair_threshold=.01f;auto edge_boundary=run_fixture(r6);
+    require(std::abs(channel(point_boundary,47,16)-136)<=1,"point depth did not select the producer texel at a silhouette");
+    require(std::abs(channel(linear_boundary,47,16)-144)<=1,"legacy linear depth boundary oracle changed");
+    require(edge_boundary==point_boundary,"edge-aware depth interpolated across a silhouette");
+    auto ramp=fixture([](UINT x,UINT){return .2f+.01f*x;});
+    r6.depth_sampling_mode=0;auto coherent_linear=run_fixture(r6,&ramp);
+    r6.depth_sampling_mode=2;r6.depth_repair_threshold=.02f;
+    require(run_fixture(r6)==coherent_linear,"edge-aware depth did not retain bilinear sampling on a coherent ramp");
+
+    r6.inspector_view=1;r6.depth_scale=3;r6.depth_repair_mode=1;r6.depth_display_gain=8;
+    auto raw=run_fixture(r6,&boundary);binocular(raw);
+    require(std::abs(channel(raw,15,16)-64)<=1 && std::abs(channel(raw,16,16)-191)<=1,"raw inspector did not use uncalibrated point samples");
+    for(UINT y=0;y<32;++y)for(UINT x=0;x<32;++x)
+        require(std::abs(channel(raw,x,y)-(x<16?64:191))<=1,"raw inspector sampled poison outside the padded producer rectangle");
+    auto raw_controls=r6;raw_controls.true_reprojection_strength=2;
+    raw_controls.enable_depth_edge_stabilization=raw_controls.enable_spatial_repair=1;
+    raw_controls.enable_ui_edge_guard=raw_controls.enable_ui_footprint_reprojection=1;
+    require(run_fixture(raw_controls)==raw,"raw inspector changed under legacy stereo controls");
+    r6.depth_scale=1;r6.depth_repair_mode=0;r6.depth_display_gain=-8;r6.depth_sampling_mode=0;
+    require(run_fixture(r6)==raw,"raw inspector changed with sampling, calibration, repair or exposure");
+    r6.inspector_view=2;r6.depth_display_gain=0;auto readable=run_fixture(r6);binocular(readable);
+    // Inspector 2 maps the raw point samples, independent of normal-pass filtering.
+    r6.depth_sampling_mode=1;readable=run_fixture(r6);
+    require(std::abs(channel(readable,8,16)-int(std::lround(255*std::log2(1.25))))<=1,"readable inverse depth exposure-zero formula mismatch");
+    r6.depth_display_gain=2;auto exposed=run_fixture(r6);
+    require(std::abs(channel(exposed,8,16)-int(std::lround(255*std::log2(2.)/std::log2(5.))))<=1,"readable inverse depth exposure formula mismatch");
+    require(exposed!=readable,"readable depth exposure has no pixel effect");
+    for(UINT mode=2;mode<=5;++mode){r6.inspector_view=mode;binocular(run_fixture(r6));}
+    r6.inspector_view=3;auto edges=run_fixture(r6);
+    require(channel(edges,8,16)==0 && channel(edges,14,16)==255,"edge inspector did not distinguish a flat region from a silhouette");
+    r6.inspector_view=5;r6.use_true_reprojection=1;r6.true_reprojection_strength=2;
+    auto confidence=run_fixture(r6,&plane);binocular(confidence);
+    require(channel(confidence,8,16)==0 && channel(confidence,8,16,1)==255 &&
+        channel(confidence,31,16)==255 && channel(confidence,31,16,1)==0,
+        "confidence inspector did not distinguish a converged inverse solve from source clamping");
+    r6.use_true_reprojection=0;r6.true_reprojection_strength=1;
+
+    // A single bad texel is repairable; a one-texel-wide foreground strand
+    // and a silhouette have incoherent neighbors and must survive intact.
+    r6.inspector_view=0;r6.depth_display_gain=0;r6.depth_sampling_mode=1;r6.depth_repair_threshold=.05f;
+    auto outlier=fixture([](UINT x,UINT y){return x==7&&y==8?.9f:.25f;});
+    r6.depth_repair_mode=0;auto dirty=run_fixture(r6,&outlier);
+    r6.depth_repair_mode=1;auto repaired=run_fixture(r6);
+    auto clean=fixture([](UINT,UINT){return .25f;});auto clean_image=run_fixture(r6,&clean);
+    require(repaired==clean_image && dirty!=clean_image,"isolated coherent-neighborhood depth outlier was not repaired");
+    auto strand=fixture([](UINT x,UINT){return x==7?.9f:.25f;});
+    r6.depth_repair_mode=0;auto strand_before=run_fixture(r6,&strand);r6.depth_repair_mode=1;
+    require(run_fixture(r6)==strand_before,"depth repair erased a thin foreground strand");
+    r6.depth_repair_mode=0;auto silhouette_before=run_fixture(r6,&boundary);r6.depth_repair_mode=1;
+    require(run_fixture(r6)==silhouette_before,"depth repair moved a silhouette");
+    r6.inspector_view=1;auto raw_clean=run_fixture(r6,&outlier);r6.depth_repair_mode=0;
+    require(run_fixture(r6)==raw_clean && channel(raw_clean,14,16)>220,"raw inspector concealed a repairable outlier");
+
+    r6.inspector_view=0;r6.use_true_reprojection=1;r6.true_reprojection_strength=2;r6.depth_repair_mode=0;
+    r6.preserve_stereo_strength=1;auto preserved=run_fixture(r6,&plane);
+    require(std::abs(channel(preserved,40,16)-128)<=1,"preserve at 2x failed the known-plane displacement oracle");
+    r6.enable_depth_edge_stabilization=1;r6.depth_edge_threshold=.0001f;r6.depth_edge_stabilization_strength=1;
+    r6.enable_spatial_repair=1;r6.repair_residual_pixels=0;r6.repair_depth_threshold=.0001f;
+    r6.enable_ui_edge_guard=1;r6.ui_edge_guard_strength=1;
+    r6.enable_ui_footprint_reprojection=1;r6.ui_footprint_reprojection_strength=0;
+    require(run_fixture(r6)==preserved,"preserve failed to bypass legacy local strength/color modifications");
+    r6.preserve_stereo_strength=0;require(run_fixture(r6)!=preserved,"legacy flattening fixture did not activate any local controls");
+    // Restore capture SRVs before the queue/capture lifetime regressions below.
+    fixture_cpu=descriptors->GetCPUDescriptorHandleForHeapStart();fixture_cpu.ptr+=stride;
+    srv.Format=DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;dev->CreateShaderResourceView(snapshot.Get(),&srv,fixture_cpu);
+    fixture_cpu.ptr+=stride;srv.Format=DXGI_FORMAT_R8G8B8A8_UNORM;dev->CreateShaderResourceView(color.Get(),&srv,fixture_cpu);
+
     std::cout<<"STAGE next-frame depth and stale rejection\n";
     // This time the outer proxy callback sees opaque list wrappers with a
     // distinct IUnknown. The native inner callback must still publish exactly
@@ -351,6 +483,78 @@ int main() try {
     require(!capture.acquire(),"late bind on same list validated an earlier capture");
     require(g_alias_callbacks>0,"COM command-list aliases were not tested");
     require(queue_submit_hook.size()>=2 && queue_submit_hook.size()<=3,"queue hook registry lost an installed queue");
+    std::cout<<"STAGE actual depth-candidate selection, quota isolation and generation reset\n";
+    stock_dibr::DepthCapture selection_capture;
+    auto second_depth=make(dev.Get(),tex(32,32,DXGI_FORMAT_R32_TYPELESS,D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+    auto selection_heap_desc=dsv_heap_desc;selection_heap_desc.NumDescriptors=2;
+    ComPtr<ID3D12DescriptorHeap> selection_heap;check(dev->CreateDescriptorHeap(&selection_heap_desc,IID_PPV_ARGS(&selection_heap)));
+    const auto selection_dsv_stride=dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+    auto first_dsv=selection_heap->GetCPUDescriptorHandleForHeapStart();auto second_dsv=first_dsv;second_dsv.ptr+=selection_dsv_stride;
+    auto second_desc=dsv_desc;second_desc.Format=DXGI_FORMAT_D32_FLOAT;
+    dev->CreateDepthStencilView(depth.Get(),&dsv_desc,first_dsv);dev->CreateDepthStencilView(second_depth.Get(),&second_desc,second_dsv);
+    auto configure_selection=[&]() {
+        selection_capture.configure(dev.Get(),q.Get(),64,32,true);
+        selection_capture.on_depth_stencil_view_created(depth.Get(),&dsv_desc,first_dsv);
+        selection_capture.on_depth_stencil_view_created(second_depth.Get(),&second_desc,second_dsv);
+        g_capture=&selection_capture;
+    };
+    configure_selection();
+    auto begin_selection_frame=[&]() {
+        check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));selection_capture.on_command_list_reset(cmd.Get());
+    };
+    auto selection_pass=[&](ID3D12Resource* resource,D3D12_CPU_DESCRIPTOR_HANDLE handle,float extent) {
+        b=barrier(resource,read,D3D12_RESOURCE_STATE_DEPTH_WRITE);cmd->ResourceBarrier(1,&b);
+        D3D12_VIEWPORT vp{0,0,extent,extent,0,1};cmd->RSSetViewports(1,&vp);selection_capture.on_viewports(cmd.Get(),1,&vp);
+        cmd->OMSetRenderTargets(0,nullptr,FALSE,&handle);selection_capture.on_render_targets(cmd.Get(),0,handle);
+        cmd->OMSetRenderTargets(0,nullptr,FALSE,nullptr);selection_capture.on_render_targets(cmd.Get(),0,{});
+        b=barrier(resource,D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);selection_capture.on_post_resource_barriers(cmd.Get(),1,&b);
+    };
+    auto submit_selection_frame=[&]() {check(cmd->Close());q->ExecuteCommandLists(1,lists);wait(q.Get());};
+    auto verify_selected_pixels=[&](ID3D12Resource* selected) {
+        // A source-ID assertion alone could miss leasing the wrong slot.
+        const auto desc=selected->GetDesc();D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};UINT64 size{};
+        dev->GetCopyableFootprints(&desc,0,1,0,&fp,nullptr,nullptr,&size);
+        auto result=make(dev.Get(),buf(size),D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
+        begin_selection_frame();b=barrier(selected,read,D3D12_RESOURCE_STATE_COPY_SOURCE);cmd->ResourceBarrier(1,&b);
+        D3D12_TEXTURE_COPY_LOCATION src{},dst{};src.pResource=selected;src.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dst.pResource=result.Get();dst.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;dst.PlacedFootprint=fp;cmd->CopyTextureRegion(&dst,0,0,0,&src,nullptr);
+        b=barrier(selected,D3D12_RESOURCE_STATE_COPY_SOURCE,read);cmd->ResourceBarrier(1,&b);submit_selection_frame();
+        void* data{};check(result->Map(0,nullptr,&data));float sample{};std::memcpy(&sample,data,4);result->Unmap(0,nullptr);
+        require(std::abs(sample-.8f)<.00001f,"manual candidate ID leased pixels from the wrong source");
+    };
+    begin_selection_frame();upload(second_depth.Get(),[](UINT,UINT){return .8f;});
+    b=barrier(second_depth.Get(),D3D12_RESOURCE_STATE_COPY_DEST,read);cmd->ResourceBarrier(1,&b);
+    selection_pass(depth.Get(),first_dsv,16);selection_pass(second_depth.Get(),second_dsv,32);submit_selection_frame();
+    const auto known_candidates=selection_capture.candidates();require(known_candidates.size()==2,"actual submitted producers did not register two candidate IDs");
+    uint64_t first_id{},second_id{};
+    for(const auto& candidate:known_candidates) {
+        require(candidate.available,"submitted candidate was not marked available");
+        if(candidate.width==48)first_id=candidate.id;
+        if(candidate.width==32)second_id=candidate.id;
+    }
+    require(first_id && second_id && first_id!=second_id,"candidate IDs did not identify distinct producer allocations");
+    selection_capture.finish_frame();wait(q.Get());
+    require(selection_capture.select_candidate(second_id) && selection_capture.selected_candidate()==second_id,"known second candidate could not be selected");
+    begin_selection_frame();
+    // More nonselected read windows than the twelve capture slots must not
+    // consume the selected source's record-time scheduling quota.
+    for(UINT i=0;i<13;++i)selection_pass(depth.Get(),first_dsv,16);
+    selection_pass(second_depth.Get(),second_dsv,32);submit_selection_frame();
+    auto selected_snapshot=selection_capture.acquire();require(bool(selected_snapshot),"earlier nonselected windows starved a later manually selected producer");
+    require(selection_capture.active_candidate_id()==second_id,"acquire did not report the actual manually selected source ID");
+    verify_selected_pixels(selected_snapshot.Get());selection_capture.finish_frame();wait(q.Get());
+    begin_selection_frame();selection_pass(depth.Get(),first_dsv,16);submit_selection_frame();
+    require(!selection_capture.acquire() && selection_capture.active_candidate_id()==0,"missing selected producer fell back to another source or stale depth");
+    require(selection_capture.selected_candidate()==second_id,"missing selected source silently rearmed automatic selection");
+    selection_capture.finish_frame();wait(q.Get());
+    selection_capture.reset();configure_selection();
+    require(selection_capture.selected_candidate()==0 && selection_capture.active_candidate_id()==0 && selection_capture.candidates().empty(),"reset retained candidate selection or old generation metadata");
+    require(!selection_capture.select_candidate(second_id),"old generation candidate ID remained selectable after reset");
+    begin_selection_frame();selection_pass(second_depth.Get(),second_dsv,32);submit_selection_frame();
+    selected_snapshot=selection_capture.acquire();require(bool(selected_snapshot),"reset did not rearm fresh automatic acquisition");
+    require(selection_capture.active_candidate_id()!=0 && selection_capture.active_candidate_id()!=second_id,"reset reused an invalidated candidate ID");
+    verify_selected_pixels(selected_snapshot.Get());selection_capture.finish_frame();wait(q.Get());g_capture=&capture;
+
     std::cout<<"STAGE failed depth fence signals retain submitted resources across list Reset\n";
     proxy->forward_via_virtual=false;g_opaque_outer_queue=nullptr;
     ComPtr<ID3D12CommandAllocator> failure_reset_allocator;
@@ -401,5 +605,5 @@ int main() try {
     require(g_proxy_execute_calls==original_calls_before_clear+1,"cached detour dropped real submission after clear");
     require(g_submit_callbacks==callbacks_before_clear,"retired hook still invoked its observer");
     ComPtr<ID3D12InfoQueue> info;if(SUCCEEDED(dev.As(&info)))for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size{};info->GetMessage(i,nullptr,&size);std::vector<char> data(size);auto* message=reinterpret_cast<D3D12_MESSAGE*>(data.data());check(info->GetMessage(i,message,&size));if(message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)throw std::runtime_error(message->pDescription);}
-    std::cout<<"PASS: actual queue-submit hook covers distinct dummy/proxy vtables and cached native dispatch, observer reentrancy guard, canonical command-list aliases, native inner callback under opaque outer wrappers, exactly-once publication, alternate direct-queue GPU wait, wrong-producer/late-bind rejection, teardown forwarding, automatic captured-list submission, immediate reset preservation, actual live capture header + production shader on WARP; actual UE5 format19 D32+S8 depth plane, padded allocation with DLSS-sized viewport, distinct eyes, strength0-through2 monotonic known-plane displacement, opaque alpha, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
+    std::cout<<"PASS: actual queue-submit hook covers distinct dummy/proxy vtables and cached native dispatch, observer reentrancy guard, canonical command-list aliases, native inner callback under opaque outer wrappers, exactly-once publication, alternate direct-queue GPU wait, wrong-producer/late-bind rejection, teardown forwarding, automatic captured-list submission, immediate reset preservation, actual live capture header + production shader on WARP; actual multi-producer manual selection with quota isolation, missing-source fail-closed and reset-generation reacquisition; actual UE5 format19 D32+S8 depth plane, padded allocation with DLSS-sized viewport, distinct eyes, strength0-through2 monotonic known-plane displacement, opaque alpha, R6 padded-rect point/edge-aware filtering, calibrated depth conventions, raw/readable/edge/overlay/confidence binocular inspectors, exposure isolation, isolated-outlier repair with strand/silhouette protection, preserve2x legacy-control bypass, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
 } catch(const std::exception& e) {std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}

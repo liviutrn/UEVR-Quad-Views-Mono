@@ -17,6 +17,8 @@ if sys.platform=='win32':
         raise RuntimeError('QueueSubmitHook.hpp is missing; apply stock_dibr/apply_queue_fix.py before running the Windows GPU test.')
     run(['cl','/nologo','/std:c++20','/EHsc','/W4','/WX',here/'policy_tests.cpp','/Fe:policy-tests.exe'])
     run([out/'policy-tests.exe'])
+    run(['cl','/nologo','/std:c++20','/EHsc','/W4','/WX',here/'candidate_policy_tests.cpp','/Fe:candidate-policy-tests.exe'])
+    run([out/'candidate-policy-tests.exe'])
     run(['cl','/nologo','/std:c++20','/EHsc','/W4','/I'+str(root/'src'),'/I'+str(out),
          here/'gpu_test.cpp','/Fe:gpu-test.exe','/link','d3d12.lib','dxgi.lib','d3dcompiler.lib'])
     run([out/'gpu-test.exe'])
@@ -29,8 +31,14 @@ if sys.platform=='win32':
 else:
     run(['g++','-std=c++20','-Wall','-Wextra','-Werror',here/'policy_tests.cpp','-o',out/'policy-tests'])
     run([out/'policy-tests'])
+    run(['g++','-std=c++20','-Wall','-Wextra','-Werror',here/'candidate_policy_tests.cpp','-o',out/'candidate-policy-tests'])
+    run([out/'candidate-policy-tests'])
     print('Windows WARP tests require Windows; not executed here.',flush=True)
 (out/'test-scope.json').write_text(json.dumps({'production_shader':True,'production_capture_header':True,
+    'candidate_policy_tests':True,
+    'depth_candidate_selection_pixels_and_reset':sys.platform=='win32',
+    'depth_inspector_binocular_pixel_oracles':sys.platform=='win32',
+    'depth_filtering_repair_and_preserve2x_oracles':sys.platform=='win32',
     'queue_submit_hook_distinct_proxy_vtables':sys.platform=='win32','streamline_native_interface_discovery':sys.platform=='win32',
     'cross_queue_gpu_wait':sys.platform=='win32','wrong_producer_rejected':sys.platform=='win32',
     'com_list_aliases':sys.platform=='win32','nested_wrapper_native_callback':sys.platform=='win32','observer_reentrancy_guard':sys.platform=='win32','strength_changes_pixels':sys.platform=='win32',

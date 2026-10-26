@@ -111,6 +111,12 @@ jobs:
       - name: Protect optional UI snapshot producer lifetime
         run: python stock_dibr/apply_ui_retirement_fix.py backend
 
+      - name: Apply R6 inspector and calibration shader
+        run: python stock_dibr/apply_inspector_shader.py backend
+
+      - name: Apply R6 inspector and comparison UI
+        run: python stock_dibr/apply_inspector_ui.py backend
+
       - name: Run stock DIBR policy and WARP tests
         shell: pwsh
         run: |
