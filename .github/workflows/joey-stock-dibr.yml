@@ -102,6 +102,12 @@ jobs:
       - name: Apply review fixes
         run: python stock_dibr/apply_review_fix.py backend
 
+      - name: Apply adversarial transaction fixes
+        run: python stock_dibr/apply_transaction_fix.py backend
+
+      - name: Apply adversarial hook and lifecycle fixes
+        run: python stock_dibr/apply_adversarial_hooks.py backend
+
       - name: Run stock DIBR policy and WARP tests
         shell: pwsh
         run: |

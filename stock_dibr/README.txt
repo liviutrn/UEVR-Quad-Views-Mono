@@ -95,3 +95,37 @@ Single-view construction is restricted to the main game viewport Draw, after
 three stable validated main-family observations and three consecutive ready
 DIBR outputs from the same resource generation. Unrelated scene captures
 retain their normal view count. A failed output resets consecutive warmup.
+
+Revision 5: adversarial failure and lifecycle corrections
+--------------------------------------------------------
+Allocation and descriptor preparation now finish before GPU recording starts.
+An abandoned recording is closed and discarded before its input resources
+can retire. Output state is committed only after a checked submission; a
+failed Close, Signal, or event-arm operation cannot activate single-view
+suppression using an output that was never submitted. The three-slot ring
+falls back to ordinary stereo when no safely reusable slot is available.
+
+Submitted resources with an unprovable retirement fence are quarantined.
+Recording-list Reset cannot release already submitted depth after a failed
+producer or consumer Signal. Pending depth generations continue receiving
+late Execute/Reset retirement callbacks after the capture mode is disabled.
+Observer detach drains callbacks before releasing the observer's owner.
+
+Cached DSV replay and live descriptor replacement are serialized. Queue
+callbacks preserve actual same-queue enqueue order, while independent queues
+remain concurrent. Changing UWorld invalidates single-view readiness before
+new views are constructed. UI alpha is supplied when any footprint/edge/mask
+consumer needs it, independent of the edge-guard switch.
+
+Depth capture is opt-in again. Enable "Enable DSV/RDG Depth Capture
+(Experimental)" explicitly for this STALKER 2 test. Keep VectorXR disabled
+for this test, as in the clean injection setup.
+
+Remaining test boundary: shape, ordered DSV binding and queue provenance do
+not establish semantic camera identity. A secondary camera with the same
+viewport dimensions can still qualify. candidateSources in the depth summary
+reports distinct eligible depth sources, but is not a camera discriminator.
+The Windows tests cover production shader/capture/hooks and shared transaction
+helpers; they do not execute STALKER 2, a headset, or the entire production
+component's failure paths. An in-game test is still needed to establish that
+this exact package works on the target runtime.

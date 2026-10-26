@@ -20,6 +20,12 @@ if sys.platform=='win32':
     run(['cl','/nologo','/std:c++20','/EHsc','/W4','/I'+str(root/'src'),'/I'+str(out),
          here/'gpu_test.cpp','/Fe:gpu-test.exe','/link','d3d12.lib','dxgi.lib','d3dcompiler.lib'])
     run([out/'gpu-test.exe'])
+    run(['cl','/nologo','/std:c++20','/EHsc','/W4','/I'+str(root/'src'),'/I'+str(out),
+         here/'hook_tests.cpp','/Fe:hook-tests.exe','/link','d3d12.lib','dxgi.lib'])
+    run([out/'hook-tests.exe'])
+    run(['cl','/nologo','/std:c++20','/EHsc','/W4','/I'+str(root/'src'),'/I'+str(out),
+         here/'transaction_tests.cpp','/Fe:transaction-tests.exe','/link','d3d12.lib','dxgi.lib','d3dcompiler.lib'])
+    run([out/'transaction-tests.exe'])
 else:
     run(['g++','-std=c++20','-Wall','-Wextra','-Werror',here/'policy_tests.cpp','-o',out/'policy-tests'])
     run([out/'policy-tests'])
@@ -29,5 +35,5 @@ else:
     'cross_queue_gpu_wait':sys.platform=='win32','wrong_producer_rejected':sys.platform=='win32',
     'com_list_aliases':sys.platform=='win32','nested_wrapper_native_callback':sys.platform=='win32','observer_reentrancy_guard':sys.platform=='win32','strength_changes_pixels':sys.platform=='win32',
     'viewport_producer_rectangle':sys.platform=='win32','strength_full_range_monotonic':sys.platform=='win32','late_binding_rejected':sys.platform=='win32','teardown_forwarding':sys.platform=='win32',
-    'immediate_reset_after_submit':sys.platform=='win32','manual_submit_callback':False,
+    'immediate_reset_after_submit':sys.platform=='win32','serialized_dsv_replay':sys.platform=='win32','queue_callback_order':sys.platform=='win32','detached_retirement':sys.platform=='win32','transaction_fault_injection':sys.platform=='win32','failed_depth_signals_retained_across_reset':sys.platform=='win32','manual_submit_callback':False,
     'windows_warp_executed':sys.platform=='win32','game_tested':False,'headset_tested':False},indent=2))

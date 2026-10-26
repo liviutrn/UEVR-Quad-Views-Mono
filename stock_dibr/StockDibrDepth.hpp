@@ -96,6 +96,7 @@ class DepthCapture final : public D3D12DepthStencilObserver {
     uint64_t captured{}, submitted{}, consumed{}, exhausted{}, rejected{};
     uint64_t dsv_events{}, bind_events{}, viewport_events{}, read_windows{};
     uint64_t execute_events{}, same_queue_events{}, matched_lists{}, foreign_matches{}, reset_discards{}, cross_queue_consumed{};
+    size_t candidate_sources{};
     std::array<uint64_t, 7> reject_reasons{};
     std::string observed{"none"};
 
@@ -280,6 +281,13 @@ class DepthCapture final : public D3D12DepthStencilObserver {
 
 public:
     bool accepts_cached_dsv_metadata() const override { return true; }
+    bool has_pending_retirement() override {
+        std::scoped_lock lock{mutex};
+        collect_retired();
+        if (!retired.empty()) return true;
+        for (const auto& slot : slots) if (!retire_ready(slot, fence.Get())) return true;
+        return false;
+    }
     void configure(ID3D12Device* dev, ID3D12CommandQueue* q, uint64_t w, uint32_t h, bool active) {
         std::scoped_lock lock{mutex};
         collect_retired();
@@ -516,7 +524,16 @@ public:
                 static_cast<uint32_t>(std::lround(s.viewport.Height)), width, height);
             if (current_queue) {
                 if (!found) {
-                    if (FAILED(q->Signal(fence.Get(), ++signal))) { enabled = false; last = "depth submission signal failed"; return; }
+                    if (FAILED(q->Signal(fence.Get(), ++signal))) {
+                        // Execute already happened. Reset of its recording list
+                        // does not prove GPU retirement after a failed Signal.
+                        for (auto& affected : slots) if (submitted_by(affected, count, submitted_lists)) {
+                            affected.pending = false; affected.quarantined = true; affected.epoch = 0;
+                        }
+                        enabled = false; last = "depth submission signal failed; submitted slots quarantined";
+                        submit_retired(q, count, submitted_lists);
+                        return;
+                    }
                     found = true;
                 }
                 s.pending = false; s.fence = signal;
@@ -548,8 +565,12 @@ public:
         std::scoped_lock lock{mutex};
         collect_retired();
         Slot* best{};
+        std::array<ID3D12Resource*, Capacity> sources{};
+        candidate_sources = 0;
         for (auto& s : slots) {
             if (s.pending || (!s.fence && !s.foreign_fence) || s.epoch != epoch || s.leased || s.quarantined) continue;
+            if (std::find(sources.begin(), sources.begin() + candidate_sources, s.source.Get()) == sources.begin() + candidate_sources)
+                sources[candidate_sources++] = s.source.Get();
             if (!best || double(s.viewport.Width) * s.viewport.Height > double(best->viewport.Width) * best->viewport.Height ||
                 (s.viewport.Width == best->viewport.Width && s.serial > best->serial)) best = &s;
         }
@@ -579,7 +600,10 @@ public:
         if (leased < Capacity) {
             auto& s = slots[leased];
             if (queue && fence && SUCCEEDED(queue->Signal(fence.Get(), ++signal))) s.fence = signal;
-            else { enabled = false; s.pending = true; last = "depth consumer signal failed"; }
+            else {
+                enabled = false; s.pending = false; s.quarantined = true; s.epoch = 0;
+                last = "depth consumer signal failed; leased slot quarantined";
+            }
             s.leased = false; leased = Capacity;
         }
         ++epoch; recorded_this_interval = 0;
@@ -597,6 +621,7 @@ public:
             std::to_string(same_queue_events) + "/" + std::to_string(matched_lists) + "/" +
             std::to_string(foreign_matches) + "/" + std::to_string(reset_discards) +
             " crossQueueUsed=" + std::to_string(cross_queue_consumed) +
+            " candidateSources=" + std::to_string(candidate_sources) +
             " windows=" + std::to_string(read_windows) + " rejects[batch/shape/binding/layout/device/slice/order]=" +
             std::to_string(reject_reasons[0]) + "/" + std::to_string(reject_reasons[1]) + "/" + std::to_string(reject_reasons[2]) + "/" +
             std::to_string(reject_reasons[3]) + "/" + std::to_string(reject_reasons[4]) + "/" + std::to_string(reject_reasons[5]) + "/" + std::to_string(reject_reasons[6]) +
@@ -627,6 +652,7 @@ public:
         slots = {};
         width = 0; height = 0; ++epoch; leased = Capacity; signal = 0;
         recorded_this_interval = 0;
+        candidate_sources = 0;
         lists.clear(); render_passes.clear(); executed_proofs.clear(); execute_batch = 0;
         captured = submitted = consumed = exhausted = rejected = 0;
         collect_retired();

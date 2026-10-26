@@ -99,6 +99,7 @@ class QueueProxy final : public ID3D12CommandQueue {
     std::atomic<ULONG> references{1};
 public:
     bool forward_via_virtual{};
+    bool fail_signals{};
     explicit QueueProxy(ID3D12CommandQueue* q):inner{q},
         native_execute{reinterpret_cast<stock_dibr::QueueSubmitHook::Callback>((*(void***)q)[10])} {}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** out) override {
@@ -135,7 +136,7 @@ public:
     void STDMETHODCALLTYPE SetMarker(UINT m,const void* p,UINT n) override {inner->SetMarker(m,p,n);}
     void STDMETHODCALLTYPE BeginEvent(UINT m,const void* p,UINT n) override {inner->BeginEvent(m,p,n);}
     void STDMETHODCALLTYPE EndEvent() override {inner->EndEvent();}
-    HRESULT STDMETHODCALLTYPE Signal(ID3D12Fence* f,UINT64 n) override {return inner->Signal(f,n);}
+    HRESULT STDMETHODCALLTYPE Signal(ID3D12Fence* f,UINT64 n) override {return fail_signals ? E_FAIL : inner->Signal(f,n);}
     HRESULT STDMETHODCALLTYPE Wait(ID3D12Fence* f,UINT64 n) override {return inner->Wait(f,n);}
     HRESULT STDMETHODCALLTYPE GetTimestampFrequency(UINT64* n) override {return inner->GetTimestampFrequency(n);}
     HRESULT STDMETHODCALLTYPE GetClockCalibration(UINT64* g,UINT64* c) override {return inner->GetClockCalibration(g,c);}
@@ -350,6 +351,42 @@ int main() try {
     require(!capture.acquire(),"late bind on same list validated an earlier capture");
     require(g_alias_callbacks>0,"COM command-list aliases were not tested");
     require(queue_submit_hook.size()>=2 && queue_submit_hook.size()<=3,"queue hook registry lost an installed queue");
+    std::cout<<"STAGE failed depth fence signals retain submitted resources across list Reset\n";
+    proxy->forward_via_virtual=false;g_opaque_outer_queue=nullptr;
+    auto record_failure_capture=[&](stock_dibr::DepthCapture& target) {
+        target.configure(dev.Get(),q.Get(),64,32,true);
+        target.on_depth_stencil_view_created(depth.Get(),&dsv_desc,dsv_handle);
+        check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));
+        target.on_command_list_reset(cmd.Get());
+        b=barrier(depth.Get(),read,D3D12_RESOURCE_STATE_DEPTH_WRITE);cmd->ResourceBarrier(1,&b);
+        D3D12_VIEWPORT vp{0,0,16,16,0,1};cmd->RSSetViewports(1,&vp);target.on_viewports(cmd.Get(),1,&vp);
+        cmd->OMSetRenderTargets(0,nullptr,FALSE,&dsv_handle);target.on_render_targets(cmd.Get(),0,dsv_handle);
+        cmd->OMSetRenderTargets(0,nullptr,FALSE,nullptr);target.on_render_targets(cmd.Get(),0,{});
+        b=barrier(depth.Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);
+        target.on_post_resource_barriers(cmd.Get(),1,&b);check(cmd->Close());
+        g_capture=&target;
+    };
+    auto reset_submitted_list=[&](stock_dibr::DepthCapture& target) {
+        // The list may be reset using a different idle allocator while its
+        // original allocator/work is still in flight. This is NOT retirement.
+        check(probe_allocator->Reset());check(cmd->Reset(probe_allocator.Get(),nullptr));
+        target.on_command_list_reset(cmd.Get());check(cmd->Close());
+        require(target.has_pending_retirement(),"failed Signal resources were freed by recording-list Reset");
+        target.reset();
+        require(target.has_pending_retirement(),"failed Signal quarantine was lost on capture reset");
+        wait(native_queue.Get());
+    };
+    stock_dibr::DepthCapture failed_producer;
+    record_failure_capture(failed_producer);
+    proxy->fail_signals=true;q->ExecuteCommandLists(1,lists);proxy->fail_signals=false;
+    require(!failed_producer.acquire(),"failed producer fence published depth");
+    reset_submitted_list(failed_producer);
+    stock_dibr::DepthCapture failed_consumer;
+    record_failure_capture(failed_consumer);q->ExecuteCommandLists(1,lists);
+    require(bool(failed_consumer.acquire()),"consumer-failure setup did not publish depth");
+    proxy->fail_signals=true;failed_consumer.finish_frame();proxy->fail_signals=false;
+    reset_submitted_list(failed_consumer);
+    g_capture=&capture;
     std::cout<<"STAGE teardown forwarding\n";
     const auto cached_detour=reinterpret_cast<stock_dibr::QueueSubmitHook::Callback>((*(void***)q.Get())[10]);
     const auto callbacks_before_clear=g_submit_callbacks;

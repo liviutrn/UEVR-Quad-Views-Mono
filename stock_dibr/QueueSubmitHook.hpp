@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <mutex>
+#include <memory>
 #include <shared_mutex>
 #include <unordered_map>
 #include <utility>
@@ -23,6 +24,7 @@ private:
         std::shared_mutex activity;
         std::shared_mutex metadata;
         std::unordered_map<void**, Callback> originals;
+        std::unordered_map<IUnknown*, std::weak_ptr<std::recursive_mutex>> submissions;
         QueueSubmitHook* owner{};
         Callback callback{};
     };
@@ -30,6 +32,35 @@ private:
     std::unordered_map<void**, Microsoft::WRL::ComPtr<ID3D12CommandQueue>> slots;
     Callback callback{};
     inline static thread_local bool notifying{};
+
+    static std::shared_ptr<std::recursive_mutex> submission_mutex(ID3D12CommandQueue* queue) {
+        Microsoft::WRL::ComPtr<ID3D12CommandQueue> native{queue};
+        ID3D12CommandQueue* visited[8]{};
+        for (size_t depth = 0; native && depth < 8; ++depth) {
+            bool repeated{};
+            for (size_t i = 0; i < depth; ++i) repeated |= visited[i] == native.Get();
+            if (repeated) break;
+            visited[depth] = native.Get();
+            Microsoft::WRL::ComPtr<IUnknown> next;
+            if (FAILED(native->QueryInterface(StreamlineNativeInterface,
+                reinterpret_cast<void**>(next.GetAddressOf()))) || !next) break;
+            Microsoft::WRL::ComPtr<ID3D12CommandQueue> next_queue;
+            if (FAILED(next.As(&next_queue))) break;
+            native = std::move(next_queue);
+        }
+        Microsoft::WRL::ComPtr<IUnknown> identity;
+        if (native) native.As(&identity);
+        auto& state = registry();
+        std::unique_lock lock{state.metadata};
+        if (state.submissions.size() > 256) {
+            for (auto it = state.submissions.begin(); it != state.submissions.end();)
+                if (it->second.expired()) it = state.submissions.erase(it); else ++it;
+        }
+        auto& weak = state.submissions[identity.Get()];
+        auto serial = weak.lock();
+        if (!serial) { serial = std::make_shared<std::recursive_mutex>(); weak = serial; }
+        return serial;
+    }
 
     static void WINAPI execute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists) {
         auto& state = registry();
@@ -42,6 +73,12 @@ private:
         // Every installed slot publishes its original before this function is
         // callable. Originals remain available after the slot is restored.
         if (!original) return;
+        // Keep enqueue and observer publication in one per-native-queue order.
+        // Recursive ownership admits ordinary proxy -> native forwarding and
+        // observer-private work on the same calling thread. Different queues
+        // remain independent; the weak registry does not retain queue objects.
+        const auto serial = submission_mutex(queue);
+        std::scoped_lock ordered{*serial};
         original(queue, count, lists);
         // Observe every forwarding layer: a proxy can replace the list array,
         // and only the native layer may match the recorded COM identities.
