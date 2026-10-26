@@ -30,6 +30,7 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             std::optional<sdk::object_liveness::Identity> setter_identity{};
             uint64_t mono_generation{};
             uint64_t runtime_epoch{};
+            std::chrono::steady_clock::time_point last_tick{};
             bool needs_recovery_log{};
             bool force_reassert{};
             float original_enabled{};
@@ -40,6 +41,22 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
         const auto reconcile_foreground = [&]() {
             const bool requested = is_duoview_renderer_active();
             if (!requested && !fg.active) return;
+
+            // Savegame load can recreate the UWorld's material-parameter
+            // instance without replacing the persistent collection asset.
+            // A resumed game tick after a loading pause explicitly refreshes
+            // both scalar overrides once, even if the collection's getter
+            // returns stale-but-apparently-correct values.
+            const auto tick_now = std::chrono::steady_clock::now();
+            if (requested && fg.active &&
+                fg.last_tick.time_since_epoch().count() != 0 &&
+                tick_now - fg.last_tick > std::chrono::seconds(1)) {
+                fg.force_reassert = true;
+                fg.needs_recovery_log = true;
+                SPDLOG_INFO("[DuoView][Foreground] long game-tick pause; "
+                            "reasserting MPC_FOV after possible savegame reload");
+            }
+            fg.last_tick = tick_now;
 
             auto* world = engine != nullptr ? engine->get_world() : nullptr;
             if (!world) { fg = {}; return; }
