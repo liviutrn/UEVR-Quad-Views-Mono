@@ -353,6 +353,8 @@ int main() try {
     require(queue_submit_hook.size()>=2 && queue_submit_hook.size()<=3,"queue hook registry lost an installed queue");
     std::cout<<"STAGE failed depth fence signals retain submitted resources across list Reset\n";
     proxy->forward_via_virtual=false;g_opaque_outer_queue=nullptr;
+    ComPtr<ID3D12CommandAllocator> failure_reset_allocator;
+    check(dev->CreateCommandAllocator(qd.Type,IID_PPV_ARGS(&failure_reset_allocator)));
     auto record_failure_capture=[&](stock_dibr::DepthCapture& target) {
         target.configure(dev.Get(),q.Get(),64,32,true);
         target.on_depth_stencil_view_created(depth.Get(),&dsv_desc,dsv_handle);
@@ -369,7 +371,7 @@ int main() try {
     auto reset_submitted_list=[&](stock_dibr::DepthCapture& target) {
         // The list may be reset using a different idle allocator while its
         // original allocator/work is still in flight. This is NOT retirement.
-        check(probe_allocator->Reset());check(cmd->Reset(probe_allocator.Get(),nullptr));
+        check(failure_reset_allocator->Reset());check(cmd->Reset(failure_reset_allocator.Get(),nullptr));
         target.on_command_list_reset(cmd.Get());check(cmd->Close());
         require(target.has_pending_retirement(),"failed Signal resources were freed by recording-list Reset");
         target.reset();
