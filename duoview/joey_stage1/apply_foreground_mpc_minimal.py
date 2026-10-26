@@ -29,6 +29,7 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             std::optional<sdk::object_liveness::Identity> getter_identity{};
             std::optional<sdk::object_liveness::Identity> setter_identity{};
             uint64_t mono_generation{};
+            uint64_t runtime_epoch{};
             bool needs_recovery_log{};
             bool force_reassert{};
             float original_enabled{};
@@ -74,9 +75,12 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             // Rebind even in that case; never assume the old runtime's cached
             // reflection targets or parameter instance remain usable.
             const auto current_generation = mono_generation();
-            if (fg.active && fg.mono_generation != current_generation) {
-                invalidate_bindings("Mono/OpenXR generation changed");
+            const auto current_runtime_epoch = foreground_mpc_runtime_epoch();
+            if (fg.active && (fg.mono_generation != current_generation ||
+                              fg.runtime_epoch != current_runtime_epoch)) {
+                invalidate_bindings("rendering generation or OpenXR reset epoch changed");
                 fg.mono_generation = current_generation;
+                fg.runtime_epoch = current_runtime_epoch;
             }
 
             // Revalidate cached UObject identity each tick: cached pointers
@@ -184,6 +188,7 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
                 fg.original_enabled = current_enabled;
                 fg.original_depth = current_depth;
                 fg.mono_generation = current_generation;
+                fg.runtime_epoch = current_runtime_epoch;
                 fg.force_reassert = true;
                 fg.active = true;
                 SPDLOG_INFO("[DuoView][Foreground] MPC_FOV activated; cached asset; "
@@ -231,8 +236,9 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
             fg.force_reassert = false;
             if (fg.needs_recovery_log) {
                 SPDLOG_INFO("[DuoView][Foreground] MPC_FOV rebound successfully; world={}, "
-                            "generation={}, IsFOVEnabled={}, DepthScale={}",
-                            world_id, current_generation, wanted_enabled, wanted_depth);
+                            "generation={}, runtime_epoch={}, IsFOVEnabled={}, DepthScale={}",
+                            world_id, current_generation, current_runtime_epoch,
+                            wanted_enabled, wanted_depth);
                 fg.needs_recovery_log = false;
             }
             if (!requested) {
