@@ -90,3 +90,8 @@ Reprojection strength now scales the mapping being solved. Previously, the
 second solver iteration could undo stereo at strength 2. The production
 shader is checked at strengths 0, 0.5, 1, 1.5, and 2 against exact plane
 displacement, with matching strength in the spatial-repair residual.
+
+Single-view construction is restricted to the main game viewport Draw, after
+three stable validated main-family observations and three consecutive ready
+DIBR outputs from the same resource generation. Unrelated scene captures
+retain their normal view count. A failed output resets consecutive warmup.

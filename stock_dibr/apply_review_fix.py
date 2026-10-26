@@ -41,3 +41,51 @@ edit(shader,
      "            synthesized_source_uv,\n            reprojection_strength,\n            source_clamped,")
 
 print("Applied independent review correction: monotonic DIBR strength and matching spatial-repair mapping")
+
+hook = "src/mods/vr/FFakeStereoRenderingHook.cpp"
+edit(hook,
+     """        if (ready.preview_ready && ready.consecutive_ready_frames >= DIBR_SINGLE_VIEW_WARMUP_FRAMES) return 1;""",
+     """        const auto expected_viewport = g_hook->get_render_target_manager()->get_viewport();
+        const bool validated_main_family = ready.generation != 0 &&
+            ready.generation == g_hook->m_dibr_single_view_generation &&
+            expected_viewport != nullptr &&
+            g_hook->m_dibr_single_view_target == reinterpret_cast<uintptr_t>(expected_viewport) &&
+            g_hook->m_dibr_single_view_scene != 0 &&
+            g_hook->m_dibr_single_view_stable_frames >= DIBR_SINGLE_VIEW_FAMILY_STABLE_FRAMES;
+        if (is_stereo_enabled && g_hook->is_in_viewport_client_draw() &&
+            validated_main_family && ready.preview_ready &&
+            ready.consecutive_ready_frames >= DIBR_SINGLE_VIEW_WARMUP_FRAMES) return 1;""")
+edit(hook,
+     """            if (main_family && prev_count == 1 && readiness.preview_ready) {""",
+     """            if (main_family) {
+                const auto target = reinterpret_cast<uintptr_t>(view_family->get_render_target());
+                const auto scene = reinterpret_cast<uintptr_t>(view_family->get_scene_interface());
+                if (g_hook->m_dibr_single_view_target != target || g_hook->m_dibr_single_view_scene != scene) {
+                    g_hook->m_dibr_single_view_target = target;
+                    g_hook->m_dibr_single_view_scene = scene;
+                    g_hook->m_dibr_single_view_stable_frames = 1;
+                } else if (g_hook->m_dibr_single_view_stable_frames < DIBR_SINGLE_VIEW_FAMILY_STABLE_FRAMES) {
+                    ++g_hook->m_dibr_single_view_stable_frames;
+                }
+                g_hook->m_dibr_single_view_family = reinterpret_cast<uintptr_t>(view_family);
+            } else if (view_family->get_render_target() == rtm->get_viewport()) {
+                // A malformed current main family invalidates the prior proof.
+                // Unrelated scene captures never acquire or replace that proof.
+                g_hook->m_dibr_single_view_stable_frames = 0;
+                set_dibr_status(DIBR_SINGLE_VIEW_FALLBACK, "STALKER: current main family failed validation");
+            }
+            if (main_family && prev_count == 1 && readiness.preview_ready) {""")
+
+edit("src/mods/vr/D3D12Component.cpp",
+     """        m_dibr_single_view_preview_ready.store(false, std::memory_order_release);
+        return;
+    }
+
+    const auto width = static_cast<uint32_t>""",
+     """        m_dibr_single_view_preview_ready.store(false, std::memory_order_release);
+        m_dibr_single_view_ready_frames.store(0, std::memory_order_release);
+        return;
+    }
+
+    const auto width = static_cast<uint32_t>""")
+print("Applied main Draw/validated family activation gate and consecutive-output warmup reset")
