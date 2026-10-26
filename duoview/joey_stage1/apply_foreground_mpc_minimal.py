@@ -20,6 +20,8 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
         struct ForegroundMPCState {
             uintptr_t world_id{};
             std::optional<sdk::object_liveness::Identity> world_identity{};
+            uintptr_t pawn_id{};
+            std::optional<sdk::object_liveness::Identity> pawn_identity{};
             sdk::UObject* collection{};
             std::optional<sdk::object_liveness::Identity> collection_identity{};
             sdk::UObject* library{};
@@ -98,6 +100,33 @@ BLOCK = r'''    // STALKER 2 DuoView foreground parity. Automatic only while ID6
                 invalidate_bindings("rendering generation or OpenXR reset epoch changed");
                 fg.mono_generation = current_generation;
                 fg.runtime_epoch = current_runtime_epoch;
+            }
+
+            // Loading a save can recreate the playable pawn while retaining
+            // both UWorld and MaterialParameterCollection UObjects. Treat that
+            // as a new material-parameter-instance lifecycle. This is a
+            // pointer+object-serial observation only, never an old-pawn call.
+            // It also catches fast quickloads without a one-second tick gap.
+            if (const auto gameplay = sdk::UGameplayStatics::get()) {
+                auto* controller = gameplay->get_player_controller(world, 0);
+                auto* pawn = controller != nullptr
+                    ? controller->get_acknowledged_pawn() : nullptr;
+                const uintptr_t current_pawn_id = reinterpret_cast<uintptr_t>(pawn);
+                const auto observed_pawn = pawn != nullptr
+                    ? sdk::observe_uobject(static_cast<sdk::UObjectBase*>(pawn))
+                    : std::nullopt;
+                if (pawn == nullptr || (observed_pawn &&
+                    sdk::is_current_object(observed_pawn->identity))) {
+                    const bool pawn_replaced =
+                        fg.active && (fg.pawn_id != current_pawn_id ||
+                         (fg.pawn_identity &&
+                          !sdk::is_current_object(*fg.pawn_identity)));
+                    if (pawn_replaced)
+                        invalidate_bindings("player pawn lifecycle changed during save reload");
+                    fg.pawn_id = current_pawn_id;
+                    fg.pawn_identity = observed_pawn
+                        ? std::optional{observed_pawn->identity} : std::nullopt;
+                }
             }
 
             // Revalidate cached UObject identity each tick: cached pointers
