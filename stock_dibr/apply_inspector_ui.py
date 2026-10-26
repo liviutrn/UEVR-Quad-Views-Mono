@@ -32,7 +32,7 @@ edit(vh, "    float get_dibr_disparity_pixels() const {", """    int get_dibr_in
     bool is_dibr_preserve_stereo_strength() const { return m_dibr_preserve_stereo_strength->value(); }
 
     float get_dibr_disparity_pixels() const {""")
-edit(vh, '    const ModSlider::Ptr m_dibr_disparity_pixels{', '''    const ModCombo::Ptr m_dibr_inspector_view{ ModCombo::create(generate_name("DIBRInspectorView"), {"Normal stereo", "Raw depth", "Readable inverse depth", "Depth edges", "Depth over color", "Reprojection confidence"}, 0) };
+edit(vh, '    const ModSlider::Ptr m_dibr_disparity_pixels{', '''    const ModCombo::Ptr m_dibr_inspector_view{ ModCombo::create(generate_name("DIBRInspectorView"), {"Normal stereo", "Raw depth", "Readable depth", "Depth edges", "Depth over color", "Reprojection confidence"}, 0) };
     const ModCombo::Ptr m_dibr_depth_sampling_mode{ ModCombo::create(generate_name("DIBRDepthSamplingMode"), {"R5 linear", "Point", "Edge-aware"}, 0) };
     const ModCombo::Ptr m_dibr_depth_repair_mode{ ModCombo::create(generate_name("DIBRDepthRepairMode"), {"Off", "Isolated spike median"}, 0) };
     const ModSlider::Ptr m_dibr_depth_scale{ ModSlider::create(generate_name("DIBRDepthScale"), 0.25f, 4.0f, 1.0f) };
@@ -107,6 +107,7 @@ edit(vc, '''                m_dibr_disparity_pixels->draw("Disparity (Pixels)");
                         m_dibr_depth_display_gain->draw("Depth display exposure (stops, visualization only)");
                         m_dibr_depth_sampling_mode->draw("Depth Sampling");
                         m_dibr_depth_scale->draw("Device-depth calibration (1 = unchanged)");
+                        m_dibr_reversed_depth->draw("Reversed-Z convention (display/calibration/legacy repair)");
                         ImGui::TextWrapped("1.0 keeps captured depth unchanged. Scales near-oriented device-Z using the selected depth convention. This is not a metric distance or universal stereo-strength multiplier. Keep 1.0 unless calibrating a verified map.");
                         m_dibr_depth_repair_mode->draw("Depth Repair (no temporal history)");
                         if (get_dibr_depth_repair_mode() != 0)
@@ -150,8 +151,7 @@ edit(vc, '''                    if (ImGui::TreeNode("Legacy fallback tuning")) {
                         m_dibr_legacy_depth_curve->draw("Legacy Depth Response Curve");''', '''                    ImGui::EndDisabled();
                     if (ImGui::TreeNode("Legacy fallback tuning")) {
                         m_dibr_disparity_pixels->draw("Disparity (Pixels, legacy only)");
-                        m_dibr_reversed_depth->draw("Use Reversed-Z Depth (legacy/repair convention)");
-                        ImGui::TextWrapped("Disparity and Reversed-Z do not change validated geometric projection. Reversed-Z still selects the depth ordering convention used by legacy repair helpers.");
+                        ImGui::TextWrapped("Disparity changes only the legacy fallback. The geometric path uses captured device-Z unchanged at calibration 1.0. Reversed-Z selects the display, calibration and legacy repair convention.");
                         m_dibr_legacy_depth_curve->draw("Legacy Depth Response Curve");''')
 # snprintf has an explicit include even on branches whose transitive includes
 # happened to supply it. Keep this anchor independent of the shader changes.

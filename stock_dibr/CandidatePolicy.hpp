@@ -78,7 +78,7 @@ public:
             }
             entries_[index].identity = identity;
             entries_[index].info.id = next_id_;
-            next_id_ = next_id_ == std::numeric_limits<uint64_t>::max() ? 0 : next_id_ + 1;
+            next_id_ = next_id_ == (std::numeric_limits<uint64_t>::max)() ? 0 : next_id_ + 1;
         }
         auto& info = entries_[index].info;
         info.width = width;

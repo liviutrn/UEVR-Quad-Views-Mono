@@ -240,7 +240,7 @@ int main() try {
     // that makes the next compute dispatch see this queue's depth pixels.
 
     std::cout<<"STAGE production shader dispatch\n";
-    ComPtr<ID3DBlob> bytecode,error;const auto compiled=D3DCompile(shader,std::strlen(shader),"production DIBR",nullptr,nullptr,"main","cs_5_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&bytecode,&error);
+    ComPtr<ID3DBlob> bytecode,error;const auto compiled=D3DCompile(shader,std::strlen(shader),"production DIBR",nullptr,nullptr,"main","cs_5_0",D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&bytecode,&error);
     if(FAILED(compiled)){if(error)std::cerr<<static_cast<const char*>(error->GetBufferPointer());check(compiled);}
     D3D12_DESCRIPTOR_RANGE ranges[2]{};ranges[0]={D3D12_DESCRIPTOR_RANGE_TYPE_SRV,3,0,0,0};ranges[1]={D3D12_DESCRIPTOR_RANGE_TYPE_UAV,1,0,0,0};
     D3D12_ROOT_PARAMETER params[3]{};for(UINT i=0;i<2;++i){params[i].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;params[i].DescriptorTable={1,&ranges[i]};}
@@ -312,7 +312,7 @@ int main() try {
         for(UINT y=0;y<16;++y)for(UINT x=0;x<16;++x)values[(y+4)*48+x+8]=value(x,y);
         return values;
     };
-    auto run_fixture=[&](TestConstants c,const std::vector<float>* values=nullptr) {
+    auto run_fixture=[&](const TestConstants& c,const std::vector<float>* values=nullptr) {
         check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
         if(values) {
             if(fixture_ready){b=barrier(fixture_depth.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);cmd->ResourceBarrier(1,&b);}
