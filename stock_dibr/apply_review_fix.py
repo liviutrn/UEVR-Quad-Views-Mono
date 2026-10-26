@@ -83,7 +83,7 @@ edit("src/mods/vr/D3D12Component.cpp",
 
     const auto width = static_cast<uint32_t>""",
      """        m_dibr_single_view_preview_ready.store(false, std::memory_order_release);
-        m_dibr_single_view_ready_frames.store(0, std::memory_order_release);
+        if (m_stock_dibr_scope) m_dibr_single_view_ready_frames.store(0, std::memory_order_release);
         return;
     }
 
