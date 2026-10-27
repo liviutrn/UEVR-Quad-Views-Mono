@@ -85,14 +85,14 @@ c = replace_once(c, '''    std::shared_ptr<uevr::stalker2_native::PairFrame> ret
 {''', '''    std::shared_ptr<uevr::stalker2_native::PairFrame> retained_stalker_pair,
     std::optional<std::function<void(d3d12::CommandContext&, d3d12::dibr_transaction::ExecuteResult)>> submission_result)
 {''', 'definition')
-c = replace_once(c, '''    texture_ctx->commands.execute();
-    bool stalker_enqueued = false;''', '''    if (submission_result) {
+c = replace_once(c, '''    const auto stalker_fence_before = retained_stalker_pair ? texture_ctx->commands.fence_value : 0;
+    texture_ctx->commands.execute();''', '''    const auto stalker_fence_before = retained_stalker_pair ? texture_ctx->commands.fence_value : 0;
+    if (submission_result) {
         const auto result = texture_ctx->commands.execute_checked();
         (*submission_result)(texture_ctx->commands, result);
     } else {
         texture_ctx->commands.execute();
-    }
-    bool stalker_enqueued = false;''', 'submission')
+    }''', 'submission')
 hp.write_text(h, encoding='utf-8')
 cp.write_text(c, encoding='utf-8')
 print('Applied independent UI snapshot submission and retirement tracking')
