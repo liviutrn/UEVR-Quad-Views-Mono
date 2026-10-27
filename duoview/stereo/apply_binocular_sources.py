@@ -45,7 +45,7 @@ edit(f,'    CameraPose camera{};',
 '''    CameraPose camera{};
     std::array<CameraPose, 2> eye_cameras{};
     std::array<float,16> projection_right{};
-    bool binocular_enabled{};''')
+    // binocular_enabled is defined in the shared source model for WARP/geometry tests.''')
 edit(f,'        if (!frame.rectangles[i] || !frame.projections[i] || !frame.cameras[i]) return {};',
 '''        if (!frame.rectangles[i] || !frame.projections[i] || !frame.cameras[i]) return {};
         if (frame.binocular_enabled) {

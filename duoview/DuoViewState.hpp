@@ -13,6 +13,8 @@ struct ViewFrame {
     FrameConfig config;
     std::array<float, 16> projection{};
     CameraPose camera{};
+    // B4 direct stereo rendering is only permitted after both source poses are proven.
+    bool binocular_enabled{};
     std::optional<uint32_t> mono_source_frame{};
     bool camera_valid{}, main_family{}, consumed{}, gaze_valid{}, invalid{};
     std::array<bool, 2> rectangles{}, projections{}, cameras{};
