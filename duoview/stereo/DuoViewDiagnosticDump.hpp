@@ -2,6 +2,9 @@
 // One-shot offline diagnostics. Never used by the stereo renderer.
 #include <d3d12.h>
 #include <wrl/client.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <filesystem>
 #include <fstream>
@@ -165,7 +168,7 @@ class Session : public std::enable_shared_from_this<Session> {
                     auto hi=sorted.begin()+sorted.size()*99/100;
                     std::nth_element(sorted.begin(),lo,sorted.end());float v0=*lo;
                     std::nth_element(sorted.begin(),hi,sorted.end());float v1=*hi;
-                    const float span=std::max(1e-6f,v1-v0);
+                    const float span=(std::max)(1e-6f,v1-v0);
                     std::vector<uint8_t> gray(z.size()*4,255);
                     for(size_t p=0;p<z.size();++p) {
                         uint8_t q=(std::isfinite(z[p])&&z[p]>=0&&z[p]<=1)
