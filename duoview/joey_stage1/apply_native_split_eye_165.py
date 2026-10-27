@@ -163,6 +163,29 @@ edit(s,
     "Preserve Build165 identical-camera rule when OFF")
 
 hook = "src/mods/vr/FFakeStereoRenderingHook.cpp"
+# Stage1 converts is_using_mono() to the WHOLE mono family, including ID6.
+# Build165's second-camera replay was only ONE of the mono centering paths.
+# Joey's CalculateStereoViewOffset and CalculateStereoProjectionMatrix both
+# additionally force the entire DuoView producer to eye 0. Opt out of those
+# two MONO rules specifically for split-eye ID6. Do NOT change is_using_mono()
+# globally: DuoView's XR submission and source lifetime require it.
+edit(hook,
+    '    const bool mono = vr->is_using_mono();',
+    '''    const bool mono = vr->is_using_mono() && !vr->is_duoview_split_eye_enabled();
+    // UE5 double-precision ID6 producer: force exact physical 0=LEFT, 1=RIGHT.
+    // Native Joey remains responsible for eye orientation/IPD and head offset.
+    if (vr->is_duoview_split_eye_enabled() && g_hook->m_has_double_precision &&
+        (view_index == 0 || view_index == 1)) {
+        true_index = view_index;
+    }''',
+    "Undo Stage1 mono-centering IN the native eye-offset calculation for ID6 only")
+edit(hook,
+    '        if (vr->is_using_mono()) { true_index = 0; }',
+    '''        if (vr->is_duoview_split_eye_enabled() && g_hook->m_has_double_precision &&
+            (view_index == 0 || view_index == 1)) {
+            true_index = view_index;
+        } else if (vr->is_using_mono()) { true_index = 0; }''',
+    "Undo Stage1 mono-index override IN native projection for ID6 only")
 edit(hook,
     '''g_hook->m_has_double_precision && view_index == 1) {''',
     '''g_hook->m_has_double_precision && view_index == 1 && !vr->is_duoview_split_eye_enabled()) {''',
@@ -191,7 +214,7 @@ edit(hook,
                 const double dx=a[0]-b[0], dy=a[1]-b[1], dz=a[2]-b[2];
                 const double sq=dx*dx+dy*dy+dz*dz;
                 SPDLOG_INFO_EVERY_N_SEC(3,
-                    "[DuoView][Split165] Native source camera separation squared={:.5f} UE-units^2 (zero implies no physical stereo)",
+                    "[DuoView][Split165] Native camera delta^2={:.8f} UE-units^2 (source 0 LEFT / source 1 RIGHT)",
                     sq);
             }
         }
