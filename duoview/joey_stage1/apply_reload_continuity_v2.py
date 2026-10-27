@@ -5,7 +5,7 @@ Patch is applied AFTER the exact stable Build45 MPC and Build49 eye alignment.
 The only runtime interventions are:
   * Retry FOV collection/reflection resolution after a world, pawn, or XR reset
   * Reassert the two proven MPC_FOV scalars after a playable tick gap / rebinding
-  * One bounded ID6 quarantine retry after actual successful XR DuoView submissions
+  * One bounded ID6 retry ONLY after an observed save/world/pawn transition and prior XR submissions
 Never calls State::retire, configure_duoview or GPU device/swapchain operations.
 """
 import sys
@@ -174,39 +174,82 @@ one(
 # stable. Never retire the producer twice, touch command slots, reconfigure the
 # swapchains, or change the user's mode/XYZ/eye preferences from game tick.
 marker = '    // STALKER 2 DuoView foreground parity. Automatic only while ID6 is active.'
-recovery = r'''    // DUOVIEW RELOAD V2: bounded recovery using already-retired packet state.
-    // This cannot touch GPU resources or modify settings. A fresh producer
-    // packet is required by the original ID6 submission gates after rearm.
+recovery = r'''    // DUOVIEW RELOAD V3: ONLY recover after an observed scene/load transition.
+    // Known-good source producer, GPU compositor, and all user settings remain
+    // completely untouched. Original fault handler already retired bad packet.
     {
         struct DuoReloadV2 {
             uint64_t last_copied{};
             uint32_t proven_copies{};
             uint32_t stable_playable_ticks{};
+            uintptr_t observed_world{};
+            uintptr_t observed_pawn{};
             uintptr_t stable_world{};
             uintptr_t stable_pawn{};
+            bool initialized{};
             bool attempted{};
+            std::chrono::steady_clock::time_point last_tick{};
+            std::chrono::steady_clock::time_point reload_deadline{};
             std::chrono::steady_clock::time_point quarantine_since{};
         };
         static DuoReloadV2 recovery{};
         if (!is_using_duoview_mono()) {
             recovery = {};
         } else {
+            const auto now = std::chrono::steady_clock::now();
             const auto xr = get_openxr_runtime();
             const uint64_t copied = xr != nullptr ?
                 xr->duoview_copy_submits.load(std::memory_order_acquire) : 0;
             if (copied < recovery.last_copied) {
-                // An explicit OpenXR reset creates a fresh submission counter.
+                // XR reset or user reset of delivery counters. Never retain
+                // a retry authorization across a different counter lifetime.
                 recovery = {};
             }
+
+            auto* world = engine != nullptr ? engine->get_world() : nullptr;
+            auto* gameplay = world != nullptr ? sdk::UGameplayStatics::get() : nullptr;
+            auto* controller = gameplay != nullptr ?
+                gameplay->get_player_controller(world, 0) : nullptr;
+            auto* pawn = controller != nullptr ?
+                controller->get_acknowledged_pawn() : nullptr;
+            const auto world_id = reinterpret_cast<uintptr_t>(world);
+            const auto pawn_id = reinterpret_cast<uintptr_t>(pawn);
+
+            // A compositor fault alone NEVER authorizes automatic reactivation.
+            // Only an observed world/pawn transition or prolonged load pause
+            // opens a short window for one stable-scene retry.
+            const bool world_changed = recovery.initialized &&
+                recovery.observed_world != world_id;
+            const bool pawn_changed = recovery.initialized &&
+                recovery.observed_pawn != pawn_id;
+            const bool resumed_after_loading = recovery.initialized &&
+                recovery.last_tick.time_since_epoch().count() != 0 &&
+                now - recovery.last_tick > std::chrono::seconds(1);
+            const bool load_transition =
+                world_changed || pawn_changed || resumed_after_loading;
+            if (load_transition) {
+                recovery.reload_deadline = now + std::chrono::seconds(15);
+                recovery.attempted = false;
+                recovery.stable_playable_ticks = 0;
+                recovery.stable_world = 0;
+                recovery.stable_pawn = 0;
+                recovery.quarantine_since = {};
+                SPDLOG_INFO("[DuoView][ReloadV3] Scene/load transition observed; "
+                            "one-time rearm window opened");
+            }
+            recovery.observed_world = world_id;
+            recovery.observed_pawn = pawn_id;
+            recovery.initialized = true;
+            recovery.last_tick = now;
+
             const bool quarantined =
                 m_duoview_quarantined.load(std::memory_order_acquire);
             if (!quarantined && copied > recovery.last_copied) {
                 const uint64_t delta = copied - recovery.last_copied;
-                const uint64_t accumulated =
-                    static_cast<uint64_t>(recovery.proven_copies) + delta;
-                recovery.proven_copies =
-                    static_cast<uint32_t>(std::min<uint64_t>(accumulated, 30));
-                if (recovery.proven_copies >= 12) recovery.attempted = false;
+                recovery.proven_copies = static_cast<uint32_t>(
+                    std::min<uint64_t>(
+                        static_cast<uint64_t>(recovery.proven_copies) + delta,
+                        30));
             }
             recovery.last_copied = copied;
             if (!quarantined) {
@@ -215,40 +258,35 @@ recovery = r'''    // DUOVIEW RELOAD V2: bounded recovery using already-retired 
                 recovery.stable_pawn = 0;
                 recovery.quarantine_since = {};
             } else if (xr != nullptr && recovery.proven_copies >= 12 &&
-                       !recovery.attempted && engine != nullptr) {
-                auto* world = engine->get_world();
-                auto* gameplay = world != nullptr ? sdk::UGameplayStatics::get() : nullptr;
-                auto* controller = gameplay != nullptr ?
-                    gameplay->get_player_controller(world, 0) : nullptr;
-                auto* pawn = controller != nullptr ?
-                    controller->get_acknowledged_pawn() : nullptr;
-                if (world != nullptr && pawn != nullptr) {
-                    const auto world_id = reinterpret_cast<uintptr_t>(world);
-                    const auto pawn_id = reinterpret_cast<uintptr_t>(pawn);
-                    if (recovery.stable_world != world_id ||
-                        recovery.stable_pawn != pawn_id) {
-                        recovery.stable_playable_ticks = 0;
-                        recovery.quarantine_since = std::chrono::steady_clock::now();
-                    }
-                    recovery.stable_world = world_id;
-                    recovery.stable_pawn = pawn_id;
-                    if (recovery.stable_playable_ticks < 12)
-                        ++recovery.stable_playable_ticks;
-                    if (recovery.stable_playable_ticks >= 12 &&
-                        std::chrono::steady_clock::now() -
-                            recovery.quarantine_since >= std::chrono::milliseconds(350)) {
-                        recovery.attempted = true;
-                        recovery.proven_copies = 0;
-                        m_duoview_quarantined.store(false, std::memory_order_release);
-                        SPDLOG_INFO("[DuoView][ReloadV2] Stable playable world; rearmed ID6 "
-                                    "without touching GPU compositor or user settings");
-                    }
-                } else {
+                       !recovery.attempted &&
+                       now < recovery.reload_deadline &&
+                       world != nullptr && pawn != nullptr) {
+                // Stable pointer identity for 12 playable ticks AND 350 ms.
+                // Do not repeatedly rearm an actual GPU/producer failure.
+                if (recovery.stable_world != world_id ||
+                    recovery.stable_pawn != pawn_id) {
                     recovery.stable_playable_ticks = 0;
-                    recovery.stable_world = 0;
-                    recovery.stable_pawn = 0;
-                    recovery.quarantine_since = {};
+                    recovery.quarantine_since = now;
                 }
+                recovery.stable_world = world_id;
+                recovery.stable_pawn = pawn_id;
+                if (recovery.stable_playable_ticks < 12)
+                    ++recovery.stable_playable_ticks;
+                if (recovery.stable_playable_ticks >= 12 &&
+                    now - recovery.quarantine_since >=
+                        std::chrono::milliseconds(350)) {
+                    recovery.attempted = true;
+                    recovery.proven_copies = 0;
+                    m_duoview_quarantined.store(false, std::memory_order_release);
+                    SPDLOG_INFO("[DuoView][ReloadV3] Post-load recovery authorized: "
+                                "rearmed ID6 without touching GPU or user options");
+                }
+            } else if (quarantined &&
+                       (world == nullptr || pawn == nullptr)) {
+                recovery.stable_playable_ticks = 0;
+                recovery.stable_world = 0;
+                recovery.stable_pawn = 0;
+                recovery.quarantine_since = {};
             }
         }
     }
@@ -256,4 +294,4 @@ recovery = r'''    // DUOVIEW RELOAD V2: bounded recovery using already-retired 
 '''
 one(marker, recovery + marker)
 p.write_text(s, encoding="utf-8", newline="")
-print("PASS: Build45 MPC reload refresh, explicit reset epoch, bounded ID6 rearm with no GPU mutation.")
+print("PASS: Build45 MPC refresh, reset epoch, post-load ONLY ID6 rearm with no GPU mutation.")
