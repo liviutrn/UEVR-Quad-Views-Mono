@@ -15,6 +15,8 @@
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <chrono>
 #include "production_shader.hpp"
 #include "production_constants.hpp"
 using Microsoft::WRL::ComPtr;
@@ -242,20 +244,33 @@ int main() try {
     std::cout<<"STAGE production shader dispatch\n";
     ComPtr<ID3DBlob> bytecode,error;const auto compiled=D3DCompile(shader,std::strlen(shader),"production DIBR",nullptr,nullptr,"main","cs_5_0",D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&bytecode,&error);
     if(FAILED(compiled)){if(error)std::cerr<<static_cast<const char*>(error->GetBufferPointer());check(compiled);}
-    D3D12_DESCRIPTOR_RANGE ranges[2]{};ranges[0]={D3D12_DESCRIPTOR_RANGE_TYPE_SRV,3,0,0,0};ranges[1]={D3D12_DESCRIPTOR_RANGE_TYPE_UAV,1,0,0,0};
+    D3D12_DESCRIPTOR_RANGE ranges[2]{};ranges[0]={D3D12_DESCRIPTOR_RANGE_TYPE_SRV,3,0,0,0};ranges[1]={D3D12_DESCRIPTOR_RANGE_TYPE_UAV,3,0,0,0};
     D3D12_ROOT_PARAMETER params[3]{};for(UINT i=0;i<2;++i){params[i].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;params[i].DescriptorTable={1,&ranges[i]};}
     params[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_CBV;params[2].Descriptor.ShaderRegister=0;
     D3D12_STATIC_SAMPLER_DESC sampler{};sampler.Filter=D3D12_FILTER_MIN_MAG_MIP_LINEAR;sampler.AddressU=sampler.AddressV=sampler.AddressW=D3D12_TEXTURE_ADDRESS_MODE_CLAMP;sampler.MaxLOD=D3D12_FLOAT32_MAX;sampler.ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;
     D3D12_ROOT_SIGNATURE_DESC rsd{3,params,1,&sampler,D3D12_ROOT_SIGNATURE_FLAG_NONE};ComPtr<ID3DBlob> rsblob;
     check(D3D12SerializeRootSignature(&rsd,D3D_ROOT_SIGNATURE_VERSION_1,&rsblob,&error));ComPtr<ID3D12RootSignature> rs;check(dev->CreateRootSignature(0,rsblob->GetBufferPointer(),rsblob->GetBufferSize(),IID_PPV_ARGS(&rs)));
     D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};pd.pRootSignature=rs.Get();pd.CS={bytecode->GetBufferPointer(),bytecode->GetBufferSize()};ComPtr<ID3D12PipelineState> pso;check(dev->CreateComputePipelineState(&pd,IID_PPV_ARGS(&pso)));
-    D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;hd.NumDescriptors=4;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    std::array<ComPtr<ID3D12PipelineState>,3> visibility_pso;
+    const char* visibility_entries[]{"ClearVisibility","ScatterDepth","ScatterSource"};
+    for(UINT i=0;i<3;++i) {
+        ComPtr<ID3DBlob> code,compile_errors;
+        const auto hr=D3DCompile(shader,std::strlen(shader),"production visibility",nullptr,nullptr,visibility_entries[i],"cs_5_0",
+            D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&code,&compile_errors);
+        if(FAILED(hr)){if(compile_errors)std::cerr<<static_cast<const char*>(compile_errors->GetBufferPointer());check(hr);}
+        pd.CS={code->GetBufferPointer(),code->GetBufferSize()};check(dev->CreateComputePipelineState(&pd,IID_PPV_ARGS(&visibility_pso[i])));
+    }
+    auto visibility_depth=make(dev.Get(),tex(32,32,DXGI_FORMAT_R32_UINT,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    auto visibility_source=make(dev.Get(),tex(32,32,DXGI_FORMAT_R32_UINT,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;hd.NumDescriptors=6;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> descriptors;check(dev->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&descriptors)));const auto stride=dev->GetDescriptorHandleIncrementSize(hd.Type);auto cpu=descriptors->GetCPUDescriptorHandleForHeapStart();
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};srv.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;srv.Texture2D.MipLevels=1;srv.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srv.Format=DXGI_FORMAT_R8G8B8A8_UNORM;dev->CreateShaderResourceView(color.Get(),&srv,cpu);cpu.ptr+=stride;
     srv.Format=DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;dev->CreateShaderResourceView(snapshot.Get(),&srv,cpu);cpu.ptr+=stride;
     srv.Format=DXGI_FORMAT_R8G8B8A8_UNORM;dev->CreateShaderResourceView(color.Get(),&srv,cpu);cpu.ptr+=stride;
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};uav.ViewDimension=D3D12_UAV_DIMENSION_TEXTURE2D;uav.Format=DXGI_FORMAT_R8G8B8A8_UNORM;dev->CreateUnorderedAccessView(output.Get(),nullptr,&uav,cpu);
+    uav.Format=DXGI_FORMAT_R32_UINT;cpu.ptr+=stride;dev->CreateUnorderedAccessView(visibility_depth.Get(),nullptr,&uav,cpu);
+    cpu.ptr+=stride;dev->CreateUnorderedAccessView(visibility_source.Get(),nullptr,&uav,cpu);
     auto cb=make(dev.Get(),buf(256),D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);TestConstants constants{};
     constants.output_width=64;constants.output_height=constants.source_eye_width=constants.source_height=32;
     constants.depth_width=48;constants.depth_height=24;std::memcpy(constants.depth_uv_scale_bias,depth_uv.data(),sizeof(constants.depth_uv_scale_bias));constants.depth_is_double_wide=1;constants.reversed_depth=1;
@@ -328,7 +343,13 @@ int main() try {
         check(cb->Map(0,nullptr,&mapped));std::memcpy(mapped,&c,256);cb->Unmap(0,nullptr);
         b=barrier(output.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);cmd->ResourceBarrier(1,&b);
         cmd->SetDescriptorHeaps(1,heaps);cmd->SetComputeRootSignature(rs.Get());cmd->SetPipelineState(pso.Get());
-        gpu=descriptors->GetGPUDescriptorHandleForHeapStart();cmd->SetComputeRootDescriptorTable(0,gpu);gpu.ptr+=stride*3;cmd->SetComputeRootDescriptorTable(1,gpu);cmd->SetComputeRootConstantBufferView(2,cb->GetGPUVirtualAddress());cmd->Dispatch(8,4,1);
+        gpu=descriptors->GetGPUDescriptorHandleForHeapStart();cmd->SetComputeRootDescriptorTable(0,gpu);gpu.ptr+=stride*3;cmd->SetComputeRootDescriptorTable(1,gpu);cmd->SetComputeRootConstantBufferView(2,cb->GetGPUVirtualAddress());
+        if(c.reconstruction_mode!=0 && c.use_true_reprojection && (c.inspector_view==0 || c.inspector_view==6)) {
+            D3D12_RESOURCE_BARRIER order{};order.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            for(auto& auxiliary:visibility_pso){cmd->SetPipelineState(auxiliary.Get());cmd->Dispatch(4,4,1);cmd->ResourceBarrier(1,&order);}
+            cmd->SetPipelineState(pso.Get());
+        }
+        cmd->Dispatch(8,4,1);
         b=barrier(output.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);cmd->ResourceBarrier(1,&b);
         from.pResource=output.Get();to.pResource=readback.Get();to.PlacedFootprint=footprint;cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
         check(cmd->Close());q->ExecuteCommandLists(1,lists);wait(q.Get());
@@ -423,6 +444,129 @@ int main() try {
     r6.enable_ui_footprint_reprojection=1;r6.ui_footprint_reprojection_strength=0;
     require(run_fixture(r6)==preserved,"preserve failed to bypass legacy local strength/color modifications");
     r6.preserve_stereo_strength=0;require(run_fixture(r6)!=preserved,"legacy flattening fixture did not activate any local controls");
+    // The optional visibility preflight can fail while the R6 pipeline remains
+    // usable. Its absent scratch resources are represented by typed null UAVs.
+    const auto fallback_reference=run_fixture(r6,&plane);
+    auto optional_cpu=descriptors->GetCPUDescriptorHandleForHeapStart();optional_cpu.ptr+=stride*4;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC optional_uav{};optional_uav.Format=DXGI_FORMAT_R32_UINT;optional_uav.ViewDimension=D3D12_UAV_DIMENSION_TEXTURE2D;
+    dev->CreateUnorderedAccessView(nullptr,nullptr,&optional_uav,optional_cpu);optional_cpu.ptr+=stride;
+    dev->CreateUnorderedAccessView(nullptr,nullptr,&optional_uav,optional_cpu);
+    require(run_fixture(r6)==fallback_reference,"legacy fallback changed with absent optional visibility scratch UAVs");
+    optional_cpu=descriptors->GetCPUDescriptorHandleForHeapStart();optional_cpu.ptr+=stride*4;
+    dev->CreateUnorderedAccessView(visibility_depth.Get(),nullptr,&optional_uav,optional_cpu);optional_cpu.ptr+=stride;
+    dev->CreateUnorderedAccessView(visibility_source.Get(),nullptr,&optional_uav,optional_cpu);
+    std::cout<<"STAGE R7 production forward visibility analytic scenes\n";
+    // Inspect the actual atomic buffers as well as resolved color. This makes
+    // the occlusion oracle independent of the shader's color reconstruction.
+    auto read_visibility=[&](ID3D12Resource* resource) {
+        const auto desc=resource->GetDesc();D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};UINT64 size{};
+        dev->GetCopyableFootprints(&desc,0,1,0,&fp,nullptr,nullptr,&size);
+        auto result=make(dev.Get(),buf(size),D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
+        check(post_submit_allocator->Reset());check(cmd->Reset(post_submit_allocator.Get(),nullptr));capture.on_command_list_reset(cmd.Get());
+        auto transition=barrier(resource,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);cmd->ResourceBarrier(1,&transition);
+        D3D12_TEXTURE_COPY_LOCATION source{},destination{};source.pResource=resource;source.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        destination.pResource=result.Get();destination.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;destination.PlacedFootprint=fp;
+        cmd->CopyTextureRegion(&destination,0,0,0,&source,nullptr);
+        transition=barrier(resource,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);cmd->ResourceBarrier(1,&transition);
+        check(cmd->Close());q->ExecuteCommandLists(1,lists);wait(q.Get());
+        void* data{};check(result->Map(0,nullptr,&data));std::vector<uint32_t> values(32*32);
+        for(UINT y=0;y<32;++y)std::memcpy(values.data()+y*32,static_cast<char*>(data)+y*fp.Footprint.RowPitch,32*sizeof(uint32_t));
+        result->Unmap(0,nullptr);return values;
+    };
+    TestConstants r7=constants;r7.reconstruction_mode=1;r7.preserve_stereo_strength=1;r7.true_reprojection_strength=1;
+    r7.depth_scale=1;r7.depth_sampling_mode=1;r7.depth_repair_mode=0;
+    r7.visibility_fill_radius=16;r7.visibility_depth_tolerance=.03f;
+    std::memcpy(r7.depth_uv_scale_bias,r6.depth_uv_scale_bias,sizeof(r7.depth_uv_scale_bias));
+    // Analytic projection: x' = x - 8*near_depth pixels, y'=y.
+    // The character occupies source x16..23, y8..23; background continues
+    // on either side. A slope in y makes this more than a constant-plane test.
+    auto character=fixture([](UINT x,UINT y){return x>=8&&x<12&&y>=4&&y<12?.75f+.005f*(float(y)-8):.25f;});
+    auto verify_winners=[&](const TestConstants& c,const std::vector<float>& depths) {
+        const auto indices=read_visibility(visibility_source.Get());
+        const auto keys=read_visibility(visibility_depth.Get());
+        std::vector<uint32_t> expected(32*32,UINT32_MAX);std::vector<float> closest(32*32,-1.f);
+        for(UINT y=0;y<32;++y)for(UINT x=0;x<32;++x) {
+            const float z=depths[(y/2+4)*48+x/2+8];
+            const float point[]{(float(x)+.5f)/16.f-1.f,1.f-(float(y)+.5f)/16.f,z,1.f};
+            float projected[4]{};for(UINT row=0;row<4;++row)for(UINT column=0;column<4;++column)
+                projected[row]+=c.source_to_right[column*4+row]*point[column];
+            if(!std::isfinite(z)||z<0||z>1||!std::isfinite(projected[3])||projected[3]<=1e-6f)continue;
+            const float target_depth=projected[2]/projected[3];
+            const float tx=(float(x)+.5f)+c.true_reprojection_strength*((projected[0]/projected[3]+1.f)*16.f-(float(x)+.5f));
+            const float ty=(float(y)+.5f)+c.true_reprojection_strength*((1.f-projected[1]/projected[3])*16.f-(float(y)+.5f));
+            if(!std::isfinite(target_depth)||target_depth<0||target_depth>1||!std::isfinite(tx)||!std::isfinite(ty)||tx<0||tx>=32||ty<0||ty>=32)continue;
+            const UINT target=UINT(std::floor(ty))*32+UINT(std::floor(tx));
+            const float near_value=c.reversed_depth?target_depth:1.f-target_depth;
+            const UINT index=y*32+x;
+            if(near_value>closest[target] || (near_value==closest[target] && index<expected[target])){closest[target]=near_value;expected[target]=index;}
+        }
+        for(UINT i=0;i<32*32;++i) {
+            require(indices[i]==expected[i],"R7 forward source-index oracle failed (projection, target-Z ordering or deterministic tie)");
+            float actual_depth{};std::memcpy(&actual_depth,&keys[i],sizeof(actual_depth));
+            require(expected[i]==UINT32_MAX?keys[i]==0:std::abs(actual_depth-closest[i])<.000001f,"R7 forward target-depth key oracle failed");
+        }
+        return indices;
+    };
+    auto character_image=run_fixture(r7,&character);auto character_indices=verify_winners(r7,character);
+    require(character_indices[16*32+12]==16*32+18,"slanted foreground did not occlude the overlapping background");
+    // Character moves six pixels and background moves two. x18..21 is newly
+    // exposed, so only the right visible background (source x24) may fill it.
+    for(UINT x=18;x<=21;++x)require(channel(character_image,x+32,16)==192,"disocclusion fill copied or stretched the foreground character");
+    for(UINT y=0;y<32;++y)for(UINT x=0;x<32;++x) {
+        require(channel(character_image,x,y)==int(x*8),"R7 changed the source eye");
+        require(channel(character_image,x,y,3)==255 && channel(character_image,x+32,y,3)==255,"R7 alpha is not opaque");
+    }
+    // Conventional Z with the same near-oriented x displacement must produce
+    // exactly the same visibility and color as reversed Z.
+    auto conventional=character;for(UINT y=4;y<20;++y)for(UINT x=8;x<24;++x)conventional[y*48+x]=1.f-character[y*48+x];
+    r7.reversed_depth=0;r7.source_to_right[8]=.5f;r7.source_to_right[12]=-.5f;
+    auto conventional_image=run_fixture(r7,&conventional);verify_winners(r7,conventional);
+    for(size_t i=0;i<character_image.size();++i)require(std::abs(int(conventional_image[i])-int(character_image[i]))<=1,"normal/reversed Z changed the same geometric scene");
+    // Flip only target Z while preserving the source projection. Source-near
+    // becomes target-far: source Z ordering would select the wrong surface.
+    r7.reversed_depth=1;r7.source_to_right[8]=-.5f;r7.source_to_right[12]=0;
+    r7.source_to_right[10]=-1;r7.source_to_right[14]=1;
+    run_fixture(r7,&character);auto flipped_indices=verify_winners(r7,character);
+    require(flipped_indices[16*32+12]==16*32+14,"occlusion used source Z instead of projected target Z");
+    r7.source_to_right[10]=1;r7.source_to_right[14]=0;
+    // A 4.25-pixel translation on a coherent plane has an exact linear-ramp
+    // color oracle. Refinement must recover fractional sampling, not stair steps.
+    auto fractional_plane=fixture([](UINT,UINT){return .53125f;});
+    auto fractional=run_fixture(r7,&fractional_plane);verify_winners(r7,fractional_plane);
+    for(UINT x=2;x<24;++x)require(std::abs(channel(fractional,x+32,16)-(int(x*8)+34))<=1,"fractional-plane forward reconstruction lost subpixel displacement");
+    // Far reversed-Z zero is valid and must not be confused with clear key 0.
+    auto far_plane=fixture([](UINT,UINT){return 0.f;});
+    auto far_image=run_fixture(r7,&far_plane);auto far_indices=verify_winners(r7,far_plane);
+    for(UINT i=0;i<32*32;++i)require(far_indices[i]==i,"valid zero-depth far plane became uncovered");
+    for(UINT x=0;x<32;++x)require(channel(far_image,x+32,16)==int(x*8),"zero-depth far plane lost its source pixels");
+    auto normal_far=fixture([](UINT,UINT){return 1.f;});r7.reversed_depth=0;r7.source_to_right[8]=.5f;r7.source_to_right[12]=-.5f;
+    run_fixture(r7,&normal_far);verify_winners(r7,normal_far);
+    r7.reversed_depth=1;r7.source_to_right[8]=-.5f;r7.source_to_right[12]=0;
+    // Compression makes multiple equal-depth texels land in each target pixel.
+    // Source index must deterministically choose the first, independent of GPU order.
+    r7.source_to_right[0]=.5f;run_fixture(r7,&plane);verify_winners(r7,plane);r7.source_to_right[0]=1;
+    // Inspector colors encode direct coverage, verified fill and unresolved
+    // pixels explicitly. Every visualization is binocular and opaque.
+    r7.inspector_view=6;auto coverage=run_fixture(r7,&character);binocular(coverage);
+    require(channel(coverage,12,16,1)>180 && channel(coverage,12,16,2)<40,"coverage inspector direct sample is not green");
+    require(channel(coverage,19,16,0)==0 && channel(coverage,19,16,2)==255,"coverage inspector verified background fill is not cyan");
+    r7.visibility_fill_radius=0;auto unfilled=run_fixture(r7);binocular(unfilled);
+    require(channel(unfilled,19,16,0)==255 && channel(unfilled,19,16,1)<20,"coverage inspector unresolved pixel is not red");
+    r7.visibility_fill_radius=16;
+    auto invalid_projection=[&](const TestConstants& invalid) {
+        const auto image=run_fixture(invalid,&plane);const auto indices=verify_winners(invalid,plane);binocular(image);
+        for(UINT i=0;i<32*32;++i)require(indices[i]==UINT32_MAX,"invalid projection emitted a phantom covered source");
+        require(channel(image,16,16,0)==255 && channel(image,16,16,1)<20,"invalid projection was not visibly unresolved");
+    };
+    auto invalid=r7;invalid.source_to_right[15]=-1;invalid_projection(invalid);
+    invalid=r7;invalid.source_to_right[0]=std::numeric_limits<float>::quiet_NaN();invalid_projection(invalid);
+    invalid=r7;invalid.source_to_right[14]=2;invalid_projection(invalid);
+    // Report this deliberately as CPU-observed WARP dispatch/readback latency;
+    // it is not a physical GPU/headset performance measurement.
+    r7.inspector_view=0;const auto timing_start=std::chrono::steady_clock::now();
+    for(UINT iteration=0;iteration<5;++iteration)run_fixture(r7,iteration==0?&character:nullptr);
+    const auto warp_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-timing_start).count()/5.;
+    std::cout<<"R7 WARP CPU-observed dispatch/wait/readback mean (5 frames): "<<warp_ms<<" ms (not hardware GPU timing)\n";
     // Restore capture SRVs before the queue/capture lifetime regressions below.
     fixture_cpu=descriptors->GetCPUDescriptorHandleForHeapStart();fixture_cpu.ptr+=stride;
     srv.Format=DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;dev->CreateShaderResourceView(snapshot.Get(),&srv,fixture_cpu);
@@ -510,7 +654,7 @@ int main() try {
         b=barrier(resource,D3D12_RESOURCE_STATE_DEPTH_WRITE,read);cmd->ResourceBarrier(1,&b);selection_capture.on_post_resource_barriers(cmd.Get(),1,&b);
     };
     auto submit_selection_frame=[&]() {check(cmd->Close());q->ExecuteCommandLists(1,lists);wait(q.Get());};
-    auto verify_selected_pixels=[&](ID3D12Resource* selected) {
+    auto verify_selected_pixels=[&](ID3D12Resource* selected,float expected=.8f) {
         // A source-ID assertion alone could miss leasing the wrong slot.
         const auto desc=selected->GetDesc();D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};UINT64 size{};
         dev->GetCopyableFootprints(&desc,0,1,0,&fp,nullptr,nullptr,&size);
@@ -520,7 +664,7 @@ int main() try {
         dst.pResource=result.Get();dst.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;dst.PlacedFootprint=fp;cmd->CopyTextureRegion(&dst,0,0,0,&src,nullptr);
         b=barrier(selected,D3D12_RESOURCE_STATE_COPY_SOURCE,read);cmd->ResourceBarrier(1,&b);submit_selection_frame();
         void* data{};check(result->Map(0,nullptr,&data));float sample{};std::memcpy(&sample,data,4);result->Unmap(0,nullptr);
-        require(std::abs(sample-.8f)<.00001f,"manual candidate ID leased pixels from the wrong source");
+        require(std::abs(sample-expected)<.00001f,"candidate family leased pixels from the wrong physical source");
     };
     begin_selection_frame();upload(second_depth.Get(),[](UINT,UINT){return .8f;});
     b=barrier(second_depth.Get(),D3D12_RESOURCE_STATE_COPY_DEST,read);cmd->ResourceBarrier(1,&b);
@@ -553,7 +697,63 @@ int main() try {
     begin_selection_frame();selection_pass(second_depth.Get(),second_dsv,32);submit_selection_frame();
     selected_snapshot=selection_capture.acquire();require(bool(selected_snapshot),"reset did not rearm fresh automatic acquisition");
     require(selection_capture.active_candidate_id()!=0 && selection_capture.active_candidate_id()!=second_id,"reset reused an invalidated candidate ID");
-    verify_selected_pixels(selected_snapshot.Get());selection_capture.finish_frame();wait(q.Get());g_capture=&capture;
+    verify_selected_pixels(selected_snapshot.Get());selection_capture.finish_frame();wait(q.Get());
+
+    std::cout<<"STAGE rotating producer family, stable equal-area choice and manual family pin\n";
+    // Two physical resources alternate at the same executed producer route.
+    // A second equal-sized pass at a distinct ordinal is a separate family.
+    auto rotating_b=make(dev.Get(),tex(32,32,DXGI_FORMAT_R32_TYPELESS,D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+    auto competing_depth=make(dev.Get(),tex(32,32,DXGI_FORMAT_R32_TYPELESS,D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL),D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+    check(second_depth->SetName(L"R7_MainSceneDepth"));check(rotating_b->SetName(L"R7_MainSceneDepth"));
+    check(competing_depth->SetName(L"R7_SecondaryDepth"));
+    const auto main_name_hash=stock_dibr::producer_resource_name_hash(second_depth.Get());
+    require(main_name_hash!=0 && main_name_hash==stock_dibr::producer_resource_name_hash(rotating_b.Get()),"actual D3D12 resource debug names did not corroborate the rotating family");
+    require(main_name_hash!=stock_dibr::producer_resource_name_hash(competing_depth.Get()),"different named producer was conflated with the main family");
+    D3D12_DESCRIPTOR_HEAP_DESC rotation_heap_desc{};rotation_heap_desc.Type=D3D12_DESCRIPTOR_HEAP_TYPE_DSV;rotation_heap_desc.NumDescriptors=3;
+    ComPtr<ID3D12DescriptorHeap> rotation_heap;check(dev->CreateDescriptorHeap(&rotation_heap_desc,IID_PPV_ARGS(&rotation_heap)));
+    auto rotation_a_dsv=rotation_heap->GetCPUDescriptorHandleForHeapStart();auto rotation_b_dsv=rotation_a_dsv;rotation_b_dsv.ptr+=selection_dsv_stride;
+    auto competing_dsv=rotation_b_dsv;competing_dsv.ptr+=selection_dsv_stride;
+    dev->CreateDepthStencilView(second_depth.Get(),&second_desc,rotation_a_dsv);
+    dev->CreateDepthStencilView(rotating_b.Get(),&second_desc,rotation_b_dsv);
+    dev->CreateDepthStencilView(competing_depth.Get(),&second_desc,competing_dsv);
+    selection_capture.reset();selection_capture.configure(dev.Get(),q.Get(),64,32,true);g_capture=&selection_capture;
+    selection_capture.on_depth_stencil_view_created(second_depth.Get(),&second_desc,rotation_a_dsv);
+    selection_capture.on_depth_stencil_view_created(rotating_b.Get(),&second_desc,rotation_b_dsv);
+    selection_capture.on_depth_stencil_view_created(competing_depth.Get(),&second_desc,competing_dsv);
+    begin_selection_frame();upload(rotating_b.Get(),[](UINT,UINT){return .3f;});upload(competing_depth.Get(),[](UINT,UINT){return .6f;});
+    b=barrier(rotating_b.Get(),D3D12_RESOURCE_STATE_COPY_DEST,read);cmd->ResourceBarrier(1,&b);
+    b=barrier(competing_depth.Get(),D3D12_RESOURCE_STATE_COPY_DEST,read);cmd->ResourceBarrier(1,&b);
+    selection_pass(second_depth.Get(),rotation_a_dsv,32);selection_pass(competing_depth.Get(),competing_dsv,32);submit_selection_frame();
+    auto rotation_snapshot=selection_capture.acquire();require(bool(rotation_snapshot),"initial equal-area rotating producer could not be acquired");
+    const auto family_id=selection_capture.active_candidate_id();require(family_id!=0,"rotating family has no stable ID");
+    verify_selected_pixels(rotation_snapshot.Get(),.8f);selection_capture.finish_frame();wait(q.Get());
+    uint64_t a_physical{},b_physical{};
+    for(UINT frame=1;frame<=4;++frame) {
+        if(frame==3)require(selection_capture.select_candidate(family_id),"stable producer family could not be manually pinned");
+        begin_selection_frame();const bool use_b=(frame&1u)!=0;
+        selection_pass(use_b?rotating_b.Get():second_depth.Get(),use_b?rotation_b_dsv:rotation_a_dsv,32);
+        selection_pass(competing_depth.Get(),competing_dsv,32);submit_selection_frame();
+        rotation_snapshot=selection_capture.acquire();require(bool(rotation_snapshot),"rotating producer family became unavailable during normal A/B rotation");
+        require(selection_capture.active_candidate_id()==family_id,"equal-area competitor caused automatic flip-flop or manual pin changed family");
+        const auto metadata=selection_capture.candidates();require(metadata.size()==2,"rotating allocations created extra producer families");
+        for(const auto& candidate:metadata)if(candidate.id==family_id) {
+            require(candidate.members==2 && candidate.available && candidate.route_confidence==2,"rotating producer did not report both name-corroborated physical members");
+            if(use_b)b_physical=candidate.physical_id;else a_physical=candidate.physical_id;
+        }
+        verify_selected_pixels(rotation_snapshot.Get(),use_b?.3f:.8f);selection_capture.finish_frame();wait(q.Get());
+    }
+    require(a_physical && b_physical && a_physical!=b_physical,"rotating family obscured physical-member identity");
+    require(selection_capture.select_candidate(0),"automatic selection could not be rearmed after family pin");
+    // A transient absence must not flip to an equal-area alternate. After the
+    // documented three-epoch grace, a fresh competing producer becomes usable.
+    for(UINT absent=1;absent<=3;++absent) {
+        begin_selection_frame();selection_pass(competing_depth.Get(),competing_dsv,32);submit_selection_frame();
+        rotation_snapshot=selection_capture.acquire();
+        if(absent<3)require(!rotation_snapshot,"automatic family switched before absence grace elapsed");
+        else {require(bool(rotation_snapshot) && selection_capture.active_candidate_id()!=family_id,"automatic family failed to recover after three absent epochs");verify_selected_pixels(rotation_snapshot.Get(),.6f);}
+        selection_capture.finish_frame();wait(q.Get());
+    }
+    g_capture=&capture;
 
     std::cout<<"STAGE failed depth fence signals retain submitted resources across list Reset\n";
     proxy->forward_via_virtual=false;g_opaque_outer_queue=nullptr;
@@ -605,5 +805,5 @@ int main() try {
     require(g_proxy_execute_calls==original_calls_before_clear+1,"cached detour dropped real submission after clear");
     require(g_submit_callbacks==callbacks_before_clear,"retired hook still invoked its observer");
     ComPtr<ID3D12InfoQueue> info;if(SUCCEEDED(dev.As(&info)))for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size{};info->GetMessage(i,nullptr,&size);std::vector<char> data(size);auto* message=reinterpret_cast<D3D12_MESSAGE*>(data.data());check(info->GetMessage(i,message,&size));if(message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)throw std::runtime_error(message->pDescription);}
-    std::cout<<"PASS: actual queue-submit hook covers distinct dummy/proxy vtables and cached native dispatch, observer reentrancy guard, canonical command-list aliases, native inner callback under opaque outer wrappers, exactly-once publication, alternate direct-queue GPU wait, wrong-producer/late-bind rejection, teardown forwarding, automatic captured-list submission, immediate reset preservation, actual live capture header + production shader on WARP; actual multi-producer manual selection with quota isolation, missing-source fail-closed and reset-generation reacquisition; actual UE5 format19 D32+S8 depth plane, padded allocation with DLSS-sized viewport, distinct eyes, strength0-through2 monotonic known-plane displacement, opaque alpha, R6 padded-rect point/edge-aware filtering, calibrated depth conventions, raw/readable/edge/overlay/confidence binocular inspectors, exposure isolation, isolated-outlier repair with strand/silhouette protection, preserve2x legacy-control bypass, fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
+    std::cout<<"PASS: actual queue-submit hook covers distinct dummy/proxy vtables and cached native dispatch, observer reentrancy guard, canonical command-list aliases, native inner callback under opaque outer wrappers, exactly-once publication, alternate direct-queue GPU wait, wrong-producer/late-bind rejection, teardown forwarding, automatic captured-list submission, immediate reset preservation, actual live capture header + production shader on WARP; actual multi-producer manual selection with quota isolation, missing-source fail-closed and reset-generation reacquisition; actual UE5 format19 D32+S8 depth plane, padded allocation with DLSS-sized viewport, distinct eyes, strength0-through2 monotonic known-plane displacement, opaque alpha, R6 padded-rect point/edge-aware filtering, calibrated depth conventions, raw/readable/edge/overlay/confidence binocular inspectors, exposure isolation, isolated-outlier repair with strand/silhouette protection, preserve2x legacy-control bypass; R7 production clear/scatter/resolve entrypoints, slanted character occlusion and projected target-Z/source-index analytic oracles, fractional plane subpixel reconstruction, normal/reversed far-plane sentinel coverage, verified background-only fill, binocular direct/filled/unresolved coverage inspector, invalid projection rejection, typed-null-UAV legacy fallback, named rotating A/B producer family fresh pixels and stable ties/manual pin/absence grace; fresh next-frame pixels, stale rejection, discarded-list reset, no D3D12 errors. "<<different<<" distinct pixel pairs.\n"<<capture.summary()<<"\n";
 } catch(const std::exception& e) {std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}

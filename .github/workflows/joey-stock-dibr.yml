@@ -117,6 +117,15 @@ jobs:
       - name: Apply R6 inspector and comparison UI
         run: python stock_dibr/apply_inspector_ui.py backend
 
+      - name: Apply R7 visibility-aware reconstruction shader
+        run: python stock_dibr/apply_visibility_shader.py backend
+
+      - name: Apply R7 visibility pipeline
+        run: python stock_dibr/apply_visibility_pipeline.py backend
+
+      - name: Apply R7 stable depth selection UI
+        run: python stock_dibr/apply_stable_depth_ui.py backend
+
       - name: Run stock DIBR policy and WARP tests
         shell: pwsh
         run: |

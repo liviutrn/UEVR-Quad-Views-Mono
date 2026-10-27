@@ -189,4 +189,75 @@ builds. The shader stage also copies the portable candidate policy header into
 the generated backend. Portable candidate-policy tests run on Linux and
 Windows; Windows WARP, the pinned backend build, the full compatibility suite,
 and headset validation must be read from the matching workflow run. No R6
-headset validation is recorded here.
+acceptance result was recorded; the user's negative headset feedback is
+summarized under Revision 7.
+
+Revision 7: visibility reconstruction and producer-pattern IDs
+--------------------------------------------------------------
+R6 headset feedback was negative and does not constitute acceptance. Automatic
+depth selection produced an image, but the displayed physical candidate ID
+changed more than once per second and manually selected IDs did not work
+reliably. R6 IDs identify individual D3D resource objects. When the engine
+rotates resources for one logical stream, an exact physical ID can have no
+fresh slot in a Present interval even while another allocation is active. R6
+failed closed instead of using an unrelated or stale depth image.
+
+R7 now records physical members separately from heuristic producer-pattern IDs.
+A new allocation joins an existing pattern only when its executed route is
+compatible and is corroborated by a repeated DSV descriptor handle or the
+exact same nonzero D3D resource debug-name hash. Format, viewport, queue, route
+shape, and ordinal alone cannot merge resources. These markers can be shared
+by unrelated passes or recycled; they are heuristics, not unique camera proof.
+If evidence is missing or contradictory, the candidate stays separate or is
+marked ambiguous; an ambiguous pattern cannot be manually pinned. Resource
+names may be absent and DSV handles may not stay stable across a pool, so a
+rotating source may remain split into physical candidates and manual selection
+may still be unavailable. The grouping does not establish semantic camera
+identity or prove that depth and color came from the same camera. Windows WARP
+and headset verification are pending.
+
+Auto initially uses the R6 largest-area/latest-sequence winner, then holds its
+current choice indefinitely while it remains fresh and valid. Resource size
+alone never upgrades the choice. Auto changes after the current choice is
+absent or invalid for three consecutive epochs. During that grace period, it
+may acquire a fresh current-frame physical fallback; it never uses a
+previous-frame slot. Manual pattern selection stays pinned and fails closed if
+no fresh matching physical member is available.
+
+R7 adds a selectable Visibility-aware reconstruction mode (the new UI default)
+and retains R6 inverse reconstruction for comparison. The R7 path
+forward-projects current source pixels and builds per-eye unsigned-integer
+visibility-depth and source-index maps. A depth pass picks the nearest
+projected surface; a source pass chooses a deterministic winner for equal-depth
+collisions. The resulting source-index map marks actual coverage and holes for
+the current frame. It uses no temporal color or depth history.
+
+Background fill defaults to a 32-pixel search radius, is bounded to 64 pixels,
+and can be disabled with radius zero. It fills only a small hole with visible
+samples on both sides, a depth discontinuity at its boundaries, and a stable
+farther background run. It cannot reveal surfaces hidden from the captured
+view, recover missing geometry, or establish camera provenance. The coverage
+inspector uses green for covered pixels, cyan for bounded fill, red for
+unresolved regions using the R6 geometric fallback, and purple when visibility
+is unavailable. Inspector views 1–5 and reconstruction mode 0 retain the R6
+views/path. If visibility support, pipeline creation, or scratch allocation
+fails, the optional path reports the reason and the current frame uses R6; it
+does not block normal R6 setup. Near-character artifacts from incorrect or
+incomplete input depth remain unresolved by this pass.
+
+The user found that strength 2.0 looked like reduced world scale and prefers
+1.0. Strength 1.0 remains the preferred baseline; increasing strength changes
+perceived scale and is not a quality setting. Near-character artifacts also
+remained in R6, and its isolated-spike repair did not improve them.
+
+The workflow applies R7 visibility shader, visibility pipeline, and stable
+depth-selection UI after both R6 stages. The R6 shader stage still copies the
+capture headers into the generated backend before R7 runs. Source pins and the
+existing policy/WARP test step, backend build, compatibility targets, frontend
+tests/build, and package order are unchanged. `run_tests.py` marks the new
+Windows-only R7 visibility analytic oracles, stable named-depth rotation, and
+legacy null-visibility-UAV fallback as Windows-only in its `test-scope.json`
+output. The local portable policy tests reported zero failures, including a
+150-epoch check that a larger resource does not replace a fresh Auto choice.
+Windows WARP, full builds, compatibility tests, and headset behavior remain
+pending. No R7 headset acceptance is claimed.

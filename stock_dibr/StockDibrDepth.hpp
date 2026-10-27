@@ -16,6 +16,33 @@
 #include <vector>
 
 namespace stock_dibr {
+// Exact, bounded debug-name bytes are a producer marker, not a camera label.
+// GUID values are from Microsoft/DirectX-Headers include/directx/d3dcommon.h.
+// Local constants avoid adding a dxguid library dependency.
+inline uint64_t producer_resource_name_hash(ID3D12Object* object) {
+    if (!object) return 0;
+    static constexpr GUID NameW{0x4cca5fd8,0x921f,0x42c8,{0x85,0x66,0x70,0xca,0xf2,0xa9,0xb7,0x41}};
+    static constexpr GUID NameA{0x429b8c22,0x9188,0x4b0c,{0x87,0x42,0xac,0xb0,0xbf,0x85,0xc2,0x00}};
+    const GUID* keys[]{&NameW, &NameA};
+    for (size_t key = 0; key < 2; ++key) {
+        UINT size{};
+        if (FAILED(object->GetPrivateData(*keys[key], &size, nullptr)) || !size || size > 1024) continue;
+        if (key == 0 && size % sizeof(wchar_t)) continue;
+        std::array<unsigned char, 1024> bytes{};
+        const auto expected = size;
+        if (FAILED(object->GetPrivateData(*keys[key], &size, bytes.data())) || size != expected) continue;
+        bool nonempty{};
+        uint64_t hash = 14695981039346656037ull;
+        hash ^= key + 1; hash *= 1099511628211ull;
+        for (UINT i = 0; i < size; ++i) {
+            nonempty = nonempty || bytes[i] != 0;
+            hash ^= bytes[i]; hash *= 1099511628211ull;
+        }
+        if (nonempty) return hash ? hash : 1;
+    }
+    return 0;
+}
+
 // Captures use a verified direct producer queue; alternate queues require an
 // explicit producer fence and a GPU wait on the presentation queue. A slot
 // belongs to its recording list until actual ExecuteCommandLists, and then to
@@ -59,6 +86,7 @@ class DepthCapture final : public D3D12DepthStencilObserver {
         };
         std::array<BindingProof, BindingProofCapacity> proofs{};
         UINT proof_count{};
+        bool proof_overflow{};
         uint64_t touch{}, event{};
     };
     struct RetiredGeneration {
@@ -73,13 +101,16 @@ class DepthCapture final : public D3D12DepthStencilObserver {
         D3D12_VIEWPORT viewport{};
         Ptr<IUnknown> queue_identity, list_identity;
         uint64_t epoch{}, batch{}, event{};
-        UINT list_index{};
+        UINT list_index{}, route_ordinal{};
+        bool route_valid{};
+        SIZE_T dsv_handle{};
     };
 
     mutable std::mutex mutex;
     std::array<Slot, Capacity> slots;
     CandidatePolicy<Capacity> candidate_policy;
-    std::array<Ptr<IUnknown>, Capacity> candidate_identities;
+    std::array<Ptr<IUnknown>, CandidatePolicy<Capacity>::MemberCapacity> candidate_identities;
+    std::array<Ptr<IUnknown>, Capacity> producer_identities;
     Ptr<ID3D12Device> device;
     Ptr<ID3D12CommandQueue> queue;
     Ptr<ID3D12Fence> fence;
@@ -164,6 +195,7 @@ class DepthCapture final : public D3D12DepthStencilObserver {
             }
             if (exists) continue;
             if (state.proof_count == BindingProofCapacity) {
+                state.proof_overflow = true;
                 std::move(state.proofs.begin() + 1, state.proofs.end(), state.proofs.begin());
                 --state.proof_count;
             }
@@ -189,7 +221,7 @@ class DepthCapture final : public D3D12DepthStencilObserver {
     }
     bool select_executed_main_binding(ID3D12Resource* resource, const D3D12_RESOURCE_DESC& depth,
         IUnknown* producer, IUnknown* capture_list, uint64_t capture_event, uint64_t batch, UINT list_index,
-        D3D12_VIEWPORT& selected) const {
+        D3D12_VIEWPORT& selected, ProducerRoute& route) const {
         const ExecutedProof* latest{};
         for (const auto& proof : executed_proofs) {
             if (proof.epoch != epoch || proof.resource != resource || proof.queue_identity.Get() != producer ||
@@ -202,8 +234,11 @@ class DepthCapture final : public D3D12DepthStencilObserver {
                 (proof.batch == latest->batch && proof.list_index == latest->list_index && proof.event > latest->event))
                 latest = &proof;
         }
-        if (!latest) return false;
+        if (!latest || !latest->route_valid) return false;
         selected = latest->viewport;
+        route.list_index = latest->list_index;
+        route.ordinal = latest->route_ordinal;
+        route.dsv_handle = static_cast<uint64_t>(latest->dsv_handle);
         return true;
     }
     bool retire_ready(const Slot& s, ID3D12Fence* f) const {
@@ -324,7 +359,7 @@ public:
         }
         if (w && h && (w != width || h != height)) {
             ++epoch; width = w; height = h; executed_proofs.clear();
-            for (auto& [cmd, state] : lists) { (void)cmd; state.proof_count = 0; }
+            for (auto& [cmd, state] : lists) { (void)cmd; state.proof_count = 0; state.proof_overflow = false; }
         }
     }
     void on_depth_stencil_view_created(ID3D12Resource* resource,
@@ -465,12 +500,8 @@ public:
             // A manual choice must not lose all capture slots to earlier,
             // unrelated passes. This is only a record-time scheduling filter;
             // execute-time producer proof remains mandatory before acquisition.
-            const auto selected_id = candidate_policy.selected();
-            if (selected_id) {
-                const auto identity = object_identity(source);
-                if (candidate_policy.id_for_identity(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(identity.Get()))) != selected_id)
-                    continue;
-            }
+            const auto source_identity = object_identity(source);
+            if (!candidate_policy.permits_record(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(source_identity.Get())))) continue;
             auto it = std::find_if(slots.begin(), slots.end(), [&](const Slot& s) { return retire_ready(s, fence.Get()); });
             if (it == slots.end()) { ++exhausted; return; }
             auto& s = *it;
@@ -520,16 +551,29 @@ public:
             SUCCEEDED(q->GetDevice(IID_PPV_ARGS(&producer_device))) &&
             SUCCEEDED(device.As(&expected_device)) && producer_device.Get() == expected_device.Get();
         const auto batch = ++execute_batch;
+        uint64_t producer_token{};
         if (valid_producer) {
+            for (size_t i = 0; i < producer_identities.size(); ++i)
+                if (producer_identities[i].Get() == producer_identity.Get()) producer_token = i + 1;
+            if (!producer_token) for (size_t i = 0; i < producer_identities.size(); ++i) if (!producer_identities[i]) {
+                producer_identities[i] = producer_identity; producer_token = i + 1; break;
+            }
+            // Ordinals describe distinct eligible main DSV resources in each
+            // submitted list, not pointer addresses or command-list identities.
             for (UINT i = 0; i < count; ++i) {
                 if (submitted_lists[i] == nullptr || submitted_lists[i]->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT)
                     continue;
                 const auto identity = object_identity(submitted_lists[i]);
                 const auto found = lists.find(identity.Get());
                 if (found == lists.end()) continue;
+                std::array<ID3D12Resource*, BindingProofCapacity> route_resources{};
+                UINT route_count{};
                 for (UINT j = 0; j < found->second.proof_count; ++j) {
                     const auto& proof = found->second.proofs[j];
-                    executed_proofs.push_back({proof.resource, proof.viewport, producer_identity, identity, epoch, batch, proof.event, i});
+                    UINT ordinal{};
+                    for (; ordinal < route_count; ++ordinal) if (route_resources[ordinal] == proof.resource) break;
+                    if (ordinal == route_count) route_resources[route_count++] = proof.resource;
+                    executed_proofs.push_back({proof.resource, proof.viewport, producer_identity, identity, epoch, batch, proof.event, i, ordinal, !found->second.proof_overflow, proof.handle});
                     if (executed_proofs.size() > ExecutedProofCapacity) executed_proofs.pop_front();
                 }
             }
@@ -546,9 +590,10 @@ public:
             // Recording-time metadata only establishes whether a copy is worth
             // recording. Its viewport may belong to an unsubmitted list. Use
             // the actual ordered producer proof for the published sample rect.
-            const bool provenance_ok = enabled && valid_producer && select_executed_main_binding(
+            ProducerRoute route{};
+            const bool provenance_ok = enabled && valid_producer && producer_token && select_executed_main_binding(
                 s.source.Get(), desc, producer_identity.Get(), s.list_identity.Get(), s.capture_event,
-                batch, capture_index, s.viewport);
+                batch, capture_index, s.viewport, route);
             if (provenance_ok) s.layout = stock_dibr::layout(
                 static_cast<uint64_t>(std::lround(s.viewport.Width)),
                 static_cast<uint32_t>(std::lround(s.viewport.Height)), width, height);
@@ -596,8 +641,16 @@ public:
                     s.layout = candidate_layout;
                     const auto identity = object_identity(s.source.Get());
                     const auto token = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(identity.Get()));
+                    route.resource_name_hash = producer_resource_name_hash(s.source.Get());
+                    route.queue = producer_token;
+                    route.format_family = static_cast<uint32_t>(storage(desc.Format));
+                    route.layout = static_cast<uint32_t>(candidate_layout);
+                    route.x = static_cast<int32_t>(std::lround(s.viewport.TopLeftX));
+                    route.y = static_cast<int32_t>(std::lround(s.viewport.TopLeftY));
+                    route.width = static_cast<int32_t>(std::lround(s.viewport.Width));
+                    route.height = static_cast<int32_t>(std::lround(s.viewport.Height));
                     s.candidate_id = candidate_policy.observe(token, desc.Width,
-                        static_cast<uint32_t>(desc.Height), static_cast<uint32_t>(desc.Format), epoch);
+                        static_cast<uint32_t>(desc.Height), static_cast<uint32_t>(desc.Format), epoch, route, s.serial);
                     if (s.candidate_id) retain_candidate_identity(identity.Get());
                 } else {
                     s.candidate_id = 0; s.epoch = 0;
@@ -614,6 +667,7 @@ public:
     Ptr<ID3D12Resource> acquire() {
         std::scoped_lock lock{mutex};
         collect_retired();
+        candidate_policy.choose_auto(epoch);
         Slot* best{};
         const auto selected = candidate_policy.selected();
         std::array<ID3D12Resource*, Capacity> sources{};
@@ -624,7 +678,7 @@ public:
             if (std::find(sources.begin(), sources.begin() + candidate_sources, s.source.Get()) == sources.begin() + candidate_sources)
                 sources[candidate_sources++] = s.source.Get();
             if (!best || double(s.viewport.Width) * s.viewport.Height > double(best->viewport.Width) * best->viewport.Height ||
-                (s.viewport.Width == best->viewport.Width && s.serial > best->serial)) best = &s;
+                (double(s.viewport.Width) * s.viewport.Height == double(best->viewport.Width) * best->viewport.Height && s.serial > best->serial)) best = &s;
         }
         if (!best) {
             active_candidate = 0;
@@ -662,7 +716,7 @@ public:
         auto result = candidate_policy.candidates();
         for (auto& candidate : result) {
             candidate.available = std::any_of(slots.begin(), slots.end(), [&](const Slot& s) {
-                return s.candidate_id == candidate.id && !s.pending && !s.leased && !s.quarantined &&
+                return !candidate.ambiguous && s.candidate_id == candidate.id && !s.pending && !s.leased && !s.quarantined &&
                     (s.fence || s.foreign_fence) && s.epoch == epoch;
             });
         }
@@ -712,6 +766,10 @@ public:
             " candidateRegistryEverFull=" + std::to_string(candidate_policy.capacity_exhausted()) +
             " selectedCandidate=" + std::to_string(candidate_policy.selected()) +
             " activeCandidate=" + std::to_string(active_candidate) +
+            " autoCandidate=" + std::to_string(candidate_policy.automatic()) +
+            " choiceSwitches=" + std::to_string(candidate_policy.switch_count()) +
+            " choiceStableEpochs=" + std::to_string(candidate_policy.stable_epochs()) +
+            " choiceReason=" + candidate_policy.switch_reason() +
             " windows=" + std::to_string(read_windows) + " rejects[batch/shape/binding/layout/device/slice/order]=" +
             std::to_string(reject_reasons[0]) + "/" + std::to_string(reject_reasons[1]) + "/" + std::to_string(reject_reasons[2]) + "/" +
             std::to_string(reject_reasons[3]) + "/" + std::to_string(reject_reasons[4]) + "/" + std::to_string(reject_reasons[5]) + "/" + std::to_string(reject_reasons[6]) +
@@ -746,6 +804,7 @@ public:
         active_candidate = 0;
         candidate_policy.reset();
         candidate_identities = {};
+        producer_identities = {};
         lists.clear(); render_passes.clear(); executed_proofs.clear(); execute_batch = 0;
         captured = submitted = consumed = exhausted = rejected = 0;
         collect_retired();
