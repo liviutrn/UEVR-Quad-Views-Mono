@@ -121,6 +121,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'DuoView R5 guarded integration hook failed' }
           python workspace/duoview/stereo/apply_binocular_sources.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B2 binocular source opt-in patch failed' }
+          python workspace/duoview/stereo/apply_r5_reverse.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B3 inverse R5 projection patch failed' }
+          python workspace/duoview/stereo/apply_dual_r5_runtime.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B3+B4 two-eye rendering pipeline patch failed' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Backend whitespace/patch conflict' }
       - name: Configure MSVC for R5 command-line WARP fixtures
