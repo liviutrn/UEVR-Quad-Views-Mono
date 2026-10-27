@@ -1,5 +1,5 @@
-name: DuoView + R5 DIBR depth bridge V1 (experimental)
-run-name: Experimental DuoView-R5 depth bridge V1 (#${{ github.run_number }})
+name: DuoView B2-B4 binocular bidirectional R5 experimental
+run-name: Binocular DuoView B2-B4 R5 (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -9,6 +9,7 @@ on:
       - experiment/duoview-mono-eye-alignment-hud-v48-20261022
       - fix/duoview-v49-openxr-alignment-persistence-20261022
       - experiment/duoview-r5-dibr-integration-v1-20261027
+      - experiment/duoview-binocular-r5-bidirectional-20261027
   pull_request:
     branches:
       - build-182
@@ -118,6 +119,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'R5 UI retirement patch failed' }
           python workspace/duoview/stereo/integrate_r5_v1.py backend
           if ($LASTEXITCODE -ne 0) { throw 'DuoView R5 guarded integration hook failed' }
+          python workspace/duoview/stereo/apply_binocular_sources.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B2 binocular source opt-in patch failed' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Backend whitespace/patch conflict' }
       - name: Configure MSVC for R5 command-line WARP fixtures
