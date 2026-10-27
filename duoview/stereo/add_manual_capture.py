@@ -204,8 +204,8 @@ edit(dc,'''                                    if (compositor.recorded_commands(
                                         }
                                     }
                                     if (compositor.recorded_commands()) commands.has_commands = true;''', "record without altering V3 rendered output")
-edit(dc,'''                            if (submitted && recorded) {
-                                runtimes::OpenXR::PipelineState pose{};''',
+edit(dc,'''                            if (submitted && recorded && callback_attempted) {
+                                if (native_frame_ticket) {''',
 '''                            if (capture && capture_recorded) {
                                 // OpenXR::copy already enqueued commands.execute() before
                                 // it returned. A separate queue marker lets the worker
@@ -221,8 +221,8 @@ edit(dc,'''                            if (submitted && recorded) {
                                     SPDLOG_ERROR("[DuoView][Capture] Could not fence snapshot {}; retaining request for retry",capture_id);
                                 }
                             }
-                            if (submitted && recorded) {
-                                runtimes::OpenXR::PipelineState pose{};''', "readback after checked queue enqueue")
+                            if (submitted && recorded && callback_attempted) {
+                                if (native_frame_ticket) {''', "readback after checked queue enqueue")
 # Needed to retire snapshot leases even when XR submission failed; never leave captured R5 resources leased.
 edit(dc,'''                                if (submitted && recorded && callback_attempted)
                                     m_stock_dibr_depth->finish_frame();''',
