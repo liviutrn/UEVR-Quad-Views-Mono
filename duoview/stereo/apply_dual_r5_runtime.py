@@ -64,13 +64,17 @@ edit(dc,'            for (auto& tc : it->second.texture_contexts) {',
 
 # Each new XR command slot receives independent R5 preview state. Allocate
 # only after the existing DuoView compositor has proven usable.
-edit(dc,'                if (!comp) comp = std::make_unique<uevr::duoview::dx12::Compositor>();',
-'''                if (!comp) comp = std::make_unique<uevr::duoview::dx12::Compositor>();
+edit(dc,'''                auto& comp = m_openxr.duoview_compositors[&tc->commands];
+                if (!comp) comp = std::make_unique<uevr::duoview::dx12::Compositor>();''',
+'''                auto& comp = m_openxr.duoview_compositors[&tc->commands];
+                if (!comp) comp = std::make_unique<uevr::duoview::dx12::Compositor>();
                 if (!m_openxr.duoview_r5_slots.contains(&tc->commands))
                     m_openxr.duoview_r5_slots[&tc->commands] =
                         std::make_shared<uevr::duoview::r5::StereoSlot>();''')
-edit(dc,'                if (!comp) comp = std::make_unique<uevr::duoview::dx12::Compositor>();',
-'''                if (!comp) comp = std::make_unique<uevr::duoview::dx12::Compositor>();
+edit(dc,'''                auto& comp = this->duoview_compositors[&tc->commands];
+                if (!comp) comp = std::make_unique<uevr::duoview::dx12::Compositor>();''',
+'''                auto& comp = this->duoview_compositors[&tc->commands];
+                if (!comp) comp = std::make_unique<uevr::duoview::dx12::Compositor>();
                 if (!this->duoview_r5_slots.contains(&tc->commands))
                     this->duoview_r5_slots[&tc->commands] =
                         std::make_shared<uevr::duoview::r5::StereoSlot>();''')
