@@ -221,5 +221,5 @@ edit(fh,anchor,'''        if (stalker2_is_current_game()) {
             set_dibr_status(DIBR_SINGLE_VIEW_BLOCKED, "three DIBR output failures in this generation");''')
 # Keep opt-in depth capture for the combined experiment; rendering mode
 # remains user selected, and all capture stays gated to DIBR mode only.
-print('Depth capture remains opt-in for DuoView + R5 coexistence')
+edit('src/mods/VR.hpp','ModToggle::create(generate_name("DIBRUE5RDGDepthCapture"), false)','ModToggle::create(generate_name("DIBRUE5RDGDepthCapture"), true)')
 print(json.dumps({'baseline':'5ac7edc207866569334175e4ed8a7517971547f6','changed':sorted(set(changed))},indent=2))
