@@ -14,7 +14,7 @@ hdr = (b / "src/mods/VR.hpp").read_text(encoding="utf-8-sig")
 xr = (b / "src/mods/vr/runtimes/OpenXR.hpp").read_text(encoding="utf-8-sig")
 overlay = (b / "src/mods/vr/OverlayComponent.hpp").read_text(encoding="utf-8-sig")
 hook = (b / "src/mods/vr/FFakeStereoRenderingHook.cpp").read_text(encoding="utf-8-sig")
-a = cpp.index("    // DUOVIEW RELOAD V2:")
+a = cpp.index("    // DUOVIEW RELOAD V3:")
 c = cpp.index("    // STALKER 2 DuoView foreground parity.", a)
 rearm = cpp[a:c]
 d = cpp.index("    // Some Supermassive camera paths rewrite crop/aspect state", c)
@@ -26,10 +26,28 @@ for token in (
     "std::chrono::milliseconds(350)",
     "get_acknowledged_pawn()",
     "recovery.attempted = true;",
+    "const bool load_transition =",
+    "world_changed || pawn_changed || resumed_after_loading",
+    "if (load_transition) {",
+    "recovery.reload_deadline = now + std::chrono::seconds(15)",
+    "now < recovery.reload_deadline",
+    "if (!quarantined && copied > recovery.last_copied)",
+    "recovery.stable_world != world_id",
+    "recovery.stable_pawn != pawn_id",
+    "recovery.proven_copies = 0;",
     "m_duoview_quarantined.store(false",
-    "without touching GPU compositor",
+    "Post-load recovery authorized",
 ):
     assert token in rearm, token
+
+# Prohibit unauthorized ID6 resurrection on a general compositor error.
+assert rearm.count("m_duoview_quarantined.store(false") == 1
+guard = rearm.index("} else if (xr != nullptr && recovery.proven_copies >= 12 &&")
+rearm_call = rearm.index("m_duoview_quarantined.store(false")
+assert guard < rearm_call
+assert rearm.index("now < recovery.reload_deadline", guard) < rearm_call
+assert "if (recovery.proven_copies >= 12) recovery.attempted = false;" not in rearm
+assert "recovery.attempted = false;" in rearm[rearm.index("if (load_transition) {"):guard]
 for forbidden in (
     "m_duoview.retire", "m_duoview.configure", "configure_duoview(",
     "destroy_swapchains", "create_swapchains", "m_openxr.reset(",
@@ -64,6 +82,6 @@ for option in ("DuoViewCropWidth","DuoViewCropHeight","DuoViewPeripheralScale",
 assert "get_xyz_head_movement_gains()" in hook
 assert "UI_MonoHudConvergence" in overlay and "UI_MonoHudOpticalDistance" in overlay
 assert "mono_eye_alignment_enabled" in xr
-print("PASS: V2 only re-arms quarantined ID6 after proved XR copies + stable playable world.")
-print("PASS: No GPU/compositor mutation in reload logic; Build45 MPC targets preserved.")
+print("PASS: V3 cannot rearm a generic GPU fault without observed scene/load transition and prior XR copies.")
+print("PASS: One bounded post-load rearm, no GPU/compositor mutation; Build45 MPC targets preserved.")
 print("PASS: Build49 calibration, HUD, gaze, sharpening, and original XYZ sliders/keys retained.")
