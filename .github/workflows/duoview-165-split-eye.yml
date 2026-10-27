@@ -1,9 +1,9 @@
-name: DuoView Build165 Split Eye Native Input V2 TEST
-run-name: Build165 V2 Native Left Fovea Right Periphery (${{ github.run_number }})
+name: DuoView Build165 Split Eye Native Input V3 Validated
+run-name: Build165 V3 Native Left Fovea Right Periphery (${{ github.run_number }})
 on:
   push:
     branches:
-      - fix/duoview-165-native-split-eye-v2-20261027
+      - fix/duoview-165-native-split-eye-v3-reviewed-20261027
   pull_request:
     branches:
       - build-182
@@ -170,7 +170,7 @@ jobs:
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
-          DUOVIEW BUILD165 SPLIT EYE V2 INPUT — NATIVE LEFT FOVEA + NATIVE RIGHT PERIPHERY, SAME MONO OUTPUT BOTH EYES. HEADSET UNVERIFIED.
+          DUOVIEW BUILD165 SPLIT EYE V3 INPUT — NATIVE LEFT FOVEA + NATIVE RIGHT PERIPHERY, SAME MONO OUTPUT BOTH EYES. HEADSET UNVERIFIED.
           Backend: exact Joey 5ac7edc207866569334175e4ed8a7517971547f6 + guarded DuoView modifications.
           Restricted SDK unchanged: joeyhodge/UESDK 3cffbc82429b6165ceec2714f0f0d9ae48f55596.
           Matching frontend source: 60be4b0f9a646109fd9fdf448bacd41477234091, plus ID 6.
@@ -191,7 +191,7 @@ jobs:
           Optional GPU timing is OFF by default; it measures DuoView raster/output only and excludes Unreal scene rendering and any source gather copies. Compositor resources prewarm at swapchain creation and remain owned by each OpenXR command slot until its fence retires. No waits, shader compilation, or GPU resource creation occur in the XR copy callback; immutable packet lifetimes are retained through command-slot fence retirement.
           Debug source 0=blended output, 1=periphery only, 2=fovea only (dark outside ROI).
           Split mode ON assigns source UE0 to LEFT fovea and UE1 to RIGHT periphery. Toggle OFF restores the Build165 shared-camera behavior.
-          V2 corrects the mono-family centering inside both Joey native eye-offset and projection functions. Only toggle OFF shares the original centered Build165 camera. Toggle ON produces physically separated native source cameras; final composite remains duplicated to both XR eyes and will show parallax boundaries. No DIBR.
+          V3 keeps the V2 mono-family eye-offset/projection correction, freezes the experimental switch at UE draw boundaries and compiles independent left/right camera and cropped-left/full-right projection lifecycle tests. Only toggle OFF shares the original centered Build165 camera. Toggle ON produces physically separated native source cameras; final composite remains duplicated to both XR eyes and will show parallax boundaries. No DIBR.
           Stage5 reads combined calibrated PSVR2 Toolkit CAPI gaze ONCE per frame. No DLL bundled.
           If CAPI is unavailable/invalid or blinked, ID6 stays at fixed center; no OpenXR gaze layer required.
           Menu shows whether PSVR2 gaze is fresh, center fallback, or Mono quarantine.
@@ -218,16 +218,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-v165-SplitEye-v2-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-v165-SplitEye-v3-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-v165-SplitEye-v2-${{ github.run_number }}
+          name: UEVR-DuoView-v165-SplitEye-v3-${{ github.run_number }}
           path: |
-            UEVR-DuoView-v165-SplitEye-v2-*.zip
-            UEVR-DuoView-v165-SplitEye-v2-*.zip.sha256
+            UEVR-DuoView-v165-SplitEye-v3-*.zip
+            UEVR-DuoView-v165-SplitEye-v3-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -242,7 +242,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-DuoView-v165-SplitEye-v2-Evidence-${{ github.run_number }}
+          name: UEVR-DuoView-v165-SplitEye-v3-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
