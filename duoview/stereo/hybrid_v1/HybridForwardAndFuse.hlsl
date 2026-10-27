@@ -49,14 +49,14 @@ bool Inside(float2 p,float4 rect) {
     return all(rect.zw>float2(0,0))&&
            all(p>=rect.xy)&&all(p<rect.xy+rect.zw)&&ValidUV(p);
 }
-bool Unproject(float2 uv,float z,row_major float4x4 matrix,out float3 world) {
-    const float4 w=mul(matrix,float4(uv.x*2-1,1-uv.y*2,z,1));
+bool Unproject(float2 uv,float z,row_major float4x4 transform,out float3 world) {
+    const float4 w=mul(transform,float4(uv.x*2-1,1-uv.y*2,z,1));
     world=float3(0,0,0);
     if(!all(isfinite(w))||abs(w.w)<1e-8f)return false;
     world=w.xyz/w.w;return all(isfinite(world));
 }
-bool Project(float3 world,row_major float4x4 matrix,out float2 uv,out float z) {
-    const float4 p=mul(matrix,float4(world,1));
+bool Project(float3 world,row_major float4x4 transform,out float2 uv,out float z) {
+    const float4 p=mul(transform,float4(world,1));
     uv=float2(0,0);z=0;
     if(!all(isfinite(p))||p.w<=1e-7f)return false;
     const float3 ndc=p.xyz/p.w;uv=float2(.5f*ndc.x+.5f,.5f-.5f*ndc.y);z=ndc.z;
