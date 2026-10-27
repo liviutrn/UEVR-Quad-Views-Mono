@@ -120,6 +120,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'DuoView R5 guarded integration hook failed' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Backend whitespace/patch conflict' }
+      - name: Configure MSVC for R5 command-line WARP fixtures
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Verify original R5 depth, GPU, queue and transaction fixtures
         shell: pwsh
         run: |
