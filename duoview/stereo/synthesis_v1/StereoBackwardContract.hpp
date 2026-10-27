@@ -19,7 +19,7 @@ struct alignas(16) BackwardConstants {
     float sourceColorRect[4]{};
     float targetRealColorRect[4]{};
     float depthParams[4]{}; // minDepth, maxDepth, absWorldError, relativeWorldError
-    float edgeParams[4]{};  // absWorldEdgeThreshold, relativeEdgeThreshold
+    float edgeParams[4]{};  // targetEdgeAbs, targetEdgeRel, minimumSourceCoverage, maximumPhotoLumaDelta
     std::uint32_t outputRegion[4]{};
     std::uint32_t outputConfig[4]{}; // width,height,flags,reserved
 };
@@ -28,10 +28,10 @@ static_assert(alignof(BackwardConstants)==16);
 static_assert(offsetof(BackwardConstants, outputConfig)==400);
 enum Reject : std::uint32_t {
     InvalidTargetDepth=1u, UnreliableTargetEdge=2u, OutsideSourceProjection=4u,
-    InvalidSourceDepth=8u, NoNativeFallback=16u
+    InvalidSourceDepth=8u, NoNativeFallback=16u, PhotometricMismatch=32u
 };
 enum Flags : std::uint32_t {
-    HasTargetColor=1u, GuardTargetDepthEdge=2u
+    HasTargetColor=1u, GuardTargetDepthEdge=2u, PhotometricGuard=4u
 };
 struct BindingContract {
     // D3D12 descriptor table registers: SRV t0=SourceColor, t1=SourceDepth,

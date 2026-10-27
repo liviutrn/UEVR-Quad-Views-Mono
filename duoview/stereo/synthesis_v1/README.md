@@ -1,4 +1,4 @@
-# DuoView 165 — Stereo synthesis prototype V1
+# DuoView 165 — Stereo synthesis prototype V2 (adversarial review)
 
 **Status:** shader + C++ binding contract + analytic CPU tests only, not connected to live UEVR. This branch was created from the **headset-validated Split-Eye V3 commit 26b1b412**. It does not modify any existing V3 code, OpenXR output, camera handling, source-pass shading, or your running depth-capture branch.
 
@@ -55,3 +55,17 @@ The output buffer's untouched pixels must be initialized or composited from real
 - Then implement forward z/owner scatter if left full target depth unavailable. Add temporal smoothing, hole repair, confidence-aware foveal seam only after this geometry works.
 
 No external source code was copied; the architectural choice is from the DuoView Implementation-First Engineering Plan.
+
+
+## Adversarial review V2 — changes
+
+1. **Conservative low-res target-depth reconstruction:** Four target depth texels are gathered with bilinear spatial weights in **device depth**, and only if their linearized camera-ray distances agree inside configurable edge thresholds. On a continuous planar perspective triangle device depth is affine in screen coordinates, so this reduces point-depth block artifacts; it still does not reconstruct missing silhouette geometry. A discontinuity rejects the warp and falls back to actual right-eye color.
+2. **Same-ray visibility comparison:** Source candidate depth is reconstructed at the source candidate's predicted UV, not at four neighboring tap ray directions. This avoids angular bias on angled surfaces. Once a depth is accepted, color comes from that SAME depth tap's own projected color coordinate.
+3. **Coverage gate:** A lone surviving edge tap cannot paint the entire target pixel. EdgeParams.z is the minimum accepted bilinear tap coverage (start with 0.75 and tune against images).
+4. **Optional photometric safety:** Flag bit 4 enables absolute luma disagreement rejection, provided BOTH color resources are proven comparable and decoded in the same linear-light color space. EdgeParams.w controls the maximum permitted luma difference; the **photometric guard is OFF by default**. Lumen is known to create view-dependent shading, so geometry and appearance checks must remain separate.
+
+The old EdgeParams x/y thresholds were far too speculative for UE centimeters and grazing-angle surfaces. Do not copy them blindly. Possible *experimental* values (not calibrated or validated) in Unreal units: DepthParams=(0.000001,0.999999,0.1,0.001) and EdgeParams=(2.0,0.0025,0.75,0.15). Values must be tuned after inspecting the actual right-eye depth candidate and projection. For no photometric guard use OutputConfig.z=3; photometric guard additionally requires flag bit4.
+
+**Remaining limitations:** No proof yet that source/target depth belongs to the corresponding V3 eye cameras, that color/depth are postprocessed at compatible stages, or that source color has the correct TAA/DLSS jitter. The shader is standalone, not a running D3D12 stereo compositor. No GPU timestamp, WARP pixel-level output fixture, or headset visual measurement yet. Left-periphery right-to-left reconstruction still needs its own depth provenance or a separate robust forward-splat path. Do not merge into the user-tested V3 branch without these gates.
+
+These design changes are informed by the research report and independent findings on occlusion-aware depth refinement and color-depth alignment, not imported implementations.

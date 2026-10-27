@@ -1,9 +1,9 @@
 name: DuoView stereo gather prototype (standalone)
-run-name: Synthesized Stereo V1 Math and Shader Compile ${{ github.run_number }}
+run-name: Synthesized Stereo V2 Adversarial Review Shader CI ${{ github.run_number }}
 on:
   push:
     branches:
-      - experiment/duoview-165-stereo-gather-v1-20261027
+      - experiment/duoview-165-stereo-gather-v2-reviewed-20261028
   workflow_dispatch:
 permissions:
   contents: read
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: DuoView-StereoGather-V1-Shader-Proof
+          name: DuoView-StereoGather-V2-Shader-Proof
           path: |
             StereoBackwardGather.cso
             duoview/stereo/synthesis_v1/StereoBackwardGather.hlsl

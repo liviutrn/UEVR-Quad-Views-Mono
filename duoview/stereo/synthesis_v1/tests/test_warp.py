@@ -4,6 +4,7 @@ import unittest, math, pathlib
 HERE=pathlib.Path(__file__).resolve().parents[1]
 HLSL=(HERE/"StereoBackwardGather.hlsl").read_text(encoding="utf-8")
 HEADER=(HERE/"StereoBackwardContract.hpp").read_text(encoding="utf-8")
+README=(HERE/"README.md").read_text(encoding="utf-8")
 def mv(m,v): return [sum(m[i][k]*v[k] for k in range(4)) for i in range(4)]
 def inv(m):
     a=[list(row)+[float(i==j) for j in range(4)] for i,row in enumerate(m)]
@@ -74,4 +75,50 @@ class Tests(unittest.TestCase):
         self.assertNotIn("SourceColor.SampleLevel",HLSL)
         self.assertIn("depthEyeProven && frameGenerationMatches",HEADER)
         self.assertIn("static_assert(sizeof(BackwardConstants)==416)",HEADER)
+
+    def test_sloped_surface_device_z_interpolation(self):
+        # For perspective triangle rasterization device Z is linear in screen x
+        # on a continuous plane. Nearest-target depth would create stair steps.
+        m=revz(.1,1000)
+        def z_for_u(u):
+            return 2/(1-.5*(2*u-1))
+        def dev(u):
+            return project([0,0,z_for_u(u)],m)[2]
+        low_u,high_u=.375,.625
+        target_u=.44
+        alpha=(target_u-low_u)/(high_u-low_u)
+        blended=(1-alpha)*dev(low_u)+alpha*dev(high_u)
+        self.assertAlmostEqual(blended,dev(target_u),places=9)
+        self.assertGreater(abs(dev(low_u)-dev(target_u)),.0001)
+        self.assertIn("ReconstructTargetDepth",HLSL)
+        self.assertIn("targetZ=(depth[0]*weight[0]",HLSL)
+    def test_depth_discontinuity_requires_real_fallback(self):
+        m=revz(.1,1000)
+        z1=project([0,0,1],m)[2]
+        z2=project([0,0,10],m)[2]
+        w1=unproject((.5,.5),z1,inv(m))
+        w2=unproject((.5,.5),z2,inv(m))
+        self.assertGreater(math.dist(w1,w2),2.)
+        self.assertIn("if(abs(distance-referenceDistance)>allowed)return false;",HLSL)
+        self.assertIn("REJECT_TARGET_EDGE",HLSL)
+    def test_same_ray_visibility_removes_angular_bias(self):
+        m=revz(.1,1000)
+        uv=(.82,.5)
+        z=project([0,0,2],m)[2]
+        center=unproject(uv,z,inv(m))
+        nearby=unproject((uv[0]+1/320,uv[1]),z,inv(m))
+        distance=lambda q:math.sqrt(sum(t*t for t in q))
+        self.assertGreater(abs(distance(nearby)-distance(center)),.0001)
+        self.assertLess(math.dist(unproject(uv,z,inv(m)),center),1e-10)
+        self.assertIn("Unproject(sourceNativeUV,tapZ,SourceDepthWorldFromClip",HLSL)
+        self.assertIn("length(seenOnProjectedRay-visibleTargetWorld)",HLSL)
+    def test_partial_tap_coverage_must_fallback(self):
+        self.assertLess(.25,.75)
+        self.assertIn("coverage<max(0.0f,EdgeParams.z)",HLSL)
+        self.assertIn("Reject(outPx,fallback,REJECT_SOURCE_DEPTH)",HLSL)
+    def test_photometric_guard_opt_in_only(self):
+        self.assertIn("(OutputConfig.z & PHOTO_GUARD)!=0u",HLSL)
+        self.assertIn("REJECT_PHOTOMETRIC",HLSL)
+        self.assertIn("photometric guard is OFF by default",README)
+
 if __name__=="__main__":unittest.main()
