@@ -42,16 +42,19 @@ struct BindingContract {
     // R16_UNORM as appropriate, with HLSL float reconstruction matching the
     // actual depth format and plane (typed float SRV load).
     // All views must be captured from one UE frame with correct matrices.
+    // All shader matrices/positions must use a SHARED camera-relative origin;
+    // do not upload absolute UE5 LWC floats into the HLSL constant buffer.
     // Same color-space exposure/postprocess stage for left/right color.
     // A DSV copy is not evidence that it matches either camera.
     // This is a diagnostic/prototype contract, not an active UEVR hook.
     bool depthEyeProven{};
     bool frameGenerationMatches{};
+    bool cameraRelativeOriginProven{};
     bool viewMatricesMatchDepth{};
     bool compatibleColorEncoding{};
     bool renderTargetsReady{};
     bool canDispatch() const noexcept {
-        return depthEyeProven && frameGenerationMatches &&
+        return depthEyeProven && frameGenerationMatches && cameraRelativeOriginProven &&
           viewMatricesMatchDepth && compatibleColorEncoding && renderTargetsReady;
     }
 };

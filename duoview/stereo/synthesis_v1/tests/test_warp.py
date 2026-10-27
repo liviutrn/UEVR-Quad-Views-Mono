@@ -121,4 +121,15 @@ class Tests(unittest.TestCase):
         self.assertIn("REJECT_PHOTOMETRIC",HLSL)
         self.assertIn("photometric guard is OFF by default",README)
 
+
+    def test_ue5_large_world_f32_precision(self):
+        import struct
+        f32=lambda x:struct.unpack('f',struct.pack('f',x))[0]
+        center=100000000.
+        left,right=center-3.6,center+3.6
+        self.assertLess(f32(right)-f32(left),7.2)
+        self.assertAlmostEqual(f32(right-center)-f32(left-center),7.2,places=5)
+        self.assertIn("cameraRelativeOriginProven",HEADER)
+        self.assertIn("Camera-relative",README)
+
 if __name__=="__main__":unittest.main()

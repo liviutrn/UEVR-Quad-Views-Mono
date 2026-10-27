@@ -3,6 +3,8 @@
 // Supports target RIGHT fovea from LEFT high-res color/depth.
 // Inputs MUST be same-frame, exact jittered view-projection matrices, and
 // source/target depth from the correct UE scene pass. Fail closed otherwise.
+// All world-labelled matrices/vectors operate in ONE COMMON CAMERA-RELATIVE
+// coordinate frame (double-precision origin rebased by CPU before float upload).
 // All rects are normalized resource (x0,y0,width,height), not crop FOV coordinates.
 Texture2D<float4> SourceColor : register(t0);
 Texture2D<float>  SourceDepth : register(t1);
