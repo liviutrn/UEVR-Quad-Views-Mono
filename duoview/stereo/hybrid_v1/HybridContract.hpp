@@ -19,8 +19,8 @@ struct alignas(16) HybridConstants {
     uint32_t targetDimensions[4]{};
     uint32_t flags[4]{};
 };
-static_assert(sizeof(HybridConstants)==496);
-static_assert(offsetof(HybridConstants,flags)==480);
+static_assert(sizeof(HybridConstants)==432);
+static_assert(offsetof(HybridConstants,flags)==416);
 enum class CandidateMode : uint32_t { Auto=0, LockedLeft=1, LockedRight=2, BothLocked=3 };
 struct StereoProvenance {
     bool leftSceneColorDepthSamePass{};
