@@ -1,0 +1,49 @@
+name: DuoView stereo gather prototype (standalone)
+run-name: Synthesized Stereo V1 Math and Shader Compile ${{ github.run_number }}
+on:
+  push:
+    branches:
+      - experiment/duoview-165-stereo-gather-v1-20261027
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-synthesis:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Analytic reversed-Z, parallax, crop and depth-edge tests
+        shell: pwsh
+        run: |
+          python -m unittest discover -s duoview/stereo/synthesis_v1/tests -p "test_*.py" -v
+          if ($LASTEXITCODE -ne 0) { throw 'Stereo CPU math tests failed' }
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build and execute C++ binding contract regression
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 duoview/stereo/synthesis_v1/tests/ContractCompile.cpp /Fe:contract_test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'MSVC constants mirror failed' }
+          .\contract_test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Stereo resource provenance gate failed' }
+      - name: Compile actual HLSL with Windows SDK fxc
+        shell: pwsh
+        run: |
+          $found = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -File -Filter fxc.exe |
+            Where-Object { $_.FullName -match '\\x64\\fxc\.exe$' } | Sort-Object FullName -Descending
+          $compiler = $found | Select-Object -First 1
+          if (-not $compiler) { throw 'No Windows SDK fxc.exe: cannot claim shader compilation' }
+          & $compiler.FullName /nologo /Ges /T cs_5_0 /E CSBackwardTargetDepth /Fo:StereoBackwardGather.cso duoview/stereo/synthesis_v1/StereoBackwardGather.hlsl
+          if ($LASTEXITCODE -ne 0) { throw 'Actual HLSL compilation failed' }
+          if (-not (Test-Path StereoBackwardGather.cso)) { throw 'Shader binary missing' }
+          Write-Output "Compiled $((Get-Item StereoBackwardGather.cso).Length) bytes with $($compiler.FullName)"
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: DuoView-StereoGather-V1-Shader-Proof
+          path: |
+            StereoBackwardGather.cso
+            duoview/stereo/synthesis_v1/StereoBackwardGather.hlsl
+            duoview/stereo/synthesis_v1/StereoBackwardContract.hpp
+            duoview/stereo/synthesis_v1/README.md
+          retention-days: 30
