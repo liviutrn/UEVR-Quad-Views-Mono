@@ -238,7 +238,10 @@ recovery = r'''    // DUOVIEW RELOAD V3: ONLY recover after an observed scene/lo
                 now - recovery.last_tick > std::chrono::seconds(1);
             const bool load_transition =
                 world_changed || pawn_changed || resumed_after_loading;
-            if (load_transition) {
+            // Initial world creation is not a save reload: do not arm a
+            // compositor retry until this runtime has already proven at
+            // least twelve real successful XR DuoView submissions.
+            if (load_transition && recovery.proven_copies >= 12) {
                 recovery.reload_deadline = now + std::chrono::seconds(15);
                 recovery.attempted = false;
                 recovery.stable_playable_ticks = 0;
