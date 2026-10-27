@@ -28,7 +28,7 @@ for token in (
     "recovery.attempted = true;",
     "const bool load_transition =",
     "world_changed || pawn_changed || resumed_after_loading",
-    "if (load_transition) {",
+    "if (load_transition && recovery.proven_copies >= 12) {",
     "recovery.reload_deadline = now + std::chrono::seconds(15)",
     "now < recovery.reload_deadline",
     "if (!quarantined && copied > recovery.last_copied)",
@@ -40,6 +40,11 @@ for token in (
 ):
     assert token in rearm, token
 
+# A fresh ID6 startup, even with a world/pawn pointer transition, does not
+# grant permission to retry before any successfully submitted DuoView frames.
+assert "if (load_transition && recovery.proven_copies >= 12) {" in rearm
+assert "if (load_transition) {" not in rearm
+
 # Prohibit unauthorized ID6 resurrection on a general compositor error.
 assert rearm.count("m_duoview_quarantined.store(false") == 1
 guard = rearm.index("} else if (xr != nullptr && recovery.proven_copies >= 12 &&")
@@ -47,7 +52,7 @@ rearm_call = rearm.index("m_duoview_quarantined.store(false")
 assert guard < rearm_call
 assert rearm.index("now < recovery.reload_deadline", guard) < rearm_call
 assert "if (recovery.proven_copies >= 12) recovery.attempted = false;" not in rearm
-assert "recovery.attempted = false;" in rearm[rearm.index("if (load_transition) {"):guard]
+assert "recovery.attempted = false;" in rearm[rearm.index("if (load_transition && recovery.proven_copies >= 12) {"):guard]
 for forbidden in (
     "m_duoview.retire", "m_duoview.configure", "configure_duoview(",
     "destroy_swapchains", "create_swapchains", "m_openxr.reset(",
