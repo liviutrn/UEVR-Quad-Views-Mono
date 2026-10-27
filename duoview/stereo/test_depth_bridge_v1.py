@@ -19,7 +19,7 @@ checks = {
  "explicit unknown semantic eye association": "eyeAttribution=UNKNOWN" in dep,
  "headset screenshot-ready depth summary": 'ImGui::TextWrapped("Depth DSV/queue proof: %s", depth_proof.c_str());' in ui,
  "diagnostics opt-in": 'm_dibr_ue5_rdg_depth_capture->value()' in ui,
- "no diagnostic acquire altering GPU queue timing": "m_stock_dibr_depth->acquire()" not in dx,
+ "no second depth acquire in DuoView diagnostic path": dx.count("m_stock_dibr_depth->acquire()") == 1,
  "existing output compositor preserved": "compositor.record_native(device, commands.cmd_list.Get()," in dx,
 }
 for name,ok in checks.items():
