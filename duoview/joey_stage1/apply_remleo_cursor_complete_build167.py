@@ -93,14 +93,13 @@ BOOL WINAPI duoview_get_cursor_hook(LPPOINT pt) {
 }
 
 BOOL WINAPI duoview_set_cursor_hook(int x, int y) {
-    if (g_framework && g_framework->is_duoview_cursor_hooks_ready() &&
-        g_framework->is_duoview_cursor_remap_active()) {
-        if (g_framework->should_block_duoview_set_cursor_pos()) {
-            return TRUE;
-        }
+    if (g_framework && g_framework->is_duoview_cursor_hooks_ready()) {
+        if (g_framework->should_block_duoview_set_cursor_pos()) return TRUE;
+        if (g_framework->is_duoview_cursor_remap_active()) {
         POINT pt{x,y};
         g_framework->map_duoview_cursor_from_game(pt);
         x=pt.x; y=pt.y;
+        }
     }
     return g_duoview_set_cursor_hook.call<BOOL>(x,y);
 }
@@ -268,6 +267,29 @@ edit("Framework.cpp",
     m_is_ui_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow);''',
 "Preserve normal UEVR overlay input on menu-open")
 
+
+# Once SafetyHook installs its detours, NEVER overwrite user32 with the legacy
+# RET patch. Preserve original behavior only when our hooks are unavailable.
+edit("Framework.cpp",
+'''void Framework::patch_set_cursor_pos() {
+    std::scoped_lock _{ m_patch_mtx };''',
+'''void Framework::patch_set_cursor_pos() {
+    if (m_duoview_cursor_hooks_ready.load(std::memory_order_acquire)) {
+        m_duoview_cursor_block_set.store(true,std::memory_order_release);
+        return;
+    }
+    std::scoped_lock _{ m_patch_mtx };''',
+"Avoid overwriting installed SafetyHook with the old RET patch")
+
+edit("Framework.cpp",
+'''void Framework::remove_set_cursor_pos_patch() {
+    std::scoped_lock _{ m_patch_mtx };''',
+'''void Framework::remove_set_cursor_pos_patch() {
+    m_duoview_cursor_block_set.store(false,std::memory_order_release);
+    if (m_duoview_cursor_hooks_ready.load(std::memory_order_acquire)) return;
+    std::scoped_lock _{ m_patch_mtx };''',
+"Disable pointer block without damaging installed SafetyHook")
+
 # Windows mouse messages MUST be mapped too. Old Build166 omitted this,
 # making hit-testing fail when the render window exceeds monitor bounds.
 edit("hooks/WindowsMessageHook.cpp",
@@ -402,12 +424,10 @@ print("BUILD167 copy complete Remleo UI pose/size in same compositor submit")
 
 edit("mods/vr/D3D12Component.cpp",
 '''            auto& openxr_overlay = vr->get_overlay_component().get_openxr();
-
-            if (vr->m_2d_screen_mode->value())''',
+            const auto ui_pose_diagnostics_enabled''',
 '''            auto& openxr_overlay = vr->get_overlay_component().get_openxr();
             openxr_overlay.begin_duoview_cursor_submit();
-
-            if (vr->m_2d_screen_mode->value())''',
+            const auto ui_pose_diagnostics_enabled''',
 "Invalidate previous UI plane at start of current D3D12 layer submission")
 
 print("PASS applied Build167 Remleo cursor source (Framework/Win32/Overlay/D3D12), all changes opt-in and guarded.")
