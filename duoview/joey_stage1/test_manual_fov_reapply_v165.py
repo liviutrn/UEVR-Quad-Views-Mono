@@ -8,6 +8,7 @@ h = (root / "src/mods/VR.hpp").read_text(encoding="utf-8-sig")
 c = (root / "src/mods/VR.cpp").read_text(encoding="utf-8-sig")
 d = (root / "src/mods/vr/FFakeStereoRenderingHook.cpp").read_text(encoding="utf-8-sig")
 xr = (root / "src/mods/vr/runtimes/OpenXR.cpp").read_text(encoding="utf-8-sig")
+xrh = (root / "src/mods/vr/runtimes/OpenXR.hpp").read_text(encoding="utf-8-sig")
 start = c.index("    // STALKER 2 DuoView foreground parity.")
 end = c.index("    // Some Supermassive camera paths rewrite crop/aspect state", start)
 fg = c[start:end]
@@ -50,10 +51,10 @@ for forbidden in ("m_duoview.retire(", "configure_duoview(", "destroy_swapchains
     assert forbidden not in fg, forbidden
 for required in ("m_duoview_manual_fov_requested{false}",
                  "m_duoview_manual_fov_status{0}", "m_xyz_headscale_hold_bypass{ false }",
-                 "get_xyz_head_movement_gains()", "OpenXR_MonoEyeAlignmentPercent"):
+                 "get_xyz_head_movement_gains()"):
     assert required in h, required
 assert "get_xyz_head_movement_gains()" in d
-assert "mono_eye_alignment_enabled" in xr
+assert "mono_eye_alignment_enabled" in xr and "OpenXR_MonoEyeAlignmentPercent" in xrh
 assert c.count('if (ImGui::Button("Reapply DuoView FOV"))') == 1
 assert c.count("m_duoview_manual_fov_requested.exchange(") == 1
 assert c.count("[DuoView][ManualFOV] CONFIRMED") == 1
