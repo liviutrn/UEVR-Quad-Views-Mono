@@ -4,6 +4,7 @@ import argparse, hashlib, json, subprocess
 from pathlib import Path
 
 EDITED_BACKEND = {
+ "src/Framework.hpp", "src/Framework.cpp", "src/hooks/WindowsMessageHook.cpp",
  "src/mods/vr/MonoRenderingPolicy.hpp", "src/mods/vr/CompatibilityPolicy.hpp",
  "src/mods/VR.hpp", "src/mods/VR.cpp",
  "src/mods/vr/OverlayComponent.hpp", "src/mods/vr/OverlayComponent.cpp",
