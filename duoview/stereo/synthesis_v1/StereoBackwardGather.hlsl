@@ -26,7 +26,7 @@ cbuffer BackwardSettings : register(b0)
     float4 SourceColorRect;
     float4 TargetRealColorRect;
     float4 DepthParams;        // validMin, validMax, worldAbsolute, worldRelative
-    float4 EdgeParams;         // targetDepthEdgeWorldAbs, edgeRelative, unused, unused
+    float4 EdgeParams;         // depthEdgeAbs, depthEdgeRel, minSourceTapCoverage, photoLumaMaxDelta
     uint4 OutputRegion;        // x, y, width, height (destination pixels)
     uint4 OutputConfig;        // destWidth, destHeight, flags, reserved
 };
@@ -38,6 +38,9 @@ static const uint REJECT_TARGET_EDGE = 2u;
 static const uint REJECT_SOURCE_PROJECTION = 4u;
 static const uint REJECT_SOURCE_DEPTH = 8u;
 static const uint REJECT_NO_REAL_COLOR = 16u;
+static const uint REJECT_PHOTOMETRIC = 32u;
+static const uint PHOTO_GUARD = 4u;
+
 
 bool DeviceDepthValid(float z)
 {
@@ -98,34 +101,71 @@ void Reject(uint2 dest, float4 fallback, uint mask)
     OutConfidence[dest] = 0.0f;
     OutReject[dest] = mask | (((OutputConfig.z & HAS_TARGET_COLOR)==0) ? REJECT_NO_REAL_COLOR : 0u);
 }
-bool SampleTargetDepthAt(float2 targetUV, uint2 size, out float z, out int2 p)
+// Reconstruct a surface at the actual HIGH-RES target ray from low-res depth.
+// Inside continuous surfaces D3D device Z is interpolable in screen space
+// (perspective rasterization already performs the appropriate interpolation).
+// NEVER interpolate depth across a large discontinuity: fall back to real
+// target-eye low-res color. Source rects are exact native viewport bounds.
+// Edge-guard ON = conservative 2x2 target-depth upsampling; OFF = point-depth
+// compatibility mode for A/B debugging only.
+bool ReconstructTargetDepth(float2 targetUV, uint2 size,
+                            out float targetZ, out float support)
 {
-    z=0; p=int2(0,0);
-    float2 uv=MapNativeUV(targetUV,TargetDepthRect);
-    if (!InsideRect(uv,TargetDepthRect) || any(uv<float2(0.0f,0.0f)) || any(uv>=1.0f.xx))return false;
-    p=int2(floor(uv*float2(size)));
-    if(any(p<0) || p.x>=int(size.x) || p.y>=int(size.y))return false;
-    z=TargetDepth.Load(int3(p,0));
-    return DeviceDepthValid(z);
-}
-bool TargetDepthEdgeUnsafe(uint2 tp,uint2 size,float2 targetUV,float baseDistance)
-{
-    if((OutputConfig.z & GUARD_TARGET_EDGE)==0) return false;
-    static const int2 neighbors[4]={int2(-1,0),int2(1,0),int2(0,-1),int2(0,1)};
-    const float tolerance = EdgeParams.x + EdgeParams.y * baseDistance;
-    [unroll] for(uint i=0;i<4;i++) {
-        const int2 q=int2(tp)+neighbors[i];
-        if(any(q<0)||q.x>=int(size.x)||q.y>=int(size.y))continue;
-        const float2 physical=(float2(q)+0.5f)/float2(size);
-        if(!InsideRect(physical,TargetDepthRect))continue;
-        const float z=TargetDepth.Load(int3(q,0));
-        if(!DeviceDepthValid(z))return true;
-        float3 world;
-        // Compare depth along the SAME ray. Do not mistake neighbor angle for a depth edge.
-        if(!Unproject(targetUV,z,TargetWorldFromClip,world))return true;
-        if(abs(length(world-TargetCameraWorld.xyz)-baseDistance)>tolerance)return true;
+    targetZ=0.0f;
+    support=0.0f;
+    const float2 physicalUV=MapNativeUV(targetUV,TargetDepthRect);
+    if(!InsideRect(physicalUV,TargetDepthRect) ||
+       any(physicalUV < float2(0,0)) || any(physicalUV >= 1.0f.xx))
+        return false;
+    const float2 xy=physicalUV*float2(size)-0.5f;
+    if((OutputConfig.z & GUARD_TARGET_EDGE)==0) {
+        const int2 p=int2(floor(physicalUV*float2(size)));
+        if(any(p<0)||p.x>=int(size.x)||p.y>=int(size.y))return false;
+        targetZ=TargetDepth.Load(int3(p,0));
+        support=1.0f;
+        return DeviceDepthValid(targetZ);
     }
-    return false;
+    const int2 first=int2(floor(xy));
+    float depth[4];
+    float weight[4];
+    float weightSum=0.0f;
+    float referenceDistance=-1.0f;
+    const float2 projectedTargetUV=targetUV;
+    [unroll] for(uint j=0;j<2;j++){
+        [unroll] for(uint i=0;i<2;i++){
+            const uint k=j*2+i;
+            const int2 p=first+int2(i,j);
+            const float2 delta=abs(xy-float2(p));
+            weight[k]=max(0.0f,1.0f-delta.x)*max(0.0f,1.0f-delta.y);
+            depth[k]=0.0f;
+            // Border taps outside physical source viewport are rejected,
+            // not clamped to unrelated pixels.
+            if(any(p<0)||p.x>=int(size.x)||p.y>=int(size.y))return false;
+            const float2 tapUV=(float2(p)+0.5f)/float2(size);
+            if(!InsideRect(tapUV,TargetDepthRect))return false;
+            const float d=TargetDepth.Load(int3(p,0));
+            if(!DeviceDepthValid(d))return false;
+            depth[k]=d;
+            float3 pointOnTargetRay;
+            if(!Unproject(projectedTargetUV,d,TargetWorldFromClip,pointOnTargetRay))
+                return false;
+            const float distance=length(pointOnTargetRay-TargetCameraWorld.xyz);
+            if(!isfinite(distance))return false;
+            // All depths are compared at SAME ray to remove angular bias.
+            if(referenceDistance<0.0f)referenceDistance=distance;
+            else {
+                const float allowed=max(1.0e-4f,
+                    EdgeParams.x+EdgeParams.y*referenceDistance);
+                if(abs(distance-referenceDistance)>allowed)return false;
+            }
+            weightSum+=weight[k];
+        }
+    }
+    if(weightSum<=1.0e-6f)return false;
+    targetZ=(depth[0]*weight[0]+depth[1]*weight[1]
+            +depth[2]*weight[2]+depth[3]*weight[3])/weightSum;
+    support=1.0f;
+    return DeviceDepthValid(targetZ);
 }
 [numthreads(8,8,1)]
 void CSBackwardTargetDepth(uint3 threadId : SV_DispatchThreadID)
@@ -140,17 +180,15 @@ void CSBackwardTargetDepth(uint3 threadId : SV_DispatchThreadID)
     uint depthW,depthH;
     TargetDepth.GetDimensions(depthW,depthH);
     const uint2 tdSize=uint2(depthW,depthH);
-    float targetZ; int2 depthPixel;
-    if(!depthW||!depthH || !SampleTargetDepthAt(targetUV,tdSize,targetZ,depthPixel)) {
-        Reject(outPx,fallback,REJECT_TARGET);return;
+    float targetZ,targetSupport;
+    if(!depthW||!depthH ||
+       !ReconstructTargetDepth(targetUV,tdSize,targetZ,targetSupport)) {
+        Reject(outPx,fallback,(OutputConfig.z&GUARD_TARGET_EDGE)!=0u ?
+            REJECT_TARGET_EDGE : REJECT_TARGET);return;
     }
     float3 visibleTargetWorld;
     if(!Unproject(targetUV,targetZ,TargetWorldFromClip,visibleTargetWorld)) {
         Reject(outPx,fallback,REJECT_TARGET);return;
-    }
-    const float targetRay=length(visibleTargetWorld-TargetCameraWorld.xyz);
-    if(TargetDepthEdgeUnsafe(uint2(depthPixel),tdSize,targetUV,targetRay)) {
-        Reject(outPx,fallback,REJECT_TARGET_EDGE);return;
     }
 
     float2 sourceNativeUV;float sourceZ;
@@ -190,10 +228,17 @@ void CSBackwardTargetDepth(uint3 threadId : SV_DispatchThreadID)
             const float tapZ=SourceDepth.Load(int3(dp,0));
             if(!DeviceDepthValid(tapZ))continue;
             const float2 tapNativeUV=(tapPhysicalUV-SourceDepthRect.xy)/SourceDepthRect.zw;
-            float3 sourceVisibleWorld;
-            if(!Unproject(tapNativeUV,tapZ,SourceDepthWorldFromClip,sourceVisibleWorld))continue;
-            const float err=abs(length(sourceVisibleWorld-SourceCameraWorld.xyz)-candidateDistance);
+            // Visibility difference on the SAME source-camera ray: do
+            // not compare radial distances from DIFFERENT source texels.
+            float3 seenOnProjectedRay;
+            if(!Unproject(sourceNativeUV,tapZ,SourceDepthWorldFromClip,
+                          seenOnProjectedRay))continue;
+            const float err=length(seenOnProjectedRay-visibleTargetWorld);
             if(err>tolerance)continue;
+            // Actual tap location still controls WHICH color texel is read.
+            float3 sourceVisibleWorld;
+            if(!Unproject(tapNativeUV,tapZ,SourceDepthWorldFromClip,
+                          sourceVisibleWorld))continue;
             // Color MUST correspond to this depth-validated source texel,
             // never to an independently bilinear-filtered foreground edge.
             float2 sourceColorUV;float sourceColorZ;
@@ -209,12 +254,24 @@ void CSBackwardTargetDepth(uint3 threadId : SV_DispatchThreadID)
             bestError=min(bestError,err);
         }
     }
-    if(accumulated<=1.0e-5f) {
+    const float coverage=saturate(accumulated/max(allSpatialWeights,1.0e-5f));
+    // Isolated valid samples next to a silhouette are NOT sufficient.
+    // This guard favors real right-eye color over fragile spatial extrapolation.
+    if(accumulated<=1.0e-5f || coverage<max(0.0f,EdgeParams.z)) {
         Reject(outPx,fallback,REJECT_SOURCE_DEPTH);return;
     }
-    OutColor[outPx]=weightedColor/accumulated;
-    const float coverage=saturate(accumulated/max(allSpatialWeights,1.0e-5f));
+    const float4 color=weightedColor/accumulated;
+    if((OutputConfig.z & PHOTO_GUARD)!=0u &&
+       (OutputConfig.z & HAS_TARGET_COLOR)!=0u) {
+        // Use only when source and fallback color SRVs share linear-light
+        // encoding/exposure; disabled by default for Lumen/DLSS uncertainty.
+        const float3 luma=float3(0.2126f,0.7152f,0.0722f);
+        if(abs(dot(color.rgb,luma)-dot(fallback.rgb,luma))>EdgeParams.w) {
+            Reject(outPx,fallback,REJECT_PHOTOMETRIC);return;
+        }
+    }
+    OutColor[outPx]=color;
     const float consistency=saturate(1.0f-bestError/tolerance);
-    OutConfidence[outPx]=coverage*consistency;
-    OutReject[outPx]=0u;  // valid synthesized sample; other masks signal real fallback
+    OutConfidence[outPx]=coverage*consistency*targetSupport;
+    OutReject[outPx]=0u;  // native fallback is not an unfilled hole
 }
