@@ -44,8 +44,19 @@ one(
             if (requested && fg.active &&
                 fg.last_tick.time_since_epoch().count() != 0 &&
                 now - fg.last_tick > std::chrono::seconds(1)) {
+                // A save can replace the live MPC instance and reflected
+                // functions while retaining the same UWorld and pawn. Avoid
+                // using stale reflection pointers on the first resumed tick.
+                // Only this detected pause triggers the extra collection
+                // lookup; healthy frames keep the proven Build45 fast path.
+                fg.collection = nullptr;
+                fg.collection_identity.reset();
+                fg.library = nullptr;
+                fg.library_identity.reset();
+                fg.getter = nullptr;
+                fg.setter = nullptr;
                 fg.force_reassert = true;
-                SPDLOG_INFO("[DuoView][ReloadV2] Long tick gap: refresh MPC_FOV");
+                SPDLOG_INFO("[DuoView][ReloadV3] Long tick gap: MPC bindings refreshed");
             }
             fg.last_tick = now;
 
