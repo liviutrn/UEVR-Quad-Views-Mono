@@ -315,17 +315,16 @@ edit("hooks/WindowsMessageHook.cpp",
 # Game UI / cursor quad: copy the actual current submission, not a stale
 # previous frame, and NEVER change the game projection or compositor source.
 edit("mods/vr/OverlayComponent.hpp",
+'''        std::optional<std::reference_wrapper<XrCompositionLayerQuad>> generate_framework_ui_quad();''',
 '''        std::optional<std::reference_wrapper<XrCompositionLayerQuad>> generate_framework_ui_quad();
+        void begin_duoview_cursor_submit() { m_duoview_game_ui_quad_valid=false; }''',
+"Register current-submit reset API")
 
-    private:
+edit("mods/vr/OverlayComponent.hpp",
+'''        XrCompositionLayerQuad m_slate_layer{};''',
+'''        bool m_duoview_game_ui_quad_valid{false};
         XrCompositionLayerQuad m_slate_layer{};''',
-'''        std::optional<std::reference_wrapper<XrCompositionLayerQuad>> generate_framework_ui_quad();
-        void begin_duoview_cursor_submit() { m_duoview_game_ui_quad_valid=false; }
-
-    private:
-        bool m_duoview_game_ui_quad_valid{false};
-        XrCompositionLayerQuad m_slate_layer{};''',
-"Reset game UI quad readiness before each D3D12 submission")
+"Track valid game UI quad for THIS compositor submit only")
 
 edit("mods/vr/OverlayComponent.cpp",
 '''#include "Framework.hpp"
