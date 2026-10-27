@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <thread>
+#include <mutex>
 #include <memory>
 #include <vector>
 #include <string>
@@ -48,6 +49,15 @@ class Session : public std::enable_shared_from_this<Session> {
     bool recorded_{};
     static constexpr UINT64 MaxBytes = 512ull * 1024 * 1024;
     UINT64 total_bytes_{};
+    // When command recording may already have been submitted, a failed Signal
+    // can NEVER authorize release of the GPU-owned source/readback buffers.
+    // Deliberately quarantine the exceptional case until process teardown.
+    static void quarantine_unproven(std::shared_ptr<Session> pending) {
+        static auto* guard = new std::mutex;
+        static auto* records = new std::vector<std::shared_ptr<Session>>;
+        std::scoped_lock lock{*guard};
+        records->push_back(std::move(pending));
+    }
     static bool supported_depth(DXGI_FORMAT f) {
         return f==DXGI_FORMAT_R32G8X24_TYPELESS || f==DXGI_FORMAT_R32_TYPELESS ||
             f==DXGI_FORMAT_R24G8_TYPELESS || f==DXGI_FORMAT_R16_TYPELESS;
@@ -232,22 +242,38 @@ public:
         recorded_=true;return true;
     }
     bool launch(ID3D12Device* dev,ID3D12CommandQueue* q) {
-        if(!recorded_||!dev||!q) return false;
-        if(FAILED(dev->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence_))))return false;
-        if(FAILED(q->Signal(fence_.Get(),1)))return false;
-        auto self=shared_from_this();
-        std::thread([self] {
-            // GPU completion is waited ONLY on a worker thread.
-            HANDLE e=CreateEventW(nullptr,FALSE,FALSE,nullptr);
-            if(e) {
-                if(SUCCEEDED(self->fence_->SetEventOnCompletion(1,e)))
-                    WaitForSingleObject(e,INFINITE);
-                CloseHandle(e);
-            } else {
-                while(self->fence_->GetCompletedValue()<1) Sleep(25);
-            }
-            if(self->fence_->GetCompletedValue()>=1)self->save();
-        }).detach();
+        if(!recorded_) return false;
+        const auto self=shared_from_this();
+        if(!dev || !q ||
+           FAILED(dev->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence_))) ||
+           FAILED(q->Signal(fence_.Get(),1))) {
+            quarantine_unproven(self); // copy may already be enqueued
+            return false;
+        }
+        try {
+            std::thread([self] {
+                // No GPU waits and no file I/O on the OpenXR render thread.
+                HANDLE e=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+                bool event_waited=false;
+                if(e) {
+                    if(SUCCEEDED(self->fence_->SetEventOnCompletion(1,e)))
+                        event_waited=(WaitForSingleObject(e,INFINITE)==WAIT_OBJECT_0);
+                    CloseHandle(e);
+                }
+                if(!event_waited) {
+                    for(;;) {
+                        const auto done=self->fence_->GetCompletedValue();
+                        if(done>=1) break; // UINT64_MAX also indicates device removed
+                        Sleep(25);
+                    }
+                }
+                const auto done=self->fence_->GetCompletedValue();
+                if(done>=1 && done!=UINT64_MAX) self->save();
+            }).detach();
+        } catch(...) {
+            quarantine_unproven(self);
+            return false;
+        }
         return true;
     }
 };
