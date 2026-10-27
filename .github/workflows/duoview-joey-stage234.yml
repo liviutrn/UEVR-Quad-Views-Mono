@@ -1,4 +1,4 @@
-name: DuoView v165 Authoritative Manual FOV - Isolated Recovery
+name: DuoView v205 Confirmed FOV + Two Configurable Recovery Hotkeys
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
   push:
@@ -10,6 +10,7 @@ on:
       - fix/duoview-v49-openxr-alignment-persistence-20261022
       - feature/v1861-xyz-headscale-keybinds-20261024
       - fix/v165-manual-fov-authoritative-mpc-20261027
+      - feature/v205-duoview-fov-and-runtime-hotkeys-20261027
   pull_request:
     branches:
       - build-182
@@ -118,6 +119,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Exact Build165 manual MPC recovery source anchors mismatch' }
           python workspace/duoview/joey_stage1/test_manual_fov_global_lookup_v165.py backend evidence/v165-protected-sha256.json
           if ($LASTEXITCODE -ne 0) { throw 'Build165 FOV/manual-only no-regression contract failed' }
+          python workspace/duoview/joey_stage1/test_v205_recovery_hotkeys.py --capture backend evidence/v205-keybind-baseline.json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot capture exact user-confirmed #205 implementation' }
+          python workspace/duoview/joey_stage1/apply_v205_manual_fov_runtime_hotkeys.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Two-keybind patch failed its exact #205 source anchors' }
+          python workspace/duoview/joey_stage1/test_v205_recovery_hotkeys.py --verify backend evidence/v205-keybind-baseline.json
+          if ($LASTEXITCODE -ne 0) { throw 'Keybind patch changed proven #205 logic or unrelated rendering code' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling patch contains whitespace errors' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
@@ -229,6 +236,7 @@ jobs:
           DXBC shaders are precompiled during CI; per-XR-image PSOs/textures are prewarmed on swapchain setup.
           Build45 preserved: STALKER 2 ID6 uses cached, conditional MPC_FOV IsFOVEnabled=0 and DepthScale=1; restores original values on exit.
           Build48 repairs the HUD Optical Convergence toggle: default OFF, effective in Mono ID5 and DuoView ID6 for both OpenXR game Quad and Cylinder layers (view-following ON or OFF, per-eye UI composition ON or OFF). HUD layer optical distance range 2..200m preserves apparent size and offset. If HUD is baked into the game scene, quad-only HUD control does not affect that embedded content.
+          RECOVERY KEYBINDS: Built on USER HEADSET-VERIFIED #205, commit 9720b2a0256af9078af78f5276d2190308fd13a6. UEVR VR > Keybinds > Overlay/Runtime Keys: Reapply DuoView FOV Key and Reinitialize Runtime Key. Both UNBOUND default; same key allowed. When shared, reset completes FIRST; FOV repair is queued after OpenXR returns successfully, followed by 850ms minimum and an active DuoView + ready runtime + valid gameplay world check. No reset loop, no load detection, existing FOV button untouched. Original MPC handler, shaders, stereo hook, XYZ settings, runtime alignment and compositor verified byte-identical; hotkey code confined to VR.hpp, VR.cpp.
           This version begins from user-verified working #165, exact commit 7a5cfd17084e82fb6c04908dd4915e8bd1eee01c.
           Manual FOV repair button appears beside 'Reinitialize Runtime' under VR. It touches ONLY the existing Build45 FOV handler. After save/quickload click the button if needed. Verifies read-back 0/1; reports precise failure on exception, missing world/collection, missing Kismet library or failed write. Only on manual click, it can find a previously validated MPC asset via the full Unreal global object array if UEVR's live class registry fails after reload. No automatic reload detection, GPU compositor changes, world/Pawn hooks, eye presentation or XYZ modifications.
           Build49: preserves the live Mono Eye Alignment enabled toggle and exact percentage (for example -1.25%) when selecting Reset Runtime; restores before returning from OpenXR reinitialization, including repeated resets. Adds reset-log confirmation. No rendering, HUD, shader, gaze, frame timing or SteamVR layer modifications.
@@ -246,16 +254,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-Quad-Views-Mono-v165-ManualFOV-GlobalLookup-${{ github.run_number }}.zip"
+          $zip="UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-Quad-Views-Mono-v165-ManualFOV-GlobalLookup-${{ github.run_number }}
+          name: UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-${{ github.run_number }}
           path: |
-            UEVR-Quad-Views-Mono-v165-ManualFOV-GlobalLookup-*.zip
-            UEVR-Quad-Views-Mono-v165-ManualFOV-GlobalLookup-*.zip.sha256
+            UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-*.zip
+            UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -270,7 +278,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-v165-ManualFOV-GlobalLookup-Evidence-${{ github.run_number }}
+          name: UEVR-v205-FOV-Runtime-Hotkeys-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
