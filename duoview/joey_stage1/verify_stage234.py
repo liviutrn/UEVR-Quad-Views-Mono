@@ -211,7 +211,7 @@ def main():
  native_shader=(Path(__file__).parents[1]/"DuoViewNativeCompositeRaster.hlsl").read_text(encoding="utf-8")
  if "outputPixel.x >= OutputSize.x" not in native_shader or "outputPixel.x -= OutputSize.x" not in native_shader:
   raise RuntimeError("Direct-XR double-wide coordinate mapping is missing")
- if compositor.count("DrawInstanced(3,1,0,0)") != 2:
+ if compositor.count("DrawInstanced(3,1,0,0)") != (3 if "record_r5_stereo(" in compositor else 2):
   raise RuntimeError("The direct-XR route must use one draw and the compatibility route one draw")
  for token in ("srv_descriptors_valid_", "srv_first_reference_", "srv_second_reference_",
                "xr_rtv_reference_", "srv_descriptor_refresh_count_", "xr_rtv_refresh_count_",
