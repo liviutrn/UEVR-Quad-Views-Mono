@@ -1,4 +1,4 @@
-name: DuoView v186.1 Full Reload Continuity V2
+name: DuoView v186.1 Guarded Save Reload V3
 run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
 on:
   push:
@@ -9,6 +9,7 @@ on:
       - experiment/duoview-mono-eye-alignment-hud-v48-20261022
       - fix/duoview-v49-openxr-alignment-persistence-20261022
       - fix/duoview-v1861-full-reload-v2-20261027
+      - fix/duoview-v1861-reload-guarded-v3-20261027
   pull_request:
     branches:
       - build-182
@@ -206,9 +207,9 @@ jobs:
           The exact source pose is frozen before Native Fix invokes either renderer callback and travels with the completed packet. Brief source gaps may reuse the last successfully submitted released image with its original pose for at most 100ms; no new source pair is composed during the hold. A new scene-image acquisition, mode generation, swapchain change or submission failure invalidates continuity. Until the first valid Native pair is available, warmup keeps the XR transition loop live and waits for the next pair. A compositor fault after validation returns ID6 to original Joey Mono on the following frame.
           An incomplete or cropped Native source is never presented as a full-FOV Mono image.
           DXBC shaders are precompiled during CI; per-XR-image PSOs/textures are prewarmed on swapchain setup.
-          FULL RELOAD V2 (OCT 2026): Based on original known-good v186.1 Build49, with the original XYZ movement scaling patch copied byte-for-byte. No changes to DuoView sources, GPU renderer, XR copy, fovea/gaze/shading, HUD optics or the original compositor.
+          GUARDED FULL RELOAD V3 (OCT 2026): Based on original known-good v186.1 Build49, with the original XYZ movement scaling patch copied byte-for-byte. No changes to DuoView sources, GPU renderer, XR copy, fovea/gaze/shading, HUD optics or the original compositor.
           Fixed reload mechanism: when a save recreates a world/pawn or pauses the playable engine tick, MPC_FOV rebinds and reasserts the two proven scalar values without replacing or resetting the DuoView compositor.
-          ID6 quarantine recovery: once 12 successfully submitted DuoView XR frames have already been observed, a quarantined rendering path may be rearmed after 12 stable playable pawn ticks and at least 350ms. This only clears an atomic fallback flag. The already-faulted producer was retired by the original fault handler, and it is NEVER retired or reconfigured from the recovery code. One failed retry stays in Mono until new real submitted frames or a new manual selection / successful OpenXR reset.
+          ID6 quarantine recovery: a GPU/compositor fault ALONE never authorizes reactivation. An observed pawn/world change or an engine-tick pause exceeding one second first opens a 15-second recovery window. Only within that window, if this XR runtime has already delivered 12 real DuoView frames and the playable pawn stabilizes for 12 game ticks and at least 350ms, the quarantined renderer may be rearmed ONCE. This merely clears the atomic quarantine bit: NO retirement, compositor reconfiguration, swapchain changes, GPU actions, or settings writes. If reload is not detected, the original Mono fallback remains protected. If rearm fails, another attempt requires a fresh scene transition and new successful delivered DuoView frames.
           Reset Runtime: eye alignment and its exact calibration persist, and any ID6 quarantine is cleared only after a successful runtime initialization. Foreground MPC reflection cache is then refreshed on the next game tick.
           IMPORTANT: Headset testing on repeated quickloads, save reload, autosave reload and Reset Runtime is REQUIRED. Automated CI cannot prove in-game visual continuity. Keep your proven installation intact; test in a separate folder.
           Build45 preserved: STALKER 2 ID6 uses cached, conditional MPC_FOV IsFOVEnabled=0 and DepthScale=1; restores original values on exit.
@@ -228,16 +229,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-Quad-Views-Mono-v186.1-FullReloadV2-${{ github.run_number }}.zip"
+          $zip="UEVR-Quad-Views-Mono-v186.1-GuardedReloadV3-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-Quad-Views-Mono-v186.1-FullReloadV2-${{ github.run_number }}
+          name: UEVR-Quad-Views-Mono-v186.1-GuardedReloadV3-${{ github.run_number }}
           path: |
-            UEVR-Quad-Views-Mono-v186.1-FullReloadV2-*.zip
-            UEVR-Quad-Views-Mono-v186.1-FullReloadV2-*.zip.sha256
+            UEVR-Quad-Views-Mono-v186.1-GuardedReloadV3-*.zip
+            UEVR-Quad-Views-Mono-v186.1-GuardedReloadV3-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -252,7 +253,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-v186.1-FullReloadV2-Evidence-${{ github.run_number }}
+          name: UEVR-v186.1-GuardedReloadV3-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
