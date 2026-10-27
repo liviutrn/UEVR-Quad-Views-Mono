@@ -275,6 +275,78 @@ public:
         if (!copied) return reject("Direct Native blend succeeded but Mono XR output validation failed");
         return true;
     }
+    // B4: direct binocular output. No Mono intermediate or identical-eye copy.
+    // Inputs are the two *distinct* packed R5 outputs, each with a native half.
+    bool record_r5_stereo(ID3D12Device* device,ID3D12GraphicsCommandList* cmd,
+        ID3D12Resource* packed_fovea,ID3D12Resource* packed_periphery,
+        ID3D12Resource* destination,const ViewFrame& frame,
+        std::shared_ptr<const void> packet_lifetime) {
+        recorded_commands_=false;
+        const auto reject=[this](const char* msg) {error_=msg;return false;};
+        if(!device||!cmd||!packed_fovea||!packed_periphery||!destination||
+           !frame.binocular_enabled||packed_fovea==packed_periphery||
+           frame.config.settings.fovea_view!=0) return reject("Invalid B4 stereo origin");
+        const auto& l=frame.config.layout;
+        const auto fd=packed_fovea->GetDesc(),pd=packed_periphery->GetDesc(),xd=destination->GetDesc();
+        const auto source_valid=[](const D3D12_RESOURCE_DESC& d,uint32_t w,uint32_t h) {
+            return d.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+                d.Width==uint64_t(w)*2&&d.Height==h &&
+                d.Format==DXGI_FORMAT_R8G8B8A8_UNORM &&
+                d.DepthOrArraySize==1&&d.MipLevels==1&&d.SampleDesc.Count==1;
+        };
+        if(!source_valid(fd,l.fovea.width,l.fovea.height) ||
+           !source_valid(pd,l.periphery.width,l.periphery.height) ||
+           !stereo_destination_valid(xd,width_,height_) ||
+           width_!=l.atlas_width/2 || height_!=l.atlas_height ||
+           device_.Get()!=device || !r5_stereo_pipeline_ || !root_ || !srv_ || !rtv_)
+            return reject("B4 pipeline or packed R5 RGB dimensions incompatible");
+        const auto rtv_format=srgb_ ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:DXGI_FORMAT_B8G8R8A8_UNORM;
+        if(xd.Format!=rtv_format&&xd.Format!=DXGI_FORMAT_B8G8R8A8_TYPELESS)
+            return reject("B4 OpenXR RTV format mismatch");
+        Microsoft::WRL::ComPtr<ID3D12Device> fdev,pdev,ddev,cdev;
+        if(FAILED(packed_fovea->GetDevice(IID_PPV_ARGS(&fdev)))||
+           FAILED(packed_periphery->GetDevice(IID_PPV_ARGS(&pdev)))||
+           FAILED(destination->GetDevice(IID_PPV_ARGS(&ddev)))||
+           FAILED(cmd->GetDevice(IID_PPV_ARGS(&cdev)))||
+           fdev.Get()!=device||pdev.Get()!=device||ddev.Get()!=device||cdev.Get()!=device)
+            return reject("B4 device ownership mismatch");
+        ensure_srvs(device,packed_fovea,packed_periphery,DXGI_FORMAT_R8G8B8A8_UNORM);
+        primary_reference_=packed_fovea;secondary_reference_=packed_periphery;
+        packet_lifetime_=std::move(packet_lifetime);
+        ShaderConstants constants{
+            {l.atlas_width/2,l.atlas_height},{l.atlas_width,l.atlas_height},
+            {l.fovea.x,l.fovea.y,l.fovea.width,l.fovea.height},
+            {l.periphery.x,l.periphery.y,l.periphery.width,l.periphery.height},
+            {l.u0,l.v0,l.u1,l.v1},frame.config.settings.feather_fraction,
+            frame.config.settings.debug_border?1u:0u,frame.config.settings.diagnostic_view,0.f,
+            {static_cast<uint32_t>(fd.Width),fd.Height},
+            {static_cast<uint32_t>(pd.Width),pd.Height},
+            {0u,0u},frame.config.settings.sharpen_strength,0.1f,0.02f,
+            3u | (srgb_ ? 0u : 4u)
+        };
+        // Both R5 resources were written by compute and ended in PS SRV state.
+        const auto handle=direct_xr_rtv_cpu_;
+        if(xr_rtv_reference_.Get()!=destination||xr_rtv_format_!=rtv_format) {
+            D3D12_RENDER_TARGET_VIEW_DESC view{};
+            view.Format=rtv_format;view.ViewDimension=D3D12_RTV_DIMENSION_TEXTURE2D;
+            device->CreateRenderTargetView(destination,&view,handle);
+            xr_rtv_reference_=destination;xr_rtv_format_=rtv_format;++xr_rtv_refresh_count_;
+        }
+        const D3D12_VIEWPORT viewport{0,0,float(width_*2),float(height_),0,1};
+        const D3D12_RECT scissor{0,0,LONG(width_*2),LONG(height_)};
+        ID3D12DescriptorHeap* heaps[]{srv_.Get()};
+        cmd->SetDescriptorHeaps(1,heaps);
+        cmd->SetGraphicsRootSignature(root_.Get());
+        cmd->SetPipelineState(r5_stereo_pipeline_.Get());
+        cmd->SetGraphicsRootDescriptorTable(0,srv_gpu_start_);
+        cmd->SetGraphicsRoot32BitConstants(1,sizeof(constants)/4,&constants,0);
+        cmd->RSSetViewports(1,&viewport);cmd->RSSetScissorRects(1,&scissor);
+        cmd->OMSetRenderTargets(1,&handle,FALSE,nullptr);
+        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        cmd->DrawInstanced(3,1,0,0);
+        recorded_commands_=true;last_native_direct_xr_=true;error_.clear();
+        return true;
+    }
     // Fallback for capture resources that cannot be sampled as SRVs.
     // Keep the original bit-for-bit gather path for format and GPU safety.
     // Gather Joey's actual Native Stereo Fix primary and secondary render
@@ -446,8 +518,8 @@ private:
         return false;
     }
     bool prepare(ID3D12Device* device, UINT width, UINT height, bool srgb) {
-        if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
-        output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
+        if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && r5_stereo_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
+        output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); r5_stereo_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
         srv_first_reference_.Reset(); srv_second_reference_.Reset(); xr_rtv_reference_.Reset();
         srv_descriptors_valid_=false; srv_cached_format_=DXGI_FORMAT_UNKNOWN;
         xr_rtv_format_=DXGI_FORMAT_UNKNOWN;
@@ -500,6 +572,9 @@ private:
         if (!check(device->CreateGraphicsPipelineState(&graphics, IID_PPV_ARGS(&pipeline_)), "Create raster PSO")) return false;
         graphics.PS = {native_pixel_shader_bytecode, sizeof(native_pixel_shader_bytecode)};
         if (!check(device->CreateGraphicsPipelineState(&graphics, IID_PPV_ARGS(&native_pipeline_)), "Create direct Native raster PSO")) return false;
+        graphics.PS={r5_stereo_pixel_shader_bytecode,sizeof(r5_stereo_pixel_shader_bytecode)};
+        if (!check(device->CreateGraphicsPipelineState(&graphics,IID_PPV_ARGS(&r5_stereo_pipeline_)),
+            "Create B4 R5 stereoscopic raster PSO")) return false;
         D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT; heap.CreationNodeMask = heap.VisibleNodeMask = 1;
         D3D12_RESOURCE_DESC texture{};
         texture.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -536,7 +611,7 @@ private:
     ComPtr<ID3D12Resource> srv_first_reference_, srv_second_reference_, xr_rtv_reference_;
     std::shared_ptr<const void> packet_lifetime_{};
     ComPtr<ID3D12RootSignature> root_;
-    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_;
+    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_, r5_stereo_pipeline_;
     ComPtr<ID3D12DescriptorHeap> srv_, rtv_;
     D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_start_{}, rtv_cpu_start_{}, direct_xr_rtv_cpu_{};
     D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_start_{};
