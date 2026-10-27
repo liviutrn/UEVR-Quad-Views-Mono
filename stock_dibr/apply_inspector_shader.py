@@ -88,9 +88,9 @@ for old,new in [
 ('if (target_right && EnableDepthEdgeStabilization != 0)', 'if (target_right && EnableDepthEdgeStabilization != 0 && PreserveStereoStrength == 0)'),
 ('if (EnableSpatialRepair != 0 && (target_right || ShowSpatialRepairMask != 0))', 'if (EnableSpatialRepair != 0 && PreserveStereoStrength == 0 && (target_right || ShowSpatialRepairMask != 0))'),
 ('if (target_right && ui_edge_mask > 0.0f)', 'if (target_right && ui_edge_mask > 0.0f && PreserveStereoStrength == 0)')]: edit(c,old,new)
-edit(c, '    constants.reversed_depth = parameters.reversed_depth ? 1 : 0;', '''    constants.inspector_view = std::min(parameters.inspector_view, 5u);
-    constants.depth_sampling_mode = std::min(parameters.depth_sampling_mode, 2u);
-    constants.depth_repair_mode = std::min(parameters.depth_repair_mode, 1u);
+edit(c, '    constants.reversed_depth = parameters.reversed_depth ? 1 : 0;', '''    constants.inspector_view = (std::min)(parameters.inspector_view, 5u);
+    constants.depth_sampling_mode = (std::min)(parameters.depth_sampling_mode, 2u);
+    constants.depth_repair_mode = (std::min)(parameters.depth_repair_mode, 1u);
     constants.preserve_stereo_strength = parameters.preserve_stereo_strength ? 1u : 0u;
     constants.depth_scale = std::clamp(parameters.depth_scale, 0.25f, 4.0f);
     constants.depth_display_gain = std::clamp(parameters.depth_display_gain, -8.0f, 24.0f);
