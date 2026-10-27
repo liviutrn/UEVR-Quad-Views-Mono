@@ -85,12 +85,24 @@ c = replace_once(c, '''    std::shared_ptr<uevr::stalker2_native::PairFrame> ret
 {''', '''    std::shared_ptr<uevr::stalker2_native::PairFrame> retained_stalker_pair,
     std::optional<std::function<void(d3d12::CommandContext&, d3d12::dibr_transaction::ExecuteResult)>> submission_result)
 {''', 'definition')
-c = replace_once(c, '''    texture_ctx->commands.execute();''', '''    if (submission_result) {
+# There are three texture-context executions in the DuoView backend.
+# Patch ONLY the execution immediately preceding DuoView's canonical proof.
+# Other execution sites remain unchanged.
+needle = '    texture_ctx->commands.execute();'
+marker = '    const bool duo_enqueued=!duo_copy || uevr::stalker2_native::SubmissionProof{'
+if c.count(marker) != 1:
+    raise RuntimeError(f'DuoView delivery marker unavailable: {c.count(marker)} matches')
+end = c.index(marker)
+pos = c.rfind(needle, 0, end)
+if pos < 0 or end-pos > 4096:
+    raise RuntimeError('DuoView submission call missing before delivery proof')
+replacement = '''    if (submission_result) {
         const auto result = texture_ctx->commands.execute_checked();
         (*submission_result)(texture_ctx->commands, result);
     } else {
         texture_ctx->commands.execute();
-    }''', 'submission')
+    }'''
+c = c[:pos] + replacement + c[pos+len(needle):]
 hp.write_text(h, encoding='utf-8')
 cp.write_text(c, encoding='utf-8')
 print('Applied independent UI snapshot submission and retirement tracking')
