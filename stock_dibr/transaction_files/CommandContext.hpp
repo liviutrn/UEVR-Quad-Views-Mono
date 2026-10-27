@@ -1,0 +1,84 @@
+#pragma once
+
+#include <mutex>
+#include <d3d12.h>
+
+#include "ComPtr.hpp"
+#include "DIBRTransaction.hpp"
+
+namespace d3d12 {
+struct TextureContext;
+
+void set_fence_profiler_enabled(bool enabled);
+bool is_fence_profiler_enabled();
+
+struct CommandContext {
+    CommandContext() = default;
+    virtual ~CommandContext() { this->reset(); }
+
+    bool setup(const wchar_t* name = L"CommandContext object");
+    void reset();
+    // Returns true only after any submitted work has retired and the command
+    // allocator/list are safe to reuse.
+    bool wait(uint32_t ms);
+    // Reclaims an already-completed command allocator without blocking the
+    // caller. Consumers that need a hard synchronization still use wait().
+    bool try_wait();
+    // Nonblocking and non-mutating; an unused context has no GPU references.
+    bool references_retired();
+    // Extend this submission's retirement point past work subsequently queued
+    // on the original queue (for example, spectator/OpenXR consumers).
+    bool extend_submission_retirement();
+    void copy(ID3D12Resource* src, ID3D12Resource* dst, 
+        D3D12_RESOURCE_STATES src_state = D3D12_RESOURCE_STATE_PRESENT,
+        D3D12_RESOURCE_STATES dst_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    void copy_region(ID3D12Resource* src, ID3D12Resource* dst, D3D12_BOX* src_box, 
+        D3D12_RESOURCE_STATES src_state = D3D12_RESOURCE_STATE_PRESENT,
+        D3D12_RESOURCE_STATES dst_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    void copy_region_to_subresource(ID3D12Resource* src, ID3D12Resource* dst, D3D12_BOX* src_box, UINT dst_subresource,
+        D3D12_RESOURCE_STATES src_state = D3D12_RESOURCE_STATE_PRESENT,
+        D3D12_RESOURCE_STATES dst_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    void copy_region(ID3D12Resource* src, ID3D12Resource* dst, 
+        D3D12_BOX* src_box, UINT dst_x, UINT dst_y, UINT dst_z,
+        D3D12_RESOURCE_STATES src_state, 
+        D3D12_RESOURCE_STATES dst_state);
+    void copy_region_stereo(ID3D12Resource* srcleft, ID3D12Resource* srcright, ID3D12Resource* dst, D3D12_BOX* srcleft_box, D3D12_BOX* srcright_box,
+        UINT dstleft_x, UINT dstleft_y, UINT dstleft_z,
+        UINT dstright_x, UINT dstright_y, UINT dstright_z,
+        D3D12_RESOURCE_STATES src_state = D3D12_RESOURCE_STATE_PRESENT,
+        D3D12_RESOURCE_STATES dst_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    void clear_rtv(ID3D12Resource* dst, D3D12_CPU_DESCRIPTOR_HANDLE rtv, const float* color, 
+        D3D12_RESOURCE_STATES dst_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    void clear_rtv(TextureContext& tex, const float* color, D3D12_RESOURCE_STATES dst_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    void execute();
+    dibr_transaction::ExecuteResult execute_checked();
+    bool discard_recording();
+    bool has_untracked_submission() const { return this->untracked_submission; }
+    bool device_removed_after_untracked_submission() const { return this->device_removed_after_untracked; }
+    void quarantine_untracked_objects();
+
+    bool ready() const {
+        return !this->poisoned && this->cmd_list != nullptr && this->cmd_allocator != nullptr && this->fence != nullptr;
+    }
+
+    ComPtr<ID3D12CommandAllocator> cmd_allocator{};
+    ComPtr<ID3D12GraphicsCommandList> cmd_list{};
+    ComPtr<ID3D12Fence> fence{};
+    // Checked DIBR recovery must signal the exact queue that executed its list.
+    ComPtr<ID3D12CommandQueue> submission_queue{};
+    UINT64 fence_value{};
+    HANDLE fence_event{};
+
+    std::recursive_mutex mtx{};
+
+    bool waiting_for_fence{false};
+    bool has_commands{false};
+    bool poisoned{false};
+    bool untracked_submission{false};
+    bool fence_event_armed{false};
+    bool device_removed_after_untracked{false};
+    uint64_t close_failure_count{0};
+
+    std::wstring internal_name{L"CommandContext object"};
+};
+}
