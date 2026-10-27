@@ -13,7 +13,7 @@ float4 PSR5StereoMain(VertexOut i):SV_TARGET0 {
     const uint eye = i.pos.x >= OutputSize.x ? 1u : 0u;
     const float2 eyePixel=float2(i.pos.x - eye*OutputSize.x,i.pos.y);
     const float2 fullUv=eyePixel / float2(OutputSize);
-    const float2 pUV=NativeStereoSampleUV(fullUv,PeripheryRect.zw,NativePeripheryDimensions,eye);
+    const float2 pUV=NativeStereoSampleUV(fullUv,PeripheralRect.zw,NativePeripheryDimensions,eye);
     float4 periphery=PeripheralNativeSource.SampleLevel(LinearClamp,pUV,0);
     const float weight=BlendWeight(fullUv);
     float4 result=DebugViewMode==2 ? float4(.04,.04,.04,1) : periphery;
