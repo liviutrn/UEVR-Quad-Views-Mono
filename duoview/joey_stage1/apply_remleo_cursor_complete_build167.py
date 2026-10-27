@@ -290,6 +290,13 @@ edit("Framework.cpp",
     std::scoped_lock _{ m_patch_mtx };''',
 "Disable pointer block without damaging installed SafetyHook")
 
+
+edit("hooks/WindowsMessageHook.cpp",
+'''#include "WindowsMessageHook.hpp"''',
+'''#include "../Framework.hpp"
+#include "WindowsMessageHook.hpp"''',
+"Expose guarded Framework coordinate remap to game window hook")
+
 # Windows mouse messages MUST be mapped too. Old Build166 omitted this,
 # making hit-testing fail when the render window exceeds monitor bounds.
 edit("hooks/WindowsMessageHook.cpp",
