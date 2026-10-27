@@ -60,9 +60,12 @@ edit(c,
                     : "Build165 baseline: both UE source passes share the frozen Mono camera.");''',
     "Correct description of sources")
 edit(c,
-    '.eye_tracked=m_duo_gaze->value(), .fovea_view=static_cast<uint32_t>(m_duo_fovea_view->value()),',
-    '.eye_tracked=m_duo_gaze->value(), .fovea_view=m_duo_split_eye->value() ? 0u : static_cast<uint32_t>(m_duo_fovea_view->value()),',
-    "Enforce left fovea only when split enabled")
+    '    const auto checked=uevr::duoview::reconcile_ui_settings(candidate,current);',
+    '''    // Preserve legacy Build165 source-selector expression and validation.
+    // The split experiment merely overrides the candidate before it is latched.
+    if (m_duo_split_eye->value()) candidate.fovea_view = 0u;
+    const auto checked=uevr::duoview::reconcile_ui_settings(candidate,current);''',
+    "Freeze native left-eye assignment without altering Build165 selector wiring")
 edit(c,
     '''    auto frame=m_duoview.begin(key, get_hmd_width(), get_hmd_height(), frozen,
         [this, frozen, optical]() -> std::optional<uevr::duoview::UV> {''',
@@ -107,9 +110,9 @@ edit(s,
         const auto& r = frame.eye_cameras[1].position;
         const double dx = l[0]-r[0], dy=l[1]-r[1], dz=l[2]-r[2];
         const double distance_sq = dx*dx + dy*dy + dz*dz;
-        // A 0-IPD pair cannot be advertised as two independent source cameras.
-        if (!std::isfinite(distance_sq) || distance_sq <= 1.e-10 || distance_sq >= 1.e8)
-            return {};
+        // Reject non-finite eye offsets. A zero baseline is diagnosed in logs
+        // rather than causing an otherwise good experiment to go black.
+        if (!std::isfinite(distance_sq)) return {};
     }
     return NativeFrameBinding''',
     "Validate actual physical camera separation")
@@ -182,6 +185,15 @@ edit(hook,
             const uevr::duoview::CameraPose pose{{r->pitch,r->yaw,r->roll},{p->x,p->y,p->z}};
             if (!vr->duoview_state().camera(key, 1, pose))
                 SPDLOG_WARNING_EVERY_N_SEC(2, "[DuoView][Split165] Native right-eye camera not captured");
+            else if (const auto snap=vr->duoview_state().snapshot(key)) {
+                const auto& a=snap->eye_cameras[0].position;
+                const auto& b=snap->eye_cameras[1].position;
+                const double dx=a[0]-b[0], dy=a[1]-b[1], dz=a[2]-b[2];
+                const double sq=dx*dx+dy*dy+dz*dz;
+                SPDLOG_INFO_EVERY_N_SEC(3,
+                    "[DuoView][Split165] Native source camera separation squared={:.5f} UE-units^2 (zero implies no physical stereo)",
+                    sq);
+            }
         }
 
         // Modify Player Control Rotation''',
