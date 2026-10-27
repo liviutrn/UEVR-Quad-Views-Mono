@@ -22,7 +22,7 @@ edit(dc,
  '''                        } else {
                             if (m_stock_dibr_scope) {
                                 const auto duo_depth_extent = m_game_tex.texture->GetDesc();
-                                m_stock_dibr_depth.configure(device,
+                                m_stock_dibr_depth->configure(device,
                                     g_framework->get_d3d12_hook()->get_command_queue(),
                                     duo_depth_extent.Width, duo_depth_extent.Height, true);
                             }
@@ -34,8 +34,8 @@ edit(dc,
                                 vr->duoview_abort("Validated Native Stereo Fix pair failed DuoView composition");''',
  '''                            if (m_stock_dibr_scope) {
                                 if (submitted && recorded && callback_attempted)
-                                    m_stock_dibr_depth.finish_frame();
-                                SPDLOG_INFO_EVERY_N_SEC(2, "[DuoView][R5DepthBridge] mode=diagnostics-only {}", m_stock_dibr_depth.summary());
+                                    m_stock_dibr_depth->finish_frame();
+                                SPDLOG_INFO_EVERY_N_SEC(2, "[DuoView][R5DepthBridge] mode=diagnostics-only {}", m_stock_dibr_depth->summary());
                             }
                             if (compositor_fault) {
                                 vr->duoview_abort("Validated Native Stereo Fix pair failed DuoView composition");''')
