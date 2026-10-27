@@ -1,6 +1,16 @@
 # Changelog
 
-This changelog covers **published stable releases**. Experimental Quad Views, DIBR and diagnostics builds are **not** promoted here.
+This changelog documents **published DuoView releases**. Experimental Quad Views, DIBR and diagnostics builds are not promoted as recommended production releases. A published build may still include features awaiting headset validation; each entry specifies its test status.
+
+## [v186.2 — Manual FOV recovery & configurable keybinds](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v186.2) — 2026-10-27
+
+**Latest packaged release: GitHub Actions Build #206.** Binary source: `915226735b03dc736028f01b93cb39a20efe81cb`. The original #205 FOV recovery was confirmed successful after a real S.T.A.L.K.E.R. 2 save reload; #206's new keyboard controls and combined-key sequence have passed compilation and static/integration regressions but still require a headset test.
+
+- **From verified Build #165:** retains the existing DuoView ID 6 foveal/peripheral rendering, Glamarye, first-person FOV correction, Mono HUD/eye alignment and XYZ head scaling.
+- **Build #205 (manual recovery):** adds `Reapply DuoView FOV` beside `Reinitialize Runtime`. When the normal `MPC_FOV` lookup is unavailable after a load, its manually requested fallback resolves the previously validated collection in Unreal's global object registry, writes `IsFOVEnabled=0` / `DepthScale=1`, and verifies both scalar values. This path was confirmed effective in a save-load headset test.
+- **Build #206 (hotkeys):** adds two persistent UEVR ModKey settings, `Reapply DuoView FOV Key` and `Reinitialize Runtime Key`, both initially Unbound. The same physical key can be assigned to both actions; the reset completes before a delayed gameplay-ready FOV reapply. The existing manual button and #205 FOV handler remain unchanged.
+- **No broader automatic recovery:** no save-load watchdog, compositor recovery or automatic OpenXR reset. Rendering paths and protected modules are source-identical to #205.
+- Full release notes: [v186.2](RELEASE_NOTES_V1862.md). Previous public release tags and binary assets remain unchanged.
 
 ## [v186.1 MPC/HUD/Eye Alignment Persist49-56](https://github.com/liviutrn/UEVR-Quad-Views-Mono/releases/tag/v186.1-mpc-hud-eyealignment-persist49-56) — 2026-10-23
 
@@ -29,4 +39,4 @@ This changelog covers **published stable releases**. Experimental Quad Views, DI
 
 ### Release policy
 
-"Stable" here means **tested and accepted by the project owner on the stated hardware and game**, not general multi-game/headset certification. Tags and assets for prior stable releases are preserved unchanged. Later diagnostic, Quad Views, and DIBR experiments are not implicitly part of any stable release.
+An explicitly **headset-validated** feature means it was observed working in-game, not that it is certified across machines or games. New functionality may be CI-verified only until tested on hardware. Earlier release assets and tags remain intact; experimental Quad Views and DIBR work is not implicitly incorporated into this release.
