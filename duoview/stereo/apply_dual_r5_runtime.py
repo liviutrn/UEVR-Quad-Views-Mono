@@ -55,8 +55,11 @@ edit(dc,'        hook->set_depth_stencil_observer(m_stock_dibr_scope ?',
         hook->set_depth_stencil_observer(m_stock_dibr_scope && vr->is_duoview_binocular_requested() ?
             static_cast<D3D12DepthStencilObserver*>(m_duo_r5_depth.get()) :
             m_stock_dibr_scope ?''')
-edit(dc,'    this->duoview_compositors.clear();',
-       '    this->duoview_r5_slots.clear();\n    this->duoview_compositors.clear();')
+p=root/dc
+_s=p.read_text()
+_old='    this->duoview_compositors.clear();'
+assert _s.count(_old)==2, 'Expected precisely two protected clear sites'
+p.write_text(_s.replace(_old,'    this->duoview_r5_slots.clear();\\n'+_old))
 edit(dc,'    if (!this->duoview_compositors.empty())',
        '    if (!this->duoview_compositors.empty() || !this->duoview_r5_slots.empty())')
 edit(dc,'            for (auto& tc : it->second.texture_contexts) {',
