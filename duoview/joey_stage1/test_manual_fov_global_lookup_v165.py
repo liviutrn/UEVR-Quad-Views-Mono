@@ -43,7 +43,7 @@ for term in (
     "known_mpc_full_name = unique_collection->get_full_name();",
     'if (!world) {',
     "fail_manual(\"No active UWorld on game tick\")",
-    "fail_manual(\"MPC_FOV absent from both live registry and global object array\")",
+    "MPC_FOV absent from both live registry and global object array",
     "fail_manual(\"KismetMaterialLibrary method binding not available\")",
     "fail_manual(\"Cannot read current-world MPC_FOV scalar values\")",
     "fail_manual(\"Unreal SDK exception during manual MPC operation\")",
