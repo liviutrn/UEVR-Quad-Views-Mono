@@ -1,0 +1,134 @@
+name: Publish v186.2 DuoView original Build206
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-v1862-build206.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: v1862-public-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'liviutrn/UEVR-Quad-Views-Mono'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: v186.2
+      SOURCE_RUN: '40562995836'
+      SOURCE_SHA: '915226735b03dc736028f01b93cb39a20efe81cb'
+      RELEASE_SHA: 'df8b64e57f9dfb3595957b6e3f593703b3d947e4'
+      ARTIFACT_ID: '12762752795'
+      ARTIFACT_DIGEST: 'sha256:9d0781b385d7b5d3f0568f3c0d4f01368fa1c117a99d175017d483b5bbaec2fc'
+      ARTIFACT: UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-206
+      ZIP: UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-206.zip
+    steps:
+      - name: Check out maintained public documentation
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify source CI run, exact artifact identity, and release documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s README.md
+          test -s CHANGELOG.md
+          test -s RELEASE_NOTES_V1862.md
+          grep -Fq v186.2 README.md
+          grep -Fq v186.2 CHANGELOG.md
+          test "$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" --jq .head_sha)" = "$SOURCE_SHA"
+          test "$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" --jq .conclusion)" = success
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .name)" = "$ARTIFACT"
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .expired)" = false
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .workflow_run.head_sha)" = "$SOURCE_SHA"
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .digest)" = "$ARTIFACT_DIGEST"
+          test "$(gh api "repos/$GH_REPO/commits/$RELEASE_SHA" --jq .sha)" = "$RELEASE_SHA"
+          for name in README.md CHANGELOG.md RELEASE_NOTES_V1862.md; do
+            a="$(gh api "repos/$GH_REPO/contents/$name?ref=main" --jq .sha)"
+            b="$(gh api "repos/$GH_REPO/contents/$name?ref=$RELEASE_SHA" --jq .sha)"
+            test "$a" = "$b"
+          done
+      - name: Download unchanged CI206 package and verify SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download "$SOURCE_RUN" --name "$ARTIFACT" --dir dist
+          test -s "dist/$ZIP"
+          test -s "dist/$ZIP.sha256"
+          expected="$(tr -d '[:space:]' < "dist/$ZIP.sha256" | tr '[:upper:]' '[:lower:]')"
+          actual="$(sha256sum "dist/$ZIP" | cut -d' ' -f1)"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          test "$expected" = "$actual"
+          unzip -t "dist/$ZIP" >/dev/null
+          echo "Exact CI206 package SHA256: $actual"
+      - name: Privacy scan docs and every release package file
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          import os,re
+          expected={
+            "baseline.lock.json","duoview-stage1-edits.json",
+            "duoview-stage1-source-hashes.json","duoview-stage234-hashes.json",
+            "exact-baseline-source.json","LuaVR.dll","openvr_api.dll",
+            "openxr_loader.dll","READ_FIRST.txt","UEVRBackend.dll",
+            "UEVRInjector.dll.config","UEVRInjector.exe","UEVRInjector.pdb",
+            "UEVRPluginNullifier.dll"
+          }
+          patterns={
+            "personal email":rb"(?<![A-Za-z0-9._+-])[A-Za-z0-9._+-]{2,}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+            "Windows user profile":rb"[A-Za-z]:\\Users\\[A-Za-z0-9_. -]{2,}",
+            "macOS user profile":rb"/Users/[A-Za-z0-9_. -]{2,}",
+            "access token":rb"gh[pousr]_[A-Za-z0-9]{12,}",
+            "private key":rb"-----BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY-----"
+          }
+          def scan(name,data):
+            for label,pattern in patterns.items():
+              if re.search(pattern,data,re.I):
+                raise SystemExit(f"Privacy audit failed for {name}: {label}")
+          for p in ("README.md","CHANGELOG.md","RELEASE_NOTES_V1862.md"):
+            scan(p,Path(p).read_bytes())
+          with ZipFile(Path("dist")/os.environ["ZIP"]) as z:
+            names=set(z.namelist())
+            if names!=expected:
+              raise SystemExit(f"Unexpected files in public binary package: {sorted(names^expected)}")
+            for item in z.infolist():
+              if item.is_dir() or item.filename.startswith("/") or ".." in item.filename.split("/"):
+                raise SystemExit("Unsafe archive path")
+              scan(item.filename,z.read(item))
+          print(f"PASS privacy audit: {len(expected)} expected package entries, public README, changelog, release notes")
+          PY
+      - name: Publish v186.2 as latest GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            test "$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq .object.sha)" = "$RELEASE_SHA"
+            gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$ZIP"
+            gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$ZIP.sha256"
+            gh release edit "$TAG" --latest
+          else
+            gh release create "$TAG" "dist/$ZIP" "dist/$ZIP.sha256" \
+              --target "$RELEASE_SHA" \
+              --title "v186.2 — DuoView FOV Recovery & Runtime Hotkeys (Build #206)" \
+              --notes-file RELEASE_NOTES_V1862.md \
+              --latest
+          fi
+      - name: Verify public latest release tag and both downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" = "$TAG"
+          test "$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq .object.sha)" = "$RELEASE_SHA"
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = false
+          test "$(gh release view "$TAG" --json isPrerelease --jq .isPrerelease)" = false
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$ZIP"
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$ZIP.sha256"
+          gh release view "$TAG" --json url,title,tagName --jq '{url:.url,title:.title,tag:.tagName}'
