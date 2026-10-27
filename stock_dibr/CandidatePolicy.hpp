@@ -27,10 +27,10 @@ struct ProducerRoute {
     }
     bool valid() const { return queue && format_family && width > 0 && height > 0; }
     bool compatible(const ProducerRoute& b) const {
-        const auto near = [](int32_t a, int32_t c) { return int64_t(a) - c <= 2 && int64_t(c) - a <= 2; };
+        const auto close_origin = [](int32_t a, int32_t c) { return int64_t(a) - c <= 2 && int64_t(c) - a <= 2; };
         return valid() && b.valid() && queue == b.queue && format_family == b.format_family &&
             layout == b.layout && list_index == b.list_index && ordinal == b.ordinal &&
-            near(x,b.x) && near(y,b.y) &&
+            close_origin(x,b.x) && close_origin(y,b.y) &&
             // Dynamic resolution changes extent while retaining viewport shape.
             // Match R5's bounded pixel alignment tolerance in aspect space.
             (int64_t(width)*b.height-int64_t(b.width)*height <=

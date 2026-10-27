@@ -518,9 +518,9 @@ int main() try {
     }
     // Conventional Z with the same near-oriented x displacement must produce
     // exactly the same visibility and color as reversed Z.
-    auto conventional=character;for(UINT y=4;y<20;++y)for(UINT x=8;x<24;++x)conventional[y*48+x]=1.f-character[y*48+x];
+    auto conventional_character=character;for(UINT y=4;y<20;++y)for(UINT x=8;x<24;++x)conventional_character[y*48+x]=1.f-character[y*48+x];
     r7.reversed_depth=0;r7.source_to_right[8]=.5f;r7.source_to_right[12]=-.5f;
-    auto conventional_image=run_fixture(r7,&conventional);verify_winners(r7,conventional);
+    auto conventional_image=run_fixture(r7,&conventional_character);verify_winners(r7,conventional_character);
     for(size_t i=0;i<character_image.size();++i)require(std::abs(int(conventional_image[i])-int(character_image[i]))<=1,"normal/reversed Z changed the same geometric scene");
     // Flip only target Z while preserving the source projection. Source-near
     // becomes target-far: source Z ordering would select the wrong surface.
@@ -723,7 +723,7 @@ int main() try {
     begin_selection_frame();upload(rotating_b.Get(),[](UINT,UINT){return .3f;});upload(competing_depth.Get(),[](UINT,UINT){return .6f;});
     b=barrier(rotating_b.Get(),D3D12_RESOURCE_STATE_COPY_DEST,read);cmd->ResourceBarrier(1,&b);
     b=barrier(competing_depth.Get(),D3D12_RESOURCE_STATE_COPY_DEST,read);cmd->ResourceBarrier(1,&b);
-    selection_pass(second_depth.Get(),rotation_a_dsv,32);selection_pass(competing_depth.Get(),competing_dsv,32);submit_selection_frame();
+    selection_pass(competing_depth.Get(),competing_dsv,32);selection_pass(second_depth.Get(),rotation_a_dsv,32);submit_selection_frame();
     auto rotation_snapshot=selection_capture.acquire();require(bool(rotation_snapshot),"initial equal-area rotating producer could not be acquired");
     const auto family_id=selection_capture.active_candidate_id();require(family_id!=0,"rotating family has no stable ID");
     verify_selected_pixels(rotation_snapshot.Get(),.8f);selection_capture.finish_frame();wait(q.Get());
@@ -731,26 +731,32 @@ int main() try {
     for(UINT frame=1;frame<=4;++frame) {
         if(frame==3)require(selection_capture.select_candidate(family_id),"stable producer family could not be manually pinned");
         begin_selection_frame();const bool use_b=(frame&1u)!=0;
+        selection_pass(competing_depth.Get(),competing_dsv,32);
         selection_pass(use_b?rotating_b.Get():second_depth.Get(),use_b?rotation_b_dsv:rotation_a_dsv,32);
+        // A later competing capture must not defeat a fresh established family.
+        // The first two route ordinals remain stable across A/B rotation.
         selection_pass(competing_depth.Get(),competing_dsv,32);submit_selection_frame();
         rotation_snapshot=selection_capture.acquire();require(bool(rotation_snapshot),"rotating producer family became unavailable during normal A/B rotation");
         require(selection_capture.active_candidate_id()==family_id,"equal-area competitor caused automatic flip-flop or manual pin changed family");
         const auto metadata=selection_capture.candidates();require(metadata.size()==2,"rotating allocations created extra producer families");
         for(const auto& candidate:metadata)if(candidate.id==family_id) {
-            require(candidate.members==2 && candidate.available && candidate.route_confidence==2,"rotating producer did not report both name-corroborated physical members");
+            require(candidate.members==2 && !candidate.ambiguous && candidate.route_confidence==2,"rotating producer did not report both name-corroborated physical members");
             if(use_b)b_physical=candidate.physical_id;else a_physical=candidate.physical_id;
         }
         verify_selected_pixels(rotation_snapshot.Get(),use_b?.3f:.8f);selection_capture.finish_frame();wait(q.Get());
     }
     require(a_physical && b_physical && a_physical!=b_physical,"rotating family obscured physical-member identity");
     require(selection_capture.select_candidate(0),"automatic selection could not be rearmed after family pin");
-    // A transient absence must not flip to an equal-area alternate. After the
-    // documented three-epoch grace, a fresh competing producer becomes usable.
+    // During the three-epoch logical-choice grace, a fresh alternate still
+    // supplies this frame. No stale pixels or unnecessary synthesis stall.
     for(UINT absent=1;absent<=3;++absent) {
         begin_selection_frame();selection_pass(competing_depth.Get(),competing_dsv,32);submit_selection_frame();
         rotation_snapshot=selection_capture.acquire();
-        if(absent<3)require(!rotation_snapshot,"automatic family switched before absence grace elapsed");
-        else {require(bool(rotation_snapshot) && selection_capture.active_candidate_id()!=family_id,"automatic family failed to recover after three absent epochs");verify_selected_pixels(rotation_snapshot.Get(),.6f);}
+        require(bool(rotation_snapshot) && selection_capture.active_candidate_id()!=family_id,"missing automatic family failed to use a fresh current-frame alternate");
+        uint64_t logical_choice{};for(const auto& candidate:selection_capture.candidates())if(candidate.selected_auto)logical_choice=candidate.id;
+        if(absent<3)require(logical_choice==family_id,"logical automatic family switched before absence grace elapsed");
+        else require(logical_choice==selection_capture.active_candidate_id(),"logical automatic family failed to switch after three absent epochs");
+        verify_selected_pixels(rotation_snapshot.Get(),.6f);
         selection_capture.finish_frame();wait(q.Get());
     }
     g_capture=&capture;
