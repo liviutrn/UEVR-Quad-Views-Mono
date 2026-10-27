@@ -117,6 +117,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'R5 UI retirement patch failed' }
           python workspace/duoview/stereo/integrate_r5_v1.py backend
           if ($LASTEXITCODE -ne 0) { throw 'DuoView R5 guarded integration hook failed' }
+          python workspace/duoview/stereo/enhance_depth_bridge_v1.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'DepthBridge provenance enhancement rejected' }
+          python workspace/duoview/stereo/test_depth_bridge_v1.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'V3+R5 metadata-only diagnostics regression failed' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Backend whitespace/patch conflict' }
       - name: Configure MSVC for R5 command-line WARP fixtures
