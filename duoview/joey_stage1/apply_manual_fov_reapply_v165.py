@@ -86,6 +86,52 @@ cpp = once(cpp,
     "MPC manual cache invalidation")
 
 cpp = once(cpp,
+    '''                if (!unique_collection) return;''',
+    '''                if (!unique_collection) {
+                    if (fg.manual_reapply_pending) {
+                        fg.manual_reapply_pending = false;
+                        m_duoview_manual_fov_status.store(3, std::memory_order_release);
+                        SPDLOG_WARNING_EVERY_N_SEC(5,
+                            "[DuoView][ManualFOV] Could not locate a live MPC_FOV asset");
+                    }
+                    return;
+                }''',
+    "Explicit failure when MPC asset unavailable")
+
+cpp = once(cpp,
+    '''                if (!library || !getter || !setter) return;''',
+    '''                if (!library || !getter || !setter) {
+                    if (fg.manual_reapply_pending) {
+                        fg.manual_reapply_pending = false;
+                        m_duoview_manual_fov_status.store(3, std::memory_order_release);
+                        SPDLOG_WARNING_EVERY_N_SEC(5,
+                            "[DuoView][ManualFOV] KismetMaterialLibrary bindings unavailable");
+                    }
+                    return;
+                }''',
+    "Explicit failure when Kismet bindings unavailable")
+
+cpp = once(cpp,
+    '''            if (!read(L"IsFOVEnabled", current_enabled) ||
+                !read(L"DepthScale", current_depth)) return;''',
+    '''            if (!read(L"IsFOVEnabled", current_enabled) ||
+                !read(L"DepthScale", current_depth)) {
+                if (fg.manual_reapply_pending) {
+                    fg.manual_reapply_pending = false;
+                    m_duoview_manual_fov_status.store(3, std::memory_order_release);
+                    SPDLOG_WARNING_EVERY_N_SEC(5,
+                        "[DuoView][ManualFOV] Could not read live MPC_FOV scalars");
+                }
+                return;
+            }
+            if (fg.manual_reapply_pending) {
+                SPDLOG_INFO("[DuoView][ManualFOV] Before write: "
+                            "IsFOVEnabled={} DepthScale={}",
+                            current_enabled, current_depth);
+            }''',
+    "Manual before/after diagnostic; never interfere with normal ticks")
+
+cpp = once(cpp,
     '''            const bool enabled_ok = std::abs(current_enabled - wanted_enabled) <= epsilon ||
                                     write(L"IsFOVEnabled", wanted_enabled);
             const bool depth_ok = std::abs(current_depth - wanted_depth) <= epsilon ||
