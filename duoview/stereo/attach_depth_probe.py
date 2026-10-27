@@ -169,4 +169,14 @@ edit(dc,'''                                if ((submitted && recorded && callbac
 '''                                if ((submitted && recorded && callback_attempted) || capture_id || preview_mode)
                                     m_stock_dibr_depth->finish_frame();''',
 "GPU retire preview consumers")
+# A manual raw capture may occur during active live preview. Preview owns
+# selected GPU buffers; include those same submitted copies in the snapshot.
+# Do not allow arbitrary leased DIBR buffers from a different consumer.
+edit(depth,
+'''            if(!s.texture || s.pending || s.leased || s.quarantined || s.epoch!=epoch ||
+               (!s.fence && !s.foreign_fence)) continue;''',
+'''            if(!s.texture || s.pending || (s.leased && !snapshot_leases[i]) ||
+               s.quarantined || s.epoch!=epoch ||
+               (!s.fence && !s.foreign_fence)) continue;''',
+"capture all eligible candidates including previewed slots")
 print("Depth preview browser applied. Manual/Auto candidate selection and capture metadata now part of ID6.")
