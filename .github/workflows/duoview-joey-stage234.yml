@@ -8,12 +8,13 @@ on:
       - experiment/duoview-v1861-mpc-hud-mono-convergence-20261022
       - experiment/duoview-mono-eye-alignment-hud-v48-20261022
       - fix/duoview-v49-openxr-alignment-persistence-20261022
+      - feature/v1861-remleo-complete-cursor-20261027
   pull_request:
     branches:
       - build-182
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: duoview-stage234-${{ github.ref }}
   cancel-in-progress: true
@@ -88,6 +89,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Build49 Mono eye alignment reset persistence patch failed' }
           python workspace/duoview/joey_stage1/test_runtime_eye_alignment_persistence_build49.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Build49 Mono eye alignment persistence regression failed' }
+          python workspace/duoview/joey_stage1/apply_remleo_cursor_complete_build167.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Build167 full Remleo cursor patch failed' }
+          python workspace/duoview/joey_stage1/test_remleo_cursor_complete_build167.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Build167 cursor regression contract failed' }
+          git -C backend diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Cursor changes failed git diff check' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
       - name: Verify pinned production geometry and pair-state contracts
@@ -212,18 +219,29 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-${{ github.run_number }}.zip"
+          "BUILD167 CURSOR: v186.1 Build49 baseline, Remleo-style Windows mouse mapping and cursor UI plane. Opt in using FrameworkConfig > Main > Always Show Cursor. DuoView mode 6 only. This is headset-unverified; do not overwrite stable. No XYZ extension." | Set-Content package/BUILD167_CURSOR_READ_FIRST.txt
+          $zip="UEVR-DuoView-v1861-Remleo-Cursor-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-${{ github.run_number }}
+          name: UEVR-DuoView-v1861-Remleo-Cursor-${{ github.run_number }}
           path: |
-            UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-*.zip
-            UEVR-Quad-Views-Mono-v186.1-MPC-HUD-EyeAlignment-Persist49-*.zip.sha256
+            UEVR-DuoView-v1861-Remleo-Cursor-*.zip
+            UEVR-DuoView-v1861-Remleo-Cursor-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
+      - name: Publish directly downloadable test prerelease
+        if: success()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag="v1861-remleo-cursor-${{ github.run_number }}"
+          $zip="UEVR-DuoView-v1861-Remleo-Cursor-${{ github.run_number }}.zip"
+          gh release create $tag $zip "$zip.sha256" --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "DuoView Remleo Cursor ${{ github.run_number }} (test)" --notes "Test build from verified v186.1 Build49. Complete opt-in mouse hooks and Win32 coordinate remap plus current-submit OpenXR cursor/game UI quad matching. Mode6 only, default disabled. No XYZ extension. Hardware testing required. DO NOT overwrite stable." --prerelease
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub direct release publication failed' }
       - name: Record public source and dependency provenance
         if: always()
         shell: pwsh
