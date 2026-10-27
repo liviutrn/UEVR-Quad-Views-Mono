@@ -45,14 +45,14 @@ bool DeviceDepthValid(float z)
 }
 bool UVInside(float2 uv)
 {
-    return all(uv >= 0.0f.xx) && all(uv < 1.0f.xx);
+    return all(uv >= float2(0.0f,0.0f)) && all(uv < 1.0f.xx);
 }
 bool Unproject(float2 uv, float z, row_major float4x4 inverseMatrix,
                out float3 world)
 {
     float4 p = mul(inverseMatrix, float4(2.0f*uv.x-1.0f,
                                         1.0f-2.0f*uv.y, z, 1.0f));
-    world = 0.0f.xxx;
+    world = float3(0.0f,0.0f,0.0f);
     if (abs(p.w) < 1.0e-8f || !all(isfinite(p))) return false;
     world = p.xyz / p.w;
     return all(isfinite(world));
@@ -61,7 +61,7 @@ bool Project(float3 world, row_major float4x4 vp,
              out float2 uv, out float projectedZ)
 {
     float4 p = mul(vp, float4(world, 1.0f));
-    uv = 0.0f.xx; projectedZ = 0.0f;
+    uv = float2(0.0f,0.0f); projectedZ = 0.0f;
     if (p.w <= 1.0e-7f || !all(isfinite(p))) return false;
     const float3 ndc = p.xyz / p.w;
     uv = float2(ndc.x*0.5f+0.5f, 0.5f-ndc.y*0.5f);
@@ -74,7 +74,7 @@ float2 MapNativeUV(float2 nativeUV, float4 rect)
 }
 bool InsideRect(float2 physicalUV, float4 rect)
 {
-    return all(rect.zw > 0.0f.xx) &&
+    return all(rect.zw > float2(0.0f,0.0f)) &&
            all(physicalUV >= rect.xy) &&
            all(physicalUV < rect.xy+rect.zw);
 }
@@ -102,7 +102,7 @@ bool SampleTargetDepthAt(float2 targetUV, uint2 size, out float z, out int2 p)
 {
     z=0; p=int2(0,0);
     float2 uv=MapNativeUV(targetUV,TargetDepthRect);
-    if (!InsideRect(uv,TargetDepthRect) || any(uv<0.0f.xx) || any(uv>=1.0f.xx))return false;
+    if (!InsideRect(uv,TargetDepthRect) || any(uv<float2(0.0f,0.0f)) || any(uv>=1.0f.xx))return false;
     p=int2(floor(uv*float2(size)));
     if(any(p<0) || p.x>=int(size.x) || p.y>=int(size.y))return false;
     z=TargetDepth.Load(int3(p,0));
@@ -166,14 +166,14 @@ void CSBackwardTargetDepth(uint3 threadId : SV_DispatchThreadID)
     const uint2 sdSize=uint2(sdW,sdH);
     const float2 sourcePhysicalUV=MapNativeUV(sourceNativeUV,SourceDepthRect);
     if(!InsideRect(sourcePhysicalUV,SourceDepthRect) ||
-       any(sourcePhysicalUV<0.0f.xx)||any(sourcePhysicalUV>=1.0f.xx)){
+       any(sourcePhysicalUV<float2(0.0f,0.0f))||any(sourcePhysicalUV>=1.0f.xx)){
         Reject(outPx,fallback,REJECT_SOURCE_PROJECTION);return;
     }
     const float2 sourceTexelCoord=sourcePhysicalUV*float2(sdSize)-0.5f;
     const int2 lower=int2(floor(sourceTexelCoord));
     const float candidateDistance=length(visibleTargetWorld-SourceCameraWorld.xyz);
     const float tolerance=max(1.0e-5f,DepthParams.z+DepthParams.w*candidateDistance);
-    float4 weightedColor=0.0f.xxxx;
+    float4 weightedColor=float4(0.0f,0.0f,0.0f,0.0f);
     float accumulated=0.0f;
     float bestError=1.0e20f;
     float allSpatialWeights=0.0f;
@@ -200,7 +200,7 @@ void CSBackwardTargetDepth(uint3 threadId : SV_DispatchThreadID)
             if(!Project(sourceVisibleWorld,SourceColorClipFromWorld,sourceColorUV,sourceColorZ))continue;
             const float2 colorPhysicalUV=MapNativeUV(sourceColorUV,SourceColorRect);
             if(!InsideRect(colorPhysicalUV,SourceColorRect) ||
-               any(colorPhysicalUV<0.0f.xx)||any(colorPhysicalUV>=1.0f.xx))continue;
+               any(colorPhysicalUV<float2(0.0f,0.0f))||any(colorPhysicalUV>=1.0f.xx))continue;
             const int2 colorPx=int2(floor(colorPhysicalUV*float2(scW,scH)));
             if(any(colorPx<0)||colorPx.x>=int(scW)||colorPx.y>=int(scH))continue;
             const float4 color=SourceColor.Load(int3(colorPx,0));
