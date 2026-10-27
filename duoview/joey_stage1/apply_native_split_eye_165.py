@@ -25,22 +25,32 @@ edit(h,
     '''    const ModToggle::Ptr m_duo_native_fix{ModToggle::create(generate_name("DuoViewNativeFixSamePass"), true)};
     // Enabled by default only in this isolated experimental Build165 branch.
     // Disabling restores the original Build165 centered producer cameras.
-    const ModToggle::Ptr m_duo_split_eye{ModToggle::create(generate_name("DuoView165NativeSplitEye"), true)};''',
+    const ModToggle::Ptr m_duo_split_eye{ModToggle::create(generate_name("DuoView165NativeSplitEye"), true)};
+    std::atomic<bool> m_duo_split_eye_frozen{false};''',
     "Add experimental toggle")
 edit(h, '    bool is_duoview_renderer_active() const;',
     '''    bool is_duoview_renderer_active() const;
     bool is_duoview_split_eye_enabled() const {
-        return is_duoview_renderer_active() && m_duo_split_eye->value();
+        return is_duoview_renderer_active() && m_duo_split_eye_frozen.load(std::memory_order_acquire);
     }''', "Expose experimental state")
 edit(h, '*m_duo_native_fix, *m_duo_quant,',
     '*m_duo_native_fix, *m_duo_split_eye, *m_duo_quant,',
     "Persist experimental toggle")
+edit(h,
+    '''    void duoview_start_draw() {
+        m_duoview_draw_serial.fetch_add(1, std::memory_order_acq_rel);''',
+    '''    void duoview_start_draw() {
+        // Freeze per-draw policy BEFORE either UE camera/projection callback.
+        m_duo_split_eye_frozen.store(m_duo_split_eye->value(), std::memory_order_release);
+        m_duoview_draw_serial.fetch_add(1, std::memory_order_acq_rel);''',
+    "Freeze split-eye toggle at UE draw boundary")
 
 c = "src/mods/VR.cpp"
 edit(c,
     'm_duo_native_fix->draw("Native Stereo Fix shading (OFF = stock secondary-pass)");',
     '''m_duo_native_fix->draw("Native Stereo Fix shading (OFF = stock secondary-pass)");
                 m_duo_split_eye->draw("B165 TEST: LEFT fovea / RIGHT periphery native camera");
+                ImGui::TextUnformatted("Split-eye toggle applies at NEXT UE draw boundary, never within a source pair.");
                 ImGui::TextWrapped("ON: Joey native left/right eye origins and projections; left-eye fovea receives cropped projection IN the UE rendering pass. Right-eye periphery uses full projection at reduced resolution. Output is the unchanged SAME combined image for both eyes; visible parallax seams are expected. OFF = original Build165 mono producer cameras. No DIBR.");''',
     "Add diagnostic UI")
 edit(c,
@@ -63,7 +73,9 @@ edit(c,
     '    const auto checked=uevr::duoview::reconcile_ui_settings(candidate,current);',
     '''    // Preserve legacy Build165 source-selector expression and validation.
     // The split experiment merely overrides the candidate before it is latched.
-    if (m_duo_split_eye->value()) candidate.fovea_view = 0u;
+    const bool source_split = (m_fake_stereo_hook && m_fake_stereo_hook->is_in_viewport_client_draw())
+        ? m_duo_split_eye_frozen.load(std::memory_order_acquire) : m_duo_split_eye->value();
+    if (source_split) candidate.fovea_view = 0u;
     const auto checked=uevr::duoview::reconcile_ui_settings(candidate,current);''',
     "Freeze native left-eye assignment without altering Build165 selector wiring")
 edit(c,
