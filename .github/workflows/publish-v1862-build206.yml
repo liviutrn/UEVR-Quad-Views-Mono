@@ -131,4 +131,4 @@ jobs:
           test "$(gh release view "$TAG" --json isPrerelease --jq .isPrerelease)" = false
           gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$ZIP"
           gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$ZIP.sha256"
-          gh release view "$TAG" --json url,title,tagName --jq '{url:.url,title:.title,tag:.tagName}'
+          gh release view "$TAG" --json url,name,tagName --jq '{url:.url,title:.name,tag:.tagName}'
