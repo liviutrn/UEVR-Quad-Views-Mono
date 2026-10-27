@@ -105,8 +105,20 @@ float4 VisibilityResolve(float2 uv, out uint state) {
     int left_distance=0,right_distance=0;
     uint left_index=0xffffffffu,right_index=0xffffffffu; float left_depth=0,right_depth=0;
     [loop] for (uint distance=1;distance<=radius;++distance) {
-        if (left_distance==0 && VisibilityCovered(p-int2((int)distance,0),left_index,left_depth)) left_distance=(int)distance;
-        if (right_distance==0 && VisibilityCovered(p+int2((int)distance,0),right_index,right_depth)) right_distance=(int)distance;
+        // Do not put an out-parameter probe in an && expression. Shader
+        // compilers may evaluate it even after this boundary has been found.
+        if (left_distance==0) {
+            uint probe_index; float probe_depth;
+            if (VisibilityCovered(p-int2((int)distance,0),probe_index,probe_depth)) {
+                left_distance=(int)distance; left_index=probe_index; left_depth=probe_depth;
+            }
+        }
+        if (right_distance==0) {
+            uint probe_index; float probe_depth;
+            if (VisibilityCovered(p+int2((int)distance,0),probe_index,probe_depth)) {
+                right_distance=(int)distance; right_index=probe_index; right_depth=probe_depth;
+            }
+        }
         if ((left_distance!=0 || p.x-(int)distance<0) &&
             (right_distance!=0 || p.x+(int)distance>=(int)SourceEyeWidth)) break;
     }

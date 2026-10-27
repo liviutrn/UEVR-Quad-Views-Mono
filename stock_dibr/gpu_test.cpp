@@ -511,7 +511,8 @@ int main() try {
     require(character_indices[16*32+12]==16*32+18,"slanted foreground did not occlude the overlapping background");
     // Character moves six pixels and background moves two. x18..21 is newly
     // exposed, so only the right visible background (source x24) may fill it.
-    for(UINT x=18;x<=21;++x)require(channel(character_image,x+32,16)==192,"disocclusion fill copied or stretched the foreground character");
+    for(UINT x=18;x<=21;++x)require(channel(character_image,x+32,16)==192,
+        (std::string("disocclusion background boundary moved: x=")+std::to_string(x)+", red="+std::to_string(channel(character_image,x+32,16))).c_str());
     for(UINT y=0;y<32;++y)for(UINT x=0;x<32;++x) {
         require(channel(character_image,x,y)==int(x*8),"R7 changed the source eye");
         require(channel(character_image,x,y,3)==255 && channel(character_image,x+32,y,3)==255,"R7 alpha is not opaque");
