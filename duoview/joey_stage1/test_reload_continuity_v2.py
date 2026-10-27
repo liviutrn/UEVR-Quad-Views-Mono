@@ -57,7 +57,7 @@ for forbidden in (
     assert forbidden not in rearm, forbidden
 for token in (
     "fg.force_reassert = true;", "const auto epoch = foreground_mpc_runtime_epoch();",
-    "fg.runtime_epoch != epoch", "Long tick gap: refresh MPC_FOV",
+    "fg.runtime_epoch != epoch", "Long tick gap: MPC bindings refreshed",
     "Pawn changed: MPC cache refreshed", "MPC read failed; rebinding",
     "MPC write failed; retrying cached bindings",
     "fg.original_enabled = current_enabled;", "fg.original_depth = current_depth;",
@@ -65,6 +65,16 @@ for token in (
     "const float wanted_depth = requested ? 1.0f : fg.original_depth;",
 ):
     assert token in fg, token
+# The paused-runtime branch MUST drop both the collection and reflection
+# bindings before reasserting them. Fast path must not perform this scan.
+pause_start = fg.index("if (requested && fg.active &&")
+pause_end = fg.index('auto* world = engine != nullptr ?', pause_start)
+pause = fg[pause_start:pause_end]
+for token in ("fg.collection = nullptr;", "fg.collection_identity.reset();",
+              "fg.library = nullptr;", "fg.library_identity.reset();",
+              "fg.getter = nullptr;", "fg.setter = nullptr;",
+              "fg.force_reassert = true;"):
+    assert token in pause, token
 assert "std::abs(current_enabled - wanted_enabled) <= epsilon" in fg
 assert "std::abs(current_depth - wanted_depth) <= epsilon" in fg
 assert "static_cast<sdk::UObjectBase*>(pawn)" not in cpp
