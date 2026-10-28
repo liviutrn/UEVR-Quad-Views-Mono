@@ -27,6 +27,9 @@ cbuffer DuoViewCompositeConfig : register(b0)
     float SharpenMaxChange;  // v0.1 limiter (0.10 default)
     float SharpenFXAABias;  // v0.1 edge detector (0.02 default)
     uint SharpenFlags;      // bit0=edge protection; bit1=bigger; bit2=manual SDR decode
+    float4 StereoDepthZ;   // right projection clipZ A,B,C,D
+    float4 StereoEyeX;    // native L/R projection mapping and real IPD baseline
+    float4 StereoCheck;   // abs/relative visibility threshold, max shift, test tint
 };
 
 float2 AtlasSampleUV(uint4 rect, float2 localUv)

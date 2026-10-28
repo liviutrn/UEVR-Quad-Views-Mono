@@ -18,8 +18,9 @@ struct ShaderConstants {
     uint32_t output_offset[2];
     float sharpen_strength, sharpen_max_change, sharpen_fxaa_bias;
     uint32_t sharpen_flags;
+    float stereo_depth_z[4], stereo_eye_x[4], stereo_check[4];
 };
-static_assert(sizeof(ShaderConstants) == 120);
+static_assert(sizeof(ShaderConstants) == 168);
 
 class Compositor {
 public:
@@ -476,8 +477,8 @@ private:
         return false;
     }
     bool prepare(ID3D12Device* device, UINT width, UINT height, bool srgb) {
-        if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && depth_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
-        output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); depth_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
+        if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && stereo_pipeline_ && depth_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
+        output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); stereo_pipeline_.Reset(); depth_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
         depth_first_.Reset();depth_second_.Reset();
         srv_first_reference_.Reset(); srv_second_reference_.Reset(); xr_rtv_reference_.Reset();
         srv_descriptors_valid_=false; srv_cached_format_=DXGI_FORMAT_UNKNOWN;
@@ -531,6 +532,8 @@ private:
         if (!check(device->CreateGraphicsPipelineState(&graphics, IID_PPV_ARGS(&pipeline_)), "Create raster PSO")) return false;
         graphics.PS = {native_pixel_shader_bytecode, sizeof(native_pixel_shader_bytecode)};
         if (!check(device->CreateGraphicsPipelineState(&graphics, IID_PPV_ARGS(&native_pipeline_)), "Create direct Native raster PSO")) return false;
+        graphics.PS = {native_stereo_shader_bytecode, sizeof(native_stereo_shader_bytecode)};
+        if (!check(device->CreateGraphicsPipelineState(&graphics, IID_PPV_ARGS(&stereo_pipeline_)), "Create true per-eye Native stereo raster PSO")) return false;
         graphics.PS = {native_depth_debug_shader_bytecode, sizeof(native_depth_debug_shader_bytecode)};
         if (!check(device->CreateGraphicsPipelineState(&graphics, IID_PPV_ARGS(&depth_pipeline_)), "Create Native depth diagnostic PSO")) return false;
         D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT; heap.CreationNodeMask = heap.VisibleNodeMask = 1;
@@ -569,7 +572,7 @@ private:
     ComPtr<ID3D12Resource> srv_first_reference_, srv_second_reference_, xr_rtv_reference_, depth_first_,depth_second_;
     std::shared_ptr<const void> packet_lifetime_{};
     ComPtr<ID3D12RootSignature> root_;
-    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_,depth_pipeline_;
+    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_,stereo_pipeline_,depth_pipeline_;
     ComPtr<ID3D12DescriptorHeap> srv_, rtv_;
     D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_start_{}, rtv_cpu_start_{}, direct_xr_rtv_cpu_{};
     D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_start_{};

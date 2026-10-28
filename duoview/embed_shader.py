@@ -36,12 +36,13 @@ def main():
             ("VSMain", "vs_5_0", "vertex_shader_bytecode"),
             ("PSMain", "ps_5_0", "pixel_shader_bytecode"),
             ("PSNativeMain", "ps_5_0", "native_pixel_shader_bytecode"),
+            ("PSNativeStereo", "ps_5_0", "native_stereo_shader_bytecode"),
             ("PSDepthDiagnostic", "ps_5_0", "native_depth_debug_shader_bytecode"),
         ):
             output = Path(tmp) / (name + ".cso")
             command = [str(fxc), "/nologo", "/O3", "/T", profile,
                        "/E", entry, "/I", str(source), "/Fo", str(output),
-                       str(source / ("DuoViewNativeCompositeRaster.hlsl" if entry == "PSNativeMain" else "DuoViewDepthDiagnosticRaster.hlsl" if entry == "PSDepthDiagnostic" else "DuoViewCompositeRaster.hlsl"))]
+                       str(source / ("DuoViewNativeCompositeRaster.hlsl" if entry == "PSNativeMain" else "DuoViewStereoCompositeRaster.hlsl" if entry == "PSNativeStereo" else "DuoViewDepthDiagnosticRaster.hlsl" if entry == "PSDepthDiagnostic" else "DuoViewCompositeRaster.hlsl"))]
             result = subprocess.run(command, capture_output=True, text=True)
             if result.returncode:
                 raise RuntimeError(f"Shader {entry} failed compilation: {result.stdout}\n{result.stderr}")
