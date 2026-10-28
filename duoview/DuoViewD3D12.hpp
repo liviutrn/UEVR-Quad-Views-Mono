@@ -18,9 +18,10 @@ struct ShaderConstants {
     uint32_t output_offset[2];
     float sharpen_strength, sharpen_max_change, sharpen_fxaa_bias;
     uint32_t sharpen_flags;
+    uint32_t stereo_padding[2]{};
     float stereo_depth_z[4], stereo_eye_x[4], stereo_check[4];
 };
-static_assert(sizeof(ShaderConstants) == 168);
+static_assert(sizeof(ShaderConstants) == 176);
 
 class Compositor {
 public:
