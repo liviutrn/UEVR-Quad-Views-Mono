@@ -130,7 +130,7 @@ public:
         last_native_direct_xr_=false;
         last_true_stereo_=false;
         const auto reject=[this](const char* reason) { error_=reason; return false; };
-        if(stereoMode>2u)return reject("Unknown experimental stereo mode");
+        if(stereoMode>3u)return reject("Unknown experimental stereo mode");
         if (!device || !cmd || !primary || !secondary || !destination ||
             primary==secondary || primary==destination || secondary==destination ||
             cmd->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT ||
@@ -318,7 +318,7 @@ public:
             constants.stereo_check[0]=1.f;       // absolute world units
             constants.stereo_check[1]=0.015f;    // relative world error
             constants.stereo_check[2]=.20f;      // maximum peripheral UV shift
-            constants.stereo_check[3]=stereoMode==2?1.f:0.f; // separate-eye tint test
+            constants.stereo_check[3]=stereoMode==2?1.f:stereoMode==3?3.f:0.f; // tint proof / fovea-only diagnostic
         }
 #endif // UEVR_DUOVIEW_V3_CAMERA_FIELDS
         ensure_srvs(device,fovea,periphery,sampling_format);
