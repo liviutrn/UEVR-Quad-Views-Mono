@@ -104,7 +104,7 @@ float4 RightFovea(float2 rightUV, float4 nativeRight, out float confidence) {
     return LeftNative(leftUV);
 }
 float4 StereoProofColor(float4 color,bool right) {
-    if(StereoCheck.w>0.5f && right)
+    if(abs(StereoCheck.w-1.0f)<0.25f && right)
         return float4(lerp(color.rgb,float3(.0f,.2f,.9f),.24f),1);
     return color;
 }
@@ -117,7 +117,10 @@ float4 PSNativeStereo(VertexOut i):SV_TARGET0 {
     const float feather=BlendWeight(uv);
     const float4 nativeRight=RightNative(uv);
     float4 periphery=nativeRight;
-    if(!right) {
+    // Mode 3 isolates only RIGHT fovea synthesis. BOTH peripheries receive
+    // identical real RIGHT periphery, so peripheral warping cannot hide or
+    // amplify fovea errors. Diagnostic only: provenance remains unverified.
+    if(!right && StereoCheck.w<2.5f) {
         bool good=false;
         const float2 shifted=RightSampleForLeft(uv,good);
         // This corrects peripheral parallax cheaply using RIGHT scene depth.
