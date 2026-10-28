@@ -44,6 +44,8 @@ checks={
 "Submitted counter follows copy outcome":c.index('m_duo_stereo_frames.fetch_add')>c.index('// One outcome per copy attempt.'),
 "Both stages and frame semantics explicitly unverified":'sourceRoleVerified=false sourceFrameVerified=false sourceStageVerified=false' in c,
 "Whole-eye tint on peripheral early return":'if(feather<=0.0f) return StereoProofColor(' in shader,
+"Readback saving requires actual enqueue, not merely recording":'commands_were_submitted(capture_submission)' in c and 'capture_submission=result' in c,
+"Capture records release separately from physical presentation":'headsetPresentationVerified=false' in copy and 'xrCopyReleased=' in copy,
 }
 for name,valid in checks.items():print(("PASS: " if valid else "FAIL: ")+name)
 if not all(checks.values()):raise SystemExit("Physical stereo XR integration contract FAILED")

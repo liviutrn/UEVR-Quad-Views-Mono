@@ -310,6 +310,12 @@ jobs:
             full_per_pass_matrix_reprojection=$false;
             mode='experimental-stereo-contract-fixes'; stable_release=$false
           } | ConvertTo-Json | Set-Content package/BUILD_STATUS.json
+          # Stage234 manifest predates the final R5/stereo overlays. Hash the
+          # actual generated public sources and embedded bytecode as built.
+          $finalPaths=@('src/mods/VR.cpp','src/mods/VR.hpp','src/mods/vr/D3D12Component.cpp','src/mods/vr/D3D12Component.hpp','src/mods/vr/DuoViewD3D12.hpp','src/mods/vr/DuoViewGeometry.hpp','src/mods/vr/DuoViewState.hpp','src/mods/vr/DuoViewShaderSource.hpp','src/mods/vr/DuoViewStereoCompositeRaster.hlsl','src/mods/vr/d3d12/StockDibrDepth.hpp','src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp','src/mods/vr/d3d12/DIBRTransaction.hpp','src/hooks/D3D12Hook.cpp')
+          $finalPaths | ForEach-Object {
+            @{path=$_;sha256=(Get-FileHash ("backend/"+$_) -Algorithm SHA256).Hash.ToLowerInvariant()}
+          } | ConvertTo-Json | Set-Content package/final-generated-source-sha256.json
           $needed=@('UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','duoview-stage234-hashes.json','exact-baseline-source.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }

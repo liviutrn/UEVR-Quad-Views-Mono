@@ -17,6 +17,14 @@ enum class ExecuteResult : unsigned char {
     SubmittedTrackedNeedsPolling,
     SubmittedUntracked,
 };
+// Recorded readbacks contain valid data only if their command list was
+// actually enqueued. A failed signal still owns GPU references and needs
+// retirement/quarantine; a failed Close must never produce a saved capture.
+constexpr bool commands_were_submitted(ExecuteResult result) {
+    return result==ExecuteResult::SubmittedTracked ||
+           result==ExecuteResult::SubmittedTrackedNeedsPolling ||
+           result==ExecuteResult::SubmittedUntracked;
+}
 
 enum class RetirementExtendResult : unsigned char {
     Tracked,

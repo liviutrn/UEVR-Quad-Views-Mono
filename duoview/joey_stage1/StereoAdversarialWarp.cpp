@@ -40,8 +40,8 @@ public:
         auto l=native_source(device.Get(),cmd.Get(),32,32,{0,0,0,255},true,0);
         auto r=native_source(device.Get(),cmd.Get(),16,16,{0,0,0,255},true,1);
         if(s.padded) {s.left.x=11;s.left.y=7;s.right.x=5;s.right.y=3;}
-        const auto encoded=[&](float z,float near,const DepthViewport& v) {
-            const float d=s.forward_z ? (100.f/(100.f-near)-100.f*near/((100.f-near)*z)) : near/z;
+        const auto encoded=[&](float z,float near_plane,const DepthViewport& v) {
+            const float d=s.forward_z ? (100.f/(100.f-near_plane)-100.f*near_plane/((100.f-near_plane)*z)) : near_plane/z;
             return v.min_depth+(v.max_depth-v.min_depth)*d;
         };
         auto ld=native_depth(device.Get(),cmd.Get(),s.padded?80:32,s.padded?64:32,
@@ -61,10 +61,10 @@ public:
         frame.config.settings.fovea_view=0;frame.config.settings.sharpen_strength=0;
         frame.config.settings.feather_fraction=.12f;frame.config.settings.diagnostic_view=s.debug;
         frame.split_eye=true;
-        auto projection=[&](std::array<float,16>& p,float near) {
+        auto projection=[&](std::array<float,16>& p,float near_plane) {
             p={};p[0]=p[5]=p[11]=1.f;
-            if(s.forward_z){p[10]=100.f/(100.f-near);p[14]=-100.f*near/(100.f-near);}
-            else p[14]=near;
+            if(s.forward_z){p[10]=100.f/(100.f-near_plane);p[14]=-100.f*near_plane/(100.f-near_plane);}
+            else p[14]=near_plane;
         };
         projection(frame.projection,s.left_near);projection(frame.projection_right,s.right_near);
         frame.eye_cameras[0].position={0.,0.,0.};frame.eye_cameras[1].position={s.baseline,0.,0.};
@@ -186,6 +186,6 @@ int main() try {
         Scenario bad;bad.invalid=invalid;const auto r=gpu.render(bad);++cases;
         require(!r.accepted&&!r.recorded&&!r.error.empty(),"invalid depth/projection accepted or commands recorded, case="+std::to_string(invalid));
     }
-    std::cout<<"PASS: "<<cases<<" production stereo WARP scenarios; analytic 3D, active rect/range, per-eye near, tint, fallback, resource rejects\n";
+    std::cout<<"PASS: "<<cases<<" production stereo WARP scenarios; analytic 3D, active rect/range, per-eye near_plane, tint, fallback, resource rejects\n";
     return 0;
 } catch(const std::exception& e) {std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}

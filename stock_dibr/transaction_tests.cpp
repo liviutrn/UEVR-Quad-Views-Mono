@@ -455,6 +455,11 @@ void test_warp_transactions() {
 } // namespace
 
 int main() {
+    require(!d3d12::dibr_transaction::commands_were_submitted(ExecuteResult::NoWork),"NoWork must not authorize capture readback");
+    require(!d3d12::dibr_transaction::commands_were_submitted(ExecuteResult::NotSubmitted),"Close failure must not authorize capture readback");
+    require(d3d12::dibr_transaction::commands_were_submitted(ExecuteResult::SubmittedTracked),"tracked commands lost capture ownership");
+    require(d3d12::dibr_transaction::commands_were_submitted(ExecuteResult::SubmittedTrackedNeedsPolling),"event failure must retain submitted capture");
+    require(d3d12::dibr_transaction::commands_were_submitted(ExecuteResult::SubmittedUntracked),"signal failure must retain GPU capture references");
     try {
         test_alpha_consumer_selection();
         test_warp_transactions();

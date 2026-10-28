@@ -121,6 +121,21 @@ edit(dc,'''                            if (submitted && recorded && callback_att
                             }
                             if (submitted && recorded && callback_attempted) {
                                 native_stereo_hook->duoview_delivery.result''',"post-copy submitted accounting")
+edit(dc,'''                            bool capture_recorded=false;''',
+'''                            bool capture_recorded=false;
+                            auto capture_submission=d3d12::dibr_transaction::ExecuteResult::NoWork;''',"capture queue outcome starts unsubmitted")
+edit(dc,'''                                std::nullopt, m_game_tex.texture.Get());
+                            // One outcome per copy attempt.''',
+'''                                std::nullopt, m_game_tex.texture.Get(),{},
+                                [&capture_submission](d3d12::CommandContext&,
+                                    d3d12::dibr_transaction::ExecuteResult result) {
+                                    capture_submission=result;
+                                });
+                            // One outcome per copy attempt.''',"observe checked enqueue before snapshot worker")
+edit(dc,'''                            if (capture && capture_recorded) {''',
+'''                            if (capture && capture_recorded &&
+                                d3d12::dibr_transaction::commands_were_submitted(capture_submission)) {
+                                capture->note_submission(submitted,static_cast<unsigned>(capture_submission));''',"never save unexecuted readback commands")
 edit(dc,'''                                if ((submitted && recorded && callback_attempted) || capture_id || preview_mode)
                                     m_stock_dibr_depth->finish_frame();''',
 '''                                if ((submitted && recorded && callback_attempted) || capture_id || preview_mode || stereo_mode)
@@ -145,7 +160,13 @@ edit(dump,'''           const std::vector<Candidate>& depths) {
         reserve_headset_output_=reserveHeadsetOutput;
         add_image(dev,left,''',"reserve output before raw depth captures")
 edit(dump,'''    bool record(ID3D12GraphicsCommandList* cmd) {''',
-'''    bool attach_headset_output(ID3D12Device* dev,ID3D12Resource* destination) {
+'''    void note_submission(bool xrCopyReleased,unsigned outcome) {
+        metadata_+=" readbackCommandsEnqueued=true xrCopyReleased=";
+        metadata_+=xrCopyReleased ? "true" : "false";
+        metadata_+=" executeOutcome="+std::to_string(outcome);
+        metadata_+=" headsetPresentationVerified=false";
+    }
+    bool attach_headset_output(ID3D12Device* dev,ID3D12Resource* destination) {
         if(final_output_attached_)return true;
         reserve_headset_output_=false;
         final_output_attached_=true;
