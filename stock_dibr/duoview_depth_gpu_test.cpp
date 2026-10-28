@@ -194,7 +194,54 @@ int main() try {
     require(complete.attach_headset_output(device.Get(),color.Get()),"valid final XR image failed after allocation retry");
     require(complete.record(cmd.Get()),"valid complete session did not record real copy commands");
     check(cmd->Close());queue->ExecuteCommandLists(1,lists);wait();
-    cap.finish_frame();wait();observer=nullptr;hook.clear();
+    cap.finish_frame();wait();
+    // Three REAL separately submitted WARP frame intervals, using the same
+    // resource IDs and the same within-DSV write ranks. This validates that
+    // Auto warm-up eventually emits fresh GPU-backed source pairs rather than
+    // permanently trapping normal gameplay in the mono fallback.
+    {
+        DepthCapture stable;
+        stable.configure(device.Get(),queue.Get(),8120,3228,true);
+        stable.configure_duoview_sources(2030,1614,812,646);
+        for(size_t eye=0;eye<2;++eye) {
+            D3D12_DEPTH_STENCIL_VIEW_DESC view{};
+            view.Format=DXGI_FORMAT_D32_FLOAT;
+            view.ViewDimension=D3D12_DSV_DIMENSION_TEXTURE2D;
+            stable.on_depth_stencil_view_created(source[eye].Get(),&view,handle[eye]);
+        }
+        observer=&stable;
+        auto redraw=[&](size_t eye,float value) {
+            transition(cmd.Get(),stable,source[eye].Get(),read,D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            const auto v=viewports[eye];
+            cmd->RSSetViewports(1,&v);stable.on_viewports(cmd.Get(),1,&v);
+            cmd->OMSetRenderTargets(0,nullptr,FALSE,&handle[eye]);
+            stable.on_render_targets(cmd.Get(),0,handle[eye]);
+            const D3D12_RECT rect{LONG(v.TopLeftX),LONG(v.TopLeftY),
+                                  LONG(v.TopLeftX+v.Width),LONG(v.TopLeftY+v.Height)};
+            cmd->ClearDepthStencilView(handle[eye],D3D12_CLEAR_FLAG_DEPTH,value,0,1,&rect);
+            cmd->OMSetRenderTargets(0,nullptr,FALSE,nullptr);
+            stable.on_render_targets(cmd.Get(),0,{});
+            transition(cmd.Get(),stable,source[eye].Get(),D3D12_RESOURCE_STATE_DEPTH_WRITE,read);
+        };
+        for(int frame=0;frame<3;++frame) {
+            check(allocator->Reset());
+            check(cmd->Reset(allocator.Get(),nullptr));
+            stable.on_command_list_reset(cmd.Get());
+            redraw(0,.2f);
+            redraw(1,.3f);
+            redraw(0,.4f); // same source DSV, second write rank every frame
+            check(cmd->Close());queue->ExecuteCommandLists(1,lists);wait();
+            auto current=stable.select_preview(0,0,2030,1614,812,646);
+            if(frame<2)require(!current.left && !current.right,
+                "CI30 auto issued stereo before three matching source-pass epochs");
+            else require(current.left && current.right &&
+                         current.left.Get()!=current.right.Get(),
+                "CI30 auto never accepted stable fresh WARP source-pass pair");
+            stable.finish_frame();wait();
+        }
+        std::cout<<"PASS: CI30 fresh 3-frame WARP Auto warm-up, same DSV separate write versions\n";
+    }
+    observer=nullptr;hook.clear();
     if(info)for(UINT64 i=0;i<info->GetNumStoredMessages();++i) {
         SIZE_T n{};check(info->GetMessage(i,nullptr,&n));std::vector<uint8_t> bytes(n);
         auto* message=reinterpret_cast<D3D12_MESSAGE*>(bytes.data());check(info->GetMessage(i,message,&n));
