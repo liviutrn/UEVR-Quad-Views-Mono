@@ -17,7 +17,7 @@ checks={
 "missing pair resets probation":'if(ids.size()<2) {' in d and 'auto_candidate_streak=0;' in d,
 "screen/eye source proof not asserted":'matchedEyes=UNVERIFIED' in d,
 "original experimental stereo remains":'float4 PSNativeStereo(VertexOut i)' in s,
-"R5 queue retirement still on":'snapshot_leases[i]=true;' in d and 'finish_frame()' in d,
+"R5 queue retirement still on":'snapshot_leases[i]=true;' in d and 'finish_frame(bool keep_snapshot_armed=false)' in d,
 "debug telemetry":'autoPairChanges=' in d and 'extraShapes=' in d,
 }
 for k,v in checks.items():print(("PASS " if v else "FAIL ")+k)

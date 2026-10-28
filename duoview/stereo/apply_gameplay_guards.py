@@ -41,8 +41,8 @@ edit(depth,'''            if (kind == Layout::Invalid) { ++rejected; ++reject_re
                 // Reserve capacity for two distinct viewport size classes.
                 for(size_t k=0;k<normal_size_buckets.size();++k) {
                     const auto& c=normal_size_buckets[k];
-                    if(c.w>0 && std::abs(c.w-source_viewport.Width)/c.w<0.04 &&
-                                  std::abs(c.h-source_viewport.Height)/c.h<0.04) {
+                    if(c.w>0 && std::abs(c.w-source_viewport.Width)/c.w<0.25 &&
+                                  std::abs(c.h-source_viewport.Height)/c.h<0.25) {
                         normal_bucket=k;break;
                     }
                 }
@@ -67,10 +67,10 @@ edit(depth,'            ++recorded_this_interval; ++captured;',
                 ++normal_size_buckets[normal_bucket].captured;
                 ++normal_bucket_captures[normal_bucket];
             }''',"account only successfully submitted copy commands")
-edit(depth,'''        snapshot_armed=false;
+edit(depth,'''        snapshot_armed=keep_snapshot_armed;
         ++epoch; recorded_this_interval = 0;
         executed_proofs.clear();''',
-'''        snapshot_armed=false;
+'''        snapshot_armed=keep_snapshot_armed;
         ++epoch; recorded_this_interval = 0;
         normal_size_buckets={};
         executed_proofs.clear();''',"reset size classes at frame boundary")
