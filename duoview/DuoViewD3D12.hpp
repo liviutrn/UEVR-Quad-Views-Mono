@@ -25,6 +25,7 @@ static_assert(sizeof(ShaderConstants) == 176);
 
 class Compositor {
 public:
+    bool last_true_stereo() const { return last_true_stereo_; }
     // Prebuild the per-slot PSO, descriptors and output outside OpenXR frame copy.
     // Called after swapchain images and their command contexts are constructed.
     bool prewarm(ID3D12Device* device, UINT width, UINT height, bool srgb, UINT64 frequency = 0) {
@@ -496,7 +497,6 @@ private:
         device->CreateShaderResourceView(right,&view,cpu);
         depth_first_=left;depth_second_=right;
     }
-    bool last_true_stereo() const { return last_true_stereo_; }
     void update_timing(bool timed, bool direct_xr) {
         if (!timed || (timing_pending_ && pending_direct_xr_!=direct_xr)) {
             timing_pending_=false;
