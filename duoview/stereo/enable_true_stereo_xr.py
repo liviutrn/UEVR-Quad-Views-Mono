@@ -47,7 +47,7 @@ edit(header,'    int duoview_left_choice() const {return m_duo_left_choice.load(
         }
     }
     void duoview_stereo_config(uint32_t mode,bool reverse) {
-        m_duo_stereo_mode.store((std::min)(mode,2u),std::memory_order_release);
+        m_duo_stereo_mode.store((std::min)(mode,3u),std::memory_order_release);
         m_duo_stereo_reverse.store(reverse,std::memory_order_release);
     }
     int duoview_left_choice() const {return m_duo_left_choice.load();}''',"UI public getters")
@@ -56,7 +56,7 @@ edit(vr,'                    const int n=m_d3d12.duoview_depth_candidate_count()
 '''                    int stereo_mode=int(m_d3d12.duoview_stereo_mode());
                     bool stereo_reverse=m_d3d12.duoview_stereo_reverse();
                     bool mode_changed=false;
-                    mode_changed|=ImGui::SliderInt("TRUE STEREO (0 V3 mono / 1 stereo / 2 tint proof)",&stereo_mode,0,2);
+                    mode_changed|=ImGui::SliderInt("TRUE STEREO (0 V3 / 1 stereo / 2 tint / 3 fovea only)",&stereo_mode,0,3);
                     mode_changed|=ImGui::Checkbox("Reverse stereo parallax sign (A/B)",&stereo_reverse);
                     if(mode_changed)m_d3d12.duoview_stereo_config(uint32_t(stereo_mode),stereo_reverse);
                     ImGui::Text("Experimental stereo XR copies submitted: %llu | rejected: %llu",
