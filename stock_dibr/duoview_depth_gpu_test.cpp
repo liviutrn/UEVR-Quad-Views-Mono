@@ -7,6 +7,7 @@
 #include <dxgi1_6.h>
 #include <mods/vr/d3d12/StockDibrDepth.hpp>
 #include <hooks/QueueSubmitHook.hpp>
+#include <hooks/DsvMetadataCache.hpp>
 #include <array>
 #include <vector>
 #include <iostream>
@@ -49,6 +50,27 @@ int main() try {
         require(e!=nullptr,"event creation failed");check(fence->SetEventOnCompletion(serial,e));
         const auto done=WaitForSingleObject(e,30000);CloseHandle(e);require(done==WAIT_OBJECT_0,"WARP timeout");
     };
+    {
+        // Actual activation path: cache entries are pointer identities, NOT
+        // retained COM resources. A freed/no-access address must be replayable
+        // without GetDesc, AddRef or any other virtual call into that address.
+        void* poison=VirtualAlloc(nullptr,4096,MEM_RESERVE|MEM_COMMIT,PAGE_NOACCESS);
+        require(poison!=nullptr,"no-access regression allocation failed");
+        stock_dibr::DsvMetadataCache cache;
+        std::atomic<D3D12DepthStencilObserver*> active{};
+        DepthCapture activation;activation.configure(device.Get(),queue.Get(),8120,3228,true);
+        D3D12_DEPTH_STENCIL_VIEW_DESC desc{};desc.Format=DXGI_FORMAT_D32_FLOAT;
+        desc.ViewDimension=D3D12_DSV_DIMENSION_TEXTURE2D;
+        const D3D12_CPU_DESCRIPTOR_HANDLE stale_handle{0xdead};
+        cache.publish(active,reinterpret_cast<ID3D12Resource*>(poison),&desc,stale_handle);
+        cache.attach(active,&activation);
+        require(activation.diagnostic_inventory().find("UNKNOWN_UNTIL_LIVE_BARRIER")!=std::string::npos,
+            "stale cache entry falsely reported live allocation metadata");
+        cache.attach(active,nullptr);cache.attach(active,&activation); // leave/re-enter ID6
+        cache.attach(active,nullptr);
+        require(VirtualFree(poison,0,MEM_RELEASE)!=0,"no-access regression cleanup failed");
+        std::cout<<"PASS: actual DepthCapture activation/re-activation replays PAGE_NOACCESS resource identity without COM dereference\n";
+    }
     DepthCapture cap;cap.configure(device.Get(),queue.Get(),8120,3228,true);
     cap.configure_duoview_sources(2030,1614,812,646);observer=&cap;
     stock_dibr::QueueSubmitHook hook{&submitted};require(hook.install(queue.Get()),"actual queue hook install failed");

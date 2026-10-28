@@ -81,19 +81,34 @@ edit(depth,'''        ++dsv_events;
             const auto key_id=reinterpret_cast<std::uintptr_t>(resource);
             if (!diagnostic_catalog.contains(key_id)) {
                 if (diagnostic_catalog.size()<256) {
-                    const auto d=resource->GetDesc();
+                    // Cache replay supplies a non-owning pointer identity.
+                    // Its resource may already be destroyed: NEVER call COM here.
                     std::ostringstream label;
                     label << "DSV=0x" << std::hex << key_id << std::dec
-                          << " allocation=" << d.Width << "x" << d.Height
-                          << " format=" << unsigned(d.Format)
-                          << " array=" << d.DepthOrArraySize
-                          << " MSAA=" << d.SampleDesc.Count
-                          << " classification=OBSERVED_ONLY";
+                          << " viewFormat=" << unsigned(dsv ? dsv->Format : DXGI_FORMAT_UNKNOWN)
+                          << " allocation=UNKNOWN_UNTIL_LIVE_BARRIER"
+                          << " classification=METADATA_ONLY_NONOWNING";
                     diagnostic_catalog.emplace(key_id,label.str());
                 } else ++diagnostic_catalog_overflow;
             }
         }
         const auto key = descriptor.ptr;''', "inventory all DSV creations")
+edit(depth,'''            observed = std::to_string(desc.Width) + "x" + std::to_string(desc.Height) + " fmt=" + std::to_string(desc.Format);''',
+'''            // Only the live ResourceBarrier callback supplies a resource
+            // whose lifetime is guaranteed by the executing engine call.
+            const auto live_key=reinterpret_cast<std::uintptr_t>(source);
+            if(diagnostic_catalog.contains(live_key) || diagnostic_catalog.size()<256) {
+                std::ostringstream label;
+                label << "DSV=0x" << std::hex << live_key << std::dec
+                      << " allocation=" << desc.Width << "x" << desc.Height
+                      << " format=" << unsigned(desc.Format)
+                      << " array=" << desc.DepthOrArraySize
+                      << " MSAA=" << desc.SampleDesc.Count
+                      << " classification=LIVE_BARRIER_OBSERVED_ONLY";
+                diagnostic_catalog[live_key]=label.str();
+            }
+            observed = std::to_string(desc.Width) + "x" + std::to_string(desc.Height) + " fmt=" + std::to_string(desc.Format);''',
+"read allocation metadata only from the live barrier resource")
 edit(depth,'recorded_this_interval >= Capacity || render_passes.contains',
     'recorded_this_interval >= (snapshot_armed ? Capacity : NormalCapacity) || render_passes.contains',
     "bounded high-capacity manual sampling")

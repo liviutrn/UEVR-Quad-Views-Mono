@@ -19,6 +19,8 @@ checks={
  "every captured slot has explicit cross-queue wait": "s.foreign_fence.Get(),1" in h,
  "retains capture source slots until consumer fence": "snapshot_leases[i]=true" in h and "if(signalled){s.fence=signal;s.leased=false;}" in h,
  "every DSV catalogued with metadata": "diagnostic_catalog.emplace" in h and "diagnostic_inventory()" in h,
+ "cache replay never dereferences non-owning resources":'->GetDesc(' not in h.split('void on_depth_stencil_view_created(',1)[1].split('void on_resource_barriers(',1)[0] and 'UNKNOWN_UNTIL_LIVE_BARRIER' in h,
+ "allocation metadata comes from live barrier":'classification=LIVE_BARRIER_OBSERVED_ONLY' in h,
  "all metadata shapes labelled without claiming eye identity": "eyeAttribution=UNPROVEN" in h,
  "color + depth offline readback": "left_fovea" in s and "right_periphery" in s and "depth_" in s,
  "raw precision preserved": '".raw"' in s and 'decode_depth' in s,
