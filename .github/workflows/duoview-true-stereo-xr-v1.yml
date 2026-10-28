@@ -7,6 +7,7 @@ on:
       - review/true-stereo-xr-audit-fixes-20261028
       - review/duoview-depth-contracts-20261028
       - experiment/ci31-provenance-audit-20261028
+      - experiment/ci32-stereo-reconstruction-20261028
   pull_request:
     branches:
       - build-182
@@ -150,6 +151,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Backend whitespace/patch conflict' }
       - name: Configure MSVC for R5 command-line WARP fixtures
         uses: ilammy/msvc-dev-cmd@v1
+      - name: Reproduce unread-depth overwrite on the actual previous capture implementation
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /Ibackend/src workspace/stock_dibr/capture_retention_warp.cpp /Fe:capture-retention-before.exe /link d3d12.lib dxgi.lib
+          if ($LASTEXITCODE -ne 0) { throw 'Capture retention reproduction failed compilation' }
+          ./capture-retention-before.exe --expect-overwrite *> evidence/capture-retention-before.log
+          $code=$LASTEXITCODE; Get-Content evidence/capture-retention-before.log
+          if ($code -ne 0) { throw 'Expected old same-interval overwrite did not reproduce' }
+      - name: Fix capture ownership and verify separately completed GPU submissions
+        shell: pwsh
+        run: |
+          python workspace/duoview/stereo/provenance_v1/apply_capture_retention.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Capture retention patch anchors changed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX workspace/stock_dibr/capture_slot_policy_tests.cpp /Fe:capture-slot-policy.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Capture slot policy failed compilation' }
+          ./capture-slot-policy.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Capture slot policy regression failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /Ibackend/src workspace/stock_dibr/capture_retention_warp.cpp /Fe:capture-retention-after.exe /link d3d12.lib dxgi.lib
+          if ($LASTEXITCODE -ne 0) { throw 'Corrected capture retention WARP failed compilation' }
+          ./capture-retention-after.exe *> evidence/capture-retention-after.log
+          $code=$LASTEXITCODE; Get-Content evidence/capture-retention-after.log
+          if ($code -ne 0) { throw 'Completed producer copy was lost before consumer retirement' }
       - name: Compile stereo synthesis and hybrid z-owner-forward-fuse shaders
         shell: pwsh
         run: |
@@ -260,9 +283,11 @@ jobs:
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
           DuoView TRUE STEREO XR V1 — EXPERIMENTAL HEADSET BUILD (REVIEW FIXES)
-          Build branch: experiment/ci31-provenance-audit-20261028.
+          Build branch: experiment/ci32-stereo-reconstruction-20261028.
           Stable Build165/V3 and published stable releases are NOT modified.
-          CI31 adds normal viewport/copy audit, mode 3 RIGHT-fovea-only A/B,
+          CI32 fixes completed depth copies being overwritten BEFORE their
+          Present consumer, with old-bug reproduction and corrected WARP tests.
+          It retains CI31 viewport/copy audit, mode 3 RIGHT-fovea-only A/B,
           and a fail-closed producer contract. Actual producer roles/frames
           remain UNVERIFIED; the contract has no UE producer authentication
           hook yet and full-matrix hybrid remains NOT LIVE.
@@ -341,7 +366,8 @@ jobs:
             full_per_pass_matrix_reprojection=$false;
             provenance_contract_tested=$true; producer_authenticated=$false;
             hybrid_live_dispatch=$false;
-            mode='experimental-ci31-provenance-audit'; stable_release=$false
+            unread_depth_retention_tested=$true;
+            mode='experimental-ci32-capture-retention'; stable_release=$false
           } | ConvertTo-Json | Set-Content package/BUILD_STATUS.json
           # Stage234 manifest predates the final R5/stereo overlays. Hash the
           # actual generated public sources and embedded bytecode as built.

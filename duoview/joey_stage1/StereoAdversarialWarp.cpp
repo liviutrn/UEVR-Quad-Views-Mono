@@ -86,7 +86,7 @@ public:
             left=invalid_resource.Get();
         }
         if(s.invalid==9)frame.projection[5]=std::numeric_limits<float>::infinity();
-        if(s.invalid==10)s.mode=3;
+        if(s.invalid==10)s.mode=99; // 3 is now the supported fovea-only mode
         if(s.invalid==11)s.right.max_depth=2;
         if(s.invalid==12)left=l.texture.Get();
         uevr::duoview::dx12::Compositor compositor;
@@ -182,6 +182,10 @@ int main() try {
     Scenario mono=plain;mono.mode=0;const auto mono_result=render(mono);
     for(int y=0;y<64;++y)for(int x=0;x<64;++x)
         require(std::memcmp(pixel(mono_result,x,y),pixel(mono_result,x+64,y),4)==0,"mode0 eye halves differ");
+    Scenario isolated=plain;isolated.mode=3;const auto isolated_result=render(isolated);
+    for(int y : {0,1,62,63})for(int x=0;x<64;++x)
+        require(std::memcmp(pixel(isolated_result,x,y),pixel(isolated_result,x+64,y),4)==0,
+            "fovea-only mode warped one peripheral eye");
     Scenario debug=plain;debug.debug=2;const auto debug_result=render(debug);
     require(pixel(debug_result,0,0)[0]>=9&&pixel(debug_result,0,0)[0]<=11,"fovea-only diagnostic background missing");
     for(int invalid=1;invalid<=12;++invalid) {
