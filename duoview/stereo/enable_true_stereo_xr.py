@@ -4,9 +4,11 @@ No source view changes: V3 still renders physical LEFT fovea and RIGHT periphery
 Stereo is fused to a double-wide XR texture by one new raster pass.
 """
 from pathlib import Path
-import sys
+import sys, shutil
 if len(sys.argv)!=2: raise SystemExit("usage: enable_true_stereo_xr.py <patched-backend>")
 root=Path(sys.argv[1])
+shutil.copyfile(Path(__file__).resolve().parent.parent/"DuoViewStereoCompositeRaster.hlsl",
+                root/"src/mods/vr/DuoViewStereoCompositeRaster.hlsl")
 def edit(path,old,new,label):
     p=root/path;data=p.read_text(encoding="utf-8-sig")
     if data.count(old)!=1:raise RuntimeError("Stereo XR "+label+" expected one anchor, got "+str(data.count(old)))
