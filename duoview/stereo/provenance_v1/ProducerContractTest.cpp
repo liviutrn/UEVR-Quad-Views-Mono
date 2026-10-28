@@ -1,5 +1,6 @@
 #include "ProducerContract.hpp"
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
