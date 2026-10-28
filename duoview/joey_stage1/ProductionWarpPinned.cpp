@@ -468,6 +468,68 @@ int main() try {
         if(rightBlue<=leftBlue)
             throw std::runtime_error("Diagnostic tint missing in RIGHT XR eye or eyes swapped");
         readback->Unmap(0,nullptr);
+
+        // Force sRGB PSO while the XR swapchain is typed UNORM: direct RTV
+        // is incompatible. Stereo MUST still produce distinct eye images by
+        // rasterizing into the prewarmed doublewide atlas and copying all 64px.
+        check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));
+        transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,
+                   D3D12_RESOURCE_STATE_RENDER_TARGET);
+        if(!compositor.prewarm(device.Get(),32,32,true,frequency))
+            throw std::runtime_error("Indirect stereo sRGB PSO prewarm failed");
+        if(!compositor.record_native(device.Get(),cmd.Get(),leftColor.texture.Get(),rightColor.texture.Get(),
+              stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
+              stereoFrame,std::make_shared<const int>(73),0,
+              leftDepth.texture.Get(),rightDepth.texture.Get(),0,2,1.0f))
+            throw std::runtime_error("Indirect full doublewide stereo render failed: "+compositor.error());
+        if(!compositor.last_true_stereo() || compositor.last_native_direct_xr())
+            throw std::runtime_error("Incompatible XR format reverted to MONO instead of full-eye copy");
+        transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,
+                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+        cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+        check(cmd->Close());queue->ExecuteCommandLists(1,gather_lists);
+        const UINT64 copy_signal=++native_signal;
+        check(queue->Signal(fence.Get(),copy_signal));
+        event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+        check(fence->SetEventOnCompletion(copy_signal,event));
+        if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
+            throw std::runtime_error("Indirect stereo XR copy fence timeout");
+        CloseHandle(event);
+        check(readback->Map(0,&read,&mapped));
+        if(std::memcmp(sample(16,16),sample(48,16),4)==0)
+            throw std::runtime_error("Indirect stereo copy returned identical left/right XR halves");
+        readback->Unmap(0,nullptr);
+
+        // Disable eye-tint proof and show the stereo reconstruction itself.
+        // With equal real source depth the right fovea must sample a DIFFERENT
+        // high-res LEFT texel due to physical UE camera separation.
+        check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));
+        transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,
+                   D3D12_RESOURCE_STATE_RENDER_TARGET);
+        if(!compositor.prewarm(device.Get(),32,32,false,frequency))
+            throw std::runtime_error("Native stereo mode1 PSO prewarm failed");
+        if(!compositor.record_native(device.Get(),cmd.Get(),leftColor.texture.Get(),rightColor.texture.Get(),
+              stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
+              stereoFrame,std::make_shared<const int>(74),0,
+              leftDepth.texture.Get(),rightDepth.texture.Get(),0,1,1.0f))
+            throw std::runtime_error("Actual stereo geometry render failed: "+compositor.error());
+        if(!compositor.last_true_stereo())
+            throw std::runtime_error("Geometry mode rendered without both true XR eyes");
+        transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,
+                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+        cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+        check(cmd->Close());queue->ExecuteCommandLists(1,gather_lists);
+        const UINT64 geometry_signal=++native_signal;
+        check(queue->Signal(fence.Get(),geometry_signal));
+        event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+        check(fence->SetEventOnCompletion(geometry_signal,event));
+        if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
+            throw std::runtime_error("Physical stereo geometry output fence timeout");
+        CloseHandle(event);
+        check(readback->Map(0,&read,&mapped));
+        if(std::memcmp(sample(16,16),sample(48,16),4)==0)
+            throw std::runtime_error("Stereo geometry produced no eye disparity with real source gradient and depth");
+        readback->Unmap(0,nullptr);
     }
 
     // A layout can request a fovea larger than Joey's single-eye capture. The
