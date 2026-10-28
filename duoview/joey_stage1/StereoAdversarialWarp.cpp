@@ -5,7 +5,9 @@
 #include <cmath>
 using uevr::duoview::DepthViewport;
 struct Scenario {
-    float z=2.f, left_z=0.f, baseline=.064f, left_near=.1f, right_near=.1f;
+    // Unreal scene units are centimeters. Physical plane tests below use
+    // 100/200/1000 units for 1/2/10 meters and a 6.4-unit physical baseline.
+    float z=200.f, left_z=0.f, baseline=6.4f, left_near=10.f, right_near=10.f;
     bool padded=false, srgb=false, indirect=false, forward_z=false;
     uint32_t mode=1, preview=0, debug=0;
     float sign=1.f;
@@ -41,7 +43,7 @@ public:
         auto r=native_source(device.Get(),cmd.Get(),16,16,{0,0,0,255},true,1);
         if(s.padded) {s.left.x=11;s.left.y=7;s.right.x=5;s.right.y=3;}
         const auto encoded=[&](float z,float near_plane,const DepthViewport& v) {
-            const float d=s.forward_z ? (100.f/(100.f-near_plane)-100.f*near_plane/((100.f-near_plane)*z)) : near_plane/z;
+            const float d=s.forward_z ? (10000.f/(10000.f-near_plane)-10000.f*near_plane/((10000.f-near_plane)*z)) : near_plane/z;
             return v.min_depth+(v.max_depth-v.min_depth)*d;
         };
         auto ld=native_depth(device.Get(),cmd.Get(),s.padded?80:32,s.padded?64:32,
@@ -63,7 +65,7 @@ public:
         frame.split_eye=true;
         auto projection=[&](std::array<float,16>& p,float near_plane) {
             p={};p[0]=p[5]=p[11]=1.f;
-            if(s.forward_z){p[10]=100.f/(100.f-near_plane);p[14]=-100.f*near_plane/(100.f-near_plane);}
+            if(s.forward_z){p[10]=10000.f/(10000.f-near_plane);p[14]=-10000.f*near_plane/(10000.f-near_plane);}
             else p[14]=near_plane;
         };
         projection(frame.projection,s.left_near);projection(frame.projection_right,s.right_near);
@@ -138,7 +140,7 @@ static double sample_pattern(double x,double y,int size,int c,int offset=0) {
 int main() try {
     Fixture gpu;int cases=0;
     auto render=[&](Scenario s){auto r=gpu.render(s);require(r.accepted,r.error);++cases;return r;};
-    for(float z : {1.f,2.f,10.f})for(float sign : {1.f,-1.f}) {
+    for(float z : {100.f,200.f,1000.f})for(float sign : {1.f,-1.f}) {
         Scenario s;s.z=z;s.sign=sign;const auto r=render(s);
         const double u=31.5/64.,v=31.5/64.;
         // Intersect the target camera's calibrated pinhole ray with a metric
@@ -154,7 +156,7 @@ int main() try {
     }
     Scenario plain;const auto baseline=render(plain);
     Scenario padded=plain;padded.padded=true;require(render(padded).pixels==baseline.pixels,"DSV padding/viewport changed output");
-    Scenario asymmetric=plain;asymmetric.left_near=.3f;require(render(asymmetric).pixels==baseline.pixels,"LEFT decoded using RIGHT projection");
+    Scenario asymmetric=plain;asymmetric.left_near=30.f;require(render(asymmetric).pixels==baseline.pixels,"LEFT decoded using RIGHT projection");
     Scenario ranged=plain;ranged.left.min_depth=.2f;ranged.left.max_depth=.8f;ranged.right.min_depth=.1f;ranged.right.max_depth=.9f;
     require(render(ranged).pixels==baseline.pixels,"viewport depth range ignored");
     Scenario reversed=plain;reversed.left.min_depth=1;reversed.left.max_depth=0;reversed.right.min_depth=1;reversed.right.max_depth=0;
@@ -170,7 +172,7 @@ int main() try {
         const double expected=.76*pixel(baseline,x+64,y)[c]+.24*target;
         require(std::abs(pixel(proof,x+64,y)[c]-expected)<=2,"RIGHT whole-eye tint missed center/corner");
     }
-    Scenario hidden=plain;hidden.left_z=1.f;const auto fallback=render(hidden);
+    Scenario hidden=plain;hidden.left_z=100.f;const auto fallback=render(hidden);
     for(int c=0;c<3;++c)require(std::abs(pixel(fallback,95,31)[c]-sample_pattern(31.5/64*16-.5,31.5/64*16-.5,16,c,1))<=2,
         "occluded target did not use actual RIGHT color");
     Scenario direct=plain;direct.srgb=true;const auto direct_result=render(direct);
