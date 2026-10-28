@@ -21,8 +21,10 @@ edit("src/mods/vr/DuoViewState.hpp","#pragma once",
 header="src/mods/vr/D3D12Component.hpp"
 edit(header,'    std::atomic<uint32_t> m_duo_preview_mode{0};',
 '''    std::atomic<uint32_t> m_duo_preview_mode{0};
-    // Experimental headset build defaults to actual stereo; disable for V3 A/B.
-    std::atomic<uint32_t> m_duo_stereo_mode{1};
+    // Opt-in only: without the R5 observer, stereo is NOT ready at ID6 startup.
+    // Starting at mode 1 can trigger compositor rejection and switch away from
+    // DuoView before the user can enable capture/re-enter ID6.
+    std::atomic<uint32_t> m_duo_stereo_mode{0};
     std::atomic<bool> m_duo_stereo_reverse{false};
     std::atomic<uint64_t> m_duo_stereo_frames{0};
     std::atomic<uint64_t> m_duo_stereo_reject_frames{0};''',"stereo controls")
