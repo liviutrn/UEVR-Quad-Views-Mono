@@ -3,7 +3,9 @@
 Parent: e1d72917e482855592c02be799a2070e9244d4cb (CI30)
 Branch: experiment/ci31-provenance-audit-20261028
 
-This is a **producer-identity test/diagnostic build**, not stereo playback validation.
+This is a **producer-identity and fovea-only test/diagnostic build**, not stereo playback validation.
+
+CI31 opt-in stereo mode **3** reuses the experimental CI30 right-fovea horizontal reconstruction only; both XR peripheries use identical real RIGHT periphery colors. This isolates periphery warp artifacts for a clean A/B and does not claim correct right-fovea depth geometry. Mode 0 V3 is untouched, mode 1 and tint mode 2 remain available. Mode 3 still needs a submitted left/right depth pair and inherits the existing fallback when Auto does not stabilize.
 No existing D3D12 depth observer, candidate shape, DSV pointer/write rank, copy
 fence or later XR packet may set `Stamp::authenticated=true`. Only a future
 engine-source producer hook that observes actual UE view family / scene-frame /
