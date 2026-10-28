@@ -114,7 +114,17 @@ int main() try {
     check(cmd->Close());ID3D12CommandList* lists[]{cmd.Get()};queue->ExecuteCommandLists(1,lists);wait();
     require(cap.preview_count()==3,"DuoView lost periphery or deduplicated distinct DSV write versions");
     auto pair=cap.select_preview(0,0,2030,1614,812,646);
-    require(pair.left && pair.right && pair.left.Get()!=pair.right.Get(),"DLSS-scaled Auto pair unavailable");
+    // CI30 deliberately defers a just-observed Auto pair; manual selections
+    // still work immediately, subject to the same size/scale guards.
+    require(!pair.left && !pair.right,"Auto was allowed before stability probation");
+    for(int left=1;left<=3 && !pair.left;++left) {
+        for(int right=1;right<=3 && !pair.left;++right) {
+            pair=cap.select_preview(left,right,2030,1614,812,646);
+        }
+    }
+    require(pair.left && pair.right && pair.left.Get()!=pair.right.Get(),
+            "DLSS-scaled explicit role-validated pair unavailable");
+    std::cout<<"PASS: CI30 Auto probation suppresses first frame; manual geometry-validated pair succeeds\n";
     require(pair.left_viewport.TopLeftX==11 && pair.right_viewport.TopLeftX==5,"per-source depth viewport metadata lost");
     cap.arm_diagnostic_capture();auto candidates=cap.snapshot_candidates();
     require(candidates.size()==3,"snapshot lost selected leased depth sources");
