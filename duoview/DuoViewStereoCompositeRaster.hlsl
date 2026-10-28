@@ -37,7 +37,7 @@ float4 LeftNative(float2 uv) {
     if(SharpenStrength>0.0f && DebugViewMode==0)
         source.rgb=GlamSharpenNativeFovea(uv,source.rgb);
     return source;
-
+}
 float DeviceLeftDepth(float2 local) {
     uint w,h;LeftSourceDepth.GetDimensions(w,h);
     if(!w||!h)return -1;
