@@ -30,9 +30,9 @@ bool MeshPoint(int2 pixel,out float3 eye,out float2 uv,out float clipW) {
     const float2 range=MeshConfig.z!=0 ? DepthViewportRanges.xy : DepthViewportRanges.zw;
     const float d=(MeshDeviceDepth(pixel)-range.x)/(range.y-range.x);
     if(!isfinite(d)||d<0||d>1||any(uv<0)||any(uv>1))return false;
-    const float4 point=mul(SourceEyeFromClip,float4(2*uv.x-1,1-2*uv.y,d,1));
-    if(!all(isfinite(point))||abs(point.w)<1.e-9f)return false;
-    eye=point.xyz/point.w;clipW=1.0f/point.w;
+    const float4 unprojected=mul(SourceEyeFromClip,float4(2*uv.x-1,1-2*uv.y,d,1));
+    if(!all(isfinite(unprojected))||abs(unprojected.w)<1.e-9f)return false;
+    eye=unprojected.xyz/unprojected.w;clipW=1.0f/unprojected.w;
     return all(isfinite(eye))&&clipW>0&&eye.z>=MeshEdge.z&&eye.z<=MeshEdge.w;
 }
 SurfaceVertex VSSurface(uint vertexId:SV_VertexID) {

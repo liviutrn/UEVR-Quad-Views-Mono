@@ -21,7 +21,21 @@ concurrency:
 env:
   PYTHONDONTWRITEBYTECODE: '1'
 jobs:
+  live-shader-preflight:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+      - name: Compile every live compositor and surface entry point with Windows FXC
+        shell: pwsh
+        run: |
+          python workspace/duoview/embed_shader.py "$env:RUNNER_TEMP/DuoViewShaderSource.hpp"
+          if ($LASTEXITCODE -ne 0) { throw 'Live shader preflight failed' }
   duoview-native-fix-mono-output:
+    needs: live-shader-preflight
     runs-on: windows-2022
     timeout-minutes: 120
     steps:
