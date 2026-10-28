@@ -25,6 +25,14 @@ static_assert(sizeof(ShaderConstants) == 176);
 
 class Compositor {
 public:
+    static bool split_eye_frame(const ViewFrame& frame) {
+#if defined(UEVR_DUOVIEW_V3_CAMERA_FIELDS)
+        return frame.split_eye;
+#else
+        (void)frame;
+        return false; // base/legacy DuoView standalone GPU tests
+#endif
+    }
     bool last_true_stereo() const { return last_true_stereo_; }
     // Prebuild the per-slot PSO, descriptors and output outside OpenXR frame copy.
     // Called after swapchain images and their command contexts are constructed.
@@ -147,9 +155,9 @@ public:
         // Direct double-wide raster would run sharpening twice on the same
         // monoscopic foveal content. Use the existing single-Mono compose+copy
         // when fused sharpening is enabled; leave v182 behavior otherwise.
-        if(stereoMode && (!frame.split_eye || frame.config.settings.fovea_view!=0))
+        if(stereoMode && (!split_eye_frame(frame) || frame.config.settings.fovea_view!=0))
             return reject("SplitEye V3 UE0-left/UE1-right must be ON for actual stereo; fix settings, not a Mono fallback");
-        const bool requested_stereo = stereoMode != 0 && frame.split_eye &&
+        const bool requested_stereo = stereoMode != 0 && split_eye_frame(frame) &&
             frame.config.settings.fovea_view == 0;
         const bool direct_xr=(frame.config.settings.direct_xr_output || requested_stereo ||
                             previewMode!=0) &&
@@ -239,6 +247,7 @@ public:
             frame.config.settings.sharpen_strength, 0.10f, 0.02f,
             3u | (srgb_ ? 0u : 4u) // larger radius, edge protection, SDR conversion
         };
+#if defined(UEVR_DUOVIEW_V3_CAMERA_FIELDS)
         if(stereoReady) {
             // V3's frozen LEFT and RIGHT native OpenXR matrices are col-major.
             const auto& l=frame.projection;
@@ -273,6 +282,7 @@ public:
             constants.stereo_check[2]=.20f;      // maximum peripheral UV shift
             constants.stereo_check[3]=stereoMode==2?1.f:0.f; // separate-eye tint test
         }
+#endif // UEVR_DUOVIEW_V3_CAMERA_FIELDS
         ensure_srvs(device,fovea,periphery,sampling_format);
         if(depthPreview || stereoReady) ensure_depth_srvs(device,leftDepth,rightDepth);
         // GPU lifetime remains bound to the exact retired OpenXR command slot,
