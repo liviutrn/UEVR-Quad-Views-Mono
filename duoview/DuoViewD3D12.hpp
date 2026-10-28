@@ -20,8 +20,10 @@ struct ShaderConstants {
     uint32_t sharpen_flags;
     uint32_t stereo_padding[2]{};
     float stereo_depth_z[4], stereo_eye_x[4], stereo_check[4];
+    float stereo_left_depth_z[4], left_depth_rect[4], right_depth_rect[4], depth_viewport_ranges[4];
 };
-static_assert(sizeof(ShaderConstants) == 176);
+static_assert(sizeof(ShaderConstants) == 240);
+static_assert(sizeof(ShaderConstants) / 4 + 1 <= 64); // constants + SRV table
 
 class Compositor {
 public:
@@ -121,12 +123,14 @@ public:
                 std::shared_ptr<const void> packet_lifetime, UINT64 frequency = 0,
                 ID3D12Resource* leftDepth = nullptr, ID3D12Resource* rightDepth = nullptr,
                 uint32_t previewMode = 0, uint32_t stereoMode = 0,
-                float stereoSign = 1.0f) {
+                float stereoSign = 1.0f,
+                DepthViewport leftViewport = {}, DepthViewport rightViewport = {}) {
         recorded_commands_=false;
         error_.clear();
         last_native_direct_xr_=false;
         last_true_stereo_=false;
         const auto reject=[this](const char* reason) { error_=reason; return false; };
+        if(stereoMode>2u)return reject("Unknown experimental stereo mode");
         if (!device || !cmd || !primary || !secondary || !destination ||
             primary==secondary || primary==destination || secondary==destination ||
             cmd->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT ||
@@ -219,9 +223,20 @@ public:
         const auto fovea_state=frame.config.settings.fovea_view==0 ? primary_state : secondary_state;
         const auto peripheral_state=frame.config.settings.fovea_view==0 ? secondary_state : primary_state;
 
-        const bool depth_compatible=leftDepth && rightDepth &&
-            valid_depth_srv(leftDepth->GetDesc().Format)!=DXGI_FORMAT_UNKNOWN &&
-            valid_depth_srv(rightDepth->GetDesc().Format)!=DXGI_FORMAT_UNKNOWN;
+        const auto depth_resource_valid=[&](ID3D12Resource* depth) {
+            if(!depth || depth==primary || depth==secondary || depth==destination ||
+               depth==atlas_.Get() || depth==output_.Get())return false;
+            const auto d=depth->GetDesc();
+            if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+               !d.Width || !d.Height || d.DepthOrArraySize!=1 || d.MipLevels!=1 ||
+               d.SampleDesc.Count!=1 || d.SampleDesc.Quality!=0 ||
+               (d.Flags&D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE) ||
+               valid_depth_srv(d.Format)==DXGI_FORMAT_UNKNOWN)return false;
+            ComPtr<ID3D12Device> owner;
+            return SUCCEEDED(depth->GetDevice(IID_PPV_ARGS(&owner))) && owner.Get()==device;
+        };
+        const bool depth_compatible=leftDepth!=rightDepth &&
+            depth_resource_valid(leftDepth) && depth_resource_valid(rightDepth);
         // An active stereo request must never be silently replaced by the
         // depth-preview PSO while reporting last_true_stereo=true.
         const bool depthPreview=!requested_stereo && previewMode>=1u && previewMode<=3u &&
@@ -230,6 +245,10 @@ public:
         const bool indirect_eye_output=(stereoReady || depthPreview) && !direct_xr;
         if(requested_stereo && !stereoReady)
             return reject("Stereo source pair missing/invalid: choose another foveal or peripheral DSV");
+        if((depthPreview || stereoReady) &&
+           (!depth_viewport_valid(leftViewport,leftDepth->GetDesc().Width,leftDepth->GetDesc().Height) ||
+            !depth_viewport_valid(rightViewport,rightDepth->GetDesc().Width,rightDepth->GetDesc().Height)))
+            return reject("Stereo depth viewport unknown, outside resource, or invalid depth range");
         if(requested_stereo && !std::isfinite(stereoSign))
             return reject("Nonfinite stereo reversal setting");
         if(indirect_eye_output && !atlas_)
@@ -249,11 +268,24 @@ public:
             frame.config.settings.sharpen_strength, 0.10f, 0.02f,
             3u | (srgb_ ? 0u : 4u) // larger radius, edge protection, SDR conversion
         };
+        if(depthPreview || stereoReady) {
+            const DepthViewport views[]{leftViewport,rightViewport};
+            float* rects[]{constants.left_depth_rect,constants.right_depth_rect};
+            for(int eye=0;eye<2;++eye) {
+                const auto& v=views[eye];auto* rect=rects[eye];
+                rect[0]=v.x;rect[1]=v.y;rect[2]=v.width;rect[3]=v.height;
+                constants.depth_viewport_ranges[eye*2]=v.min_depth;
+                constants.depth_viewport_ranges[eye*2+1]=v.max_depth;
+            }
+        }
 #if defined(UEVR_DUOVIEW_V3_CAMERA_FIELDS)
         if(stereoReady) {
             // V3's frozen LEFT and RIGHT native OpenXR matrices are col-major.
             const auto& l=frame.projection;
             const auto& r=frame.projection_right;
+            for(size_t k=0;k<16;++k)
+                if(!std::isfinite(l[k]) || !std::isfinite(r[k]))
+                    return reject("Stereo optical matrix contains nonfinite values");
             const float cL=l[11], cR=r[11];
             if(std::abs(cL)<1.e-7f || std::abs(cR)<1.e-7f ||
                std::abs(l[0])<1.e-7f || std::abs(r[0])<1.e-7f)
@@ -269,12 +301,16 @@ public:
                 const double d=rp[k]-lp[k];sum+=d*d;
             }
             const float baseline=static_cast<float>(std::sqrt(sum))*stereoSign;
-            if(!std::isfinite(baseline) || std::abs(baseline)<0.001f ||
+            if(!std::isfinite(baseline) ||
                std::abs(baseline)>1000.f) return reject("Native stereo baseline rejected");
             constants.stereo_depth_z[0]=r[10];
             constants.stereo_depth_z[1]=r[14];
             constants.stereo_depth_z[2]=r[11];
             constants.stereo_depth_z[3]=r[15];
+            constants.stereo_left_depth_z[0]=l[10];
+            constants.stereo_left_depth_z[1]=l[14];
+            constants.stereo_left_depth_z[2]=l[11];
+            constants.stereo_left_depth_z[3]=l[15];
             constants.stereo_eye_x[0]=aL/aR;
             constants.stereo_eye_x[1]=bL-(aL/aR)*bR;
             constants.stereo_eye_x[2]=aL*baseline;

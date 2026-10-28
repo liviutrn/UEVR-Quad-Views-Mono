@@ -31,7 +31,18 @@ cbuffer DuoViewCompositeConfig : register(b0)
     float4 StereoDepthZ;   // right projection clipZ A,B,C,D
     float4 StereoEyeX;    // native L/R projection mapping and real IPD baseline
     float4 StereoCheck;   // abs/relative visibility threshold, max shift, test tint
+    float4 StereoLeftDepthZ; // LEFT projection clipZ A,B,C,D (never decode with RIGHT)
+    float4 LeftDepthRect;    // active viewport x,y,width,height in resource pixels
+    float4 RightDepthRect;
+    float4 DepthViewportRanges; // left min,max, right min,max; not reversed-Z flags
 };
+
+int2 ActiveDepthMin(float4 rect) { return int2(ceil(rect.xy-0.5f)); }
+int2 ActiveDepthMax(float4 rect) { return int2(ceil(rect.xy+rect.zw-0.5f))-1; }
+int2 ActiveDepthTexel(float2 uv,float4 rect) {
+    return clamp(int2(floor(rect.xy+saturate(uv)*rect.zw)),
+                 ActiveDepthMin(rect),ActiveDepthMax(rect));
+}
 
 float2 AtlasSampleUV(uint4 rect, float2 localUv)
 {

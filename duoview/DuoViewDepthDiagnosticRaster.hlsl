@@ -15,7 +15,7 @@ float4 PSDepthDiagnostic(VertexOut v):SV_TARGET0 {
     if(useRight)RightDepthCandidate.GetDimensions(w,h);
     else LeftDepthCandidate.GetDimensions(w,h);
     if(w==0||h==0)return float4(1,0,1,1);
-    const uint2 coord=min(uint2(uv*float2(w,h)),uint2(w-1,h-1));
+    const int2 coord=ActiveDepthTexel(uv,useRight?RightDepthRect:LeftDepthRect);
     const float d=useRight?RightDepthCandidate.Load(int3(coord,0)):
                            LeftDepthCandidate.Load(int3(coord,0));
     if(!isfinite(d)||d<=0||d>1)return float4(1,0,1,1);

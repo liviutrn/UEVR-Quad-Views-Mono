@@ -27,11 +27,13 @@ edit(header,'    std::atomic<uint32_t> m_duo_preview_mode{0};',
     std::atomic<uint32_t> m_duo_stereo_mode{0};
     std::atomic<bool> m_duo_stereo_reverse{false};
     std::atomic<uint64_t> m_duo_stereo_frames{0};
+    std::atomic<uint64_t> m_duo_stereo_recorded_frames{0};
     std::atomic<uint64_t> m_duo_stereo_reject_frames{0};''',"stereo controls")
 edit(header,'    int duoview_left_choice() const {return m_duo_left_choice.load();}',
 '''    uint32_t duoview_stereo_mode() const {return m_duo_stereo_mode.load();}
     bool duoview_stereo_reverse() const {return m_duo_stereo_reverse.load();}
     uint64_t duoview_stereo_frames() const {return m_duo_stereo_frames.load();}
+    uint64_t duoview_stereo_recorded_frames() const {return m_duo_stereo_recorded_frames.load();}
     uint64_t duoview_stereo_rejected_frames() const {return m_duo_stereo_reject_frames.load();}
     void duoview_stereo_config(uint32_t mode,bool reverse) {
         m_duo_stereo_mode.store((std::min)(mode,2u),std::memory_order_release);
@@ -46,10 +48,12 @@ edit(vr,'                    const int n=m_d3d12.duoview_depth_candidate_count()
                     mode_changed|=ImGui::SliderInt("TRUE STEREO (0 V3 mono / 1 stereo / 2 tint proof)",&stereo_mode,0,2);
                     mode_changed|=ImGui::Checkbox("Reverse stereo parallax sign (A/B)",&stereo_reverse);
                     if(mode_changed)m_d3d12.duoview_stereo_config(uint32_t(stereo_mode),stereo_reverse);
-                    ImGui::Text("TRUE STEREO COMPOSITES DELIVERED: %llu | rejected: %llu",
+                    ImGui::Text("Experimental stereo XR copies submitted: %llu | rejected: %llu",
                         static_cast<unsigned long long>(m_d3d12.duoview_stereo_frames()),
                         static_cast<unsigned long long>(m_d3d12.duoview_stereo_rejected_frames()));
-                    ImGui::TextWrapped("Stereo ON forces direct per-eye XR raster. Candidate errors are visible; test alternate LEFT/RIGHT depth selectors. Tint proof must appear ONLY in RIGHT headset eye.");
+                    ImGui::Text("Stereo commands recorded: %llu (not headset delivery)",
+                        static_cast<unsigned long long>(m_d3d12.duoview_stereo_recorded_frames()));
+                    ImGui::TextWrapped("EXPERIMENTAL: depth eye/frame/stage identity UNVERIFIED. Stereo uses per-eye raster or a doublewide intermediate. Mode 2 tints the ENTIRE RIGHT eye. Submitted means queue copy + XR image release; headset presentation is not measured.");
                     const int n=m_d3d12.duoview_depth_candidate_count();''',"mode UI")
 dc="src/mods/vr/D3D12Component.cpp"
 edit(dc,'''                            const uint32_t preview_mode=m_duo_preview_mode.load(std::memory_order_acquire);
@@ -83,26 +87,40 @@ edit(dc,'''                            const uint32_t preview_mode=m_duo_preview
                                     last_missing_warn=now;
                                     SPDLOG_WARN("[DuoView][StereoXR] No submitted depth pair yet. Select another LEFT or RIGHT candidate, or re-enter ID6.");
                                 }
-                                if(stereo_mode)m_duo_stereo_reject_frames.fetch_add(1,std::memory_order_relaxed);
                             }''',"remove invalid spdlog macro and acquire real stereo depth")
 edit(dc,'''                                info << " previewMode=" << preview_mode''',
 '''                                info << " stereoMode=" << stereo_mode
                                      << " stereoReversed=" << (stereo_sign<0)
-                                     << " trueStereoDelivered=" << m_duo_stereo_frames.load()
+                                     << " stereoCopiesSubmitted=" << m_duo_stereo_frames.load()
+                                     << " stereoCommandsRecorded=" << m_duo_stereo_recorded_frames.load()
+                                     << " sourceRoleVerified=false sourceFrameVerified=false sourceStageVerified=false"
                                      << " trueStereoRejected=" << m_duo_stereo_reject_frames.load();
                                 info << " previewMode=" << preview_mode''',"record replay metadata")
 edit(dc,'''                                 left_depth=depths.left,right_depth=depths.right,preview_mode](''',
 '''                                 left_depth=depths.left,right_depth=depths.right,preview_mode,
-                                 stereo_mode,stereo_sign](''',"XR callback locks stereo policy")
+                                 stereo_mode,stereo_sign,
+                                 left_viewport=depths.left_viewport,right_viewport=depths.right_viewport](''',"XR callback locks stereo policy")
 edit(dc,'''                                        left_depth.Get(),right_depth.Get(),preview_mode);''',
 '''                                        left_depth.Get(),right_depth.Get(),preview_mode,
-                                        stereo_mode,stereo_sign);
+                                        stereo_mode,stereo_sign,
+                                        {left_viewport.TopLeftX,left_viewport.TopLeftY,left_viewport.Width,left_viewport.Height,left_viewport.MinDepth,left_viewport.MaxDepth},
+                                        {right_viewport.TopLeftX,right_viewport.TopLeftY,right_viewport.Width,right_viewport.Height,right_viewport.MinDepth,right_viewport.MaxDepth});
                                     if(stereo_mode) {
                                         if(recorded && compositor.last_true_stereo())
-                                            m_duo_stereo_frames.fetch_add(1,std::memory_order_relaxed);
-                                        else
-                                            m_duo_stereo_reject_frames.fetch_add(1,std::memory_order_relaxed);
-                                    }''',"stereo GPU submission counter")
+                                            m_duo_stereo_recorded_frames.fetch_add(1,std::memory_order_relaxed);
+                                    }''',"stereo GPU recording counter, not delivery")
+edit(dc,'''                            if (submitted && recorded && callback_attempted) {
+                                native_stereo_hook->duoview_delivery.result''',
+'''                            // One outcome per copy attempt. OpenXR::copy returns true
+                            // only after checked queue enqueue and successful image release.
+                            // This is NOT proof of xrEndFrame or physical display.
+                            if(stereo_mode) {
+                                if(submitted && recorded && callback_attempted)
+                                    m_duo_stereo_frames.fetch_add(1,std::memory_order_relaxed);
+                                else m_duo_stereo_reject_frames.fetch_add(1,std::memory_order_relaxed);
+                            }
+                            if (submitted && recorded && callback_attempted) {
+                                native_stereo_hook->duoview_delivery.result''',"post-copy submitted accounting")
 edit(dc,'''                                if ((submitted && recorded && callback_attempted) || capture_id || preview_mode)
                                     m_stock_dibr_depth->finish_frame();''',
 '''                                if ((submitted && recorded && callback_attempted) || capture_id || preview_mode || stereo_mode)

@@ -18,6 +18,24 @@ constexpr int renderer_view_index(int raw, bool double_precision) {
 struct Rect {
     uint32_t x{}, y{}, width{}, height{};
 };
+// Exact capture viewport, distinct from the source texture allocation and FOV crop.
+// Empty/unknown metadata must never be silently interpreted as full allocation.
+struct DepthViewport {
+    float x{}, y{}, width{}, height{}, min_depth{}, max_depth{1.f};
+};
+inline bool depth_viewport_valid(const DepthViewport& v, uint64_t width, uint32_t height) {
+    if (!width || !height || width > 16384 || height > 16384 ||
+        !std::isfinite(v.x) || !std::isfinite(v.y) ||
+        !std::isfinite(v.width) || !std::isfinite(v.height) ||
+        !std::isfinite(v.min_depth) || !std::isfinite(v.max_depth) ||
+        v.x < 0 || v.y < 0 || v.width < 1 || v.height < 1 ||
+        double(v.x)+v.width > double(width) || double(v.y)+v.height > double(height) ||
+        v.min_depth < 0 || v.min_depth > 1 || v.max_depth < 0 || v.max_depth > 1 ||
+        std::abs(v.max_depth-v.min_depth) < 1.e-7f) return false;
+    // At least one pixel center must lie inside each active interval.
+    return std::ceil(v.x-.5f) < std::ceil(v.x+v.width-.5f) &&
+           std::ceil(v.y-.5f) < std::ceil(v.y+v.height-.5f);
+}
 struct Layout {
     Rect fovea{}, periphery{};
     uint32_t atlas_width{}, atlas_height{};

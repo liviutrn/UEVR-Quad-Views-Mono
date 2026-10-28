@@ -19,7 +19,7 @@ checks={
 "Valid physical left/right source":'frame.split_eye' in comp and 'frame.eye_cameras[0].position' in comp,
 "Full frozen left/right projections":'frame.projection_right' in comp and 'frame.projection' in comp,
 "Real IPD not arbitrary full-screen disparity":'const float baseline=static_cast<float>(std::sqrt(sum))*stereoSign' in comp,
-"D3D12 root constant register alignment":'static_assert(sizeof(ShaderConstants) == 176)' in comp,
+"D3D12 root constant register alignment":'static_assert(sizeof(ShaderConstants) == 240)' in comp,
 "True depth-guided right fovea":'RightFovea(uv,nativeRight,confidence)' in shader and 'DeviceLeftDepth(local)' in shader,
 "Right peripheral depth guides left reprojection":'RightSampleForLeft(uv,good)' in shader,
 "Periphery errors use actual right color":'if(good)periphery=RightNative(shifted)' in shader,
@@ -36,7 +36,14 @@ checks={
 "Every screenshot retains stereo choices":'stereoMode=' in c and 'manualLeft=' in c,
 "R5 depth copy state supports pixel reads":'D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE' in depth,
 "Stereo active when preview disabled":'if(m_stock_dibr_scope && (preview_mode || stereo_mode))' in c,
-"Stereo root constants within DX12 root-size limit":'static_assert(sizeof(ShaderConstants) == 176)' in comp
+"Stereo root constants within DX12 root-size limit":'static_assert(sizeof(ShaderConstants) / 4 + 1 <= 64)' in comp,
+"Depth rect metadata captured with immutable selected resources":'left_viewport=depths.left_viewport' in c and 'right_viewport=depths.right_viewport' in c,
+"Distinct per-eye depth coefficients reach shader":'constants.stereo_left_depth_z[1]=l[14]' in comp and 'LeftEyeForwardZ(DeviceLeftDepth(local))' in shader,
+"Unknown or invalid depth viewport rejects before recording":'depth_viewport_valid(leftViewport' in comp and comp.index('depth_viewport_valid(leftViewport')<comp.index('ensure_depth_srvs(device,leftDepth,rightDepth)'),
+"Recorded does not claim delivered":'m_duo_stereo_recorded_frames.fetch_add' in c and 'trueStereoDelivered=' not in c,
+"Submitted counter follows copy outcome":c.index('m_duo_stereo_frames.fetch_add')>c.index('// One outcome per copy attempt.'),
+"Both stages and frame semantics explicitly unverified":'sourceRoleVerified=false sourceFrameVerified=false sourceStageVerified=false' in c,
+"Whole-eye tint on peripheral early return":'if(feather<=0.0f) return StereoProofColor(' in shader,
 }
 for name,valid in checks.items():print(("PASS: " if valid else "FAIL: ")+name)
 if not all(checks.values()):raise SystemExit("Physical stereo XR integration contract FAILED")

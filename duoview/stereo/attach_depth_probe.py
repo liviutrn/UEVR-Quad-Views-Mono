@@ -13,6 +13,7 @@ def edit(path, old, new, name):
 depth="src/mods/vr/d3d12/StockDibrDepth.hpp"
 probe=r'''    struct PreviewPair {
         Ptr<ID3D12Resource> left, right;
+        D3D12_VIEWPORT left_viewport{}, right_viewport{};
         std::string label;
         size_t count{};
     };
@@ -101,6 +102,8 @@ probe=r'''    struct PreviewPair {
         };
         r.left=lease(a);
         r.right=lease(b);
+        r.left_viewport=slots[a].viewport;
+        r.right_viewport=slots[b].viewport;
         std::ostringstream label;
         label<<"left_choice="<<left_selector<<" left_DSV=0x"<<std::hex
              <<reinterpret_cast<std::uintptr_t>(slots[a].source.Get())
@@ -109,8 +112,10 @@ probe=r'''    struct PreviewPair {
              <<" serials="<<slots[a].serial<<","<<slots[b].serial
              <<" wantedViewports=L:"<<left_width<<"x"<<left_height
              <<" R:"<<right_width<<"x"<<right_height
-             <<" actualViewports=L:"<<slots[a].viewport.Width<<"x"<<slots[a].viewport.Height
-             <<" R:"<<slots[b].viewport.Width<<"x"<<slots[b].viewport.Height
+             <<" actualViewports=L:("<<slots[a].viewport.TopLeftX<<","<<slots[a].viewport.TopLeftY
+             <<","<<slots[a].viewport.Width<<","<<slots[a].viewport.Height
+             <<") R:("<<slots[b].viewport.TopLeftX<<","<<slots[b].viewport.TopLeftY
+             <<","<<slots[b].viewport.Width<<","<<slots[b].viewport.Height<<")"
              <<" matchedEyes=UNVERIFIED";
         r.label=label.str();
         return r;

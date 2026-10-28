@@ -5,6 +5,7 @@ on:
     branches:
       - experiment/duoview-165-true-stereo-xr-v1-reviewed-20261028
       - review/true-stereo-xr-audit-fixes-20261028
+      - review/duoview-depth-contracts-20261028
   pull_request:
     branches:
       - build-182
@@ -244,7 +245,7 @@ jobs:
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
           DuoView TRUE STEREO XR V1 — EXPERIMENTAL HEADSET BUILD (REVIEW FIXES)
-          Build branch: review/true-stereo-xr-audit-fixes-20261028.
+          Build branch: review/duoview-depth-contracts-20261028.
           Stable Build165/V3 and published stable releases are NOT modified.
           This ZIP contains the experimental first real two-eye output, not the old mono-only depth bridge.
 
@@ -252,9 +253,9 @@ jobs:
           1. Extract into a SEPARATE test directory. Keep working V3 installation available.
           2. Select DuoView ID6 with V3 LEFT-fovea / RIGHT-periphery Split-Eye ON.
           3. Enable R5 DSV/RDG capture; leave and RE-ENTER ID6 to attach the live capture observer.
-          4. Set View depth = 0 (off) before testing true stereo, otherwise depth preview overrides.
+          4. Set View depth = 0 for clean tests. Stereo has priority over preview.
           5. TRUE STEREO 0 = previous V3 mono A/B; 1 = reconstructed stereo;
-             2 = stereo + BLUE tint in the RIGHT OpenXR eye ONLY (eye-isolation test).
+             2 = stereo + BLUE tint over the ENTIRE RIGHT OpenXR eye (including corners).
           6. First verify mode 2 in the headset. Then compare 0 and 1 on near
              weapon/NPC edges, an object at ~2m, distant scenery and head rotation.
           7. Left/right depth candidates are independent. Selector 0 uses the
@@ -276,6 +277,16 @@ jobs:
           LEFT periphery uses a bounded 2-iteration inverse reprojection of
           RIGHT periphery from RIGHT depth. Full two-depth V2 backward gather and
           forward z/owner hybrid are compiled PROTOTYPES, not the live pipeline.
+          This revision maps captured DSV active viewports and depth ranges,
+          uses independent LEFT/RIGHT depth projection coefficients, rejects
+          invalid resource shapes before recording, and tests analytic planes
+          at 1/2/10 units plus padded viewports on production D3D12 WARP.
+          Neither captured depth eye/frame/stage identity nor exact game
+          matrices have been proved. Do not interpret these tests as fixing
+          the remaining provenance, jitter, or full-matrix geometry blockers.
+          Counters distinguish recorded commands from submitted XR copies.
+          Submitted means checked queue enqueue + XR image release, not
+          GPU completion, xrEndFrame success, or physical headset visibility.
           Source-depth/pass attribution, occlusions at characters, Lumen shading,
           frame correspondence, temporal stability and headset optical comfort
           are NOT established by CI alone. A successful WARP test is NOT proof
@@ -289,6 +300,16 @@ jobs:
           Pinned restricted SDK: 3cffbc82429b6165ceec2714f0f0d9ae48f55596
           Pinned frontend: 60be4b0f9a646109fd9fdf448bacd41477234091
           '@ | Set-Content package/READ_FIRST.txt
+          @{
+            schema_version=1; source_commit=$env:GITHUB_SHA;
+            source_repository='liviutrn/UEVR-Quad-Views-Mono';
+            workflow_run_id=$env:GITHUB_RUN_ID; workflow_run_number=$env:GITHUB_RUN_NUMBER;
+            baseline_stereo_commit='4156975c5b3d419b5690e19c33790e5eecf2e5fd';
+            windows_build_verified=$true; headset_verified=$false;
+            depth_eye_frame_stage_identity_verified=$false;
+            full_per_pass_matrix_reprojection=$false;
+            mode='experimental-stereo-contract-fixes'; stable_release=$false
+          } | ConvertTo-Json | Set-Content package/BUILD_STATUS.json
           $needed=@('UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','duoview-stage234-hashes.json','exact-baseline-source.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }

@@ -15,14 +15,17 @@ Texture2D<float> RightSourceDepth : register(t3);
 // StereoEyeX  = (leftToRightNdcRatio, offset, nativeParallaxNdcTimesZ, valid);
 // StereoCheck = (zToleranceAbsolute, zToleranceRelative, peripheryMaxShiftUV, debug).
 // right camera z reconstruction: z = (B-d*D)/(d*C-A).
-float EyeForwardZ(float deviceZ)
+float EyeForwardZ(float deviceZ,float4 projection,float2 depthRange)
 {
-    const float denom=deviceZ*StereoDepthZ.z-StereoDepthZ.x;
-    if(!isfinite(deviceZ)||deviceZ<=0.000001f||deviceZ>=0.999999f||
+    deviceZ=(deviceZ-depthRange.x)/(depthRange.y-depthRange.x);
+    const float denom=deviceZ*projection.z-projection.x;
+    if(!isfinite(deviceZ)||deviceZ<0.0f||deviceZ>1.0f||
        abs(denom)<1.e-9f)return -1.0f;
-    const float z=(StereoDepthZ.y-deviceZ*StereoDepthZ.w)/denom;
+    const float z=(projection.y-deviceZ*projection.w)/denom;
     return (isfinite(z)&&z>0.01f&&z<1.0e8f)?z:-1.0f;
 }
+float RightEyeForwardZ(float d) { return EyeForwardZ(d,StereoDepthZ,DepthViewportRanges.zw); }
+float LeftEyeForwardZ(float d) { return EyeForwardZ(d,StereoLeftDepthZ,DepthViewportRanges.xy); }
 float2 SampleColorRight(float2 uv) {
     return NativeSampleUV(uv,PeripheralRect.zw,NativePeripheryDimensions);
 }
@@ -41,14 +44,13 @@ float4 LeftNative(float2 uv) {
 float DeviceLeftDepth(float2 local) {
     uint w,h;LeftSourceDepth.GetDimensions(w,h);
     if(!w||!h)return -1;
-    // Candidate manual selection must identify a true cropped-foveal DSV.
-    const uint2 p=min(uint2(saturate(local)*float2(w,h)),uint2(w-1,h-1));
+    const int2 p=ActiveDepthTexel(local,LeftDepthRect);
     return LeftSourceDepth.Load(int3(p,0));
 }
 float DeviceRightDepth(float2 uv) {
     uint w,h;RightSourceDepth.GetDimensions(w,h);
     if(!w||!h)return -1;
-    const uint2 p=min(uint2(saturate(uv)*float2(w,h)),uint2(w-1,h-1));
+    const int2 p=ActiveDepthTexel(uv,RightDepthRect);
     return RightSourceDepth.Load(int3(p,0));
 }
 bool InCrop(float2 uv) {
@@ -61,7 +63,7 @@ float2 RightSampleForLeft(float2 leftUV, out bool trustworthy) {
     float2 uv=leftUV; trustworthy=false;
     const float targetNdc=leftUV.x*2.0f-1.0f;
     [unroll] for(uint k=0;k<2;k++) {
-        const float z=EyeForwardZ(DeviceRightDepth(uv));
+        const float z=RightEyeForwardZ(DeviceRightDepth(uv));
         if(z<0) return leftUV;
         const float x=(targetNdc-StereoEyeX.y-StereoEyeX.z/z)/StereoEyeX.x;
         const float2 next=float2(x*0.5f+0.5f,leftUV.y);
@@ -74,14 +76,14 @@ float2 RightSampleForLeft(float2 leftUV, out bool trustworthy) {
 }
 float4 RightFovea(float2 rightUV, float4 nativeRight, out float confidence) {
     confidence=0;
-    const float z=EyeForwardZ(DeviceRightDepth(rightUV));
+    const float z=RightEyeForwardZ(DeviceRightDepth(rightUV));
     if(z<0) return nativeRight;
     const float ndcR=rightUV.x*2.0f-1.0f;
     const float ndcL=StereoEyeX.x*ndcR+StereoEyeX.y+StereoEyeX.z/z;
     const float2 leftUV=float2(ndcL*0.5f+0.5f,rightUV.y);
     if(!InCrop(leftUV)) return nativeRight;
     const float2 local=(leftUV-CropUv.xy)/(CropUv.zw-CropUv.xy);
-    const float sourceZ=EyeForwardZ(DeviceLeftDepth(local));
+    const float sourceZ=LeftEyeForwardZ(DeviceLeftDepth(local));
     const float tolerance=StereoCheck.x+StereoCheck.y*z;
     if(sourceZ<0 || abs(sourceZ-z)>max(0.01f,tolerance))return nativeRight;
     // 4-neighbor depth edge test. NEVER bilinearly paint a foreground
@@ -89,17 +91,22 @@ float4 RightFovea(float2 rightUV, float4 nativeRight, out float confidence) {
     uint dw,dh;LeftSourceDepth.GetDimensions(dw,dh);
     if(!dw||!dh) return nativeRight;
     // Source depth tap footprint is centered on texel + 0.5.
-    const int2 ip=int2(floor(saturate(local)*float2(dw,dh)-0.5f));
+    const int2 ip=int2(floor(LeftDepthRect.xy+saturate(local)*LeftDepthRect.zw-0.5f));
     [unroll] for(int j=0;j<2;j++) {
         [unroll] for(int i=0;i<2;i++) {
-            int2 q=clamp(ip+int2(i,j),int2(0,0),int2(dw-1,dh-1));
-            const float dz=EyeForwardZ(LeftSourceDepth.Load(int3(q,0)));
+            int2 q=clamp(ip+int2(i,j),ActiveDepthMin(LeftDepthRect),ActiveDepthMax(LeftDepthRect));
+            const float dz=LeftEyeForwardZ(LeftSourceDepth.Load(int3(q,0)));
             if(dz<0 || abs(dz-z)>2.0f*max(0.01f,tolerance))
                 return nativeRight;
         }
     }
     confidence=1;
     return LeftNative(leftUV);
+}
+float4 StereoProofColor(float4 color,bool right) {
+    if(StereoCheck.w>0.5f && right)
+        return float4(lerp(color.rgb,float3(.0f,.2f,.9f),.24f),1);
+    return color;
 }
 float4 PSNativeStereo(VertexOut i):SV_TARGET0 {
     const bool right=i.pos.x>=float(OutputSize.x);
@@ -117,18 +124,17 @@ float4 PSNativeStereo(VertexOut i):SV_TARGET0 {
         // A small rejected area keeps native RIGHT as the comfort fallback.
         if(good)periphery=RightNative(shifted);
     }
-    if(feather<=0.0f) return periphery;
+    if(feather<=0.0f) return StereoProofColor(
+        DebugViewMode==2 ? float4(.04f,.04f,.04f,1) : periphery,right);
     float confidence=0;
     const float4 fovea=right
         ?RightFovea(uv,nativeRight,confidence)
         :LeftNative(uv);
     // Both eye foveae inherit real LEFT shading whenever visible;
     // RIGHT falls back to actual RIGHT on genuine disocclusions.
-    const float4 finalColor=lerp(periphery,fovea,feather);
-    if(StereoCheck.w>0.5f) {
-        // Eye-output proof: blue tint only in RIGHT half; must not be
-        // visible in left XR eye when headset stereo submission is correct.
-        if(right)return float4(lerp(finalColor.rgb,float3(.0f,.2f,.9f),.24f),1);
-    }
-    return finalColor;
+    float4 finalColor=DebugViewMode==2 ? fovea : lerp(periphery,fovea,feather);
+    if(DebugViewMode==1)finalColor=periphery;
+    if(DebugBorder && feather>0.01f && feather<0.1f)
+        finalColor.rgb=float3(1.0f,.3f,0.0f);
+    return StereoProofColor(finalColor,right);
 }
