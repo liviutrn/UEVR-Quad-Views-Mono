@@ -17,19 +17,19 @@ probe=r'''    struct PreviewPair {
         size_t count{};
     };
     std::vector<size_t> preview_indices() const {
-        std::unordered_map<std::uintptr_t,size_t> unique;
+        // Preserve separately captured source passes even when Unreal reuses a DSV.
+        std::vector<size_t> out;
         for(size_t i=0;i<slots.size();++i) {
             const auto& s=slots[i];
             if(!s.texture || !s.source || s.epoch!=epoch || s.pending ||
                s.leased || s.quarantined || (!s.fence && !s.foreign_fence)) continue;
-            const auto key=reinterpret_cast<std::uintptr_t>(s.source.Get());
-            auto it=unique.find(key);
-            if(it==unique.end() || slots[it->second].serial<s.serial) unique[key]=i;
+            out.push_back(i);
         }
-        std::vector<std::pair<std::uintptr_t,size_t>> order(unique.begin(),unique.end());
-        std::sort(order.begin(),order.end(),[](const auto& a,const auto& b){return a.first<b.first;});
-        std::vector<size_t> out;
-        for(const auto& x:order)out.push_back(x.second);
+        std::sort(out.begin(),out.end(),[&](size_t a,size_t b) {
+            const auto pa=reinterpret_cast<std::uintptr_t>(slots[a].source.Get());
+            const auto pb=reinterpret_cast<std::uintptr_t>(slots[b].source.Get());
+            return pa==pb ? slots[a].serial<slots[b].serial : pa<pb;
+        });
         return out;
     }
     size_t preview_count() const {
@@ -40,8 +40,9 @@ probe=r'''    struct PreviewPair {
         std::scoped_lock lock{mutex};
         std::ostringstream out;
         const auto indices=preview_indices();
-        out<<"GPU-submitted eligible candidates: "<<indices.size()
-           <<"; ordinals sorted by DSV resource identity (may change on reload)";
+        out<<"GPU-submitted eligible snapshots: "<<indices.size()
+           <<"; same source DSV may have MULTIPLE pass captures;"
+              " ordinals by DSV identity then serial (may change on reload)";
         for(size_t k=0;k<indices.size()&&k<16;++k) {
             const auto& s=slots[indices[k]];
             const auto d=s.texture->GetDesc();
@@ -54,40 +55,62 @@ probe=r'''    struct PreviewPair {
         }
         return out.str();
     }
-    PreviewPair select_preview(int left_selector,int right_selector) {
+    PreviewPair select_preview(int left_selector,int right_selector,
+                               UINT left_width,UINT left_height,
+                               UINT right_width,UINT right_height) {
         std::scoped_lock lock{mutex};
         PreviewPair r{};
         if(!enabled)return r;
         const auto ids=preview_indices();
         r.count=ids.size();
-        if(ids.empty())return r;
+        if(ids.size()<2)return r;
         const size_t invalid=slots.size();
-        const auto choose=[&](int manual,size_t other)->size_t {
-            if(manual>0&&static_cast<size_t>(manual)<=ids.size())return ids[manual-1];
-            size_t best=ids[0];double score=-1;
+        const auto choose=[&](int manual,size_t other,UINT expected_w,UINT expected_h)->size_t {
+            // Stale manual ordinals must NOT silently change into Auto.
+            if(manual>0) {
+                if(static_cast<size_t>(manual)>ids.size())return invalid;
+                const size_t selected=ids[manual-1];
+                return selected==other ? invalid : selected;
+            }
+            size_t best=invalid;
+            double best_score=1.0e30;
             for(const auto i:ids) {
-                if(i==other && ids.size()>1)continue;
+                if(i==other)continue;
                 const auto& v=slots[i].viewport;
-                const double area=double(v.Width)*double(v.Height);
-                if(area>score){best=i;score=area;}
+                if(v.Width<=0 || v.Height<=0 || !expected_w || !expected_h)continue;
+                // Closeness to frozen left crop / right full-field viewport;
+                // unverified heuristic, not a semantic eye proof.
+                const double dx=(double(v.Width)-double(expected_w))/double(expected_w);
+                const double dy=(double(v.Height)-double(expected_h))/double(expected_h);
+                const double score=dx*dx+dy*dy;
+                if(score<best_score ||
+                   (score==best_score && (best==invalid || slots[i].serial>slots[best].serial))) {
+                    best=i;best_score=score;
+                }
             }
             return best;
         };
-        const size_t a=choose(left_selector,invalid);
-        const size_t b=choose(right_selector,a);
+        const size_t a=choose(left_selector,invalid,left_width,left_height);
+        if(a==invalid)return r;
+        const size_t b=choose(right_selector,a,right_width,right_height);
+        if(b==invalid)return r;
         auto lease=[&](size_t i)->Ptr<ID3D12Resource> {
             auto& s=slots[i];
             if(s.foreign_fence&&(!queue||FAILED(queue->Wait(s.foreign_fence.Get(),1))))return {};
             s.leased=true;snapshot_leases[i]=true;return s.texture;
         };
         r.left=lease(a);
-        r.right=(b==a)?r.left:lease(b);
+        r.right=lease(b);
         std::ostringstream label;
         label<<"left_choice="<<left_selector<<" left_DSV=0x"<<std::hex
              <<reinterpret_cast<std::uintptr_t>(slots[a].source.Get())
              <<" right_choice="<<std::dec<<right_selector<<" right_DSV=0x"<<std::hex
              <<reinterpret_cast<std::uintptr_t>(slots[b].source.Get())<<std::dec
              <<" serials="<<slots[a].serial<<","<<slots[b].serial
+             <<" wantedViewports=L:"<<left_width<<"x"<<left_height
+             <<" R:"<<right_width<<"x"<<right_height
+             <<" actualViewports=L:"<<slots[a].viewport.Width<<"x"<<slots[a].viewport.Height
+             <<" R:"<<slots[b].viewport.Width<<"x"<<slots[b].viewport.Height
              <<" matchedEyes=UNVERIFIED";
         r.label=label.str();
         return r;
@@ -122,7 +145,7 @@ vr="src/mods/VR.cpp"
 edit(vr,'                    if (ImGui::Button("CAPTURE NOW: both source colors + ALL eligible depth candidates")) {',
 '''                    ImGui::Separator();
                     ImGui::TextUnformatted("LIVE DEPTH CANDIDATE VIEWER");
-                    ImGui::TextWrapped("0=auto (largest DSV viewport, eye attribution not proven). Choose candidates and compare visible geometry to Fovea/Periphery color.");
+                    ImGui::TextWrapped("0=auto (nearest submitted viewport size per eye source; heuristic only). Use manual candidates to confirm. Reused DSV may have separate captures.");
                     const int n=m_d3d12.duoview_depth_candidate_count();
                     int left=m_d3d12.duoview_left_choice();
                     int right=m_d3d12.duoview_right_choice();
