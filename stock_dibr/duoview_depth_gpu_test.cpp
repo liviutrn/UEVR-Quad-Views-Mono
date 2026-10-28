@@ -128,12 +128,46 @@ int main() try {
         if(!left && active==.125f)found[2]=true;
     }
     require(found[0]&&found[1]&&found[2],"owned depth snapshots did not preserve distinct source contents");
+    // Exercise the real diagnostic allocation/recording path too. A nonempty
+    // candidate list must not masquerade as a complete capture if every depth
+    // allocation is excluded, or if the final XR allocation fails.
+    D3D12_RESOURCE_DESC color_desc{};color_desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    color_desc.Width=color_desc.Height=4;color_desc.DepthOrArraySize=color_desc.MipLevels=1;
+    color_desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;color_desc.SampleDesc.Count=1;
+    color_desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    auto color=resource(device.Get(),color_desc,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_RENDER_TARGET);
+    using uevr::duoview::diag::Session;
+    uevr::duoview::diag::Candidate unsupported;unsupported.source=color;
+    unsupported.state=D3D12_RESOURCE_STATE_RENDER_TARGET;unsupported.serial=999;
+    Session missing_depth{100,"test","test"};
+    require(!missing_depth.prepare(device.Get(),color.Get(),color.Get(),{unsupported},true),
+        "unsupported depth candidate saved a misleading color-only complete capture");
+    Session missing_color{101,"test","test"};
+    require(!missing_color.prepare(device.Get(),nullptr,color.Get(),candidates,true),
+        "missing LEFT color accepted as a complete capture");
+    Session legacy_colors{102,"test","test"};
+    require(legacy_colors.prepare(device.Get(),color.Get(),color.Get(),{}),
+        "legacy color-only diagnostic contract unexpectedly changed");
+    Session complete{103,"test","test"};
+    require(complete.prepare(device.Get(),color.Get(),color.Get(),candidates,true),
+        "valid complete diagnostic preparation rejected");
+    check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));cap.on_command_list_reset(cmd.Get());
+    D3D12_DESCRIPTOR_HEAP_DESC rh{};rh.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;rh.NumDescriptors=1;
+    ComPtr<ID3D12DescriptorHeap> rtv;check(device->CreateDescriptorHeap(&rh,IID_PPV_ARGS(&rtv)));
+    const auto color_handle=rtv->GetCPUDescriptorHandleForHeapStart();device->CreateRenderTargetView(color.Get(),nullptr,color_handle);
+    const float rgba[]{.1f,.3f,.7f,1.f};cmd->ClearRenderTargetView(color_handle,rgba,0,nullptr);
+    require(!complete.record(cmd.Get()),"complete capture recorded without final XR image");
+    require(!complete.attach_headset_output(device.Get(),nullptr),"null final XR image accepted");
+    require(!complete.record(cmd.Get()),"failed final XR allocation falsely marked attached");
+    require(complete.attach_headset_output(device.Get(),color.Get()),"valid final XR image failed after allocation retry");
+    require(complete.record(cmd.Get()),"valid complete session did not record real copy commands");
+    check(cmd->Close());queue->ExecuteCommandLists(1,lists);wait();
     cap.finish_frame();wait();observer=nullptr;hook.clear();
     if(info)for(UINT64 i=0;i<info->GetNumStoredMessages();++i) {
         SIZE_T n{};check(info->GetMessage(i,nullptr,&n));std::vector<uint8_t> bytes(n);
         auto* message=reinterpret_cast<D3D12_MESSAGE*>(bytes.data());check(info->GetMessage(i,message,&n));
         if(message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)throw std::runtime_error(message->pDescription);
     }
-    std::cout<<"PASS: production R5 DuoView interval preserves 3 actual GPU copies, DLSS periphery at 10% HMD, nonzero rects, 20 read-only transitions do not starve sources, reused DSV write versions stay distinct, raw readbacks match, tail invalidation rejects stale depth\n";
+    std::cout<<"PASS: production R5 DuoView interval preserves 3 actual GPU copies, DLSS periphery at 10% HMD, nonzero rects, 20 read-only transitions do not starve sources, reused DSV write versions stay distinct, raw readbacks match, tail invalidation rejects stale depth; real Session rejects incomplete color/depth/final-XR readbacks and retries final attachment before real GPU copies\n";
     return 0;
 } catch(const std::exception& e){observer=nullptr;std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}

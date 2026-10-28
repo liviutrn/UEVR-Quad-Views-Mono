@@ -30,7 +30,7 @@ checks={
 "Experimental opt-in starts with V3 mode 0 until capture observer active":'m_duo_stereo_mode{0}' in h,
 "DuoView retires one depth interval at the existing Present tail":'duoview_interval_owner->finish_frame' in c and 'Existing tail guard owns the one DuoView epoch advance' in c,
 "Raw screenshot includes stereo XR output":'"xr_submitted_doublewide"' in copy,
-"Final XR image attached inside rendering callback":'capture->attach_headset_output(device,destination);' in c,
+"Final XR image attached inside rendering callback":'if(capture->attach_headset_output(device,destination) &&' in c,
 "Final XR readback reservation":'reserve_headset_output_' in copy and '128ull*1024*1024' in copy,
 "Undeclared XR destination cannot enter pre-copy frame prep":'m_scene_capture_tex.texture.Get(),candidates,\n                                    true))' in c and 'm_scene_capture_tex.texture.Get(),candidates,\n                                    destination))' not in c,
 "Every screenshot retains stereo choices":'stereoMode=' in c and 'manualLeft=' in c,
@@ -51,6 +51,8 @@ checks={
 "Mono fallback cannot inflate stereo submitted counters":'if(submitted && stereo_recorded && callback_attempted)' in c,
 "Depth-less capture request stays pending and armed":'if(candidates.empty() || !capture->prepare' in c and 'snapshot_armed=keep_snapshot_armed' in depth,
 "Camera metadata preserves precision and explicit matrix uncertainty":'std::setprecision(17)' in c and 'frozenSourceProjection_NOT_depthPassVerified_L=[' in c,
+"Incomplete snapshot allocation never reports complete XR readback":'(!require_complete_snapshot_ || depth_ready)' in copy and '(require_complete_snapshot_ && !final_output_attached_)' in copy,
+"Prior copy status cleared before current color-pair check":c.index('m_duo_stereo_output.store(3u')<c.index('const bool packet_pair_valid'),
 }
 for name,valid in checks.items():print(("PASS: " if valid else "FAIL: ")+name)
 if not all(checks.values()):raise SystemExit("Physical stereo XR integration contract FAILED")

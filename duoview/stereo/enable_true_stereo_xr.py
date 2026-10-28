@@ -151,6 +151,12 @@ edit(dc,'''                            bool capture_recorded=false;''',
 '''                            bool capture_recorded=false;
                             bool stereo_recorded=false;
                             auto capture_submission=d3d12::dibr_transaction::ExecuteResult::NoWork;''',"capture queue outcome starts unsubmitted")
+edit(dc,'''                    if (vr->is_duoview_renderer_active()) {
+                        const auto packet = native_stereo_packet;''',
+'''                    if (vr->is_duoview_renderer_active()) {
+                        // A prior successful copy must not describe a missing current pair.
+                        m_duo_stereo_output.store(3u,std::memory_order_release);
+                        const auto packet = native_stereo_packet;''',"clear actual output before validating current color packet")
 edit(dc,'''                                std::nullopt, m_game_tex.texture.Get());
                             // One outcome per copy attempt.''',
 '''                                std::nullopt, m_game_tex.texture.Get(),{},
@@ -216,6 +222,7 @@ dump="src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp"
 edit(dump,'''    UINT64 total_bytes_{};''',
 '''    UINT64 total_bytes_{};
     bool reserve_headset_output_{};
+    bool require_complete_snapshot_{};
     bool final_output_attached_{};''',"one-shot final XR reservation")
 edit(dump,'''           total_bytes_+bytes>MaxBytes) {''',
 '''           total_bytes_+bytes>MaxBytes-(reserve_headset_output_ ? 128ull*1024*1024 : 0ull)) {''',
@@ -225,7 +232,17 @@ edit(dump,'''           const std::vector<Candidate>& depths) {
 '''           const std::vector<Candidate>& depths,
            bool reserveHeadsetOutput=false) {
         reserve_headset_output_=reserveHeadsetOutput;
+        require_complete_snapshot_=reserveHeadsetOutput;
         add_image(dev,left,''',"reserve output before raw depth captures")
+edit(dump,'''        return images_.size()>=2; // do not alter the original XR output if some depth allocations fail''',
+'''        const bool left_ready=std::any_of(images_.begin(),images_.end(),
+            [](const Image& i){return i.label=="left_fovea";});
+        const bool right_ready=std::any_of(images_.begin(),images_.end(),
+            [](const Image& i){return i.label=="right_periphery";});
+        const bool depth_ready=std::any_of(images_.begin(),images_.end(),
+            [](const Image& i){return i.depth;});
+        return left_ready && right_ready && (!require_complete_snapshot_ || depth_ready);''',
+"complete diagnostic needs actual allocated colors and depth, not candidate count")
 edit(dump,'''    bool record(ID3D12GraphicsCommandList* cmd) {''',
 '''    void note_submission(bool xrCopyReleased,unsigned outcome,bool stereoRecorded) {
         metadata_+=" readbackCommandsEnqueued=true xrCopyReleased=";
@@ -237,27 +254,40 @@ edit(dump,'''    bool record(ID3D12GraphicsCommandList* cmd) {''',
     bool attach_headset_output(ID3D12Device* dev,ID3D12Resource* destination) {
         if(final_output_attached_)return true;
         reserve_headset_output_=false;
-        final_output_attached_=true;
         // GPU copy occurs only after actual stereo pixel shader has drawn.
         // The R5 sources and final headset target share the same OpenXR
         // command-list and fence, so the manifest describes ONE frame.
-        return add_image(dev,destination,D3D12_RESOURCE_STATE_RENDER_TARGET,
+        if(!add_image(dev,destination,D3D12_RESOURCE_STATE_RENDER_TARGET,
                          "xr_submitted_doublewide",false,
-                         "FINAL headset image. LEFT x=0..W-1, RIGHT x=W..2W-1; same copy command as source color and depth.");
+                         "FINAL headset image. LEFT x=0..W-1, RIGHT x=W..2W-1; same copy command as source color and depth."))return false;
+        final_output_attached_=true;
+        return true;
     }
     bool record(ID3D12GraphicsCommandList* cmd) {''',
 "one-shot XR destination allocation inside callback")
+edit(dump,'''        if(!cmd||recorded_||images_.empty())return false;''',
+'''        if(!cmd||recorded_||images_.empty() ||
+           (require_complete_snapshot_ && !final_output_attached_))return false;''',
+"never record a complete XR snapshot whose final image allocation failed")
 edit(dc,'''                                    m_scene_capture_tex.texture.Get(),candidates)) capture.reset();''',
 '''                                    m_scene_capture_tex.texture.Get(),candidates,
                                     true)) capture.reset();''',"reserve final XR capture without undeclared destination")
 edit(dc,'''                                if(!capture->prepare(device,m_game_tex.texture.Get(),''',
 '''                                if(candidates.empty() || !capture->prepare(device,m_game_tex.texture.Get(),''',"no misleading color-only snapshot when depth is still missing")
+edit(dc,'''                                    true)) capture.reset();''',
+'''                                    true)) {
+                                    SPDLOG_WARNING_EVERY_N_SEC(2,"[DuoView][Capture] Request #{} remains pending: eligibleDepths={}; required color/depth readback preparation incomplete (format/allocation/session budget)",capture_id,candidates.size());
+                                    capture.reset();
+                                }''',"pending capture has an explicit diagnostic reason")
 edit(dc,'''                                    if (recorded && capture) {
                                         // Sources have been restored to their native RT states''',
 '''                                    if (recorded && capture) {
                                         // XR destination exists only in the copy callback.
                                         // Capture the FINAL separately composed two-eye image.
-                                        capture->attach_headset_output(device,destination);
                                         // Sources have been restored to their native RT states''',
 "bind real final XR destination after successful stereo recording")
+edit(dc,'''                                        if(capture->record(commands.cmd_list.Get())) {''',
+'''                                        if(capture->attach_headset_output(device,destination) &&
+                                           capture->record(commands.cmd_list.Get())) {''',
+"final readback allocation must succeed before recording the session")
 print("TRUE XR STEREO: actual two-eye rendering, same-command final headset screenshot, reserved readback budget.")
