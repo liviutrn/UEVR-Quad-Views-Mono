@@ -143,6 +143,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI31 producer shape diagnostic patch failed' }
           python workspace/duoview/stereo/provenance_v1/test_provenance_audit.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI31 diagnostic integration test failed' }
+          python workspace/duoview/stereo/provenance_v1/test_fovea_isolation.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI31 mode-3 fovea-only shader regression failed' }
           if ($LASTEXITCODE -ne 0) { throw 'TRUE STEREO resource + eye-output contract rejected' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Backend whitespace/patch conflict' }
@@ -260,8 +262,10 @@ jobs:
           DuoView TRUE STEREO XR V1 — EXPERIMENTAL HEADSET BUILD (REVIEW FIXES)
           Build branch: experiment/ci31-provenance-audit-20261028.
           Stable Build165/V3 and published stable releases are NOT modified.
-          CI31 adds normal viewport/copy audit and a fail-closed producer contract;
-          actual producer roles/frames are STILL UNVERIFIED and hybrid is NOT LIVE.
+          CI31 adds normal viewport/copy audit, mode 3 RIGHT-fovea-only A/B,
+          and a fail-closed producer contract. Actual producer roles/frames
+          remain UNVERIFIED; the contract has no UE producer authentication
+          hook yet and full-matrix hybrid remains NOT LIVE.
           This ZIP contains the experimental first real two-eye output, not the old mono-only depth bridge.
 
           REQUIRED PSVR2 / STALKER 2 SETUP
@@ -269,8 +273,10 @@ jobs:
           2. Select DuoView ID6 with V3 LEFT-fovea / RIGHT-periphery Split-Eye ON.
           3. Enable R5 DSV/RDG capture; leave and RE-ENTER ID6 to attach the live capture observer.
           4. Set View depth = 0 for clean tests. Stereo has priority over preview.
-          5. TRUE STEREO 0 = previous V3 mono A/B; 1 = reconstructed stereo;
-             2 = stereo + BLUE tint over the ENTIRE RIGHT OpenXR eye (including corners).
+          5. TRUE STEREO 0 = previous V3 mono A/B; 1 = legacy reconstructed stereo;
+             2 = legacy stereo + BLUE tint over ENTIRE RIGHT XR eye;
+             3 = diagnostic RIGHT fovea synthesis only: identical real RIGHT
+             periphery in BOTH XR eyes. Mode 3 is NOT full-matrix hybrid.
           6. Start in mode 0 and use CAPTURE NOW. The request stays pending until
              eligible submitted depths exist. Then verify mode 2 in the headset.
              BLUE tint must cover only the RIGHT eye, including its corners.
