@@ -30,7 +30,7 @@ checks={
 "Every screenshot retains stereo choices":'stereoMode=' in c and 'manualLeft=' in c,
 "R5 depth copy state supports pixel reads":'D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE' in depth,
 "Stereo active when preview disabled":'if(m_stock_dibr_scope && (preview_mode || stereo_mode))' in c,
-"Stereo root constants within DX12 root-size limit":'static_assert(sizeof(ShaderConstants) == 168)' in comp
+"Stereo root constants within DX12 root-size limit":'static_assert(sizeof(ShaderConstants) == 176)' in comp
 }
 for name,valid in checks.items():print(("PASS: " if valid else "FAIL: ")+name)
 if not all(checks.values()):raise SystemExit("Physical stereo XR integration contract FAILED")
