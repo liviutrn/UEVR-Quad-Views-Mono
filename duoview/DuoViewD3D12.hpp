@@ -110,7 +110,8 @@ public:
                 D3D12_RESOURCE_STATES secondary_state, const ViewFrame& frame,
                 std::shared_ptr<const void> packet_lifetime, UINT64 frequency = 0,
                 ID3D12Resource* leftDepth = nullptr, ID3D12Resource* rightDepth = nullptr,
-                uint32_t previewMode = 0) {
+                uint32_t previewMode = 0, uint32_t stereoMode = 0,
+                float stereoSign = 1.0f) {
         recorded_commands_=false;
         error_.clear();
         last_native_direct_xr_=false;
@@ -143,8 +144,12 @@ public:
         // Direct double-wide raster would run sharpening twice on the same
         // monoscopic foveal content. Use the existing single-Mono compose+copy
         // when fused sharpening is enabled; leave v182 behavior otherwise.
-        const bool direct_xr=frame.config.settings.direct_xr_output &&
-            frame.config.settings.sharpen_strength <= 0.0f &&
+        const bool requested_stereo = stereoMode != 0 && frame.split_eye &&
+            frame.config.settings.fovea_view == 0;
+        const bool direct_xr=(frame.config.settings.direct_xr_output || requested_stereo ||
+                            previewMode!=0) &&
+            (frame.config.settings.sharpen_strength <= 0.0f || requested_stereo ||
+             previewMode!=0) &&
             xrd.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
             xrd.Width==static_cast<uint64_t>(width_)*2 && xrd.Height==height_ &&
             xrd.DepthOrArraySize==1 && xrd.MipLevels==1 &&
@@ -199,10 +204,19 @@ public:
         const auto fovea_state=frame.config.settings.fovea_view==0 ? primary_state : secondary_state;
         const auto peripheral_state=frame.config.settings.fovea_view==0 ? secondary_state : primary_state;
 
-        const bool depthPreview = previewMode>=1u && previewMode<=3u &&
-          leftDepth && rightDepth && depth_pipeline_ &&
-          valid_depth_srv(leftDepth->GetDesc().Format)!=DXGI_FORMAT_UNKNOWN &&
-          valid_depth_srv(rightDepth->GetDesc().Format)!=DXGI_FORMAT_UNKNOWN;
+        const bool depth_compatible=leftDepth && rightDepth &&
+            valid_depth_srv(leftDepth->GetDesc().Format)!=DXGI_FORMAT_UNKNOWN &&
+            valid_depth_srv(rightDepth->GetDesc().Format)!=DXGI_FORMAT_UNKNOWN;
+        const bool depthPreview=previewMode>=1u && previewMode<=3u &&
+            depth_compatible && depth_pipeline_;
+        const bool stereoReady=requested_stereo && depth_compatible &&
+            stereo_pipeline_ && direct_xr;
+        if(requested_stereo && !stereoReady)
+            return reject("Stereo source pair missing/invalid: choose another foveal or peripheral DSV");
+        if(requested_stereo && !std::isfinite(stereoSign))
+            return reject("Nonfinite stereo reversal setting");
+        if(depthPreview && !direct_xr)
+            return reject("Doublewide XR output required for split-depth proof");
         ShaderConstants constants{
             {layout.atlas_width/2,layout.atlas_height},
             {layout.atlas_width,layout.atlas_height},
@@ -218,8 +232,42 @@ public:
             frame.config.settings.sharpen_strength, 0.10f, 0.02f,
             3u | (srgb_ ? 0u : 4u) // larger radius, edge protection, SDR conversion
         };
+        if(stereoReady) {
+            // V3's frozen LEFT and RIGHT native OpenXR matrices are col-major.
+            const auto& l=frame.projection;
+            const auto& r=frame.projection_right;
+            const float cL=l[11], cR=r[11];
+            if(std::abs(cL)<1.e-7f || std::abs(cR)<1.e-7f ||
+               std::abs(l[0])<1.e-7f || std::abs(r[0])<1.e-7f)
+                return reject("Stereo optical matrix coefficients degenerate");
+            const float aR=r[0]/cR, bR=r[8]/cR;
+            const float aL=l[0]/cL, bL=l[8]/cL;
+            const auto& lp=frame.eye_cameras[0].position;
+            const auto& rp=frame.eye_cameras[1].position;
+            double sum=0.0;
+            for(int k=0;k<3;++k) {
+                if(!std::isfinite(lp[k]) || !std::isfinite(rp[k]))
+                    return reject("Native left/right camera poses not finite");
+                const double d=rp[k]-lp[k];sum+=d*d;
+            }
+            const float baseline=static_cast<float>(std::sqrt(sum))*stereoSign;
+            if(!std::isfinite(baseline) || std::abs(baseline)<0.001f ||
+               std::abs(baseline)>1000.f) return reject("Native stereo baseline rejected");
+            constants.stereo_depth_z[0]=r[10];
+            constants.stereo_depth_z[1]=r[14];
+            constants.stereo_depth_z[2]=r[11];
+            constants.stereo_depth_z[3]=r[15];
+            constants.stereo_eye_x[0]=aL/aR;
+            constants.stereo_eye_x[1]=bL-(aL/aR)*bR;
+            constants.stereo_eye_x[2]=aL*baseline;
+            constants.stereo_eye_x[3]=1.f;
+            constants.stereo_check[0]=1.f;       // absolute world units
+            constants.stereo_check[1]=0.015f;    // relative world error
+            constants.stereo_check[2]=.20f;      // maximum peripheral UV shift
+            constants.stereo_check[3]=stereoMode==2?1.f:0.f; // separate-eye tint test
+        }
         ensure_srvs(device,fovea,periphery,sampling_format);
-        if(depthPreview) ensure_depth_srvs(device,leftDepth,rightDepth);
+        if(depthPreview || stereoReady) ensure_depth_srvs(device,leftDepth,rightDepth);
         // GPU lifetime remains bound to the exact retired OpenXR command slot,
         // never to whichever engine packet happens to arrive next.
         primary_reference_=primary; secondary_reference_=secondary;
@@ -233,7 +281,7 @@ public:
         ID3D12DescriptorHeap* heaps[]{srv_.Get()};
         cmd->SetDescriptorHeaps(1,heaps);
         cmd->SetGraphicsRootSignature(root_.Get());
-        cmd->SetPipelineState(depthPreview ? depth_pipeline_.Get() : native_pipeline_.Get());
+        cmd->SetPipelineState(depthPreview ? depth_pipeline_.Get() : stereoReady ? stereo_pipeline_.Get() : native_pipeline_.Get());
         cmd->SetGraphicsRootDescriptorTable(0,srv_gpu_start_);
         cmd->SetGraphicsRoot32BitConstants(1,sizeof(constants)/4,&constants,0);
         auto handle=rtv_cpu_start_;
@@ -275,6 +323,7 @@ public:
             copy_composite_to_stereo(cmd,device,output_.Get(),destination,
                 D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET);
         last_native_direct_xr_=direct_xr;
+        last_true_stereo_=stereoReady && direct_xr;
         if (timed) {
             cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,1);
             cmd->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,2,timestamps_.Get(),0);
@@ -411,6 +460,7 @@ private:
         device->CreateShaderResourceView(right,&view,cpu);
         depth_first_=left;depth_second_=right;
     }
+    bool last_true_stereo() const { return last_true_stereo_; }
     void update_timing(bool timed, bool direct_xr) {
         if (!timed || (timing_pending_ && pending_direct_xr_!=direct_xr)) {
             timing_pending_=false;
@@ -581,7 +631,7 @@ private:
     ComPtr<ID3D12Resource> timestamps_;
     UINT64 frequency_{};
     float gpu_ms_{-1.f};
-    bool timing_pending_{}, pending_direct_xr_{}, recorded_commands_{}, last_native_direct_xr_{};
+    bool timing_pending_{}, pending_direct_xr_{}, recorded_commands_{}, last_native_direct_xr_{}, last_true_stereo_{};
     uint64_t last_native_source_extents_{};
     uint64_t srv_descriptor_refresh_count_{}, xr_rtv_refresh_count_{};
     DXGI_FORMAT srv_cached_format_{DXGI_FORMAT_UNKNOWN}, xr_rtv_format_{DXGI_FORMAT_UNKNOWN};
