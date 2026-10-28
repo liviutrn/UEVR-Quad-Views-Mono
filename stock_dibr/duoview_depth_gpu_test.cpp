@@ -239,6 +239,14 @@ int main() try {
                 "CI30 auto never accepted stable fresh WARP source-pass pair");
             stable.finish_frame();wait();
         }
+        // Verify CI31 normal (not manual snapshot) observer statistics on
+        // three actual D3D12-submitted WARP intervals.
+        const auto audit=stable.summary();
+        require(audit.find("CI31normalViewportMatches=")!=std::string::npos &&
+                audit.find("CI31normalCopies=")!=std::string::npos,
+            "CI31 normal producer-viewport telemetry missing in WARP path");
+        require(audit.find("CI31normalCopies=0,0")==std::string::npos,
+            "CI31 viewport-shape copy counters did not advance on submitted WARP depths");
         std::cout<<"PASS: CI30 fresh 3-frame WARP Auto warm-up, same DSV separate write versions\n";
     }
     observer=nullptr;hook.clear();
