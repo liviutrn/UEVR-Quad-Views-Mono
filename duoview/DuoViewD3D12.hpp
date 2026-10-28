@@ -222,7 +222,9 @@ public:
         const bool depth_compatible=leftDepth && rightDepth &&
             valid_depth_srv(leftDepth->GetDesc().Format)!=DXGI_FORMAT_UNKNOWN &&
             valid_depth_srv(rightDepth->GetDesc().Format)!=DXGI_FORMAT_UNKNOWN;
-        const bool depthPreview=previewMode>=1u && previewMode<=3u &&
+        // An active stereo request must never be silently replaced by the
+        // depth-preview PSO while reporting last_true_stereo=true.
+        const bool depthPreview=!requested_stereo && previewMode>=1u && previewMode<=3u &&
             depth_compatible && depth_pipeline_;
         const bool stereoReady=requested_stereo && depth_compatible && stereo_pipeline_;
         const bool indirect_eye_output=(stereoReady || depthPreview) && !direct_xr;
