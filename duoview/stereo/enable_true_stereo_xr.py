@@ -29,12 +29,23 @@ edit(header,'    std::atomic<uint32_t> m_duo_preview_mode{0};',
     std::atomic<uint64_t> m_duo_stereo_frames{0};
     std::atomic<uint64_t> m_duo_stereo_recorded_frames{0};
     std::atomic<uint64_t> m_duo_stereo_reject_frames{0};''',"stereo controls")
+edit(header,'    std::atomic<uint64_t> m_duo_stereo_reject_frames{0};',
+'''    std::atomic<uint64_t> m_duo_stereo_reject_frames{0};
+    std::atomic<uint32_t> m_duo_stereo_output{0};''',"requested versus submitted output state")
 edit(header,'    int duoview_left_choice() const {return m_duo_left_choice.load();}',
 '''    uint32_t duoview_stereo_mode() const {return m_duo_stereo_mode.load();}
     bool duoview_stereo_reverse() const {return m_duo_stereo_reverse.load();}
     uint64_t duoview_stereo_frames() const {return m_duo_stereo_frames.load();}
     uint64_t duoview_stereo_recorded_frames() const {return m_duo_stereo_recorded_frames.load();}
     uint64_t duoview_stereo_rejected_frames() const {return m_duo_stereo_reject_frames.load();}
+    const char* duoview_stereo_output_status() const {
+        switch(m_duo_stereo_output.load()) {
+        case 1:return "EXPERIMENTAL STEREO copy submitted (source identity UNVERIFIED)";
+        case 2:return "WAITING / REJECTED stereo: V3 mono copied; depth/config details in log";
+        case 3:return "XR copy not submitted; prior displayed output is not measured";
+        default:return "V3 mode 0 mono copy";
+        }
+    }
     void duoview_stereo_config(uint32_t mode,bool reverse) {
         m_duo_stereo_mode.store((std::min)(mode,2u),std::memory_order_release);
         m_duo_stereo_reverse.store(reverse,std::memory_order_release);
@@ -53,6 +64,7 @@ edit(vr,'                    const int n=m_d3d12.duoview_depth_candidate_count()
                         static_cast<unsigned long long>(m_d3d12.duoview_stereo_rejected_frames()));
                     ImGui::Text("Stereo commands recorded: %llu (not headset delivery)",
                         static_cast<unsigned long long>(m_d3d12.duoview_stereo_recorded_frames()));
+                    ImGui::TextWrapped("Last copy: %s",m_d3d12.duoview_stereo_output_status());
                     ImGui::TextWrapped("EXPERIMENTAL: depth eye/frame/stage identity UNVERIFIED. Stereo uses per-eye raster or a doublewide intermediate. Mode 2 tints the ENTIRE RIGHT eye. Submitted means queue copy + XR image release; headset presentation is not measured.");
                     const int n=m_d3d12.duoview_depth_candidate_count();''',"mode UI")
 dc="src/mods/vr/D3D12Component.cpp"
@@ -87,9 +99,13 @@ edit(dc,'''                            const uint32_t preview_mode=m_duo_preview
                                     last_missing_warn=now;
                                     SPDLOG_WARN("[DuoView][StereoXR] No submitted depth pair yet. Select another LEFT or RIGHT candidate, or re-enter ID6.");
                                 }
-                            }''',"remove invalid spdlog macro and acquire real stereo depth")
+                            }
+                            const uint32_t effective_stereo_mode=depths.left && depths.right &&
+                                packet_frame->split_eye && packet_frame->config.settings.fovea_view==0
+                                    ? stereo_mode : 0u;''',"remove invalid spdlog macro and acquire real stereo depth")
 edit(dc,'''                                info << " previewMode=" << preview_mode''',
 '''                                info << " stereoMode=" << stereo_mode
+                                     << " effectiveStereoMode=" << effective_stereo_mode
                                      << " stereoReversed=" << (stereo_sign<0)
                                      << " stereoCopiesSubmitted=" << m_duo_stereo_frames.load()
                                      << " stereoCommandsRecorded=" << m_duo_stereo_recorded_frames.load()
@@ -98,15 +114,23 @@ edit(dc,'''                                info << " previewMode=" << preview_mo
                                 info << " previewMode=" << preview_mode''',"record replay metadata")
 edit(dc,'''                                 left_depth=depths.left,right_depth=depths.right,preview_mode](''',
 '''                                 left_depth=depths.left,right_depth=depths.right,preview_mode,
-                                 stereo_mode,stereo_sign,
+                                 stereo_mode,effective_stereo_mode,stereo_sign,&stereo_recorded,
                                  left_viewport=depths.left_viewport,right_viewport=depths.right_viewport](''',"XR callback locks stereo policy")
 edit(dc,'''                                        left_depth.Get(),right_depth.Get(),preview_mode);''',
-'''                                        left_depth.Get(),right_depth.Get(),preview_mode,
-                                        stereo_mode,stereo_sign,
+'''                                        left_depth.Get(),right_depth.Get(),stereo_mode ? 0u : preview_mode,
+                                        effective_stereo_mode,stereo_sign,
                                         {left_viewport.TopLeftX,left_viewport.TopLeftY,left_viewport.Width,left_viewport.Height,left_viewport.MinDepth,left_viewport.MaxDepth},
                                         {right_viewport.TopLeftX,right_viewport.TopLeftY,right_viewport.Width,right_viewport.Height,right_viewport.MinDepth,right_viewport.MaxDepth});
+                                    stereo_recorded=recorded && compositor.last_true_stereo();
+                                    if(!recorded && stereo_mode && !compositor.recorded_commands()) {
+                                        SPDLOG_WARNING_EVERY_N_SEC(2,"[DuoView][StereoXR] Stereo rejected; rendering V3 mono without disabling two-view capture: {}",compositor.error());
+                                        recorded=compositor.record_native(device,commands.cmd_list.Get(),
+                                            source.Get(),secondary.Get(),destination,
+                                            D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                            *packet_frame,std::static_pointer_cast<const void>(packet),0);
+                                    }
                                     if(stereo_mode) {
-                                        if(recorded && compositor.last_true_stereo())
+                                        if(stereo_recorded)
                                             m_duo_stereo_recorded_frames.fetch_add(1,std::memory_order_relaxed);
                                     }''',"stereo GPU recording counter, not delivery")
 edit(dc,'''                            if (submitted && recorded && callback_attempted) {
@@ -115,14 +139,17 @@ edit(dc,'''                            if (submitted && recorded && callback_att
                             // only after checked queue enqueue and successful image release.
                             // This is NOT proof of xrEndFrame or physical display.
                             if(stereo_mode) {
-                                if(submitted && recorded && callback_attempted)
+                                if(submitted && stereo_recorded && callback_attempted)
                                     m_duo_stereo_frames.fetch_add(1,std::memory_order_relaxed);
                                 else m_duo_stereo_reject_frames.fetch_add(1,std::memory_order_relaxed);
                             }
+                            m_duo_stereo_output.store(!submitted || !recorded ? 3u :
+                                stereo_recorded ? 1u : stereo_mode ? 2u : 0u,std::memory_order_release);
                             if (submitted && recorded && callback_attempted) {
                                 native_stereo_hook->duoview_delivery.result''',"post-copy submitted accounting")
 edit(dc,'''                            bool capture_recorded=false;''',
 '''                            bool capture_recorded=false;
+                            bool stereo_recorded=false;
                             auto capture_submission=d3d12::dibr_transaction::ExecuteResult::NoWork;''',"capture queue outcome starts unsubmitted")
 edit(dc,'''                                std::nullopt, m_game_tex.texture.Get());
                             // One outcome per copy attempt.''',
@@ -135,11 +162,51 @@ edit(dc,'''                                std::nullopt, m_game_tex.texture.Get(
 edit(dc,'''                            if (capture && capture_recorded) {''',
 '''                            if (capture && capture_recorded &&
                                 d3d12::dibr_transaction::commands_were_submitted(capture_submission)) {
-                                capture->note_submission(submitted,static_cast<unsigned>(capture_submission));''',"never save unexecuted readback commands")
+                                capture->note_submission(submitted,static_cast<unsigned>(capture_submission),stereo_recorded);''',"never save unexecuted readback commands")
 edit(dc,'''                                if ((submitted && recorded && callback_attempted) || capture_id || preview_mode)
                                     m_stock_dibr_depth->finish_frame();''',
 '''                                if ((submitted && recorded && callback_attempted) || capture_id || preview_mode || stereo_mode)
                                     m_stock_dibr_depth->finish_frame();''',"depth GPU consumer retirement")
+# The stock cleanup used to erase ALL candidates before DuoView selected
+# them. Extend the EXISTING tail guard (no extra per-frame guard allocation).
+edit(dc,'    if (m_stock_dibr_scope) m_stock_dibr_depth->finish_frame();',
+'''    const bool duoview_depth_interval=vr->is_duoview_renderer_active();
+    if(m_stock_dibr_scope && !duoview_depth_interval) {
+        m_stock_dibr_depth->finish_frame();
+    }
+    const auto duoview_interval_owner=duoview_depth_interval && m_stock_dibr_scope
+        ? m_stock_dibr_depth : nullptr;''',"skip stock early retirement for DuoView only")
+edit(dc,'    const auto dibr_preview_succeeded = vr->is_dibr_preview_active() &&',
+'''    if(m_stock_dibr_scope && !vr->is_duoview_renderer_active())
+        m_stock_dibr_depth->configure_duoview_sources(0,0,0,0);
+    const auto dibr_preview_succeeded = vr->is_dibr_preview_active() &&''',"stock DIBR restores its original discovery policy before acquiring")
+edit(dc,'''    utility::ScopeGuard dibr_consumer_retirement{[&]() {
+        if (!dibr_preview_succeeded''',
+'''    utility::ScopeGuard dibr_consumer_retirement{[&]() {
+        if(duoview_interval_owner)
+            duoview_interval_owner->finish_frame(m_duo_snapshot_pending.load(std::memory_order_acquire)!=0);
+        if (!dibr_preview_succeeded''',"single tail retirement follows all DuoView consumers")
+edit(dc,'''                                if ((submitted && recorded && callback_attempted) || capture_id || preview_mode || stereo_mode)
+                                    m_stock_dibr_depth->finish_frame();''',
+'''                                // Existing tail guard owns the one DuoView epoch advance.''',"remove duplicate DuoView retirement")
+depth_header="src/mods/vr/d3d12/StockDibrDepth.hpp"
+edit(depth_header,'    void finish_frame() {','    void finish_frame(bool keep_snapshot_armed=false) {',"preserve requested snapshot through depth warmup")
+edit(depth_header,'        snapshot_armed=false;','        snapshot_armed=keep_snapshot_armed;',"capture remains armed until valid snapshot enqueues")
+edit(dc,'#include "D3D12Component.hpp"','#include "D3D12Component.hpp"\n#include <iomanip>',"precise camera capture metadata")
+edit(dc,'                                info << "packet=" << packet->serial',
+'''                                info << std::setprecision(17);
+                                info << "packet=" << packet->serial''',"preserve double precision in camera metadata")
+edit(dc,'''                                info << " crop=(" << packet_frame->config.layout.u0''',
+'''                                info << " LEFTrotation=("<<left.rotation[0]<<","<<left.rotation[1]<<","<<left.rotation[2]
+                                     <<") RIGHTrotation=("<<right.rotation[0]<<","<<right.rotation[1]<<","<<right.rotation[2]<<")";
+                                info << " frozenSourceProjection_NOT_depthPassVerified_L=[";
+                                for(size_t k=0;k<16;++k)info<<(k?",":"")<<packet_frame->projection[k];
+                                info << "] frozenSourceProjection_NOT_depthPassVerified_R=[";
+                                for(size_t k=0;k<16;++k)info<<(k?",":"")<<packet_frame->projection_right[k];
+                                const auto& active=packet_frame->config.layout;
+                                info << "] colorActiveRects=L:(0,0,"<<active.fovea.width<<","<<active.fovea.height
+                                     <<") R:(0,0,"<<active.periphery.width<<","<<active.periphery.height<<")";
+                                info << " crop=(" << packet_frame->config.layout.u0''',"record frozen geometry without inventing depth-pass calibration")
 # The OpenXR destination pointer exists ONLY inside the frame-copy callback.
 # Reserve 128 MiB of one-shot readback budget for the FINAL stereo output,
 # then attach the actual destination after compositor.record_native completed.
@@ -160,10 +227,11 @@ edit(dump,'''           const std::vector<Candidate>& depths) {
         reserve_headset_output_=reserveHeadsetOutput;
         add_image(dev,left,''',"reserve output before raw depth captures")
 edit(dump,'''    bool record(ID3D12GraphicsCommandList* cmd) {''',
-'''    void note_submission(bool xrCopyReleased,unsigned outcome) {
+'''    void note_submission(bool xrCopyReleased,unsigned outcome,bool stereoRecorded) {
         metadata_+=" readbackCommandsEnqueued=true xrCopyReleased=";
         metadata_+=xrCopyReleased ? "true" : "false";
         metadata_+=" executeOutcome="+std::to_string(outcome);
+        metadata_+=" actualStereoRecorded=";metadata_+=stereoRecorded ? "true" : "false";
         metadata_+=" headsetPresentationVerified=false";
     }
     bool attach_headset_output(ID3D12Device* dev,ID3D12Resource* destination) {
@@ -182,6 +250,8 @@ edit(dump,'''    bool record(ID3D12GraphicsCommandList* cmd) {''',
 edit(dc,'''                                    m_scene_capture_tex.texture.Get(),candidates)) capture.reset();''',
 '''                                    m_scene_capture_tex.texture.Get(),candidates,
                                     true)) capture.reset();''',"reserve final XR capture without undeclared destination")
+edit(dc,'''                                if(!capture->prepare(device,m_game_tex.texture.Get(),''',
+'''                                if(candidates.empty() || !capture->prepare(device,m_game_tex.texture.Get(),''',"no misleading color-only snapshot when depth is still missing")
 edit(dc,'''                                    if (recorded && capture) {
                                         // Sources have been restored to their native RT states''',
 '''                                    if (recorded && capture) {

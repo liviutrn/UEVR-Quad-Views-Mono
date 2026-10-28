@@ -65,36 +65,19 @@ probe=r'''    struct PreviewPair {
         const auto ids=preview_indices();
         r.count=ids.size();
         if(ids.size()<2)return r;
-        const size_t invalid=slots.size();
-        const auto choose=[&](int manual,size_t other,UINT expected_w,UINT expected_h)->size_t {
-            // Stale manual ordinals must NOT silently change into Auto.
-            if(manual>0) {
-                if(static_cast<size_t>(manual)>ids.size())return invalid;
-                const size_t selected=ids[manual-1];
-                return selected==other ? invalid : selected;
-            }
-            size_t best=invalid;
-            double best_score=1.0e30;
-            for(const auto i:ids) {
-                if(i==other)continue;
-                const auto& v=slots[i].viewport;
-                if(v.Width<=0 || v.Height<=0 || !expected_w || !expected_h)continue;
-                // Closeness to frozen left crop / right full-field viewport;
-                // unverified heuristic, not a semantic eye proof.
-                const double dx=(double(v.Width)-double(expected_w))/double(expected_w);
-                const double dy=(double(v.Height)-double(expected_h))/double(expected_h);
-                const double score=dx*dx+dy*dy;
-                if(score<best_score ||
-                   (score==best_score && (best==invalid || slots[i].serial>slots[best].serial))) {
-                    best=i;best_score=score;
-                }
-            }
-            return best;
-        };
-        const size_t a=choose(left_selector,invalid,left_width,left_height);
-        if(a==invalid)return r;
-        const size_t b=choose(right_selector,a,right_width,right_height);
-        if(b==invalid)return r;
+        std::array<DepthShape,Capacity> shapes{};
+        for(size_t k=0;k<ids.size();++k) {
+            const auto& s=slots[ids[k]];
+            shapes[k]={s.viewport.Width,s.viewport.Height,s.serial};
+        }
+        // Joint relative-scale matching accommodates DLSS. Two 50%-scale
+        // foveal copies cannot substitute for the 20%-size periphery source.
+        // Manual ordinals remain exact; this is still NOT semantic eye proof.
+        const auto chosen=choose_duoview_depth_pair(
+            std::span<const DepthShape>{shapes.data(),ids.size()},
+            left_selector,right_selector,left_width,left_height,right_width,right_height);
+        if(!chosen.valid)return r;
+        const size_t a=ids[chosen.left],b=ids[chosen.right];
         auto lease=[&](size_t i)->Ptr<ID3D12Resource> {
             auto& s=slots[i];
             if(s.foreign_fence&&(!queue||FAILED(queue->Wait(s.foreign_fence.Get(),1))))return {};
@@ -116,6 +99,8 @@ probe=r'''    struct PreviewPair {
              <<","<<slots[a].viewport.Width<<","<<slots[a].viewport.Height
              <<") R:("<<slots[b].viewport.TopLeftX<<","<<slots[b].viewport.TopLeftY
              <<","<<slots[b].viewport.Width<<","<<slots[b].viewport.Height<<")"
+             <<" depthRanges=L:("<<slots[a].viewport.MinDepth<<","<<slots[a].viewport.MaxDepth
+             <<") R:("<<slots[b].viewport.MinDepth<<","<<slots[b].viewport.MaxDepth<<")"
              <<" matchedEyes=UNVERIFIED";
         r.label=label.str();
         return r;
@@ -150,7 +135,7 @@ vr="src/mods/VR.cpp"
 edit(vr,'                    if (ImGui::Button("CAPTURE NOW: both source colors + ALL eligible depth candidates")) {',
 '''                    ImGui::Separator();
                     ImGui::TextUnformatted("LIVE DEPTH CANDIDATE VIEWER");
-                    ImGui::TextWrapped("0=auto (nearest submitted viewport size per eye source; heuristic only). Use manual candidates to confirm. Reused DSV may have separate captures.");
+                    ImGui::TextWrapped("0=Auto (joint source-size and DLSS-scale heuristic; NOT verified eye/frame identity). Manual ordinals select exact current snapshots and may change on reload.");
                     const int n=m_d3d12.duoview_depth_candidate_count();
                     int left=m_d3d12.duoview_left_choice();
                     int right=m_d3d12.duoview_right_choice();

@@ -21,6 +21,10 @@ edit(dc,
                             bool compositor_fault = false;''',
  '''                        } else {
                             if (m_stock_dibr_scope) {
+                                const auto& depth_layout=packet_frame->config.layout;
+                                m_stock_dibr_depth->configure_duoview_sources(
+                                    depth_layout.fovea.width,depth_layout.fovea.height,
+                                    depth_layout.periphery.width,depth_layout.periphery.height);
                                 const auto duo_depth_extent = m_game_tex.texture->GetDesc();
                                 m_stock_dibr_depth->configure(device,
                                     g_framework->get_d3d12_hook()->get_command_queue(),

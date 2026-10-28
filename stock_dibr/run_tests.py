@@ -21,6 +21,9 @@ if sys.platform=='win32':
          here/'gpu_test.cpp','/Fe:gpu-test.exe','/link','d3d12.lib','dxgi.lib','d3dcompiler.lib'])
     run([out/'gpu-test.exe'])
     run(['cl','/nologo','/std:c++20','/EHsc','/W4','/I'+str(root/'src'),'/I'+str(out),
+         here/'duoview_depth_gpu_test.cpp','/Fe:duoview-depth-gpu-tests.exe','/link','d3d12.lib','dxgi.lib'])
+    run([out/'duoview-depth-gpu-tests.exe'])
+    run(['cl','/nologo','/std:c++20','/EHsc','/W4','/I'+str(root/'src'),'/I'+str(out),
          here/'hook_tests.cpp','/Fe:hook-tests.exe','/link','d3d12.lib','dxgi.lib'])
     run([out/'hook-tests.exe'])
     run(['cl','/nologo','/std:c++20','/EHsc','/W4','/I'+str(root/'src'),'/I'+str(out),

@@ -10,15 +10,16 @@ h=source("src/mods/vr/D3D12Component.hpp")
 c=source("src/mods/vr/D3D12Component.cpp")
 compositor=source("src/mods/vr/DuoViewD3D12.hpp")
 shader=source("src/mods/vr/DuoViewShaderSource.hpp")
+policy=source("src/mods/vr/d3d12/DepthPolicy.hpp")
 checks={
  "V3 split-eye physical camera unchanged":'is_duoview_split_eye_enabled()' in source("src/mods/vr/FFakeStereoRenderingHook.cpp"),
  "submitted-only depth sources":'preview_indices() const' in d and 's.pending' in d,
  "same source identity stable ordering":'slots[a].serial<slots[b].serial' in d,
- "manual chosen ordinal overrides automatic":'if(manual>0' in d,
- "stale manual index never selects unrelated Auto":'static_cast<size_t>(manual)>ids.size())return invalid' in d,
- "two separate depth snapshots required":'if(ids.size()<2)return r;' in d and 'return selected==other ? invalid : selected' in d,
+ "manual chosen ordinal overrides automatic":'if(left_manual && right_manual)' in policy,
+ "stale manual index never selects unrelated Auto":'size_t(left_manual)>n || size_t(right_manual)>n' in policy,
+ "two separate depth snapshots required":'if(ids.size()<2)return r;' in d and 'if(left_manual==right_manual)return {}' in policy,
  "reused original DSV does not collapse two pass copies":'Preserve separately captured source passes' in d,
- "auto matches frozen producer dimensions":'const double dx=(double(v.Width)-double(expected_w))' in d,
+ "auto jointly matches frozen producer dimensions and render scale":'choose_duoview_depth_pair' in d and 'if(mismatch>.05)continue' in policy,
  "producer frozen widths passed into candidate browser":'packet_frame->config.layout.fovea.width' in c and 'packet_frame->config.layout.periphery.width' in c,
  "foreign producer queue synchronization":'queue->Wait(s.foreign_fence.Get(),1)' in d,
  "depth resource lifetime retained":'snapshot_leases[i]=true' in d,

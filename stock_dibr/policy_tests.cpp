@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <array>
 
 namespace {
 unsigned failures{};
@@ -21,6 +22,8 @@ int main() {
     using stock_dibr::Layout;
     using stock_dibr::completed;
     using stock_dibr::layout;
+    using stock_dibr::duoview_depth_shape;
+    using stock_dibr::capture_boundary_supported;
 
     // Full-resolution engine depth may be packed double-wide or a single eye.
     expect(layout(3840, 2160, 3840, 2160) == Layout::Packed,
@@ -69,6 +72,21 @@ int main() {
     expect(!completed(10, 0), "zero target fence value is rejected");
     expect(!completed(std::numeric_limits<uint64_t>::max(), 10),
         "device-removed fence sentinel is not treated as completed");
+    expect(duoview_depth_shape(1015,807,2030,1614),"observed DLSS fovea fits explicit source geometry");
+    expect(duoview_depth_shape(406,323,812,646),"observed DLSS periphery below stock 20% floor is discoverable");
+    expect(!duoview_depth_shape(128,128,812,646),"square shadow shape does not fit DuoView periphery");
+    expect(!duoview_depth_shape(406,323,0,646),"unknown source shape rejected");
+    expect(capture_boundary_supported(false,false),"stock depth-read capture policy preserved");
+    expect(!capture_boundary_supported(true,false),"DuoView repeated read-only transitions cannot exhaust copy budget");
+    expect(capture_boundary_supported(true,true),"DuoView distinct write versions remain captureable");
+    const std::array<stock_dibr::DepthShape,4> candidates{{{1015,807,1},{1015,807,2},{406,323,3},{406,323,4}}};
+    auto pair=stock_dibr::choose_duoview_depth_pair(candidates,0,0,2030,1614,812,646);
+    expect(pair.valid && pair.left<2 && pair.right>=2,"Auto pairs matching relative DLSS scales, not two foveal DSVs");
+    expect(!stock_dibr::choose_duoview_depth_pair(std::span(candidates).first(2),0,0,2030,1614,812,646).valid,
+        "two foveal snapshots alone cannot masquerade as a complete Auto source pair");
+    expect(!stock_dibr::choose_duoview_depth_pair(candidates,1,1,2030,1614,812,646).valid,"duplicate manual choice rejected");
+    expect(!stock_dibr::choose_duoview_depth_pair(candidates,5,0,2030,1614,812,646).valid,"stale manual ordinal never becomes Auto");
+    expect(stock_dibr::choose_duoview_depth_pair(candidates,1,3,2030,1614,812,646).valid,"explicit distinct manual choices retained");
 
     std::printf("Stock DIBR depth policy: %u failure(s)\n", failures);
     return failures == 0 ? 0 : 1;

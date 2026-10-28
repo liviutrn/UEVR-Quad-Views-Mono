@@ -28,7 +28,7 @@ checks={
 "Explicit headset stereo switch and proof mode":'TRUE STEREO (0 V3 mono / 1 stereo / 2 tint proof)' in ui,
 "Depth preview must not silently replace real stereo PSO":'const bool depthPreview=!requested_stereo && previewMode>=1u' in comp,
 "Experimental opt-in starts with V3 mode 0 until capture observer active":'m_duo_stereo_mode{0}' in h,
-"R5 consumers retired on all synthetic passes":' || preview_mode || stereo_mode)' in c,
+"DuoView retires one depth interval at the existing Present tail":'duoview_interval_owner->finish_frame' in c and 'Existing tail guard owns the one DuoView epoch advance' in c,
 "Raw screenshot includes stereo XR output":'"xr_submitted_doublewide"' in copy,
 "Final XR image attached inside rendering callback":'capture->attach_headset_output(device,destination);' in c,
 "Final XR readback reservation":'reserve_headset_output_' in copy and '128ull*1024*1024' in copy,
@@ -46,6 +46,11 @@ checks={
 "Whole-eye tint on peripheral early return":'if(feather<=0.0f) return StereoProofColor(' in shader,
 "Readback saving requires actual enqueue, not merely recording":'commands_were_submitted(capture_submission)' in c and 'capture_submission=result' in c,
 "Capture records release separately from physical presentation":'headsetPresentationVerified=false' in copy and 'xrCopyReleased=' in copy,
+"Stock early retirement cannot erase DuoView candidates":'if(m_stock_dibr_scope && !duoview_depth_interval)' in c,
+"Missing depth never destroys the two-view producer":'effective_stereo_mode=depths.left && depths.right' in c and 'rendering V3 mono without disabling two-view capture' in c,
+"Mono fallback cannot inflate stereo submitted counters":'if(submitted && stereo_recorded && callback_attempted)' in c,
+"Depth-less capture request stays pending and armed":'if(candidates.empty() || !capture->prepare' in c and 'snapshot_armed=keep_snapshot_armed' in depth,
+"Camera metadata preserves precision and explicit matrix uncertainty":'std::setprecision(17)' in c and 'frozenSourceProjection_NOT_depthPassVerified_L=[' in c,
 }
 for name,valid in checks.items():print(("PASS: " if valid else "FAIL: ")+name)
 if not all(checks.values()):raise SystemExit("Physical stereo XR integration contract FAILED")

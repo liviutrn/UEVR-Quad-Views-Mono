@@ -83,6 +83,7 @@ class DepthCapture final : public D3D12DepthStencilObserver {
     uint32_t height{}, recorded_this_interval{};
     size_t leased{Capacity};
     bool enabled{};
+    std::array<uint32_t,4> duoview_source_sizes{};
     std::unordered_map<SIZE_T, ID3D12Resource*> dsv_resources;
     std::unordered_map<SIZE_T, bool> dsv_primary_slice;
     std::deque<SIZE_T> dsv_order;
@@ -125,6 +126,12 @@ class DepthCapture final : public D3D12DepthStencilObserver {
         }
     }
     bool main_viewport_shape(const D3D12_VIEWPORT& v) const {
+        if(duoview_source_sizes[0]) {
+            return std::isfinite(v.TopLeftX) && std::isfinite(v.TopLeftY) &&
+                v.TopLeftX>=0 && v.TopLeftY>=0 &&
+                (duoview_depth_shape(v.Width,v.Height,duoview_source_sizes[0],duoview_source_sizes[1]) ||
+                 duoview_depth_shape(v.Width,v.Height,duoview_source_sizes[2],duoview_source_sizes[3]));
+        }
         if (!width || !height || !(v.Width > 0.0f) || !(v.Height > 0.0f) ||
             !close_extent(v.TopLeftX, 0.0) || !close_extent(v.TopLeftY, 0.0)) return false;
         const double scale = double(v.Height) / double(height);
@@ -132,6 +139,11 @@ class DepthCapture final : public D3D12DepthStencilObserver {
         const double eye_width = double(width / 2) * scale;
         const double packed_width = double(width) * scale;
         return close_extent(v.Width, eye_width) || close_extent(v.Width, packed_width);
+    }
+    Layout classify_viewport(const D3D12_VIEWPORT& v) const {
+        if(duoview_source_sizes[0])return main_viewport_shape(v)?Layout::Eye:Layout::Invalid;
+        return stock_dibr::layout(static_cast<uint64_t>(std::lround(v.Width)),
+            static_cast<uint32_t>(std::lround(v.Height)),width,height);
     }
     bool viewport_matches_source(const D3D12_VIEWPORT& v,
         const D3D12_RESOURCE_DESC& depth, Layout) const {
@@ -280,6 +292,14 @@ class DepthCapture final : public D3D12DepthStencilObserver {
     }
 
 public:
+    void configure_duoview_sources(uint32_t fw,uint32_t fh,uint32_t pw,uint32_t ph) {
+        std::scoped_lock lock{mutex};
+        const std::array<uint32_t,4> requested{fw,fh,pw,ph};
+        if(requested==duoview_source_sizes)return;
+        duoview_source_sizes=requested;
+        ++epoch;recorded_this_interval=0;executed_proofs.clear();
+        for(auto& [cmd,state]:lists){(void)cmd;state.proof_count=0;}
+    }
     bool accepts_cached_dsv_metadata() const override { return true; }
     bool has_pending_retirement() override {
         std::scoped_lock lock{mutex};
@@ -403,6 +423,8 @@ public:
                 b.Flags != D3D12_RESOURCE_BARRIER_FLAG_NONE ||
                 (b.Transition.StateBefore & (D3D12_RESOURCE_STATE_DEPTH_WRITE | D3D12_RESOURCE_STATE_DEPTH_READ)) == 0 ||
                 (b.Transition.StateAfter & Read) == 0) continue;
+            if(!capture_boundary_supported(duoview_source_sizes[0]!=0,
+               (b.Transition.StateBefore&D3D12_RESOURCE_STATE_DEPTH_WRITE)!=0))continue;
             auto* source = b.Transition.pResource;
             if (!source) continue;
             ++read_windows;
@@ -430,8 +452,7 @@ public:
             if (!recorded_viewport(source, desc, source_viewport)) {
                 ++rejected; ++reject_reasons[2]; continue;
             }
-            const auto kind = stock_dibr::layout(static_cast<uint64_t>(std::lround(source_viewport.Width)),
-                static_cast<uint32_t>(std::lround(source_viewport.Height)), width, height);
+            const auto kind = classify_viewport(source_viewport);
             if (kind == Layout::Invalid) { ++rejected; ++reject_reasons[3]; continue; }
             Ptr<IUnknown> source_device, command_device, expected_device;
             if (FAILED(source->GetDevice(IID_PPV_ARGS(&source_device))) ||
@@ -519,9 +540,7 @@ public:
             const bool provenance_ok = enabled && valid_producer && select_executed_main_binding(
                 s.source.Get(), desc, producer_identity.Get(), s.list_identity.Get(), s.capture_event,
                 batch, capture_index, s.viewport);
-            if (provenance_ok) s.layout = stock_dibr::layout(
-                static_cast<uint64_t>(std::lround(s.viewport.Width)),
-                static_cast<uint32_t>(std::lround(s.viewport.Height)), width, height);
+            if (provenance_ok) s.layout = classify_viewport(s.viewport);
             if (current_queue) {
                 if (!found) {
                     if (FAILED(q->Signal(fence.Get(), ++signal))) {

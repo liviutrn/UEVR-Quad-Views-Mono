@@ -256,17 +256,24 @@ jobs:
           4. Set View depth = 0 for clean tests. Stereo has priority over preview.
           5. TRUE STEREO 0 = previous V3 mono A/B; 1 = reconstructed stereo;
              2 = stereo + BLUE tint over the ENTIRE RIGHT OpenXR eye (including corners).
-          6. First verify mode 2 in the headset. Then compare 0 and 1 on near
-             weapon/NPC edges, an object at ~2m, distant scenery and head rotation.
-          7. Left/right depth candidates are independent. Selector 0 uses the
-             closest submitted viewport size to the frozen eye source geometry;
-             this is only a heuristic, NOT proof of matching camera, frame or pass.
-             Manual 1..N ordinals are authoritative. Reused source DSVs can now
-             expose multiple independently captured passes; ordinals can change
-             after level load. Compare View depth 1/2/3 to actual color views.
+          6. Start in mode 0 and use CAPTURE NOW. The request stays pending until
+             eligible submitted depths exist. Then verify mode 2 in the headset.
+             BLUE tint must cover only the RIGHT eye, including its corners.
+             Compare 0 and 1 on near edges, ~2m objects, scenery and head rotation.
+          7. Selector 0 jointly matches both depth viewports to the frozen source
+             geometries at a coherent render scale (including DLSS). This remains
+             a heuristic, NOT proof of matching camera, frame or pass. Manual
+             1..N ordinals override Auto; stale or duplicate choices are rejected.
+             Ordinals can change after level load. Compare View depth 1/2/3 to
+             actual color views, then return View depth to 0 for a capture.
           8. CAPTURE NOW records two source colors, submitted depth candidates,
              the final double-wide XR image, plus metadata under
              %TEMP%\UEVR_DuoViewCaptures. Preserve raw files and manifest.
+
+          9. Read Actual XR output separately from the requested stereo mode.
+             Missing/invalid depth now waits in V3 mono and retries automatically;
+             it does not quarantine the two-view renderer. A recorded/submitted
+             stereo counter is not incremented by this mono fallback.
 
           IMPLEMENTATION LIMITS — PLEASE READ
           UE0 physically renders high-res cropped LEFT fovea; UE1 physically
@@ -280,7 +287,10 @@ jobs:
           This revision maps captured DSV active viewports and depth ranges,
           uses independent LEFT/RIGHT depth projection coefficients, rejects
           invalid resource shapes before recording, and tests analytic planes
-          at 1/2/10 units plus padded viewports on production D3D12 WARP.
+          at 1/2/10 meters (UE centimeter units) plus padded viewports on
+          production D3D12 WARP. A separate actual GPU capture test covers the
+          observed DLSS-scaled small periphery, reused DSV write versions,
+          read-only barrier storms and interval retirement after consumers.
           Neither captured depth eye/frame/stage identity nor exact game
           matrices have been proved. Do not interpret these tests as fixing
           the remaining provenance, jitter, or full-matrix geometry blockers.
