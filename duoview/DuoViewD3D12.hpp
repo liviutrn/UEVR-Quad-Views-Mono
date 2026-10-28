@@ -146,6 +146,8 @@ public:
         // Direct double-wide raster would run sharpening twice on the same
         // monoscopic foveal content. Use the existing single-Mono compose+copy
         // when fused sharpening is enabled; leave v182 behavior otherwise.
+        if(stereoMode && (!frame.split_eye || frame.config.settings.fovea_view!=0))
+            return reject("SplitEye V3 UE0-left/UE1-right must be ON for actual stereo; fix settings, not a Mono fallback");
         const bool requested_stereo = stereoMode != 0 && frame.split_eye &&
             frame.config.settings.fovea_view == 0;
         const bool direct_xr=(frame.config.settings.direct_xr_output || requested_stereo ||
@@ -188,6 +190,8 @@ public:
             (s.Format!=DXGI_FORMAT_B8G8R8A8_TYPELESS && s.Format!=sampling_format)) {
             // Uncommon sources can still be copied safely. Never turn an
             // optimization compatibility failure into a black headset frame.
+            if(stereoMode || previewMode)
+                return reject("Stereo requires shader-readable native color sources; R5 candidate selector cannot repair this source type");
             return record_native_gather(device,cmd,primary,secondary,destination,
                 primary_state,secondary_state,frame,std::move(packet_lifetime),frequency);
         }
