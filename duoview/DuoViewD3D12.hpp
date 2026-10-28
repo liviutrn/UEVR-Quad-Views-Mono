@@ -116,6 +116,7 @@ public:
         recorded_commands_=false;
         error_.clear();
         last_native_direct_xr_=false;
+        last_true_stereo_=false;
         const auto reject=[this](const char* reason) { error_=reason; return false; };
         if (!device || !cmd || !primary || !secondary || !destination ||
             primary==secondary || primary==destination || secondary==destination ||
@@ -210,14 +211,14 @@ public:
             valid_depth_srv(rightDepth->GetDesc().Format)!=DXGI_FORMAT_UNKNOWN;
         const bool depthPreview=previewMode>=1u && previewMode<=3u &&
             depth_compatible && depth_pipeline_;
-        const bool stereoReady=requested_stereo && depth_compatible &&
-            stereo_pipeline_ && direct_xr;
+        const bool stereoReady=requested_stereo && depth_compatible && stereo_pipeline_;
+        const bool indirect_eye_output=(stereoReady || depthPreview) && !direct_xr;
         if(requested_stereo && !stereoReady)
             return reject("Stereo source pair missing/invalid: choose another foveal or peripheral DSV");
         if(requested_stereo && !std::isfinite(stereoSign))
             return reject("Nonfinite stereo reversal setting");
-        if(depthPreview && !direct_xr)
-            return reject("Doublewide XR output required for split-depth proof");
+        if(indirect_eye_output && !atlas_)
+            return reject("True-stereo doublewide Native atlas unavailable");
         ShaderConstants constants{
             {layout.atlas_width/2,layout.atlas_height},
             {layout.atlas_width,layout.atlas_height},
@@ -286,9 +287,17 @@ public:
         cmd->SetGraphicsRootDescriptorTable(0,srv_gpu_start_);
         cmd->SetGraphicsRoot32BitConstants(1,sizeof(constants)/4,&constants,0);
         auto handle=rtv_cpu_start_;
-        if (direct_xr) {
+        if(indirect_eye_output) {
+            // Reuse the existing DOUBLEWIDE Native gather atlas: no extra
+            // high-resolution eye texture allocation and never a MONO copy.
+            transition(cmd,atlas_.Get(),D3D12_RESOURCE_STATE_COPY_DEST,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET);
+            handle=stereo_atlas_rtv_cpu_;
+        }
+        if(direct_xr || indirect_eye_output) {
             // Each Compositor is owned by one fenced XR command slot, so its
             // second RTV descriptor cannot be overwritten while GPU-active.
+            if(direct_xr) {
             handle=direct_xr_rtv_cpu_;
             if (xr_rtv_reference_.Get()!=destination || xr_rtv_format_!=xr_format) {
                 D3D12_RENDER_TARGET_VIEW_DESC xr_view{};
@@ -297,6 +306,7 @@ public:
                 xr_rtv_reference_=destination;
                 xr_rtv_format_=xr_format;
                 ++xr_rtv_refresh_count_;
+            }
             }
             const D3D12_VIEWPORT viewport{
                 0,0,static_cast<float>(width_*2),static_cast<float>(height_),0,1};
@@ -320,11 +330,32 @@ public:
         }
         transition(cmd,fovea,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,fovea_state);
         transition(cmd,periphery,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,peripheral_state);
-        const bool copied=direct_xr ||
-            copy_composite_to_stereo(cmd,device,output_.Get(),destination,
+        // Always submit independent eye halves. For a typed XR target whose
+        // RTV encoding differs from the prewarmed shader PSO, copy the ENTIRE
+        // doublewide atlas instead of duplicating an old Mono texture.
+        bool copied=false;
+        if(direct_xr) copied=true;
+        else if(indirect_eye_output) {
+            const auto a=atlas_->GetDesc();
+            if(a.Width==xrd.Width && a.Height==xrd.Height &&
+               xrd.SampleDesc.Count==1 && xrd.DepthOrArraySize==1) {
+                transition(cmd,atlas_.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,
+                           D3D12_RESOURCE_STATE_COPY_SOURCE);
+                transition(cmd,destination,D3D12_RESOURCE_STATE_RENDER_TARGET,
+                           D3D12_RESOURCE_STATE_COPY_DEST);
+                D3D12_TEXTURE_COPY_LOCATION src{atlas_.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
+                D3D12_TEXTURE_COPY_LOCATION dst{destination,D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
+                cmd->CopyTextureRegion(&dst,0,0,0,&src,nullptr);
+                transition(cmd,destination,D3D12_RESOURCE_STATE_COPY_DEST,
+                           D3D12_RESOURCE_STATE_RENDER_TARGET);
+                transition(cmd,atlas_.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,
+                           D3D12_RESOURCE_STATE_COPY_DEST);
+                copied=true;
+            }
+        } else copied=copy_composite_to_stereo(cmd,device,output_.Get(),destination,
                 D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET);
         last_native_direct_xr_=direct_xr;
-        last_true_stereo_=stereoReady && direct_xr;
+        last_true_stereo_=stereoReady && copied;
         if (timed) {
             cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,1);
             cmd->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,2,timestamps_.Get(),0);
@@ -534,7 +565,7 @@ private:
         srv_first_reference_.Reset(); srv_second_reference_.Reset(); xr_rtv_reference_.Reset();
         srv_descriptors_valid_=false; srv_cached_format_=DXGI_FORMAT_UNKNOWN;
         xr_rtv_format_=DXGI_FORMAT_UNKNOWN;
-        srv_cpu_start_={}; srv_gpu_start_={}; rtv_cpu_start_={}; direct_xr_rtv_cpu_={};
+        srv_cpu_start_={}; srv_gpu_start_={}; rtv_cpu_start_={}; direct_xr_rtv_cpu_={}; stereo_atlas_rtv_cpu_={};
         srv_descriptor_increment_=0;
         queries_.Reset(); timestamps_.Reset(); timing_pending_ = false; gpu_ms_ = -1.f; frequency_ = 0;
         device_ = device; width_ = width; height_ = height; srgb_ = srgb;
@@ -600,11 +631,11 @@ private:
         atlas_desc.Width=static_cast<uint64_t>(width)*2;
         atlas_desc.Height=height;
         atlas_desc.Format=srgb ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM;
-        atlas_desc.Flags=D3D12_RESOURCE_FLAG_NONE;
+        atlas_desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         if (!check(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&atlas_desc,
             D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&atlas_)),"Create Native gather atlas")) return false;
         atlas_->SetName(L"DuoView::NativeGatherAtlasFallback");
-        D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.NumDescriptors = 2; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.NumDescriptors = 3; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (!check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_)), "Create RTV heap")) return false;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; hd.NumDescriptors = 4;
         if (!check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srv_)), "Create SRV heap")) return false;
@@ -612,10 +643,14 @@ private:
         srv_gpu_start_=srv_->GetGPUDescriptorHandleForHeapStart();
         rtv_cpu_start_=rtv_->GetCPUDescriptorHandleForHeapStart();
         srv_descriptor_increment_=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        const auto rtv_inc=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         direct_xr_rtv_cpu_=rtv_cpu_start_;
-        direct_xr_rtv_cpu_.ptr+=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        direct_xr_rtv_cpu_.ptr+=rtv_inc;
+        stereo_atlas_rtv_cpu_=rtv_cpu_start_;
+        stereo_atlas_rtv_cpu_.ptr+=2*rtv_inc;
         D3D12_RENDER_TARGET_VIEW_DESC view{}; view.Format = output_format; view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
         device->CreateRenderTargetView(output_.Get(), &view, rtv_cpu_start_);
+        device->CreateRenderTargetView(atlas_.Get(), &view, stereo_atlas_rtv_cpu_);
         return true;
     }
     ComPtr<ID3D12Device> device_;
@@ -625,7 +660,7 @@ private:
     ComPtr<ID3D12RootSignature> root_;
     ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_,stereo_pipeline_,depth_pipeline_;
     ComPtr<ID3D12DescriptorHeap> srv_, rtv_;
-    D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_start_{}, rtv_cpu_start_{}, direct_xr_rtv_cpu_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_start_{}, rtv_cpu_start_{}, direct_xr_rtv_cpu_{}, stereo_atlas_rtv_cpu_{};
     D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_start_{};
     UINT srv_descriptor_increment_{};
     ComPtr<ID3D12QueryHeap> queries_;
