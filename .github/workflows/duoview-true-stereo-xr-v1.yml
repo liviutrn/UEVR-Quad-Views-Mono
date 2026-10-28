@@ -134,6 +134,10 @@ jobs:
           python workspace/duoview/stereo/enable_true_stereo_xr.py backend
           if ($LASTEXITCODE -ne 0) { throw 'TRUE STEREO OpenXR integration patch failed' }
           python workspace/duoview/stereo/test_true_stereo_xr.py backend
+          python workspace/duoview/stereo/apply_gameplay_guards.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI30 gameplay guard patch failed' }
+          python workspace/duoview/stereo/test_gameplay_guards.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI30 gameplay guard contract failed' }
           if ($LASTEXITCODE -ne 0) { throw 'TRUE STEREO resource + eye-output contract rejected' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Backend whitespace/patch conflict' }
