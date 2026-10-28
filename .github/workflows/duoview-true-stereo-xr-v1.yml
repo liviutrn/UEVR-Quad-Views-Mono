@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - experiment/duoview-165-true-stereo-xr-v1-reviewed-20261028
+      - review/true-stereo-xr-audit-fixes-20261028
   pull_request:
     branches:
       - build-182
@@ -242,54 +243,56 @@ jobs:
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
-          DUOVIEW + R5 EXPERIMENTAL DEPTH BRIDGE V1 - ID6 STILL MONO; METHOD 3/4 R5 DIBR — ORIGINAL PRIMARY + SECONDARY SOURCES, MONO OUTPUT. HEADSET UNVERIFIED.
-          Backend: exact Joey 5ac7edc207866569334175e4ed8a7517971547f6 + guarded DuoView modifications.
-          Restricted SDK unchanged: joeyhodge/UESDK 3cffbc82429b6165ceec2714f0f0d9ae48f55596.
-          Matching frontend source: 60be4b0f9a646109fd9fdf448bacd41477234091, plus ID 6.
-          Modes 0 and 5 are routed to ORIGINAL JOEY. Experimental mode ID6 is active ONLY in STALKER 2 DX12 OpenXR.
-          ID6 forces Joey Native Stereo Fix on and uses its original primary and secondary render sources. Native Stereo Fix settings for ordinary Native ID0 are unchanged. Supported sources are sampled directly; the validated atlas gather remains as a format-compatibility fallback.
-          Old source defaults: 0.50x0.50 crop at 1.0x density, 0.20x periphery, gaze ON, fovea UE0/periphery UE1.
-          Press Restore old DuoView settings once if an existing profile retains newer settings. Increase density to match your old preferred tuning; exact historical tuning is unknown.
-          Foveal atlas rectangle starts at x=0, matching Injector-5. Gaze uses the inverse left optical rotation, matching the old coordinate path.
-          Stable gaze crop is ON by default, optional OFF. OpenNR r10 crop guard (adjustable 0-5% of crop), 4 foveal-source-pixel alignment; large eye movements recenter immediately without temporal smoothing.
-          Missing/invalid gaze holds crop position for the configured hold interval (350ms by default) while remaining labelled unavailable. Gaze loss does not trigger a rendering-mode change.
-          Both UE views use the exact frozen producer projection and explicitly bound OpenXR Mono pose token. Native engine histories and motion vectors remain engine-owned. The validated STALKER 2 same-pass constructor policy remains active for renderer safety.
-          The separate independent-shading option is ignored while DuoView is active; Joey Native Stereo Fix owns its normal source-rendering behavior.
-          The original Native Stereo Fix secondary scene-capture target supplies the second DuoView image. Packet identity, capture generation, source geometry, and Mono pose/projection are checked before composition.
-          Transaction correction: the immutable source packet is prepared before either renderer call, keyed to both exact family IDs/targets, and associated with their current RHI command tails. Present joins the executed source owners; DuoView no longer uses sampled engine/Present clock-distance acceptance. Stock Native ID0 and Mono ID5 retain their selector policies.
-          Source checkpoints precede rendering; GPU ordering is established by source work preceding DXGI Present on its RHI thread and composition using the swapchain owning direct queue. They are not GPU-completion fences. Primary resource identity and secondary capture generations remain checked, and existing compositor command-slot fences retain packet/resources.
-          Delivery trace is bounded in RAM; failures dump the last 24 events at most every five seconds. UI distinguishes unique transaction delivery from duplicate Presents and reports overwritten/unproven transactions. No headset fluidity or 0.001% miss-rate claim is made.
-          Actual shading parity and temporal stability require headset testing.
-          Optional GPU timing is OFF by default; it measures DuoView raster/output only and excludes Unreal scene rendering and any source gather copies. Compositor resources prewarm at swapchain creation and remain owned by each OpenXR command slot until its fence retires. No waits, shader compilation, or GPU resource creation occur in the XR copy callback; immutable packet lifetimes are retained through command-slot fence retirement.
-          Debug source 0=blended output, 1=periphery only, 2=fovea only (dark outside ROI).
-          Source view0 is the first UE pass (old prototype default), view1 is the second (Build19 default).
-          Both source passes share exactly the same Mono camera.
-          Stage5 reads combined calibrated PSVR2 Toolkit CAPI gaze ONCE per frame. No DLL bundled.
-          If CAPI is unavailable/invalid or blinked, ID6 stays at fixed center; no OpenXR gaze layer required.
-          Menu shows whether PSVR2 gaze is fresh, center fallback, or Mono quarantine.
-          The output remains monoscopic: DuoView writes the same full-FOV image to both OpenXR eye regions. Direct XR output is an experimental A/B option, OFF by default: OFF composes once and copies to both eyes; ON uses one double-wide draw when formats match. Either route may be faster on your GPU; no GPU gain is measured here. Incompatible formats retain composite-and-copy. Fallback textures remain preallocated with either route. The DuoView UI reports the route used by the last submitted frame and the physical primary/secondary source extents.
-          The compositor's SRVs and direct XR RTV are cached per fenced command slot and rewritten only when the resource pair, sampling format, or destination changes. This reduces CPU/driver descriptor work only; it does not claim a GPU-time improvement.
-          Descriptor heap handles and increments are captured during prewarm and reused with those per-slot descriptors.
-          The exact source pose is frozen before Native Fix invokes either renderer callback and travels with the completed packet. Brief source gaps may reuse the last successfully submitted released image with its original pose for at most 100ms; no new source pair is composed during the hold. A new scene-image acquisition, mode generation, swapchain change or submission failure invalidates continuity. Until the first valid Native pair is available, warmup keeps the XR transition loop live and waits for the next pair. A compositor fault after validation returns ID6 to original Joey Mono on the following frame.
-          An incomplete or cropped Native source is never presented as a full-FOV Mono image.
-          DXBC shaders are precompiled during CI; per-XR-image PSOs/textures are prewarmed on swapchain setup.
-          Build45 preserved: STALKER 2 ID6 uses cached, conditional MPC_FOV IsFOVEnabled=0 and DepthScale=1; restores original values on exit.
-          Build48 repairs the HUD Optical Convergence toggle: default OFF, effective in Mono ID5 and DuoView ID6 for both OpenXR game Quad and Cylinder layers (view-following ON or OFF, per-eye UI composition ON or OFF). HUD layer optical distance range 2..200m preserves apparent size and offset. If HUD is baked into the game scene, quad-only HUD control does not affect that embedded content.
-          Build49: preserves the live Mono Eye Alignment enabled toggle and exact percentage (for example -1.25%) when selecting Reset Runtime; restores before returning from OpenXR reinitialization, including repeated resets. Adds reset-log confirmation. No rendering, HUD, shader, gaze, frame timing or SteamVR layer modifications.
-          MANUAL SOURCE SNAPSHOT: In DuoView ID6 menu, enable R5 DSV/RDG capture and re-enter ID6; press CAPTURE NOW any number of times. Every press saves left_fovea / right_periphery color BMP + raw, eligible depth raw + auto-contrast BMP and manifest under Windows TEMP\\UEVR_DuoViewCaptures\\capture_N_PID_TICK. GPU readbacks are ordered behind current XR copy; file writes happen on a GPU-fence worker. Color/depth semantic pairing is UNPROVEN, do not use as stereo geometry until inspected. Max staged bytes 512MiB; manifest reports excluded candidates.\n          NEW Mono Eye Alignment in OpenXR overlay options: default OFF, total horizontal alignment -3%..+3% of each submitted eye crop, zero/reset available. Positive moves left image toward right and right image toward left. FOV tangent-only adjustment at FINAL submitted Mono frame; unchanged copy, pose, eye gaze and no additional OpenXR layers. Virtual Desktop Fix must remain OFF. Only Mono ID5/DuoView ID6 affected; original stereo untouched. CAUTION: calibrate with stationary head, then verify head-turn reprojection and revert to OFF if discomfort/artifacts.
-          Changing source formats or unexpected swapchain lifecycle may still cause reconstruction. Monitor frame pacing.
-          Experimental: Source/test/CI passing cannot prove exact game GPU producer completion or headset stability.
-          NEVER overwrite 30-minute-proven Build3! Extract this ZIP into a SEPARATE TEST DIRECTORY.
-          Built-in gaze freshness/age counters are read from the UI; no smoothing/deadzone forced.
-          Stage5 gaze requires installed PSVR2 Toolkit CAPI and still requires headset calibration validation.
-          Restored engine view order and optical gaze mapping are source verified. Actual Lumen/shadow/exposure and visual parity require a headset test; no gamma correction applied.
-          The eye-tracked source/compositor and first-use pacing are NOT headset verified.
-          R5 integration V1: Capture is opt-in and logs [DuoView][R5DepthBridge] while ID6 is active. R5 mode 3/4 remains separately selectable. ID6 is still monoscopic; this package is for validating coexistence and producer depth diagnostics, NOT completed dual-depth stereo. Reset to stable Build165 if any regression appears.
+          DuoView TRUE STEREO XR V1 — EXPERIMENTAL HEADSET BUILD (REVIEW FIXES)
+          Build branch: review/true-stereo-xr-audit-fixes-20261028.
+          Stable Build165/V3 and published stable releases are NOT modified.
+          This ZIP contains the experimental first real two-eye output, not the old mono-only depth bridge.
+
+          REQUIRED PSVR2 / STALKER 2 SETUP
+          1. Extract into a SEPARATE test directory. Keep working V3 installation available.
+          2. Select DuoView ID6 with V3 LEFT-fovea / RIGHT-periphery Split-Eye ON.
+          3. Enable R5 DSV/RDG capture; leave and RE-ENTER ID6 to attach the live capture observer.
+          4. Set View depth = 0 (off) before testing true stereo, otherwise depth preview overrides.
+          5. TRUE STEREO 0 = previous V3 mono A/B; 1 = reconstructed stereo;
+             2 = stereo + BLUE tint in the RIGHT OpenXR eye ONLY (eye-isolation test).
+          6. First verify mode 2 in the headset. Then compare 0 and 1 on near
+             weapon/NPC edges, an object at ~2m, distant scenery and head rotation.
+          7. Left/right depth candidates are independent. Selector 0 uses the
+             closest submitted viewport size to the frozen eye source geometry;
+             this is only a heuristic, NOT proof of matching camera, frame or pass.
+             Manual 1..N ordinals are authoritative. Reused source DSVs can now
+             expose multiple independently captured passes; ordinals can change
+             after level load. Compare View depth 1/2/3 to actual color views.
+          8. CAPTURE NOW records two source colors, submitted depth candidates,
+             the final double-wide XR image, plus metadata under
+             %TEMP%\UEVR_DuoViewCaptures. Preserve raw files and manifest.
+
+          IMPLEMENTATION LIMITS — PLEASE READ
+          UE0 physically renders high-res cropped LEFT fovea; UE1 physically
+          renders low-res full-FOV RIGHT periphery. TRUE STEREO mode uses one
+          per-eye double-wide pixel shader: LEFT fovea is native; RIGHT fovea
+          gathers LEFT color using RIGHT depth and conservative LEFT depth check,
+          and uses actual RIGHT low-res color on rejected/disoccluded pixels.
+          LEFT periphery uses a bounded 2-iteration inverse reprojection of
+          RIGHT periphery from RIGHT depth. Full two-depth V2 backward gather and
+          forward z/owner hybrid are compiled PROTOTYPES, not the live pipeline.
+          Source-depth/pass attribution, occlusions at characters, Lumen shading,
+          frame correspondence, temporal stability and headset optical comfort
+          are NOT established by CI alone. A successful WARP test is NOT proof
+          of high-quality stereo in STALKER 2.
+          Keep Mono Eye Alignment OFF when validating physical stereo. Do not
+          install this build over the verified user-tested V3 or stable DuoView.
+          If stereo is wrong or uncomfortable, switch to mode 0 and preserve
+          diagnostic capture + UEVR log before switching builds.
+
+          Pinned original Joey backend: 5ac7edc207866569334175e4ed8a7517971547f6
+          Pinned restricted SDK: 3cffbc82429b6165ceec2714f0f0d9ae48f55596
+          Pinned frontend: 60be4b0f9a646109fd9fdf448bacd41477234091
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','duoview-stage234-hashes.json','exact-baseline-source.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
-          if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'R5 integration V1') { throw 'Stale Native Fix warmup instructions' }
+          if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'TRUE STEREO XR V1') { throw 'Missing or stale actual stereo headset instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
           $zip="UEVR-DuoView-TrueStereo-XR-V1-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
