@@ -67,6 +67,31 @@ static NativeSource native_source(ID3D12Device* device, ID3D12GraphicsCommandLis
     transition(cmd,result.texture.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_RENDER_TARGET);
     return result;
 }
+// R5 captures are copied to R32_FLOAT texture with pixel and non-pixel SRV state.
+// WARP uses synthetic reversed-Z so the per-eye compositor can be evaluated
+// without modifying a game-owned DSV or relying on a live Unreal scene.
+static NativeSource native_depth(ID3D12Device* device,ID3D12GraphicsCommandList* cmd,
+                                 UINT width,UINT height,float deviceZ) {
+    auto desc=texture(width,height,D3D12_RESOURCE_FLAG_NONE);
+    desc.Format=DXGI_FORMAT_R32_FLOAT;
+    NativeSource result;
+    result.texture=resource(device,desc,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT foot{}; UINT64 bytes{};
+    device->GetCopyableFootprints(&desc,0,1,0,&foot,nullptr,nullptr,&bytes);
+    result.upload=resource(device,buffer(bytes),D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);
+    void* mapped{};D3D12_RANGE zero{0,0};check(result.upload->Map(0,&zero,&mapped));
+    std::memset(mapped,0,static_cast<size_t>(bytes));
+    for(UINT y=0;y<height;++y)for(UINT x=0;x<width;++x)
+        std::memcpy(static_cast<uint8_t*>(mapped)+size_t(y)*foot.Footprint.RowPitch+x*4,&deviceZ,4);
+    result.upload->Unmap(0,nullptr);
+    D3D12_TEXTURE_COPY_LOCATION from{result.upload.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    from.PlacedFootprint=foot;
+    D3D12_TEXTURE_COPY_LOCATION to{result.texture.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
+    cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+    transition(cmd,result.texture.Get(),D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    return result;
+}
 int main() try {
     // Exercise the actual copied Joey compositor with D3D12 validation on WARP.
     ComPtr<ID3D12Debug> debug;
@@ -386,6 +411,64 @@ int main() try {
     if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
         throw std::runtime_error("Repeated Native gather cache fence timeout");
     CloseHandle(event);
+
+    // Real headset output contract: not merely 'two source renders', but
+    // independently shaded pixels in LEFT and RIGHT OpenXR image halves.
+    // Stereo test runs through the ACTUAL production doublewide RTV PSO on WARP.
+    {
+        check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));
+        transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,
+                   D3D12_RESOURCE_STATE_RENDER_TARGET);
+        auto leftColor=native_source(device.Get(),cmd.Get(),32,32,{0,0,255,255},true,0);
+        auto rightColor=native_source(device.Get(),cmd.Get(),32,32,{255,0,0,255},true,1);
+        auto leftDepth=native_depth(device.Get(),cmd.Get(),32,32,0.2f);
+        auto rightDepth=native_depth(device.Get(),cmd.Get(),32,32,0.2f);
+        const auto eye_layout=uevr::duoview::make_layout(32,32,.5f,.5f,.25f,1.f,.5f,.5f);
+        if(!eye_layout)throw std::runtime_error("Stereo WARP layout invalid");
+        uevr::duoview::ViewFrame stereoFrame{};
+        stereoFrame.config={{1,63},*eye_layout,{.5f,.5f},{},1};
+        stereoFrame.config.settings.fovea_view=0;
+        stereoFrame.config.settings.direct_xr_output=false; // Stereo MUST force direct XR
+        stereoFrame.split_eye=true;
+        stereoFrame.projection[0]=1.f;stereoFrame.projection[5]=1.f;
+        stereoFrame.projection[11]=1.f;stereoFrame.projection[14]=.1f;
+        stereoFrame.projection_right=stereoFrame.projection;
+        stereoFrame.eye_cameras[0].position={0.,0.,0.};
+        stereoFrame.eye_cameras[1].position={.12,0.,0.};
+        if(!compositor.prewarm(device.Get(),32,32,false,frequency))
+            throw std::runtime_error("Stereo WARP PSO prewarm failed");
+        if(!compositor.record_native(device.Get(),cmd.Get(),leftColor.texture.Get(),rightColor.texture.Get(),
+              stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
+              stereoFrame,std::make_shared<const int>(72),frequency,
+              leftDepth.texture.Get(),rightDepth.texture.Get(),0,2,1.0f))
+            throw std::runtime_error("True stereo XR render failed: "+compositor.error());
+        if(!compositor.last_true_stereo()||!compositor.last_native_direct_xr())
+            throw std::runtime_error("True stereo did not reach independent direct XR eye output");
+        transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,
+                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+        from={stereo.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+        to={readback.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        to.PlacedFootprint=foot;
+        cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+        check(cmd->Close());
+        queue->ExecuteCommandLists(1,gather_lists);
+        const UINT64 signal=++native_signal;
+        check(queue->Signal(fence.Get(),signal));
+        event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+        check(fence->SetEventOnCompletion(signal,event));
+        if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
+            throw std::runtime_error("Stereo WARP XR eye fence timeout");
+        CloseHandle(event);
+        check(readback->Map(0,&read,&mapped));
+        if(std::memcmp(sample(16,16),sample(48,16),4)==0)
+            throw std::runtime_error("True stereo output is still MONO (left/right central eye pixels identical)");
+        // For diagnostic eye isolation tint only RIGHT side is blue-shifted:
+        // the eye split in XR destination is genuinely separate.
+        const auto leftBlue=sample(16,16)[0],rightBlue=sample(48,16)[0];
+        if(rightBlue<=leftBlue)
+            throw std::runtime_error("Diagnostic tint missing in RIGHT XR eye or eyes swapped");
+        readback->Unmap(0,nullptr);
+    }
 
     // A layout can request a fovea larger than Joey's single-eye capture. The
     // production path must reject it before recording any GPU commands.
