@@ -21,8 +21,10 @@ edit("src/mods/vr/DuoViewState.hpp","#pragma once",
 header="src/mods/vr/D3D12Component.hpp"
 edit(header,'    std::atomic<uint32_t> m_duo_preview_mode{0};',
 '''    std::atomic<uint32_t> m_duo_preview_mode{0};
-    // Experimental headset build defaults to actual stereo; disable for V3 A/B.
-    std::atomic<uint32_t> m_duo_stereo_mode{1};
+    // Opt-in only: without the R5 observer, stereo is NOT ready at ID6 startup.
+    // Starting at mode 1 can trigger compositor rejection and switch away from
+    // DuoView before the user can enable capture/re-enter ID6.
+    std::atomic<uint32_t> m_duo_stereo_mode{0};
     std::atomic<bool> m_duo_stereo_reverse{false};
     std::atomic<uint64_t> m_duo_stereo_frames{0};
     std::atomic<uint64_t> m_duo_stereo_reject_frames{0};''',"stereo controls")
@@ -53,7 +55,12 @@ dc="src/mods/vr/D3D12Component.cpp"
 edit(dc,'''                            const uint32_t preview_mode=m_duo_preview_mode.load(std::memory_order_acquire);
                             stock_dibr::DepthCapture::PreviewPair depths{};
                             if(m_stock_dibr_scope && preview_mode) {
-                                depths=m_stock_dibr_depth->select_preview(m_duo_left_choice.load(),m_duo_right_choice.load());
+                                depths=m_stock_dibr_depth->select_preview(
+                                    m_duo_left_choice.load(),m_duo_right_choice.load(),
+                                    packet_frame->config.layout.fovea.width,
+                                    packet_frame->config.layout.fovea.height,
+                                    packet_frame->config.layout.periphery.width,
+                                    packet_frame->config.layout.periphery.height);
                             }
                             if(preview_mode && (!depths.left||!depths.right))
                                 SPDLOG_WARN_EVERY_N_SEC(2,"[DuoView][Preview] Candidate pair unavailable; use manual sliders and capture ZIP");''',
@@ -62,7 +69,12 @@ edit(dc,'''                            const uint32_t preview_mode=m_duo_preview
                             const float stereo_sign=m_duo_stereo_reverse.load(std::memory_order_acquire)?-1.0f:1.0f;
                             stock_dibr::DepthCapture::PreviewPair depths{};
                             if(m_stock_dibr_scope && (preview_mode || stereo_mode)) {
-                                depths=m_stock_dibr_depth->select_preview(m_duo_left_choice.load(),m_duo_right_choice.load());
+                                depths=m_stock_dibr_depth->select_preview(
+                                    m_duo_left_choice.load(),m_duo_right_choice.load(),
+                                    packet_frame->config.layout.fovea.width,
+                                    packet_frame->config.layout.fovea.height,
+                                    packet_frame->config.layout.periphery.width,
+                                    packet_frame->config.layout.periphery.height);
                             }
                             if((preview_mode||stereo_mode) && (!depths.left||!depths.right)) {
                                 static uint64_t last_missing_warn=0;

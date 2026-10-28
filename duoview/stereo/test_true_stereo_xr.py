@@ -26,6 +26,8 @@ checks={
 "Right fovea keeps LEFT shading":'return LeftNative(leftUV);' in shader,
 "Manual L/R DSV browsing available":'SliderInt("LEFT fovea candidate' in ui and 'SliderInt("RIGHT periphery candidate' in ui,
 "Explicit headset stereo switch and proof mode":'TRUE STEREO (0 V3 mono / 1 stereo / 2 tint proof)' in ui,
+"Depth preview must not silently replace real stereo PSO":'const bool depthPreview=!requested_stereo && previewMode>=1u' in comp,
+"Experimental opt-in starts with V3 mode 0 until capture observer active":'m_duo_stereo_mode{0}' in h,
 "R5 consumers retired on all synthetic passes":' || preview_mode || stereo_mode)' in c,
 "Raw screenshot includes stereo XR output":'"xr_submitted_doublewide"' in copy,
 "Final XR image attached inside rendering callback":'capture->attach_headset_output(device,destination);' in c,

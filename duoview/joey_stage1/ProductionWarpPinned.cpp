@@ -529,6 +529,37 @@ int main() try {
         check(readback->Map(0,&read,&mapped));
         if(std::memcmp(sample(16,16),sample(48,16),4)==0)
             throw std::runtime_error("Stereo geometry produced no eye disparity with real source gradient and depth");
+        // Inequality is not a disparity test: source views use different patterns.
+        // Freeze both source textures and both depth textures, reverse ONLY
+        // physical eye baseline. LEFT is invariant; RIGHT must shift.
+        std::array<uint8_t,4> positiveLeft{},positiveRight{};
+        std::memcpy(positiveLeft.data(),sample(16,16),4);
+        std::memcpy(positiveRight.data(),sample(48,16),4);
+        readback->Unmap(0,nullptr);
+        check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));
+        transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,
+                   D3D12_RESOURCE_STATE_RENDER_TARGET);
+        if(!compositor.record_native(device.Get(),cmd.Get(),leftColor.texture.Get(),rightColor.texture.Get(),
+              stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
+              stereoFrame,std::make_shared<const int>(75),0,
+              leftDepth.texture.Get(),rightDepth.texture.Get(),0,1,-1.0f))
+            throw std::runtime_error("Reversed physical baseline stereo render failed: "+compositor.error());
+        transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,
+                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+        cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+        check(cmd->Close());queue->ExecuteCommandLists(1,gather_lists);
+        const UINT64 reverse_signal=++native_signal;
+        check(queue->Signal(fence.Get(),reverse_signal));
+        event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+        check(fence->SetEventOnCompletion(reverse_signal,event));
+        if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
+            throw std::runtime_error("Reversed baseline stereo WARP timeout");
+        CloseHandle(event);
+        check(readback->Map(0,&read,&mapped));
+        if(std::memcmp(sample(16,16),positiveLeft.data(),4)!=0)
+            throw std::runtime_error("Changing baseline sign modified the real LEFT fovea");
+        if(std::memcmp(sample(48,16),positiveRight.data(),4)==0)
+            throw std::runtime_error("Baseline reversal did NOT alter synthesized RIGHT fovea; stereo disparity unverified");
         readback->Unmap(0,nullptr);
     }
 
