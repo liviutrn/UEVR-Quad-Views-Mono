@@ -13,6 +13,11 @@ def edit(path,old,new,label):
     p=root/path;data=p.read_text(encoding="utf-8-sig")
     if data.count(old)!=1:raise RuntimeError("Stereo XR "+label+" expected one anchor, got "+str(data.count(old)))
     p.write_text(data.replace(old,new,1),encoding="utf-8",newline="")
+# V3 split-eye patch adds these camera fields ONLY to backend's ViewFrame.
+# The workspace baseline retains the original POD type for older WARP tests.
+edit("src/mods/vr/DuoViewState.hpp","#pragma once",
+     "#pragma once\n#define UEVR_DUOVIEW_V3_CAMERA_FIELDS 1",
+     "marker for real split-eye metadata")
 header="src/mods/vr/D3D12Component.hpp"
 edit(header,'    std::atomic<uint32_t> m_duo_preview_mode{0};',
 '''    std::atomic<uint32_t> m_duo_preview_mode{0};
