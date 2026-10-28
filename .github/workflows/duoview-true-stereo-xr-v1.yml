@@ -6,6 +6,7 @@ on:
       - experiment/duoview-165-true-stereo-xr-v1-reviewed-20261028
       - review/true-stereo-xr-audit-fixes-20261028
       - review/duoview-depth-contracts-20261028
+      - experiment/ci31-provenance-audit-20261028
   pull_request:
     branches:
       - build-182
@@ -138,6 +139,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI30 gameplay guard patch failed' }
           python workspace/duoview/stereo/test_gameplay_guards.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI30 gameplay guard contract failed' }
+          python workspace/duoview/stereo/provenance_v1/apply_provenance_audit.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI31 producer shape diagnostic patch failed' }
+          python workspace/duoview/stereo/provenance_v1/test_provenance_audit.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI31 diagnostic integration test failed' }
           if ($LASTEXITCODE -ne 0) { throw 'TRUE STEREO resource + eye-output contract rejected' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Backend whitespace/patch conflict' }
@@ -156,6 +161,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Hybrid contract compile failed' }
           ./hybrid_contract.exe
           if ($LASTEXITCODE -ne 0) { throw 'Hybrid contract failed' }
+          cl /nologo /std:c++20 /EHsc workspace/duoview/stereo/provenance_v1/ProducerContractTest.cpp /Fe:producer_contract.exe
+          if ($LASTEXITCODE -ne 0) { throw 'CI31 producer identity contract compile failed' }
+          ./producer_contract.exe
+          if ($LASTEXITCODE -ne 0) { throw 'CI31 producer identity contract failed' }
           $fxc = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter fxc.exe -Recurse -File |
             Where-Object { $_.FullName -like '*\x64\fxc.exe' } | Sort-Object FullName -Descending | Select-Object -First 1
           if (!$fxc) { throw 'FXC not installed' }
@@ -249,8 +258,10 @@ jobs:
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
           DuoView TRUE STEREO XR V1 — EXPERIMENTAL HEADSET BUILD (REVIEW FIXES)
-          Build branch: review/duoview-depth-contracts-20261028.
+          Build branch: experiment/ci31-provenance-audit-20261028.
           Stable Build165/V3 and published stable releases are NOT modified.
+          CI31 adds normal viewport/copy audit and a fail-closed producer contract;
+          actual producer roles/frames are STILL UNVERIFIED and hybrid is NOT LIVE.
           This ZIP contains the experimental first real two-eye output, not the old mono-only depth bridge.
 
           REQUIRED PSVR2 / STALKER 2 SETUP
@@ -322,7 +333,9 @@ jobs:
             windows_build_verified=$true; headset_verified=$false;
             depth_eye_frame_stage_identity_verified=$false;
             full_per_pass_matrix_reprojection=$false;
-            mode='experimental-stereo-contract-fixes'; stable_release=$false
+            provenance_contract_tested=$true; producer_authenticated=$false;
+            hybrid_live_dispatch=$false;
+            mode='experimental-ci31-provenance-audit'; stable_release=$false
           } | ConvertTo-Json | Set-Content package/BUILD_STATUS.json
           # Stage234 manifest predates the final R5/stereo overlays. Hash the
           # actual generated public sources and embedded bytecode as built.
