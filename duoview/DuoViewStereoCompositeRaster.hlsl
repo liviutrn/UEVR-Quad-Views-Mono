@@ -31,9 +31,13 @@ float4 RightNative(float2 uv) {
 }
 float4 LeftNative(float2 uv) {
     const float2 local=(uv-CropUv.xy)/(CropUv.zw-CropUv.xy);
-    return SourceAtlas.SampleLevel(LinearClamp,
+    float4 source=SourceAtlas.SampleLevel(LinearClamp,
         NativeSampleUV(local,FoveaRect.zw,NativeFoveaDimensions),0);
-}
+    // Apply the legacy V3 sharpening to physical LEFT shading in BOTH eyes.
+    if(SharpenStrength>0.0f && DebugViewMode==0)
+        source.rgb=GlamSharpenNativeFovea(uv,source.rgb);
+    return source;
+
 float DeviceLeftDepth(float2 local) {
     uint w,h;LeftSourceDepth.GetDimensions(w,h);
     if(!w||!h)return -1;
@@ -84,7 +88,8 @@ float4 RightFovea(float2 rightUV, float4 nativeRight, out float confidence) {
     // silhouette into a disoccluded background. Real RIGHT color repairs.
     uint dw,dh;LeftSourceDepth.GetDimensions(dw,dh);
     if(!dw||!dh) return nativeRight;
-    const int2 ip=int2(saturate(local)*float2(dw,dh));
+    // Source depth tap footprint is centered on texel + 0.5.
+    const int2 ip=int2(floor(saturate(local)*float2(dw,dh)-0.5f));
     [unroll] for(int j=0;j<2;j++) {
         [unroll] for(int i=0;i<2;i++) {
             int2 q=clamp(ip+int2(i,j),int2(0,0),int2(dw-1,dh-1));
@@ -100,7 +105,8 @@ float4 PSNativeStereo(VertexOut i):SV_TARGET0 {
     const bool right=i.pos.x>=float(OutputSize.x);
     float2 pixel=i.pos.xy;
     if(right)pixel.x-=float(OutputSize.x);
-    const float2 uv=(pixel+float2(.5f,.5f))/float2(OutputSize);
+    // SV_POSITION is already a pixel center; do not add a second half texel.
+    const float2 uv=pixel/float2(OutputSize);
     const float feather=BlendWeight(uv);
     const float4 nativeRight=RightNative(uv);
     float4 periphery=nativeRight;
