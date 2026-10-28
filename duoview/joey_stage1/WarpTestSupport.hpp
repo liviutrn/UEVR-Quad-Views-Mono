@@ -1,4 +1,7 @@
 #pragma once
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include "DuoViewD3D12.hpp"
 #include <dxgi1_6.h>
