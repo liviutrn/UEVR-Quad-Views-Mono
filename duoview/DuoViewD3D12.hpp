@@ -3,6 +3,7 @@
 #include "DuoViewMonoCopyD3D12.hpp"
 #include "DuoViewState.hpp"
 #include "DuoViewShaderSource.hpp"
+#include "DuoViewSurfaceD3D12.hpp"
 #include <memory>
 #include <string>
 
@@ -36,6 +37,7 @@ public:
 #endif
     }
     bool last_true_stereo() const { return last_true_stereo_; }
+    ID3D12Resource* surface_color(UINT pass) const {return pass<2?surfaces_.color(pass):nullptr;}
     // Prebuild the per-slot PSO, descriptors and output outside OpenXR frame copy.
     // Called after swapchain images and their command contexts are constructed.
     bool prewarm(ID3D12Device* device, UINT width, UINT height, bool srgb, UINT64 frequency = 0) {
@@ -115,7 +117,8 @@ public:
     // Direct Native Fix composition: keep Joey's exact UE rendering and
     // captures, but sample the existing view rectangles as two SRVs instead
     // of copying them to a third (doublewide) render texture first.
-    // No new GPU resources or PSO are created in this XR command callback.
+    // Legacy/V3 uses prewarmed objects. New opt-in surface modes lazily prepare
+    // their exact-sized maps once per retired slot (and on layout changes).
     bool record_native(ID3D12Device* device, ID3D12GraphicsCommandList* cmd,
                 ID3D12Resource* primary, ID3D12Resource* secondary,
                 ID3D12Resource* destination, D3D12_RESOURCE_STATES primary_state,
@@ -130,7 +133,7 @@ public:
         last_native_direct_xr_=false;
         last_true_stereo_=false;
         const auto reject=[this](const char* reason) { error_=reason; return false; };
-        if(stereoMode>3u)return reject("Unknown experimental stereo mode");
+        if(stereoMode>6u)return reject("Unknown experimental stereo mode");
         if (!device || !cmd || !primary || !secondary || !destination ||
             primary==secondary || primary==destination || secondary==destination ||
             cmd->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT ||
@@ -318,9 +321,22 @@ public:
             constants.stereo_check[0]=1.f;       // absolute world units
             constants.stereo_check[1]=0.015f;    // relative world error
             constants.stereo_check[2]=.20f;      // maximum peripheral UV shift
-            constants.stereo_check[3]=stereoMode==2?1.f:stereoMode==3?3.f:0.f; // tint proof / fovea-only diagnostic
+            constants.stereo_check[3]=stereoMode>=4?float(stereoMode):stereoMode==2?1.f:stereoMode==3?3.f:0.f;
         }
 #endif // UEVR_DUOVIEW_V3_CAMERA_FIELDS
+        const bool surface_mode=stereoReady && stereoMode>=4u;
+        std::array<SurfaceConstants,2> surface_constants{};
+        std::array<bool,2> surface_reverse{};
+        if(surface_mode) {
+            if(!make_surface_constants(frame,leftViewport,rightViewport,stereoSign,
+                    surface_constants,surface_reverse))
+                return reject("Surface camera transform / depth sample grid invalid");
+            if(!surfaces_.prepare(device,srgb_,layout.fovea.width,layout.fovea.height,
+                    layout.periphery.width,layout.periphery.height,surface_constants)) {
+                error_=surfaces_.error();return false;
+            }
+            ensure_surface_srvs(device,sampling_format);
+        }
         ensure_srvs(device,fovea,periphery,sampling_format);
         if(depthPreview || stereoReady) ensure_depth_srvs(device,leftDepth,rightDepth);
         // GPU lifetime remains bound to the exact retired OpenXR command slot,
@@ -333,6 +349,8 @@ public:
         transition(cmd,periphery,peripheral_state,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         recorded_commands_=true;
         if (timed) cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);
+        if(surface_mode)surfaces_.record(cmd,srv_.Get(),srv_gpu_start_,&constants,
+            surface_constants,surface_reverse,stereoMode>=5u);
         ID3D12DescriptorHeap* heaps[]{srv_.Get()};
         cmd->SetDescriptorHeaps(1,heaps);
         cmd->SetGraphicsRootSignature(root_.Get());
@@ -505,6 +523,56 @@ public:
     uint64_t xr_rtv_refresh_count() const { return xr_rtv_refresh_count_; }
     UINT64 timing_frequency() const { return frequency_; }
 private:
+    static bool make_surface_constants(const ViewFrame& frame,const DepthViewport& left,
+            const DepthViewport& right,float sign,std::array<SurfaceConstants,2>& output,
+            std::array<bool,2>& reverse) {
+#if defined(UEVR_DUOVIEW_V3_CAMERA_FIELDS)
+        const auto& l=frame.config.layout;
+        const auto left_full=surface::projection(frame.projection);
+        const auto right_full=surface::projection(frame.projection_right);
+        const auto left_crop=surface::crop(left_full,l.u0,l.v0,l.u1,l.v1);
+        const auto right_crop=surface::crop(right_full,l.u0,l.v0,l.u1,l.v1);
+        const auto& a=frame.eye_cameras[0];const auto& b=frame.eye_cameras[1];
+        const auto to_right=surface::build(left_crop,right_crop,right_full,
+            a.rotation,a.position,b.rotation,b.position,sign);
+        const auto to_left=surface::build(right_full,left_full,left_full,
+            b.rotation,b.position,a.rotation,a.position,sign);
+        if(!to_right||!to_left)return false;
+        const surface::Geometry* geometry[]{&*to_right,&*to_left};
+        const DepthViewport views[]{left,right};
+        const std::array<float,16>* projections[]{&frame.projection_right,&frame.projection};
+        for(size_t pass=0;pass<2;++pass) {
+            auto& c=output[pass];const auto& g=*geometry[pass];const auto& v=views[pass];
+            std::copy(g.source_eye_from_clip.begin(),g.source_eye_from_clip.end(),c.source_eye_from_clip);
+            std::copy(g.target_clip_from_source_eye.begin(),g.target_clip_from_source_eye.end(),c.target_clip_from_source_eye);
+            std::copy(g.target_full_clip_from_source_eye.begin(),g.target_full_clip_from_source_eye.end(),c.target_full_clip_from_source_eye);
+            const double columns=std::ceil(double(v.x)+v.width-.5)-std::ceil(double(v.x)-.5);
+            const double rows=std::ceil(double(v.y)+v.height-.5)-std::ceil(double(v.y)-.5);
+            if(columns<2||rows<2||columns>16384||rows>16384)return false;
+            c.mesh_config[0]=UINT(columns);c.mesh_config[1]=UINT(rows);
+            c.mesh_config[2]=pass==0?1u:0u;
+            c.mesh_config[3]=pass==0?1u:0u; // left depth is CROPPED, never a full-field veto
+            c.visibility[2]=(*projections[pass])[11];c.visibility[3]=(*projections[pass])[15];
+            if(std::abs(c.visibility[2])<1.e-7f)return false;
+            reverse[pass]=g.reverse_depth;
+        }
+        return true;
+#else
+        (void)frame;(void)left;(void)right;(void)sign;(void)output;(void)reverse;
+        return false;
+#endif
+    }
+    void ensure_surface_srvs(ID3D12Device* device,DXGI_FORMAT format) {
+        if(surface_srv_[0].Get()==surfaces_.color(0)&&surface_srv_[1].Get()==surfaces_.color(1))return;
+        D3D12_SHADER_RESOURCE_VIEW_DESC view{};view.Format=format;
+        view.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;view.Texture2D.MipLevels=1;
+        auto handle=srv_cpu_start_;handle.ptr+=4*srv_descriptor_increment_;
+        for(UINT pass=0;pass<2;++pass) {
+            surface_srv_[pass]=surfaces_.color(pass);device->CreateShaderResourceView(surface_srv_[pass].Get(),&view,handle);
+            handle.ptr+=srv_descriptor_increment_;
+        }
+    }
     void ensure_srvs(ID3D12Device* device, ID3D12Resource* first,
                      ID3D12Resource* second, DXGI_FORMAT format) {
         if (srv_descriptors_valid_ && srv_first_reference_.Get()==first &&
@@ -613,6 +681,7 @@ private:
     bool prepare(ID3D12Device* device, UINT width, UINT height, bool srgb) {
         if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && stereo_pipeline_ && depth_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
         output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); stereo_pipeline_.Reset(); depth_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
+        surfaces_=SurfaceReprojector{};surface_srv_[0].Reset();surface_srv_[1].Reset();
         depth_first_.Reset();depth_second_.Reset();
         srv_first_reference_.Reset(); srv_second_reference_.Reset(); xr_rtv_reference_.Reset();
         srv_descriptors_valid_=false; srv_cached_format_=DXGI_FORMAT_UNKNOWN;
@@ -623,7 +692,7 @@ private:
         device_ = device; width_ = width; height_ = height; srgb_ = srgb;
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 4;
+        range.NumDescriptors = 6;
         D3D12_ROOT_PARAMETER params[2]{};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[0].DescriptorTable = {1, &range};
@@ -689,7 +758,7 @@ private:
         atlas_->SetName(L"DuoView::NativeGatherAtlasFallback");
         D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.NumDescriptors = 3; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (!check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_)), "Create RTV heap")) return false;
-        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; hd.NumDescriptors = 4;
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; hd.NumDescriptors = 6;
         if (!check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srv_)), "Create SRV heap")) return false;
         srv_cpu_start_=srv_->GetCPUDescriptorHandleForHeapStart();
         srv_gpu_start_=srv_->GetGPUDescriptorHandleForHeapStart();
@@ -703,11 +772,20 @@ private:
         D3D12_RENDER_TARGET_VIEW_DESC view{}; view.Format = output_format; view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
         device->CreateRenderTargetView(output_.Get(), &view, rtv_cpu_start_);
         device->CreateRenderTargetView(atlas_.Get(), &view, stereo_atlas_rtv_cpu_);
+        D3D12_SHADER_RESOURCE_VIEW_DESC null_view{};null_view.Format=output_format;
+        null_view.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        null_view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;null_view.Texture2D.MipLevels=1;
+        auto null_handle=srv_cpu_start_;null_handle.ptr+=4*srv_descriptor_increment_;
+        for(int slot=0;slot<2;++slot) {
+            device->CreateShaderResourceView(nullptr,&null_view,null_handle);null_handle.ptr+=srv_descriptor_increment_;
+        }
         return true;
     }
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12Resource> output_, source_, atlas_, primary_reference_, secondary_reference_;
     ComPtr<ID3D12Resource> srv_first_reference_, srv_second_reference_, xr_rtv_reference_, depth_first_,depth_second_;
+    SurfaceReprojector surfaces_;
+    ComPtr<ID3D12Resource> surface_srv_[2];
     std::shared_ptr<const void> packet_lifetime_{};
     ComPtr<ID3D12RootSignature> root_;
     ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_,stereo_pipeline_,depth_pipeline_;

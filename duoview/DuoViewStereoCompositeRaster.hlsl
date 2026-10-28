@@ -9,6 +9,8 @@
 #include "DuoViewNativeCompositeRaster.hlsl"
 Texture2D<float> LeftSourceDepth : register(t2);
 Texture2D<float> RightSourceDepth : register(t3);
+Texture2D<float4> SyntheticRightFovea : register(t4);
+Texture2D<float4> SyntheticLeftPeriphery : register(t5);
 
 // Extra root constants, appended to DuoViewCompositeConfig:
 // StereoDepthZ = (right eye clipZ coefficient A,B,C,D);
@@ -108,12 +110,47 @@ float4 StereoProofColor(float4 color,bool right) {
         return float4(lerp(color.rgb,float3(.0f,.2f,.9f),.24f),1);
     return color;
 }
+float4 SurfaceComposite(float2 uv,bool right) {
+    const float feather=BlendWeight(uv);
+    const float4 realRight=RightNative(uv);
+    const bool reconstructPeriphery=StereoCheck.w>=4.5f;
+    float4 periphery=realRight;
+    float peripheralCoverage=0;
+    if(!right && reconstructPeriphery) {
+        const float4 projected=SyntheticLeftPeriphery.SampleLevel(LinearClamp,saturate(uv),0);
+        peripheralCoverage=projected.a;
+        if(projected.a>1.e-5f)periphery=float4(lerp(realRight.rgb,projected.rgb/projected.a,projected.a),1);
+    }
+    float4 fovea=periphery;float fovealCoverage=0;
+    if(feather>0) {
+        if(!right) {fovea=LeftNative(uv);fovealCoverage=1;}
+        else {
+            const float2 local=(uv-CropUv.xy)/(CropUv.zw-CropUv.xy);
+            const float4 projected=SyntheticRightFovea.SampleLevel(LinearClamp,saturate(local),0);
+            fovealCoverage=projected.a;
+            fovea=realRight;
+            if(projected.a>1.e-5f)fovea=float4(lerp(realRight.rgb,projected.rgb/projected.a,projected.a),1);
+        }
+    }
+    if(StereoCheck.w>5.5f) {
+        // This is GEOMETRY COVERAGE, not a claim of authenticated game depth.
+        const float3 outer=right?float3(.1f,.2f,.8f):lerp(float3(.8f,0,.6f),float3(0,.6f,.8f),peripheralCoverage);
+        const float3 inner=lerp(float3(.9f,.05f,0),float3(.05f,.9f,.1f),fovealCoverage);
+        return float4(lerp(outer,inner,feather),1);
+    }
+    if(DebugViewMode==1)return periphery;
+    if(DebugViewMode==2)return feather>0?fovea:float4(.04f,.04f,.04f,1);
+    float4 color=lerp(periphery,fovea,feather);
+    if(DebugBorder && feather>.01f && feather<.1f)color.rgb=float3(1,.3f,0);
+    return color;
+}
 float4 PSNativeStereo(VertexOut i):SV_TARGET0 {
     const bool right=i.pos.x>=float(OutputSize.x);
     float2 pixel=i.pos.xy;
     if(right)pixel.x-=float(OutputSize.x);
     // SV_POSITION is already a pixel center; do not add a second half texel.
     const float2 uv=pixel/float2(OutputSize);
+    if(StereoCheck.w>=3.5f)return SurfaceComposite(uv,right);
     const float feather=BlendWeight(uv);
     const float4 nativeRight=RightNative(uv);
     float4 periphery=nativeRight;

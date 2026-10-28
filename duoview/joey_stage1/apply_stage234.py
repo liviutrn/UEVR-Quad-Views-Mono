@@ -1085,7 +1085,7 @@ OpenXR::PipelineState OpenXR::get_submit_state() {
     # declarations or altered SDK files.
     for name in ("DuoViewGeometry.hpp","DuoViewGaze.hpp","DuoViewPSVR2Gaze.hpp","DuoViewCropStability.hpp","DuoViewFrame.hpp",
                  "DuoViewConfig.hpp","DuoViewState.hpp","DuoViewD3D12.hpp",
-                 "DuoViewMonoCopyD3D12.hpp"):
+                 "DuoViewMonoCopyD3D12.hpp","SurfaceGeometry.hpp","DuoViewSurfaceD3D12.hpp"):
         target=root/"src/mods/vr"/name
         if target.exists(): raise RuntimeError("Refusing to overwrite prior source: "+str(target))
         text=(src/name).read_text(encoding="utf-8")

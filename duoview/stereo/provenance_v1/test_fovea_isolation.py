@@ -8,7 +8,7 @@ shader=load("src/mods/vr/DuoViewStereoCompositeRaster.hlsl")
 comp=load("src/mods/vr/DuoViewD3D12.hpp")
 ui=load("src/mods/VR.cpp")
 hdr=load("src/mods/vr/D3D12Component.hpp")
-assert "stereoMode>3u" in comp
+assert "stereoMode>6u" in comp
 assert "stereoMode==3?3.f:0.f" in comp
 assert "if(!right && StereoCheck.w<2.5f)" in shader
 assert "const float4 nativeRight=RightNative(uv);" in shader

@@ -194,7 +194,15 @@ class Session : public std::enable_shared_from_this<Session> {
                 <<", \"depth\": "<<(im.depth?"true":"false")
                 <<", \"raw\": "<<(raw?"true":"false")<<", \"bmp\": "<<(bmp?"true":"false")
                 <<", \"raw_row_stride\": "<<im.width*im.bytes_per_pixel
-                <<", \"details\": "<<quoted(im.details)<<"}";
+                <<", \"details\": "<<quoted(im.details);
+            if(ok && !im.depth && im.bytes_per_pixel==4 && im.label.starts_with("surface_")) {
+                uint64_t accepted=0;
+                for(size_t p=3;p<packed.size();p+=4)accepted+=packed[p]==255;
+                manifest<<", \"surface_covered_pixels\": "<<accepted
+                    <<", \"surface_total_pixels\": "<<uint64_t(im.width)*im.height
+                    <<", \"surface_coverage\": "<<double(accepted)/(uint64_t(im.width)*im.height);
+            }
+            manifest<<"}";
             if(i+1<images_.size())manifest<<",";
             manifest<<"\n";
         }
@@ -221,6 +229,12 @@ public:
         }
         if(n==0)excluded_.push_back("No eligible submitted DSV source available in this capture interval");
         return images_.size()>=2; // do not alter the original XR output if some depth allocations fail
+    }
+    void attach_surface_outputs(ID3D12Device* dev,ID3D12Resource* right,ID3D12Resource* left) {
+        if(right)add_image(dev,right,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            "surface_right_fovea",false,"Source-depth RIGHT fovea. Alpha 255 = reconstructed geometry; alpha 0 = real-R fallback. Frozen matrices are NOT depth-pass authenticated.");
+        if(left)add_image(dev,left,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            "surface_left_periphery",false,"Source-depth LEFT periphery. Alpha 255 = reconstructed geometry; alpha 0 = unavailable target surface (unwarped real-R fallback).");
     }
     bool record(ID3D12GraphicsCommandList* cmd) {
         if(!cmd||recorded_||images_.empty())return false;
@@ -268,7 +282,10 @@ public:
                     }
                 }
                 const auto done=self->fence_->GetCompletedValue();
-                if(done>=1 && done!=UINT64_MAX) self->save();
+                if(done>=1 && done!=UINT64_MAX) {
+                    try { self->save(); }
+                    catch(...) { OutputDebugStringA("DuoView: capture file saving failed\n"); }
+                }
             }).detach();
         } catch(...) {
             quarantine_unproven(self);

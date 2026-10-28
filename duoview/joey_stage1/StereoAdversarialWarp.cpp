@@ -11,6 +11,8 @@ struct Scenario {
     bool padded=false, srgb=false, indirect=false, forward_z=false;
     uint32_t mode=1, preview=0, debug=0;
     float sign=1.f;
+    float vertical=0.f, target_pitch=0.f, slope=0.f;
+    bool missing_target_depth=false, source_depth_edge=false;
     int invalid=0;
     DepthViewport left{0,0,32,32,0,1}, right{0,0,16,16,0,1};
 };
@@ -50,6 +52,24 @@ public:
             encoded(s.left_z>0?s.left_z:s.z,s.left_near,s.left),s.left);
         auto rd=native_depth(device.Get(),cmd.Get(),s.padded?48:16,s.padded?40:16,
             encoded(s.z,s.right_near,s.right),s.right);
+        if(s.mode>=4 && (s.slope!=0 || s.missing_target_depth || s.source_depth_edge)) {
+            const auto rewrite=[&](NativeSource& source,const DepthViewport& view,bool left) {
+                const auto desc=source.texture->GetDesc();D3D12_PLACED_SUBRESOURCE_FOOTPRINT foot{};UINT64 bytes{};
+                device->GetCopyableFootprints(&desc,0,1,0,&foot,nullptr,nullptr,&bytes);
+                void* data{};D3D12_RANGE none{0,0};check(source.upload->Map(0,&none,&data));
+                for(UINT y=0;y<desc.Height;++y)for(UINT x=0;x<desc.Width;++x) {
+                    if(x<view.x||y<view.y||x>=view.x+view.width||y>=view.y+view.height)continue;
+                    const double u=(double(x)+.5-view.x)/view.width;
+                    const double ray=left ? u-.5 : 2*u-1.;
+                    const double z=s.source_depth_edge && left ? (u<.5?100.:1000.) :
+                        (s.z+(left?0.:s.slope*s.baseline*s.sign))/(1.-s.slope*ray);
+                    const float d=!left&&s.missing_target_depth?0.f:encoded(float(z),left?s.left_near:s.right_near,view);
+                    std::memcpy(static_cast<uint8_t*>(data)+size_t(y)*foot.Footprint.RowPitch+x*4,&d,4);
+                }
+                source.upload->Unmap(0,nullptr);
+            };
+            rewrite(ld,s.left,true);rewrite(rd,s.right,false);
+        }
         auto output_desc=texture(128,64,D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
         output_desc.Format=s.srgb && !s.indirect?DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:DXGI_FORMAT_B8G8R8A8_UNORM;
         auto output=resource(device.Get(),output_desc,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -69,7 +89,11 @@ public:
             else p[14]=near_plane;
         };
         projection(frame.projection,s.left_near);projection(frame.projection_right,s.right_near);
-        frame.eye_cameras[0].position={0.,0.,0.};frame.eye_cameras[1].position={s.baseline,0.,0.};
+        frame.eye_cameras[0].position={0.,0.,0.};
+        frame.eye_cameras[1].position=s.mode>=4
+            ? std::array<double,3>{0.,s.baseline,s.vertical}
+            : std::array<double,3>{s.baseline,0.,0.};
+        if(s.mode>=4)frame.eye_cameras[1].rotation={s.target_pitch,0.,0.};
         ID3D12Resource* left=ld.texture.Get();ID3D12Resource* right=rd.texture.Get();
         ComPtr<ID3D12Resource> invalid_resource;
         if(s.invalid==1)s.left={};
@@ -188,6 +212,71 @@ int main() try {
             "fovea-only mode warped one peripheral eye");
     Scenario debug=plain;debug.debug=2;const auto debug_result=render(debug);
     require(pixel(debug_result,0,0)[0]>=9&&pixel(debug_result,0,0)[0]<=11,"fovea-only diagnostic background missing");
+    for(uint32_t mode : {4u,5u})for(float z : {100.f,200.f,1000.f})for(float sign : {1.f,-1.f}) {
+        Scenario surface;surface.mode=mode;surface.z=z;surface.sign=sign;
+        const auto image=render(surface);
+        for(int y=25;y<=38;y+=3)for(int x=25;x<=38;x+=3) {
+            const double u=(x+.5)/64.,v=(y+.5)/64.;
+            const double sx=(u+sign*surface.baseline/(2*z)-.25)*64-.5;
+            const double sy=(v-.25)*64-.5;
+            for(int c=0;c<3;++c)require(std::abs(pixel(image,x+64,y)[c]-sample_pattern(sx,sy,32,c))<=2.,
+                "source-depth surface differs from independent plane/color oracle");
+        }
+        if(mode==4) {
+            for(int y : {0,1,62,63})for(int x=0;x<64;++x)
+                require(std::memcmp(pixel(image,x,y),pixel(image,x+64,y),4)==0,
+                    "surface fovea-only changed peripheral eye parity");
+        } else {
+            const int x=8,y=31;
+            const double sx=((x+.5)/64.-sign*surface.baseline/(2*z))*16.-.5;
+            const double sy=(y+.5)/64.*16.-.5;
+            for(int c=0;c<3;++c)require(std::abs(pixel(image,x,y)[c]-sample_pattern(sx,sy,16,c,1))<=2.,
+                "forward peripheral surface differs from independent physical-eye oracle");
+        }
+    }
+    Scenario surface;surface.mode=5;const auto surface_base=render(surface);
+    Scenario surface_pad=surface;surface_pad.padded=true;
+    require(render(surface_pad).pixels==surface_base.pixels,"surface active-rect padding changed output");
+    Scenario surface_near=surface;surface_near.left_near=30.f;
+    const auto independent_near=render(surface_near);
+    for(size_t i=0;i<surface_base.pixels.size();++i)
+        require(std::abs(int(independent_near.pixels[i])-surface_base.pixels[i])<=1,"surface per-eye near coefficients mixed");
+    Scenario surface_forward=surface;surface_forward.forward_z=true;const auto forward_surface=render(surface_forward);
+    for(size_t i=0;i<surface_base.pixels.size();++i)
+        require(std::abs(int(forward_surface.pixels[i])-surface_base.pixels[i])<=1,"surface forward/reverse depth competition disagrees");
+    Scenario uncertain=surface;uncertain.mode=4;uncertain.missing_target_depth=true;
+    require(render(uncertain).pixels!=mono_result.pixels,"missing coarse target depth silently disabled source reconstruction");
+    Scenario tilted=uncertain;tilted.target_pitch=2.f;tilted.vertical=1.5f;
+    const auto nonrectified=render(tilted);
+    const double theta=2.*3.14159265358979323846/180.;
+    for(int y=26;y<=36;y+=2)for(int x=26;x<=36;x+=2) {
+        const double rx=2.*(x+.5)/64.-1.,ry=1.-2.*(y+.5)/64.;
+        const double zray=std::cos(theta)-std::sin(theta)*ry;
+        const double t=tilted.z/zray;
+        const double world_x=tilted.baseline+rx*t;
+        const double world_y=tilted.vertical+(std::cos(theta)*ry+std::sin(theta))*t;
+        const double sx=(.5+world_x/tilted.z)*32.-.5,sy=(.5-world_y/tilted.z)*32.-.5;
+        for(int c=0;c<3;++c)require(std::abs(pixel(nonrectified,x+64,y)[c]-sample_pattern(sx,sy,32,c))<=2.,
+            "unrectified vertical/pitched eye failed independent ray-plane oracle");
+    }
+    Scenario slope=surface;slope.mode=4;slope.slope=.5f;const auto sloped=render(slope);
+    for(int y=26;y<=36;y+=2)for(int x=26;x<=36;x+=2) {
+        const double rx=2.*(x+.5)/64.-1.,ry=1.-2.*(y+.5)/64.;
+        const double z=(slope.z+slope.slope*slope.baseline)/(1.-slope.slope*rx);
+        const double sx=(.5+(slope.baseline+rx*z)/z)*32.-.5,sy=(.5-ry)*32.-.5;
+        for(int c=0;c<3;++c)require(std::abs(pixel(sloped,x+64,y)[c]-sample_pattern(sx,sy,32,c))<=2.,
+            "sloped surface lost projective source color coordinates");
+    }
+    Scenario veto=surface;veto.mode=4;veto.z=100;veto.left_z=200;
+    const auto occluded=render(veto);
+    for(int c=0;c<3;++c)require(std::abs(pixel(occluded,95,31)[c]-sample_pattern(31.5/64*16-.5,31.5/64*16-.5,16,c,1))<=2.,
+        "certain native target occluder did not veto hidden source surface");
+    Scenario edge=surface;edge.mode=4;edge.z=1000;edge.source_depth_edge=true;
+    const auto depth_edge=render(edge);
+    for(int c=0;c<3;++c)require(std::abs(pixel(depth_edge,94,31)[c]-sample_pattern(30.5/64*16-.5,31.5/64*16-.5,16,c,1))<=2.,
+        "surface triangle bridged a foreground/background disocclusion");
+    Scenario coverage=surface;coverage.mode=6;const auto covered=render(coverage);
+    require(pixel(covered,95,31)[1]>200&&pixel(covered,95,31)[2]<40,"surface coverage did not expose accepted geometry");
     for(int invalid=1;invalid<=12;++invalid) {
         Scenario bad;bad.invalid=invalid;const auto r=gpu.render(bad);++cases;
         require(!r.accepted&&!r.recorded&&!r.error.empty(),"invalid depth/projection accepted or commands recorded, case="+std::to_string(invalid));

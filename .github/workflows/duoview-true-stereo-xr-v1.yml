@@ -8,6 +8,7 @@ on:
       - review/duoview-depth-contracts-20261028
       - experiment/ci31-provenance-audit-20261028
       - experiment/ci32-stereo-reconstruction-20261028
+      - experiment/ci33-surface-stereo-20261028
   pull_request:
     branches:
       - build-182
@@ -173,6 +174,17 @@ jobs:
           ./capture-retention-after.exe *> evidence/capture-retention-after.log
           $code=$LASTEXITCODE; Get-Content evidence/capture-retention-after.log
           if ($code -ne 0) { throw 'Completed producer copy was lost before consumer retirement' }
+      - name: Connect and validate source-depth surface reconstruction
+        shell: pwsh
+        run: |
+          python workspace/duoview/stereo/apply_surface_renderer.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Surface renderer live XR integration failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX workspace/duoview/stereo/surface_geometry_tests.cpp /Fe:surface-geometry.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Surface geometry tests failed compilation' }
+          ./surface-geometry.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Surface camera-relative geometry failed' }
+          git -C backend diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Surface integration source whitespace conflict' }
       - name: Compile stereo synthesis and hybrid z-owner-forward-fuse shaders
         shell: pwsh
         run: |
@@ -283,14 +295,16 @@ jobs:
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
           DuoView TRUE STEREO XR V1 — EXPERIMENTAL HEADSET BUILD (REVIEW FIXES)
-          Build branch: experiment/ci32-stereo-reconstruction-20261028.
+          Build branch: experiment/ci33-surface-stereo-20261028.
           Stable Build165/V3 and published stable releases are NOT modified.
           CI32 fixes completed depth copies being overwritten BEFORE their
           Present consumer, with old-bug reproduction and corrected WARP tests.
           It retains CI31 viewport/copy audit, mode 3 RIGHT-fovea-only A/B,
           and a fail-closed producer contract. Actual producer roles/frames
-          remain UNVERIFIED; the contract has no UE producer authentication
-          hook yet and full-matrix hybrid remains NOT LIVE.
+          remain UNVERIFIED; the contract has no UE depth-pass authentication
+          hook yet. NEW: modes 4/5 use camera-relative full-matrix source-depth
+          surface reconstruction LIVE, with a hardware target-eye depth buffer.
+          The older standalone compute hybrid is still not dispatched.
           This ZIP contains the experimental first real two-eye output, not the old mono-only depth bridge.
 
           REQUIRED PSVR2 / STALKER 2 SETUP
@@ -302,6 +316,12 @@ jobs:
              2 = legacy stereo + BLUE tint over ENTIRE RIGHT XR eye;
              3 = diagnostic RIGHT fovea synthesis only: identical real RIGHT
              periphery in BOTH XR eyes. Mode 3 is NOT full-matrix hybrid.
+             4 = NEW source-depth RIGHT fovea (start here); unchanged RIGHT
+                 periphery in both eyes isolates foveal reconstruction.
+             5 = NEW source-depth surfaces in RIGHT fovea AND LEFT periphery.
+             6 = NEW geometry coverage: green fovea = reconstructed; red =
+                 actual RIGHT fallback; cyan peripheral = projected; magenta
+                 peripheral = unavailable LEFT-only surface. Return to 4/5.
           6. Start in mode 0 and use CAPTURE NOW. The request stays pending until
              eligible submitted depths exist. Then verify mode 2 in the headset.
              BLUE tint must cover only the RIGHT eye, including its corners.
@@ -322,6 +342,26 @@ jobs:
              stereo counter is not incremented by this mono fallback.
 
           IMPLEMENTATION LIMITS — PLEASE READ
+          Modes 4/5 rasterize continuous source-depth surfaces into the actual
+          target camera. The hardware depth buffer resolves nearest surfaces.
+          Source color remains at native resolution via projective sampling;
+          the existing foveal sharpening applies to both foveae. Discontinuous
+          source-depth triangles are discarded. Coarse actual target depth
+          vetoes certain occluders, rather than defining all foveal geometry.
+          Real RIGHT color fills unavailable regions. No additional Unreal
+          scene render is introduced. Surfaces visible only to LEFT in the
+          outer periphery cannot be recovered exactly from RIGHT RGBD alone.
+          Mode 0 retains the previous composition, and allocates no surface
+          maps. First new-mode activation/layout change allocates exact-sized
+          maps once per retired XR slot and may cause an initial hitch.
+          Modes 4/5/6 immediately select fresh retained current-interval GPU
+          copies; the legacy pointer-based 3-epoch gate is bypassed. This
+          removes that gate's extra stereo/mono toggles but does NOT certify
+          scene-frame provenance. Missing current pairs still fall back.
+          Manual captures include reconstruction color/alpha maps and numeric
+          coverage in manifest.json; keep the whole capture folder intact.
+
+          LEGACY modes 1/2/3:
           UE0 physically renders high-res cropped LEFT fovea; UE1 physically
           renders low-res full-FOV RIGHT periphery. TRUE STEREO mode uses one
           per-eye double-wide pixel shader: LEFT fovea is native; RIGHT fovea
@@ -364,14 +404,17 @@ jobs:
             windows_build_verified=$true; headset_verified=$false;
             depth_eye_frame_stage_identity_verified=$false;
             full_per_pass_matrix_reprojection=$false;
+            full_matrix_surface_renderer_live=$true;
+            depth_pass_jitter_authenticated=$false;
             provenance_contract_tested=$true; producer_authenticated=$false;
             hybrid_live_dispatch=$false;
             unread_depth_retention_tested=$true;
-            mode='experimental-ci32-capture-retention'; stable_release=$false
+            mode='experimental-ci33-source-depth-surfaces'; stable_release=$false
           } | ConvertTo-Json | Set-Content package/BUILD_STATUS.json
           # Stage234 manifest predates the final R5/stereo overlays. Hash the
           # actual generated public sources and embedded bytecode as built.
           $finalPaths=@('src/mods/VR.cpp','src/mods/VR.hpp','src/mods/vr/D3D12Component.cpp','src/mods/vr/D3D12Component.hpp','src/mods/vr/DuoViewD3D12.hpp','src/mods/vr/DuoViewGeometry.hpp','src/mods/vr/DuoViewState.hpp','src/mods/vr/DuoViewShaderSource.hpp','src/mods/vr/DuoViewStereoCompositeRaster.hlsl','src/mods/vr/d3d12/StockDibrDepth.hpp','src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp','src/mods/vr/d3d12/DIBRTransaction.hpp','src/hooks/D3D12Hook.cpp')
+          $finalPaths+=@('src/mods/vr/SurfaceGeometry.hpp','src/mods/vr/DuoViewSurfaceD3D12.hpp','src/mods/vr/DuoViewSurfaceReproject.hlsl','src/mods/vr/d3d12/CaptureSlotPolicy.hpp')
           $finalPaths | ForEach-Object {
             @{path=$_;sha256=(Get-FileHash ("backend/"+$_) -Algorithm SHA256).Hash.ToLowerInvariant()}
           } | ConvertTo-Json | Set-Content package/final-generated-source-sha256.json
