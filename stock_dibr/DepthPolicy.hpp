@@ -44,6 +44,14 @@ inline DepthPairChoice choose_duoview_depth_pair(std::span<const DepthShape> sha
     if(n<2 || left_manual<0 || right_manual<0 || size_t(left_manual)>n || size_t(right_manual)>n)return {};
     if(left_manual && right_manual) {
         if(left_manual==right_manual)return {};
+        const auto& left=shapes[size_t(left_manual-1)];
+        const auto& right=shapes[size_t(right_manual-1)];
+        // A manual ordinal is only a diagnostic selection, never permission
+        // to feed a wrong-eye/wrong-scale source to the stereo compositor.
+        if(!duoview_depth_shape(left.width,left.height,lw,lh) ||
+           !duoview_depth_shape(right.width,right.height,rw,rh))return {};
+        const double sl=left.height/lh,sr=right.height/rh;
+        if(std::abs(sl-sr)/(sl+sr)>.05)return {};
         return {size_t(left_manual-1),size_t(right_manual-1),true};
     }
     DepthPairChoice best{};double best_score=1.e30;uint64_t latest{};

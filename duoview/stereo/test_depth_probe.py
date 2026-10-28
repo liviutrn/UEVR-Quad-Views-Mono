@@ -18,6 +18,8 @@ checks={
  "manual chosen ordinal overrides automatic":'if(left_manual && right_manual)' in policy,
  "stale manual index never selects unrelated Auto":'size_t(left_manual)>n || size_t(right_manual)>n' in policy,
  "two separate depth snapshots required":'if(ids.size()<2)return r;' in d and 'if(left_manual==right_manual)return {}' in policy,
+ "manual stereo obeys role geometry and coherent scale":'const auto& left=shapes[size_t(left_manual-1)]' in policy and 'const double sl=left.height/lh,sr=right.height/rh;' in policy,
+ "pair queue waits preflight before any lease":'if(!queue_ready(a)||!queue_ready(b))return r;' in d and d.index('if(!queue_ready(a)||!queue_ready(b))return r;')<d.index('r.left=lease(a);'),
  "reused original DSV does not collapse two pass copies":'Preserve separately captured source passes' in d,
  "auto jointly matches frozen producer dimensions and render scale":'choose_duoview_depth_pair' in d and 'if(mismatch>.05)continue' in policy,
  "producer frozen widths passed into candidate browser":'packet_frame->config.layout.fovea.width' in c and 'packet_frame->config.layout.periphery.width' in c,

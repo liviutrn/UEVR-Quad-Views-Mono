@@ -86,7 +86,20 @@ int main() {
         "two foveal snapshots alone cannot masquerade as a complete Auto source pair");
     expect(!stock_dibr::choose_duoview_depth_pair(candidates,1,1,2030,1614,812,646).valid,"duplicate manual choice rejected");
     expect(!stock_dibr::choose_duoview_depth_pair(candidates,5,0,2030,1614,812,646).valid,"stale manual ordinal never becomes Auto");
-    expect(stock_dibr::choose_duoview_depth_pair(candidates,1,3,2030,1614,812,646).valid,"explicit distinct manual choices retained");
+    expect(stock_dibr::choose_duoview_depth_pair(candidates,1,3,2030,1614,812,646).valid,"explicit coherent manual choices retained");
+    expect(!stock_dibr::choose_duoview_depth_pair(candidates,1,2,2030,1614,812,646).valid,
+        "manual override must not use two foveal depths as a stereo pair");
+    expect(!stock_dibr::choose_duoview_depth_pair(candidates,3,4,2030,1614,812,646).valid,
+        "manual override must not use two periphery depths as a stereo pair");
+    expect(!stock_dibr::choose_duoview_depth_pair(candidates,3,1,2030,1614,812,646).valid,
+        "manual override must reject reversed eye/depth roles");
+    expect(!stock_dibr::choose_duoview_depth_pair(candidates,3,0,2030,1614,812,646).valid,
+        "partial manual selector must enforce left fovea dimensions");
+    expect(!stock_dibr::choose_duoview_depth_pair(candidates,0,1,2030,1614,812,646).valid,
+        "partial manual selector must enforce right periphery dimensions");
+    const std::array<stock_dibr::DepthShape,2> mismatched_scales{{{1015,807,1},{325,258,2}}};
+    expect(!stock_dibr::choose_duoview_depth_pair(mismatched_scales,1,2,2030,1614,812,646).valid,
+        "manual override must reject incompatible scene render scales");
 
     std::printf("Stock DIBR depth policy: %u failure(s)\n", failures);
     return failures == 0 ? 0 : 1;

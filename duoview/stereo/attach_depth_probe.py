@@ -78,9 +78,17 @@ probe=r'''    struct PreviewPair {
             left_selector,right_selector,left_width,left_height,right_width,right_height);
         if(!chosen.valid)return r;
         const size_t a=ids[chosen.left],b=ids[chosen.right];
+        // Queue waits are GPU operations and can fail independently. Preflight
+        // BOTH before leasing EITHER slot; a failed second wait must not strand
+        // the left source for the rest of this epoch.
+        auto queue_ready=[&](size_t i)->bool {
+            const auto& s=slots[i];
+            return !s.foreign_fence || (queue &&
+                SUCCEEDED(queue->Wait(s.foreign_fence.Get(),1)));
+        };
+        if(!queue_ready(a)||!queue_ready(b))return r;
         auto lease=[&](size_t i)->Ptr<ID3D12Resource> {
             auto& s=slots[i];
-            if(s.foreign_fence&&(!queue||FAILED(queue->Wait(s.foreign_fence.Get(),1))))return {};
             s.leased=true;snapshot_leases[i]=true;return s.texture;
         };
         r.left=lease(a);
