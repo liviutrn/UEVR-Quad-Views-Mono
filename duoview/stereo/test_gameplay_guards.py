@@ -12,6 +12,7 @@ checks={
 "bounded bucket capacity":'normal_size_buckets[normal_bucket].captured>=NormalCapacity/2' in d,
 "copy accounting only post-copy":'++normal_size_buckets[normal_bucket].captured;' in d and d.index('++recorded_this_interval; ++captured;')<d.index('++normal_size_buckets[normal_bucket].captured;'),
 "snapshot mode not budgeted":'if (duoview_source_sizes[0] && !snapshot_armed)' in d,
+"stable source/write-version rank pin":'const auto guarded=choose_duoview_depth_pair(' in d and 'stage_key' in d,
 "auto probation only":'if(left_selector==0 && right_selector==0)' in d,
 "fresh epoch eligibility before auto":'const auto ids=preview_indices();' in d and d.index('const auto ids=preview_indices();')<d.index('if(auto_candidate_streak<3)'),
 "missing pair resets probation":'if(ids.size()<2) {' in d and 'auto_candidate_streak=0;' in d,

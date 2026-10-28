@@ -27,7 +27,7 @@ edit(depth,'    bool snapshot_armed{};',
     uint64_t normal_bucket_captures[2]{};
     uint64_t normal_bucket_skips[2]{};
     uint64_t normal_extra_shape_skips{};
-    std::array<std::uintptr_t,2> auto_candidate_identity{};
+    std::array<std::uintptr_t,4> auto_candidate_identity{};
     uint64_t auto_last_evaluated_epoch{};
     uint32_t auto_candidate_streak{};
     uint64_t auto_candidate_changes{}, auto_candidate_deferred{};
@@ -94,11 +94,43 @@ edit(depth,'        if(!chosen.valid)return r;',
             return r;
         }''',"reset probation on geometry mismatch")
 edit(depth,'        const size_t a=ids[chosen.left],b=ids[chosen.right];',
-'''        const size_t a=ids[chosen.left],b=ids[chosen.right];
+'''        size_t a=ids[chosen.left],b=ids[chosen.right];
         if(left_selector==0 && right_selector==0) {
-            const std::array<std::uintptr_t,2> current{
-                reinterpret_cast<std::uintptr_t>(slots[a].source.Get()),
-                reinterpret_cast<std::uintptr_t>(slots[b].source.Get())
+            // Source identity alone is not pass identity: the same DSV can
+            // be reused many times. Include the ordered write-version rank
+            // WITHIN each resource's submitted passes in this epoch.
+            auto stage_key=[&](size_t slot) {
+                auto* source=slots[slot].source.Get();
+                std::uintptr_t stage=0;
+                for(size_t k:ids) if(slots[k].source.Get()==source &&
+                                   slots[k].serial<=slots[slot].serial)++stage;
+                return std::array<std::uintptr_t,2>{
+                    reinterpret_cast<std::uintptr_t>(source),stage
+                };
+            };
+            // If the prior fully confirmed pair is still present and its
+            // geometry remains legal, keep it even when heuristic tie-order
+            // chooses another valid-looking pass. No old GPU resource is used.
+            if(auto_candidate_streak>=3) {
+                size_t old_l=ids.size(),old_r=ids.size();
+                for(size_t k=0;k<ids.size();++k) {
+                    const auto tag=stage_key(ids[k]);
+                    if(tag[0]==auto_candidate_identity[0] &&
+                       tag[1]==auto_candidate_identity[1])old_l=k;
+                    if(tag[0]==auto_candidate_identity[2] &&
+                       tag[1]==auto_candidate_identity[3])old_r=k;
+                }
+                if(old_l<ids.size() && old_r<ids.size()) {
+                    const auto guarded=choose_duoview_depth_pair(
+                        std::span<const DepthShape>{shapes.data(),ids.size()},
+                        int(old_l+1),int(old_r+1),
+                        left_width,left_height,right_width,right_height);
+                    if(guarded.valid){a=ids[old_l];b=ids[old_r];}
+                }
+            }
+            const auto la=stage_key(a),rb=stage_key(b);
+            const std::array<std::uintptr_t,4> current{
+                la[0],la[1],rb[0],rb[1]
             };
             // No reuse of stale *textures*: this key ONLY gates fresh epoch
             // candidates, which still must have passed the geometry test.
