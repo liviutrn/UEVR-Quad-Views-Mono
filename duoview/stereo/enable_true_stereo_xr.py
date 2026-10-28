@@ -95,21 +95,48 @@ edit(dc,'''                                if ((submitted && recorded && callbac
                                     m_stock_dibr_depth->finish_frame();''',
 '''                                if ((submitted && recorded && callback_attempted) || capture_id || preview_mode || stereo_mode)
                                     m_stock_dibr_depth->finish_frame();''',"depth GPU consumer retirement")
-# Add final stereo XR output image to one-shot captures, BEFORE depth candidates
-# consume the 512MB readback budget. Never alter XR destination image content.
+# The OpenXR destination pointer exists ONLY inside the frame-copy callback.
+# Reserve 128 MiB of one-shot readback budget for the FINAL stereo output,
+# then attach the actual destination after compositor.record_native completed.
+# No readback occurs on ordinary frames; a one-shot readback allocation in the
+# XR callback is preferable to capturing the wrong/null resource.
 dump="src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp"
-edit(dump,'''           const std::vector<Candidate>& depths) {''',
+edit(dump,'''    UINT64 total_bytes_{};''',
+'''    UINT64 total_bytes_{};
+    bool reserve_headset_output_{};
+    bool final_output_attached_{};''',"one-shot final XR reservation")
+edit(dump,'''           total_bytes_+bytes>MaxBytes) {''',
+'''           total_bytes_+bytes>MaxBytes-(reserve_headset_output_ ? 128ull*1024*1024 : 0ull)) {''',
+"reserve readback space for doublewide OpenXR image")
+edit(dump,'''           const std::vector<Candidate>& depths) {
+        add_image(dev,left,''',
 '''           const std::vector<Candidate>& depths,
-           ID3D12Resource* headsetOutput=nullptr) {''',"XR capture argument")
-edit(dump,'''        add_image(dev,right,D3D12_RESOURCE_STATE_RENDER_TARGET,"right_periphery",false,"UE1 split-right color; allocation (may include inactive pixels)");
-        size_t n=0;''',
-'''        add_image(dev,right,D3D12_RESOURCE_STATE_RENDER_TARGET,"right_periphery",false,"UE1 split-right color; allocation (may include inactive pixels)");
-        if(headsetOutput)
-            add_image(dev,headsetOutput,D3D12_RESOURCE_STATE_RENDER_TARGET,
-                      "xr_submitted_doublewide",false,
-                      "FINAL headset image. LEFT half x=0..W-1; RIGHT half x=W..2W-1. Compare both eyes on one raw image.");
-        size_t n=0;''',"XR final stereo screenshot")
+           bool reserveHeadsetOutput=false) {
+        reserve_headset_output_=reserveHeadsetOutput;
+        add_image(dev,left,''',"reserve output before raw depth captures")
+edit(dump,'''    bool record(ID3D12GraphicsCommandList* cmd) {''',
+'''    bool attach_headset_output(ID3D12Device* dev,ID3D12Resource* destination) {
+        if(final_output_attached_)return true;
+        reserve_headset_output_=false;
+        final_output_attached_=true;
+        // GPU copy occurs only after actual stereo pixel shader has drawn.
+        // The R5 sources and final headset target share the same OpenXR
+        // command-list and fence, so the manifest describes ONE frame.
+        return add_image(dev,destination,D3D12_RESOURCE_STATE_RENDER_TARGET,
+                         "xr_submitted_doublewide",false,
+                         "FINAL headset image. LEFT x=0..W-1, RIGHT x=W..2W-1; same copy command as source color and depth.");
+    }
+    bool record(ID3D12GraphicsCommandList* cmd) {''',
+"one-shot XR destination allocation inside callback")
 edit(dc,'''                                    m_scene_capture_tex.texture.Get(),candidates)) capture.reset();''',
 '''                                    m_scene_capture_tex.texture.Get(),candidates,
-                                    destination)) capture.reset();''',"capture final destination")
-print("TRUE XR STEREO: pinned actual UE split-eye sources; candidate controls; direct eye output and stereo readback capture patched.")
+                                    true)) capture.reset();''',"reserve final XR capture without undeclared destination")
+edit(dc,'''                                    if (recorded && capture) {
+                                        // Sources have been restored to their native RT states''',
+'''                                    if (recorded && capture) {
+                                        // XR destination exists only in the copy callback.
+                                        // Capture the FINAL separately composed two-eye image.
+                                        capture->attach_headset_output(device,destination);
+                                        // Sources have been restored to their native RT states''',
+"bind real final XR destination after successful stereo recording")
+print("TRUE XR STEREO: actual two-eye rendering, same-command final headset screenshot, reserved readback budget.")
