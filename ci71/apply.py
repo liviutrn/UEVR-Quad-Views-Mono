@@ -37,6 +37,13 @@ def run(root):
     // A single unstable low-res RIGHT texel cannot erase a high-res
     // LEFT silhouette. Require 3 of 4 proven closer target depths.
     return hybrid ? strongOccluders>=3u : allOcclude;""")
+ edit(sh,"""    const float nearestDepth=validZ.x==nearest?depths.x:validZ.y==nearest?depths.y:validZ.z==nearest?depths.z:depths.w;
+    if(nearest<1.e29f)o.depth=(nearestDepth-DepthViewportRanges.z)/(DepthViewportRanges.w-DepthViewportRanges.z);""",
+ """    // Do NOT prewrite target depth for pixels whose color reconstruction
+    // may be rejected. That creates invisible depth occluders and masks
+    // the later high-resolution LEFT forward mesh, causing edge jitter.
+    // An invalid backward sample preserves the cleared hardware depth.
+    """)
  edit(sh,"""    // Never average foreground and background into a non-existent surface.
     if(any(zs<=0) || farthest-nearest>MeshQuality.x+MeshQuality.y*nearest)return o;
     const float d=lerp(lerp(depths.x,depths.y,fraction.x),lerp(depths.z,depths.w,fraction.x),fraction.y);
