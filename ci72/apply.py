@@ -61,6 +61,18 @@ BackwardSurfaceOutput PSResearchBackwardSurface(VertexOut i) {
     const float2 f=frac(depthCoord);
     const float4 targetWeights=float4((1.f-f.x)*(1.f-f.y),f.x*(1.f-f.y),
                                (1.f-f.x)*f.y,f.x*f.y);
+    // Conservatively protect real RIGHT-eye foreground before testing which
+    // LEFT-eye color sample could reproject to this target pixel. A single
+    // nearer measured RIGHT surface vetoes all farther neighboring hypotheses.
+    // Otherwise a background candidate can pass LEFT validation and erase a
+    // one-texel foreground object in the RIGHT image.
+    float nearestMeasuredZ=1.e30f;
+    [unroll] for(int t=0;t<4;++t) {
+        const float z=RightEyeForwardZ(RightSourceDepth.Load(
+                         int3(origin+int2(t&1,t>>1),0)));
+        if(isfinite(z)&&z>0.f)nearestMeasuredZ=min(nearestMeasuredZ,z);
+    }
+    if(nearestMeasuredZ>=1.e29f)return outp;
     float bestScore=1.e30f, secondScore=1.e30f, bestZ=-1.f, secondZ=-1.f;
     float bestDepth=0.f;
     float2 bestUV=0;
@@ -72,6 +84,8 @@ BackwardSurfaceOutput PSResearchBackwardSurface(VertexOut i) {
         const float raw=RightSourceDepth.Load(int3(p,0));
         const float targetZ=RightEyeForwardZ(raw);
         if(!isfinite(targetZ)||targetZ<=0.f)continue;
+        if(targetZ>nearestMeasuredZ+MeshQuality.x+
+                       MeshQuality.y*nearestMeasuredZ)continue;
         const float nd=(raw-DepthViewportRanges.z)/
                         (DepthViewportRanges.w-DepthViewportRanges.z);
         if(!isfinite(nd)||nd<0.f||nd>1.f)continue;
