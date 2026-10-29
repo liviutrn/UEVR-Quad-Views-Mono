@@ -333,7 +333,7 @@ jobs:
               if not file.is_file(): raise RuntimeError('Missing CI49 production output: '+relative)
               raw=file.read_bytes(); expected=identity['new_sha256']
               if hashlib.sha256(raw).hexdigest()==expected: continue
-              normalized=raw.replace(b'\\r\\n',b'\\n')
+              normalized=raw.replace(b'\r\n',b'\n')
               if normalized!=raw and hashlib.sha256(normalized).hexdigest()==expected:
                   file.write_bytes(normalized)
                   print('CI49 exact Windows CRLF normalization:',relative)
