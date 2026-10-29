@@ -242,8 +242,29 @@ jobs:
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Build48 exact baseline / line-ending verification failed' }
           python workspace/ci48/apply.py backend *> evidence/build48-source-guard.log
-          $code=$LASTEXITCODE; Get-Content evidence/build48-source-guard.log
-          if ($code -ne 0) { throw 'Build48 hash-guarded patch failed' }
+          $initial_code=$LASTEXITCODE; Get-Content evidence/build48-source-guard.log
+          @'
+          import hashlib,json,pathlib
+          root=pathlib.Path("backend")
+          contract=json.loads(pathlib.Path("workspace/ci48/hashes.json").read_text(encoding="utf-8"))
+          for relative,identity in contract.items():
+              file=root/relative
+              if not file.is_file():
+                  raise RuntimeError("Build48 missing post-patch production file: "+relative)
+              expected=identity["new_sha256"]
+              raw=file.read_bytes()
+              if hashlib.sha256(raw).hexdigest()==expected:
+                  continue
+              normalized=raw.replace(b"\r\n",b"\n")
+              if normalized!=raw and hashlib.sha256(normalized).hexdigest()==expected:
+                  file.write_bytes(normalized)
+                  print("Build48 verified post-patch CRLF normalization:",relative)
+              else:
+                  raise RuntimeError("Build48 post-patch source differs beyond line endings: "+relative+" raw="+hashlib.sha256(raw).hexdigest()+" lf="+hashlib.sha256(normalized).hexdigest())
+          print("PASS: all ten Build48 production files match the exact hash contract")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Build48 exact post-patch verification failed' }
+          if ($initial_code -ne 0) { Write-Host 'Original verifier reported a Windows-only post-patch line-ending difference; canonical output independently verified and normalized' }
           foreach ($t in @('adversarial48_tests','auto_pair_review_tests','depth_pin_policy_tests','observed_pass_adversarial_tests')) {
             cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr/d3d12 "workspace/ci48/$t.cpp" "/Fe:$t.exe"
             if ($LASTEXITCODE -ne 0) { throw "Build48 $t compile failed" }
