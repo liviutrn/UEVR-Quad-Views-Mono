@@ -377,7 +377,7 @@ jobs:
           d=(root/"src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp").read_text()
           s=(root/"src/mods/vr/d3d12/StockDibrDepth.hpp").read_text()
           ui=(root/"src/mods/VR.cpp").read_text()
-          assert "ngx_left_fovea" in s and "ngx_motion" in s
+          assert '"left_fovea"' in s and '"right_periphery"' in s and "ngx_motion" in s
           assert "NGX_SR_PAIR_UNAVAILABLE_MONO_FALLBACK" in s
           assert "D3D12_RESOURCE_STATE_COPY_SOURCE" in s
           assert "_mv_preview.bmp" in d and "_color_preview.bmp" in d
