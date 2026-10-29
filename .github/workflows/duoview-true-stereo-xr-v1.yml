@@ -1,5 +1,5 @@
-name: DuoView CI51 DLSS dual-depth stereo Windows build
-run-name: DuoView CI51 DLSS dual-depth - Windows full build (#${{ github.run_number }})
+name: DuoView CI67 DLSS cross-thread source bridge Windows build
+run-name: DuoView CI67 NGX thread bridge - Windows full build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -16,6 +16,7 @@ on:
       - experiment/ci50-ngx-final-autostart-20261029
       - experiment/ci50-ngx-capture-atomic-20261029
       - experiment/ci51-ngx-guide-stereo-20261029
+      - experiment/ci67-ngx-cross-thread-20261029
     paths:
       - ci51/**
       - ci48/payload.b64
@@ -432,6 +433,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI51 line-ending and tamper contract regression' }
           python workspace/ci51/apply.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI51 final source contract failed' }
+          python workspace/ci51/build67_bridge.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Build67 source patch failed' }
           python workspace/ci51/embed_shaders.py backend *> evidence/ci51-shader-build.log
           $code=$LASTEXITCODE; Get-Content evidence/ci51-shader-build.log
           if ($code -ne 0) { throw 'CI51 final production shader compile failed' }
