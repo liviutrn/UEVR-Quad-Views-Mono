@@ -44,6 +44,34 @@ jobs:
         run: |
           python workspace/duoview/embed_shader.py "$env:RUNNER_TEMP/DuoViewShaderSource.hpp"
           if ($LASTEXITCODE -ne 0) { throw 'Live shader preflight failed' }
+      - name: CI50 PowerShell capture viewer syntax and synthetic two-eye test
+        shell: pwsh
+        run: |
+          $viewer=(Resolve-Path workspace/ci50/VIEW_DLSS_CAPTURE.ps1).Path
+          $tokens=$null; $parseErrors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($viewer,[ref]$tokens,[ref]$parseErrors)
+          if ($parseErrors.Count) { $parseErrors | ForEach-Object { Write-Error $_ }; throw 'Viewer PowerShell parse failed' }
+          $test=Join-Path $env:RUNNER_TEMP 'CI50_ViewerSynthetic'
+          New-Item -ItemType Directory -Force $test | Out-Null
+          @{capture_id=1;frame_info='synthetic two-eye test';candidate_inventory='six input capture absent by design';excluded=@();images=@()} |
+            ConvertTo-Json -Depth 5 | Set-Content (Join-Path $test manifest.json)
+          Add-Type -AssemblyName System.Drawing
+          $bmp=[System.Drawing.Bitmap]::new(4,2)
+          try {
+            $bmp.SetPixel(0,0,[System.Drawing.Color]::Red)
+            $bmp.SetPixel(3,0,[System.Drawing.Color]::Blue)
+            $bmp.Save((Join-Path $test 'image_0_xr_submitted_doublewide.bmp'),[System.Drawing.Imaging.ImageFormat]::Bmp)
+          } finally {$bmp.Dispose()}
+          & $viewer -CapturePath $test -NoOpen
+          if ($LASTEXITCODE -ne 0) {throw 'Viewer synthetic execution returned failure'}
+          foreach($f in @('CI50_left_eye_final.bmp','CI50_right_eye_final.bmp','CI50_DLSS_CAPTURE_VIEWER.html')){
+            if(!(Test-Path (Join-Path $test $f))){throw "Viewer did not produce $f"}
+          }
+          $left=[System.Drawing.Image]::FromFile((Join-Path $test 'CI50_left_eye_final.bmp'))
+          $right=[System.Drawing.Image]::FromFile((Join-Path $test 'CI50_right_eye_final.bmp'))
+          try {if($left.Width -ne 2 -or $right.Width -ne 2 -or $left.Height -ne 2 -or $right.Height -ne 2){throw 'Incorrect left/right split size'}}
+          finally {$left.Dispose();$right.Dispose()}
+          Write-Host 'PASS: PowerShell viewer parse, HTML generation, and 2-eye XR BMP split'
   duoview-native-fix-mono-output:
     needs: live-shader-preflight
     runs-on: windows-2022
