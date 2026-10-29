@@ -1,5 +1,5 @@
-name: DuoView CI49 - NGX DLSS depth experimental Windows build
-run-name: DuoView CI49 NGX - Windows full build (#${{ github.run_number }})
+name: DuoView CI50 - NGX six-input capture and stereo Windows build
+run-name: DuoView CI50 NGX - Windows full build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -11,9 +11,14 @@ on:
       - experiment/ci33-surface-stereo-20261028
       - experiment/ci48-stability-pre-dlss-20261029
       - experiment/ci49-ngx-dlss-depth-20261029
+      - experiment/ci50-ngx-complete-capture-20261029
     paths:
       - ci48/payload.b64
       - ci49/payload.b64
+      - ci50/upgrade_p1.b64
+      - ci50/upgrade_p2.b64
+      - ci50/upgrade_p3.b64
+      - ci50/upgrade_p4.b64
   pull_request:
     branches:
       - build-182
@@ -347,6 +352,41 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI49 explicit source contract failed' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'CI49 source diff whitespace regression' }
+      - name: Apply CI50 complete NGX input capture and default stereo UI
+        shell: pwsh
+        run: |
+          @'
+          import base64,lzma,pathlib,hashlib,ast
+          root=pathlib.Path("workspace/ci50")
+          pieces=[(root/("upgrade_p%d.b64"%i)).read_text(encoding="utf-8").strip() for i in range(1,5)]
+          if [len(x) for x in pieces]!=[1950,1950,1950,1934]:
+              raise RuntimeError("CI50 encoded source payload segments incomplete")
+          encoded="".join(pieces)
+          source=lzma.decompress(base64.b64decode(encoded,validate=True))
+          ast.parse(source.decode("utf-8"),filename="ci50/apply.py")
+          path=root/"apply.py";path.write_bytes(source)
+          print("CI50 upgrade integrity passed; script SHA256:",hashlib.sha256(source).hexdigest())
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'CI50 source integrity / Python AST failed' }
+          python workspace/ci50/apply.py backend *> evidence/ci50-source-upgrade.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci50-source-upgrade.log
+          if ($code -ne 0) { throw 'CI50 exact source anchor upgrade failed' }
+          @'
+          from pathlib import Path
+          root=Path("backend")
+          d=(root/"src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp").read_text()
+          s=(root/"src/mods/vr/d3d12/StockDibrDepth.hpp").read_text()
+          ui=(root/"src/mods/VR.cpp").read_text()
+          assert "ngx_left_fovea" in s and "ngx_motion" in s
+          assert "NGX_SR_PAIR_UNAVAILABLE_MONO_FALLBACK" in s
+          assert "D3D12_RESOURCE_STATE_COPY_SOURCE" in s
+          assert "_mv_preview.bmp" in d and "_color_preview.bmp" in d
+          assert "Enable synthesized stereo (DLSS depth)" in ui
+          print("CI50 NGX producer snapshots, two-role capture, decoded previews and UI contracts PASS")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'CI50 source-contract test failed' }
+          git -C backend diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'CI50 changed source has whitespace errors' }
       - name: Compile stereo synthesis and hybrid z-owner-forward-fuse shaders
         shell: pwsh
         run: |
@@ -559,6 +599,7 @@ jobs:
           Pinned restricted SDK: 3cffbc82429b6165ceec2714f0f0d9ae48f55596
           Pinned frontend: 60be4b0f9a646109fd9fdf448bacd41477234091
           '@ | Set-Content package/READ_FIRST.txt
+          Add-Content package/READ_FIRST.txt 'CI50: NGX-SR is the primary depth source for modes 4/5. The interface has Enable synthesized stereo (DLSS depth); ON=mode5, OFF=mode0. Periphery slider is capped at 0.499, and NGX output extents are matched exactly against frozen UE0/UE1 dimensions. CAPTURE NOW saves six selected NGX inputs (left fovea/right periphery x depth/color/motion) where supported plus final XR double-wide, as .raw + .bmp previews in %TEMP%\\UEVR_DuoViewCaptures. When NGX pair is missing, mode5 falls back to mono and DOES NOT substitute DSV depth. A successful Windows build is not in-headset validation.'
           Add-Content package/READ_FIRST.txt 'CI49 NGX-SR DEPTH EXPERIMENT: Enable ONLY by setting environment variable UEVR_DUOVIEW_NGX_DEPTH=1 in STALKER2 process BEFORE UEVR inject. Enable R5 and DuoView ID6, split-eye on, Stereo mode 4 then 5. NGX output extents must identify TWO distinct fresh roles; otherwise fallback to Build48 DSV depth selector. Mode0 and all builds without env var remain Build48. Depth state/eye/fov and headset comfort unverified. Do NOT co-inject Cheeky/OFXR until hook compatibility tested.'
           Add-Content package/READ_FIRST.txt 'Build48 experimental depth stability; manual LEFT/RIGHT pins and backups, Auto stickiness, capture diagnostics. No DLSS-input hook. Depth-producer frame/eye attribution unverified. Keep Build45 as rollback. Peripheral scale 0.5, modes 0->4->5.'
           @{
@@ -574,6 +615,7 @@ jobs:
             provenance_contract_tested=$true; producer_authenticated=$false;
             hybrid_live_dispatch=$false;
             ci49_ngx_sr_input_opt_in=$true; ngx_user_headset_verified=$false;
+            ci50_ngx_primary=$true; ci50_ngx_complete_source_capture=$true; ci50_stereo_headset_verified=$false;
             ngx_role_assignment='frozen output extent, unique match; no frame token';
             ngx_fallback='Build48 DSV Auto/manual';
             unread_depth_retention_tested=$true;
