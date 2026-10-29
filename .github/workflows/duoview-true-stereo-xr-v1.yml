@@ -265,6 +265,8 @@ jobs:
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Build48 exact post-patch verification failed' }
           if ($initial_code -ne 0) { Write-Host 'Original verifier reported a Windows-only post-patch line-ending difference; canonical output independently verified and normalized' }
+          python workspace/ci48/windows_macro_compat.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Build48 exact MSVC macro compatibility correction failed' }
           foreach ($t in @('adversarial48_tests','auto_pair_review_tests','depth_pin_policy_tests','observed_pass_adversarial_tests')) {
             cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr/d3d12 "workspace/ci48/$t.cpp" "/Fe:$t.exe"
             if ($LASTEXITCODE -ne 0) { throw "Build48 $t compile failed" }
