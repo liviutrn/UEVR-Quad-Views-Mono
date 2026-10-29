@@ -68,12 +68,12 @@ if ($xr) {
                 $eyeWidth = [int]($sourceImage.Width / 2)
                 for ($eye = 0; $eye -lt 2; $eye++) {
                     $targetName = if ($eye -eq 0) { "CI50_left_eye_final.bmp" } else { "CI50_right_eye_final.bmp" }
-                    $crop = New-Object System.Drawing.Bitmap($eyeWidth, $sourceImage.Height)
+                    $crop = [System.Drawing.Bitmap]::new($eyeWidth, $sourceImage.Height)
                     try {
                         $g = [System.Drawing.Graphics]::FromImage($crop)
                         try {
-                            $from = New-Object System.Drawing.Rectangle(($eye * $eyeWidth),0,$eyeWidth,$sourceImage.Height)
-                            $to = New-Object System.Drawing.Rectangle(0,0,$eyeWidth,$sourceImage.Height)
+                            $from = [System.Drawing.Rectangle]::new(($eye * $eyeWidth),0,$eyeWidth,$sourceImage.Height)
+                            $to = [System.Drawing.Rectangle]::new(0,0,$eyeWidth,$sourceImage.Height)
                             $g.DrawImage($sourceImage, $to, $from, [System.Drawing.GraphicsUnit]::Pixel)
                         } finally { $g.Dispose() }
                         $crop.Save((Join-Path $CapturePath $targetName),[System.Drawing.Imaging.ImageFormat]::Bmp)
