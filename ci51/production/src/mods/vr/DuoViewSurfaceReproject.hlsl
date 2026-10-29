@@ -86,16 +86,24 @@ bool TargetCertainlyOccludes(float2 targetUV,float candidateZ) {
     const int2 first=int2(floor(coordinate));
     const float2 range=MeshConfig.z!=0 ? DepthViewportRanges.zw : DepthViewportRanges.xy;
     const float4 projection=MeshConfig.z!=0 ? StereoDepthZ : StereoLeftDepthZ;
-    // A plausible target foreground must veto source background even at a
-    // mixed footprint. Actual RIGHT shading supplies the uncertain boundary.
+    // NGX hybrid refinement must honor any plausible target foreground.
+    // Keep the old all-four veto for the independent legacy forward renderer:
+    // its sloped-plane sampling contract intentionally uses that wider test.
+    const bool hybrid=(MeshConfig.w&2u)!=0;
+    bool allOcclude=true;
     [unroll] for(int y=0;y<2;++y)[unroll] for(int x=0;x<2;++x) {
         const int2 p=first+int2(x,y);
-        if(any(p<ActiveDepthMin(rect))||any(p>ActiveDepthMax(rect)))continue;
+        if(any(p<ActiveDepthMin(rect))||any(p>ActiveDepthMax(rect))) {
+            if(!hybrid)return false;
+            continue;
+        }
         const float depth=MeshConfig.z!=0 ? RightSourceDepth.Load(int3(p,0)) : LeftSourceDepth.Load(int3(p,0));
         const float z=EyeForwardZ(depth,projection,range);
-        if(z>0 && z+MeshVisibility.x+MeshVisibility.y*z<candidateZ)return true;
+        const bool occludes=z>0 && z+MeshVisibility.x+MeshVisibility.y*z<candidateZ;
+        if(hybrid && occludes)return true;
+        allOcclude=allOcclude && occludes;
     }
-    return false;
+    return !hybrid && allOcclude;
 }
 float4 PSSurface(SurfaceVertex i):SV_TARGET0 {
     if(i.sourceQ.z<=1.e-7f||i.targetFullClip.w<=1.e-7f)discard;
