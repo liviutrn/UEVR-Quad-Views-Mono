@@ -371,6 +371,8 @@ jobs:
           python workspace/ci50/apply.py backend *> evidence/ci50-source-upgrade.log
           $code=$LASTEXITCODE; Get-Content evidence/ci50-source-upgrade.log
           if ($code -ne 0) { throw 'CI50 exact source anchor upgrade failed' }
+          python workspace/ci50/fix_compilation.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI50 selected serial binding fix failed' }
           @'
           from pathlib import Path
           root=Path("backend")
@@ -496,6 +498,12 @@ jobs:
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
           Copy-Item workspace/ci48/hashes.json package/ci48-production-hashes.json
+          Copy-Item workspace/ci50/VIEW_DLSS_CAPTURE.ps1 package/VIEW_DLSS_CAPTURE.ps1
+          @'
+          @echo off
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0VIEW_DLSS_CAPTURE.ps1" %*
+          '@ | Set-Content package/VIEW_DLSS_CAPTURE.cmd -Encoding ascii
+
           @'
           DuoView TRUE STEREO XR V1 — EXPERIMENTAL HEADSET BUILD (REVIEW FIXES)
           Build branch: experiment/ci33-surface-stereo-20261028.
@@ -615,7 +623,7 @@ jobs:
             provenance_contract_tested=$true; producer_authenticated=$false;
             hybrid_live_dispatch=$false;
             ci49_ngx_sr_input_opt_in=$true; ngx_user_headset_verified=$false;
-            ci50_ngx_primary=$true; ci50_ngx_complete_source_capture=$true; ci50_stereo_headset_verified=$false;
+            ci50_ngx_primary=$true; ci50_viewer_bundled=$true; ci50_ngx_complete_source_capture=$true; ci50_stereo_headset_verified=$false;
             ngx_role_assignment='frozen output extent, unique match; no frame token';
             ngx_fallback='Build48 DSV Auto/manual';
             unread_depth_retention_tested=$true;
