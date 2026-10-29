@@ -437,6 +437,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI51 final source contract failed' }
           python workspace/ci51/build67_bridge.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Build67 source patch failed' }
+          # Preserve original CI51/67 GPU regression before intentional manual-pair refactor.
+          cl /nologo /std:c++20 /EHsc /W4 /Ibackend/src workspace/ci51/gpu_tests.cpp /Fe:ci51-baseline-gpu-tests.exe /link d3d12.lib dxgi.lib d3dcompiler.lib
+          if ($LASTEXITCODE -ne 0) { throw 'CI51 baseline WARP fixture compile failed' }
+          ./ci51-baseline-gpu-tests.exe *> evidence/ci51-baseline-gpu-tests.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci51-baseline-gpu-tests.log
+          if ($code -ne 0) { throw 'CI51 baseline WARP capture/stereo regression failed' }
           python workspace/ci69/apply.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI69 NGX-only source patch failed' }
           python workspace/ci51/embed_shaders.py backend *> evidence/ci51-shader-build.log
@@ -452,11 +458,11 @@ jobs:
           ./ci69-ngx-manual-tests.exe *> evidence/ci69-ngx-manual-tests.log
           $code=$LASTEXITCODE; Get-Content evidence/ci69-ngx-manual-tests.log
           if ($code -ne 0) { throw 'CI69 NGX manual role lifecycle tests failed' }
-          cl /nologo /std:c++20 /EHsc /W4 /Ibackend/src workspace/ci51/gpu_tests.cpp /Fe:ci51-gpu-tests.exe /link d3d12.lib dxgi.lib d3dcompiler.lib
-          if ($LASTEXITCODE -ne 0) { throw 'CI51 actual capture and shader fixture compilation failed' }
-          ./ci51-gpu-tests.exe *> evidence/ci51-gpu-tests.log
-          $code=$LASTEXITCODE; Get-Content evidence/ci51-gpu-tests.log
-          if ($code -ne 0) { throw 'CI51 WARP capture/stereo regression failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /Ibackend/src workspace/ci69/gpu_manual_tests.cpp /Fe:ci69-gpu-manual-tests.exe /link d3d12.lib dxgi.lib d3dcompiler.lib
+          if ($LASTEXITCODE -ne 0) { throw 'CI69 actual manual NGX WARP fixture compilation failed' }
+          ./ci69-gpu-manual-tests.exe *> evidence/ci69-gpu-manual-tests.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci69-gpu-manual-tests.log
+          if ($code -ne 0) { throw 'CI69 manual NGX WARP depth/stereo regression failed' }
       - name: Compile stereo synthesis and hybrid z-owner-forward-fuse shaders
         shell: pwsh
         run: |
