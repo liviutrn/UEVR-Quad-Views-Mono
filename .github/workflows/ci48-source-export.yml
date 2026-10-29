@@ -1,0 +1,38 @@
+name: CI48 exact source payload export for engineering handoff
+on:
+  push:
+    branches:
+      - experiment/ci48-stability-pre-dlss-20261029
+    paths:
+      - .github/workflows/ci48-source-export.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-ci48-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pinned CI50 build commit
+        uses: actions/checkout@v4
+        with:
+          ref: 4e4d0966d0aea4277d7c3d598959996f6b8d8542
+          persist-credentials: false
+      - name: Verify exact Github source blob identity and payload contract
+        run: |
+          test "$(git hash-object ci48/payload.b64)" = "f438c791f5b183d3f6c4b6cf36ba87b0b749e618"
+          python - <<'PY'
+          import base64,lzma,tarfile,io,json,pathlib
+          raw=pathlib.Path('ci48/payload.b64').read_text()
+          data=lzma.decompress(base64.b64decode(raw.strip()))
+          with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+              f=tar.extractfile('ci48/hashes.json')
+              j=json.loads(f.read())
+              assert len(j)==10
+          print('PASS: exact CI50 payload and ten-source-file contract')
+          PY
+      - name: Export exact compiled CI50 source input
+        uses: actions/upload-artifact@v4
+        with:
+          name: CI48-EXACT-PAYLOAD-20261029-CI50
+          path: ci48/payload.b64
+          retention-days: 7
