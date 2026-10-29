@@ -26,7 +26,7 @@ $files = @(Get-ChildItem $CapturePath -Filter "*.bmp" -File)
 $cards = New-Object System.Collections.Generic.List[string]
 foreach ($pair in $labels) {
     $name = $pair[0]; $label = $pair[1]
-    $img = $files | Where-Object { $_.BaseName.Contains("_$($name)_") -or $_.BaseName.EndsWith("_$name") } | Select-Object -First 1
+    $img = $files | Where-Object { $_.BaseName -match ("^image_[0-9]+_" + [regex]::Escape($name) + "(_|$)") } | Select-Object -First 1
     $src = if ($img) { [uri]::EscapeDataString($img.Name) } else { "" }
     $imageTag = if ($img) { "<img loading='lazy' src='$src' alt='$(Html $label)'>" } else { "<div class='missing'>Not captured (see manifest)</div>" }
     [void]$cards.Add("<figure><figcaption>$(Html $label)</figcaption>$imageTag</figure>")
