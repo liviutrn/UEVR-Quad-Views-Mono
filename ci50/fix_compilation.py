@@ -14,3 +14,10 @@ replace("src/mods/vr/D3D12Component.cpp",
     "auto candidates=m_stock_dibr_depth->snapshot_candidates();",
     "auto candidates=m_stock_dibr_depth->snapshot_candidates(depths.left_serial,depths.right_serial);")
 print("CI50: selected fovea/periphery capture serials are bound through the producer and exporter")
+
+# R32G32_FLOAT carries exactly two components, not three. Avoid reading a
+# non-existent blue channel when constructing RGB diagnostic previews.
+replace("src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp",
+    "q[0]=encode(im.bytes_per_pixel>=8 ? component(p,im.format,2) : x);",
+    "q[0]=encode((im.format==DXGI_FORMAT_R16G16B16A16_FLOAT || im.format==DXGI_FORMAT_R32G32B32A32_FLOAT) ? component(p,im.format,2) : x);")
+print("CI50: corrected two-channel float preview bounds")
