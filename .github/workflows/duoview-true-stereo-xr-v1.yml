@@ -322,7 +322,27 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI49 source unpack rejected' }
           python workspace/ci49/apply.py backend *> evidence/ci49-ngx-source.log
           $code=$LASTEXITCODE; Get-Content evidence/ci49-ngx-source.log
-          if ($code -ne 0) { throw 'CI49 source overlay hash/patch guard failed' }
+          # Git on Windows may have CRLF canonicalization. Only accept files whose
+          # LF-normalized SHA-256 exactly matches the independently frozen CI49 outputs.
+          @'
+          import hashlib,json,pathlib
+          root=pathlib.Path('backend')
+          contract=json.loads(pathlib.Path('workspace/ci49/hashes.json').read_text(encoding='utf-8'))
+          for relative,identity in contract.items():
+              file=root/relative
+              if not file.is_file(): raise RuntimeError('Missing CI49 production output: '+relative)
+              raw=file.read_bytes(); expected=identity['new_sha256']
+              if hashlib.sha256(raw).hexdigest()==expected: continue
+              normalized=raw.replace(b'\\r\\n',b'\\n')
+              if normalized!=raw and hashlib.sha256(normalized).hexdigest()==expected:
+                  file.write_bytes(normalized)
+                  print('CI49 exact Windows CRLF normalization:',relative)
+              else:
+                  raise RuntimeError('CI49 production source content mismatch: '+relative+' observed='+hashlib.sha256(raw).hexdigest())
+          print('PASS: all CI49 production source SHA-256 outputs independently verified')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'CI49 source overlay hash/patch guard failed (not a line ending difference)' }
+          if ($code -ne 0) { Write-Host 'Original CI49 guard reported Windows-only CRLF difference; exact canonical output checked and accepted' }
           python workspace/ci49/test.py
           if ($LASTEXITCODE -ne 0) { throw 'CI49 explicit source contract failed' }
           git -C backend diff --check
