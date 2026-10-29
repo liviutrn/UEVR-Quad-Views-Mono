@@ -1,5 +1,5 @@
-name: DuoView CI50 Final - NGX six-input stereo Windows build
-run-name: DuoView CI50 Final - Windows full build (#${{ github.run_number }})
+name: DuoView CI50 Final Autostart - NGX six-input stereo Windows build
+run-name: DuoView CI50 Auto NGX - Windows full build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -13,6 +13,7 @@ on:
       - experiment/ci49-ngx-dlss-depth-20261029
       - experiment/ci50-ngx-complete-capture-20261029
       - experiment/ci50-ngx-final-verified-20261029
+      - experiment/ci50-ngx-final-autostart-20261029
     paths:
       - ci48/payload.b64
       - ci49/payload.b64
@@ -642,7 +643,7 @@ jobs:
           Pinned restricted SDK: 3cffbc82429b6165ceec2714f0f0d9ae48f55596
           Pinned frontend: 60be4b0f9a646109fd9fdf448bacd41477234091
           '@ | Set-Content package/READ_FIRST.txt
-          Add-Content package/READ_FIRST.txt 'CI50: NGX-SR is the primary depth source for modes 4/5. The interface has Enable synthesized stereo (DLSS depth); ON=mode5, OFF=mode0. Periphery slider is capped at 0.499, and NGX output extents are matched exactly against frozen UE0/UE1 dimensions. CAPTURE NOW saves six selected NGX inputs (left fovea/right periphery x depth/color/motion) where supported plus final XR double-wide, as .raw + .bmp previews in %TEMP%\\UEVR_DuoViewCaptures. When NGX pair is missing, mode5 falls back to mono and DOES NOT substitute DSV depth. The actual producer fovea is fixed at 0.5x0.5 and the periphery max is 0.499, also clamped after output-pixel rounding. DLSS R16_FLOAT and R32_FLOAT depth capture previews are supported. A successful Windows build is not in-headset validation.'
+          Add-Content package/READ_FIRST.txt 'CI50: NGX-SR auto-starts on STALKER 2 DuoView ID6 stereo; R5 manual enable is no longer required. NGX-SR is the primary depth source for modes 4/5. The interface has Enable synthesized stereo (DLSS depth); ON=mode5, OFF=mode0. Periphery slider is capped at 0.499, and NGX output extents are matched exactly against frozen UE0/UE1 dimensions. CAPTURE NOW saves six selected NGX inputs (left fovea/right periphery x depth/color/motion) where supported plus final XR double-wide, as .raw + .bmp previews in %TEMP%\\UEVR_DuoViewCaptures. When NGX pair is missing, mode5 falls back to mono and DOES NOT substitute DSV depth. The actual producer fovea is fixed at 0.5x0.5 and the periphery max is 0.499, also clamped after output-pixel rounding. DLSS R16_FLOAT and R32_FLOAT depth capture previews are supported. A successful Windows build is not in-headset validation.'
           Add-Content package/READ_FIRST.txt 'CI49 NGX-SR DEPTH EXPERIMENT: Enable ONLY by setting environment variable UEVR_DUOVIEW_NGX_DEPTH=1 in STALKER2 process BEFORE UEVR inject. Enable R5 and DuoView ID6, split-eye on, Stereo mode 4 then 5. NGX output extents must identify TWO distinct fresh roles; otherwise fallback to Build48 DSV depth selector. Mode0 and all builds without env var remain Build48. Depth state/eye/fov and headset comfort unverified. Do NOT co-inject Cheeky/OFXR until hook compatibility tested.'
           Add-Content package/READ_FIRST.txt 'Build48 experimental depth stability; manual LEFT/RIGHT pins and backups, Auto stickiness, capture diagnostics. No DLSS-input hook. Depth-producer frame/eye attribution unverified. Keep Build45 as rollback. Peripheral scale 0.5, modes 0->4->5.'
           @{
