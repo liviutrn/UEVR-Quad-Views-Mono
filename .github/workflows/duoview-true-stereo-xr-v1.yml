@@ -1,5 +1,5 @@
-name: DuoView CI50 Atomic Capture - NGX six-input stereo Windows build
-run-name: DuoView CI50 Atomic NGX - Windows full build (#${{ github.run_number }})
+name: DuoView CI51 DLSS dual-depth stereo Windows build
+run-name: DuoView CI51 DLSS dual-depth - Windows full build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -15,7 +15,9 @@ on:
       - experiment/ci50-ngx-final-verified-20261029
       - experiment/ci50-ngx-final-autostart-20261029
       - experiment/ci50-ngx-capture-atomic-20261029
+      - experiment/ci51-ngx-guide-stereo-20261029
     paths:
+      - ci51/**
       - ci48/payload.b64
       - ci49/payload.b64
       - ci50/upgrade_p1.b64
@@ -423,6 +425,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI50 source-contract test failed' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'CI50 changed source has whitespace errors' }
+      - name: Apply CI51 final public source and validate actual NGX snapshot and shader paths
+        shell: pwsh
+        run: |
+          python workspace/ci51/apply.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI51 final source contract failed' }
+          python workspace/ci51/embed_shaders.py backend *> evidence/ci51-shader-build.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci51-shader-build.log
+          if ($code -ne 0) { throw 'CI51 final production shader compile failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src workspace/ci51/guide_tests.cpp /Fe:ci51-guide-tests.exe
+          if ($LASTEXITCODE -ne 0) { throw 'CI51 guide fixture compilation failed' }
+          ./ci51-guide-tests.exe *> evidence/ci51-guide-tests.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci51-guide-tests.log
+          if ($code -ne 0) { throw 'CI51 guide identity fixture failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /Ibackend/src workspace/ci51/gpu_tests.cpp /Fe:ci51-gpu-tests.exe /link d3d12.lib dxgi.lib d3dcompiler.lib
+          if ($LASTEXITCODE -ne 0) { throw 'CI51 actual capture and shader fixture compilation failed' }
+          ./ci51-gpu-tests.exe *> evidence/ci51-gpu-tests.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci51-gpu-tests.log
+          if ($code -ne 0) { throw 'CI51 WARP capture/stereo regression failed' }
       - name: Compile stereo synthesis and hybrid z-owner-forward-fuse shaders
         shell: pwsh
         run: |
@@ -541,135 +561,36 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0VIEW_DLSS_CAPTURE.ps1" %*
           '@ | Set-Content package/VIEW_DLSS_CAPTURE.cmd -Encoding ascii
 
-          @'
-          DuoView TRUE STEREO XR V1 — EXPERIMENTAL HEADSET BUILD (REVIEW FIXES)
-          Build branch: experiment/ci33-surface-stereo-20261028.
-          Stable Build165/V3 and published stable releases are NOT modified.
-          CI32 fixes completed depth copies being overwritten BEFORE their
-          Present consumer, with old-bug reproduction and corrected WARP tests.
-          It retains CI31 viewport/copy audit, mode 3 RIGHT-fovea-only A/B,
-          and a fail-closed producer contract. Actual producer roles/frames
-          remain UNVERIFIED; the contract has no UE depth-pass authentication
-          hook yet. NEW: modes 4/5 use camera-relative full-matrix source-depth
-          surface reconstruction LIVE, with a hardware target-eye depth buffer.
-          The older standalone compute hybrid is still not dispatched.
-          This ZIP contains the experimental first real two-eye output, not the old mono-only depth bridge.
-
-          REQUIRED PSVR2 / STALKER 2 SETUP
-          1. Extract into a SEPARATE test directory. Keep working V3 installation available.
-          2. Select DuoView ID6 with V3 LEFT-fovea / RIGHT-periphery Split-Eye ON.
-          3. Enable R5 DSV/RDG capture; leave and RE-ENTER ID6 to attach the live capture observer.
-          4. Set View depth = 0 for clean tests. Stereo has priority over preview.
-          5. TRUE STEREO 0 = previous V3 mono A/B; 1 = legacy reconstructed stereo;
-             2 = legacy stereo + BLUE tint over ENTIRE RIGHT XR eye;
-             3 = diagnostic RIGHT fovea synthesis only: identical real RIGHT
-             periphery in BOTH XR eyes. Mode 3 is NOT full-matrix hybrid.
-             4 = NEW source-depth RIGHT fovea (start here); unchanged RIGHT
-                 periphery in both eyes isolates foveal reconstruction.
-             5 = NEW source-depth surfaces in RIGHT fovea AND LEFT periphery.
-             6 = NEW geometry coverage: green fovea = reconstructed; red =
-                 actual RIGHT fallback; cyan peripheral = projected; magenta
-                 peripheral = unavailable LEFT-only surface. Return to 4/5.
-          6. Start in mode 0 and use CAPTURE NOW. The request stays pending until
-             eligible submitted depths exist. Then verify mode 2 in the headset.
-             BLUE tint must cover only the RIGHT eye, including its corners.
-             Compare 0 and 1 on near edges, ~2m objects, scenery and head rotation.
-          7. Selector 0 jointly matches both depth viewports to the frozen source
-             geometries at a coherent render scale (including DLSS). This remains
-             a heuristic, NOT proof of matching camera, frame or pass. Manual
-             1..N ordinals override Auto; stale or duplicate choices are rejected.
-             Ordinals can change after level load. Compare View depth 1/2/3 to
-             actual color views, then return View depth to 0 for a capture.
-          8. CAPTURE NOW records two source colors, submitted depth candidates,
-             the final double-wide XR image, plus metadata under
-             %TEMP%\UEVR_DuoViewCaptures. Preserve raw files and manifest.
-
-          9. Read Actual XR output separately from the requested stereo mode.
-             Missing/invalid depth now waits in V3 mono and retries automatically;
-             it does not quarantine the two-view renderer. A recorded/submitted
-             stereo counter is not incremented by this mono fallback.
-
-          IMPLEMENTATION LIMITS — PLEASE READ
-          Modes 4/5 rasterize continuous source-depth surfaces into the actual
-          target camera. The hardware depth buffer resolves nearest surfaces.
-          Source color remains at native resolution via projective sampling;
-          the existing foveal sharpening applies to both foveae. Discontinuous
-          source-depth triangles are discarded. Coarse actual target depth
-          vetoes certain occluders, rather than defining all foveal geometry.
-          Real RIGHT color fills unavailable regions. No additional Unreal
-          scene render is introduced. Surfaces visible only to LEFT in the
-          outer periphery cannot be recovered exactly from RIGHT RGBD alone.
-          Mode 0 retains the previous composition, and allocates no surface
-          maps. First new-mode activation/layout change allocates exact-sized
-          maps once per retired XR slot and may cause an initial hitch.
-          Modes 4/5/6 immediately select fresh retained current-interval GPU
-          copies; the legacy pointer-based 3-epoch gate is bypassed. This
-          removes that gate's extra stereo/mono toggles but does NOT certify
-          scene-frame provenance. Missing current pairs still fall back.
-          Manual captures include reconstruction color/alpha maps and numeric
-          coverage in manifest.json; keep the whole capture folder intact.
-
-          LEGACY modes 1/2/3:
-          UE0 physically renders high-res cropped LEFT fovea; UE1 physically
-          renders low-res full-FOV RIGHT periphery. TRUE STEREO mode uses one
-          per-eye double-wide pixel shader: LEFT fovea is native; RIGHT fovea
-          gathers LEFT color using RIGHT depth and conservative LEFT depth check,
-          and uses actual RIGHT low-res color on rejected/disoccluded pixels.
-          LEFT periphery uses a bounded 2-iteration inverse reprojection of
-          RIGHT periphery from RIGHT depth. Full two-depth V2 backward gather and
-          forward z/owner hybrid are compiled PROTOTYPES, not the live pipeline.
-          This revision maps captured DSV active viewports and depth ranges,
-          uses independent LEFT/RIGHT depth projection coefficients, rejects
-          invalid resource shapes before recording, and tests analytic planes
-          at 1/2/10 meters (UE centimeter units) plus padded viewports on
-          production D3D12 WARP. A separate actual GPU capture test covers the
-          observed DLSS-scaled small periphery, reused DSV write versions,
-          read-only barrier storms and interval retirement after consumers.
-          Neither captured depth eye/frame/stage identity nor exact game
-          matrices have been proved. Do not interpret these tests as fixing
-          the remaining provenance, jitter, or full-matrix geometry blockers.
-          Counters distinguish recorded commands from submitted XR copies.
-          Submitted means checked queue enqueue + XR image release, not
-          GPU completion, xrEndFrame success, or physical headset visibility.
-          Source-depth/pass attribution, occlusions at characters, Lumen shading,
-          frame correspondence, temporal stability and headset optical comfort
-          are NOT established by CI alone. A successful WARP test is NOT proof
-          of high-quality stereo in STALKER 2.
-          Keep Mono Eye Alignment OFF when validating physical stereo. Do not
-          install this build over the verified user-tested V3 or stable DuoView.
-          If stereo is wrong or uncomfortable, switch to mode 0 and preserve
-          diagnostic capture + UEVR log before switching builds.
-
-          Pinned original Joey backend: 5ac7edc207866569334175e4ed8a7517971547f6
-          Pinned restricted SDK: 3cffbc82429b6165ceec2714f0f0d9ae48f55596
-          Pinned frontend: 60be4b0f9a646109fd9fdf448bacd41477234091
-          '@ | Set-Content package/READ_FIRST.txt
-          Add-Content package/READ_FIRST.txt 'CI50: NGX-SR auto-starts on STALKER 2 DuoView ID6 stereo; R5 manual enable is no longer required. NGX-SR is the primary depth source for modes 4/5. The interface has Enable synthesized stereo (DLSS depth); ON=mode5, OFF=mode0. Periphery slider is capped at 0.499, and NGX output extents are matched exactly against frozen UE0/UE1 dimensions. CAPTURE NOW completes only when all six selected role-labeled NGX inputs are available; missing pairs or planes retain the pending capture request. A successful capture saves six NGX inputs (left fovea/right periphery x depth/color/motion) where supported plus final XR double-wide, as .raw + .bmp previews in %TEMP%\\UEVR_DuoViewCaptures. When NGX pair is missing, mode5 falls back to mono and DOES NOT substitute DSV depth. The actual producer fovea is fixed at 0.5x0.5 and the periphery max is 0.499, also clamped after output-pixel rounding. DLSS R16_FLOAT and R32_FLOAT depth capture previews are supported. A successful Windows build is not in-headset validation.'
-          Add-Content package/READ_FIRST.txt 'CI49 NGX-SR DEPTH EXPERIMENT: Enable ONLY by setting environment variable UEVR_DUOVIEW_NGX_DEPTH=1 in STALKER2 process BEFORE UEVR inject. Enable R5 and DuoView ID6, split-eye on, Stereo mode 4 then 5. NGX output extents must identify TWO distinct fresh roles; otherwise fallback to Build48 DSV depth selector. Mode0 and all builds without env var remain Build48. Depth state/eye/fov and headset comfort unverified. Do NOT co-inject Cheeky/OFXR until hook compatibility tested.'
-          Add-Content package/READ_FIRST.txt 'Build48 experimental depth stability; manual LEFT/RIGHT pins and backups, Auto stickiness, capture diagnostics. No DLSS-input hook. Depth-producer frame/eye attribution unverified. Keep Build45 as rollback. Peripheral scale 0.5, modes 0->4->5.'
+          Copy-Item workspace/ci51/README_TEST_BUILD.md package/READ_FIRST.txt
           @{
-            schema_version=1; source_commit=$env:GITHUB_SHA;
+            schema_version=2; source_commit=$env:GITHUB_SHA;
             source_repository='liviutrn/UEVR-Quad-Views-Mono';
             workflow_run_id=$env:GITHUB_RUN_ID; workflow_run_number=$env:GITHUB_RUN_NUMBER;
-            baseline_stereo_commit='4156975c5b3d419b5690e19c33790e5eecf2e5fd';
-            windows_build_verified=$true; headset_verified=$false;
-            depth_eye_frame_stage_identity_verified=$false;
-            full_per_pass_matrix_reprojection=$false;
-            full_matrix_surface_renderer_live=$true;
-            depth_pass_jitter_authenticated=$false;
-            provenance_contract_tested=$true; producer_authenticated=$false;
-            hybrid_live_dispatch=$false;
-            ci49_ngx_sr_input_opt_in=$true; ngx_user_headset_verified=$false;
-            ci50_ngx_primary=$true; ci50_viewer_bundled=$true; ci50_ngx_complete_source_capture=$true; ci50_stereo_headset_verified=$false;
-            ngx_role_assignment='frozen output extent, unique match; no frame token';
-            ngx_fallback='Build48 DSV Auto/manual';
-            unread_depth_retention_tested=$true;
-            mode='experimental-ci33-source-depth-surfaces'; stable_release=$false
+            windows_build_verified=$true; headset_verified=$false; game_verified=$false;
+            ci51_dual_depth_backward_fovea=$true; ci51_optional_forward_foreground=$true;
+            ci51_full_matrix_periphery=$true; ci51_quality_sliders=$true;
+            ci51_ngx_six_plane_structural_gate=$true; ci51_direct_compute_snapshots=$true;
+            ngx_inputs_post_evaluate_state='NON_PIXEL_SHADER_RESOURCE per NVIDIA guide3.4';
+            ngx_role_assignment='RHI color packet association and exact role dimensions; per-pass camera unverified';
+            ngx_fallback='Mono, without DSV substitution'; ngx_observer_default='enabled';
+            motion_vectors_captured=$true; motion_vectors_used_for_temporal_reconstruction=$false;
+            depth_eye_frame_stage_identity_verified=$false; depth_pass_jitter_authenticated=$false;
+            mode='experimental-ci51-ngx-dual-depth'; stable_release=$false
           } | ConvertTo-Json | Set-Content package/BUILD_STATUS.json
           # Stage234 manifest predates the final R5/stereo overlays. Hash the
           # actual generated public sources and embedded bytecode as built.
           $finalPaths=@('src/mods/VR.cpp','src/mods/VR.hpp','src/mods/vr/D3D12Component.cpp','src/mods/vr/D3D12Component.hpp','src/mods/vr/DuoViewD3D12.hpp','src/mods/vr/DuoViewGeometry.hpp','src/mods/vr/DuoViewState.hpp','src/mods/vr/DuoViewShaderSource.hpp','src/mods/vr/DuoViewStereoCompositeRaster.hlsl','src/mods/vr/d3d12/StockDibrDepth.hpp','src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp','src/mods/vr/d3d12/DIBRTransaction.hpp','src/hooks/D3D12Hook.cpp')
           $finalPaths+=@('src/mods/vr/SurfaceGeometry.hpp','src/mods/vr/DuoViewSurfaceD3D12.hpp','src/mods/vr/DuoViewSurfaceReproject.hlsl','src/mods/vr/d3d12/CaptureSlotPolicy.hpp')
+          $contract=Get-Content workspace/ci51/source_contract.json -Raw | ConvertFrom-Json
+          $finalPaths+=@($contract.PSObject.Properties.Name)
+          $finalPaths=@($finalPaths | Select-Object -Unique)
+          $publicSource='evidence/final-public-source'
+          foreach($relative in $finalPaths) {
+            $target=Join-Path $publicSource $relative
+            New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+            Copy-Item ("backend/"+$relative) $target
+          }
+          Copy-Item workspace/ci51/source_contract.json evidence/ci51-source-contract.json
           $finalPaths | ForEach-Object {
             @{path=$_;sha256=(Get-FileHash ("backend/"+$_) -Algorithm SHA256).Hash.ToLowerInvariant()}
           } | ConvertTo-Json | Set-Content package/final-generated-source-sha256.json
@@ -681,6 +602,10 @@ jobs:
           $zip="UEVR-DuoView-TrueStereo-XR-V1-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
+          Copy-Item package/final-generated-source-sha256.json evidence/final-public-source/
+          Copy-Item workspace/ci51/README_TEST_BUILD.md evidence/final-public-source/
+          $sourceZip="UEVR-DuoView-CI51-Public-Source-${{ github.run_number }}.zip"
+          Compress-Archive -Path evidence/final-public-source/* -DestinationPath $sourceZip -Force
       - uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -688,6 +613,13 @@ jobs:
           path: |
             UEVR-DuoView-TrueStereo-XR-V1-*.zip
             UEVR-DuoView-TrueStereo-XR-V1-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: UEVR-DuoView-CI51-Public-Source-${{ github.run_number }}
+          path: UEVR-DuoView-CI51-Public-Source-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance

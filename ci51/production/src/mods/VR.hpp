@@ -1,0 +1,3171 @@
+#pragma once
+
+#define NOMINMAX
+
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <array>
+#include <cmath>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <filesystem>
+#include <mutex>
+#include <optional>
+#include <stop_token>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+#include <safetyhook.hpp>
+#include <sdk/Math.hpp>
+
+#include "vr/runtimes/OpenVR.hpp"
+#include "vr/runtimes/OpenXR.hpp"
+
+#include "vr/D3D11Component.hpp"
+#include "vr/D3D12Component.hpp"
+#include "vr/OverlayComponent.hpp"
+
+#include "vr/FFakeStereoRenderingHook.hpp"
+#include "vr/RenderTargetPoolHook.hpp"
+#include "vr/CVarManager.hpp"
+
+#include "Mod.hpp"
+#include "vr/RenderingMethodSetting.hpp"
+#include "vr/DuoViewState.hpp"
+#include "vr/DuoViewPSVR2Gaze.hpp"
+#include "vr/SteamFrameInput.hpp"
+#include "vr/GamepadRecovery.hpp"
+#include "vr/ProSpiCameraProbe.hpp"
+#include "vr/ProSpiCameraFraming.hpp"
+#include "vr/ProSpiCelebrationFraming.hpp"
+#include "vr/ProSpiCameraCutGuard.hpp"
+#include "vr/ProSpiRoofVisibility.hpp"
+
+#undef max
+#include <tracy/Tracy.hpp>
+
+class VR : public Mod {
+public:
+    nlohmann::json get_support_diagnostics();
+    ~VR() override;
+
+    enum RenderingMethod {
+        NATIVE_STEREO = 0,
+        SYNCHRONIZED = 1,
+        ALTERNATING = 2,
+        SYNTHETIC_DIBR = 3,
+        SYNTHETIC_DIBR_SINGLE_VIEW = 4,
+        MONO = uevr::mono::method_id,
+        DUOVIEW_MONO = uevr::mono::duoview_method_id,
+    };
+
+    enum SynchronizeStage {
+        EARLY = 0,
+        LATE = 1,
+        VERY_LATE = 2,
+    };
+
+    enum SyncedSequentialMethod {
+        SKIP_TICK = 0,
+        SKIP_DRAW = 1,
+    };
+
+    enum AimMethod : int32_t {
+        GAME,
+        HEAD,
+        RIGHT_CONTROLLER,
+        LEFT_CONTROLLER,
+        TWO_HANDED_RIGHT,
+        TWO_HANDED_LEFT,
+    };
+
+    enum DPadMethod : int32_t {
+        RIGHT_TOUCH,
+        LEFT_TOUCH,
+        LEFT_JOYSTICK,
+        RIGHT_JOYSTICK,
+        GESTURE_HEAD,
+        GESTURE_HEAD_RIGHT,
+        RIGHT_JOYSTICK_CLICK,
+        LEFT_JOYSTICK_CLICK
+    };
+
+    enum HORIZONTAL_PROJECTION_OVERRIDE : int32_t {
+        HORIZONTAL_DEFAULT,
+        HORIZONTAL_SYMMETRIC,
+        HORIZONTAL_MIRROR
+    };
+
+    enum VERTICAL_PROJECTION_OVERRIDE : int32_t {
+        VERTICAL_DEFAULT,
+        VERTICAL_SYMMETRIC,
+        VERTICAL_MATCHED
+    };
+
+    static const inline std::string s_action_pose = "/actions/default/in/Pose";
+    static const inline std::string s_action_grip_pose = "/actions/default/in/GripPose";
+    static const inline std::string s_action_trigger = "/actions/default/in/Trigger";
+    static const inline std::string s_action_grip = "/actions/default/in/Grip";
+    static const inline std::string s_action_joystick = "/actions/default/in/Joystick";
+    static const inline std::string s_action_joystick_click = "/actions/default/in/JoystickClick";
+
+    static const inline std::string s_action_a_button_left = "/actions/default/in/AButtonLeft";
+    static const inline std::string s_action_b_button_left = "/actions/default/in/BButtonLeft";
+    static const inline std::string s_action_a_button_touch_left = "/actions/default/in/AButtonTouchLeft";
+    static const inline std::string s_action_b_button_touch_left = "/actions/default/in/BButtonTouchLeft";
+
+    static const inline std::string s_action_a_button_right = "/actions/default/in/AButtonRight";
+    static const inline std::string s_action_b_button_right = "/actions/default/in/BButtonRight";
+    static const inline std::string s_action_a_button_touch_right = "/actions/default/in/AButtonTouchRight";
+    static const inline std::string s_action_b_button_touch_right = "/actions/default/in/BButtonTouchRight";
+
+    static const inline std::string s_action_dpad_up = "/actions/default/in/DPad_Up";
+    static const inline std::string s_action_dpad_right = "/actions/default/in/DPad_Right";
+    static const inline std::string s_action_dpad_down = "/actions/default/in/DPad_Down";
+    static const inline std::string s_action_dpad_left = "/actions/default/in/DPad_Left";
+    static const inline std::string s_action_system_button = "/actions/default/in/SystemButton";
+    static const inline std::string s_action_bumper = "/actions/default/in/Bumper";
+    static const inline std::string s_action_start_button = "/actions/default/in/StartButton";
+    static const inline std::string s_action_back_button = "/actions/default/in/BackButton";
+    static const inline std::string s_action_trigger_axis = "/actions/default/in/TriggerAxis";
+    static const inline std::string s_action_squeeze = "/actions/default/in/Squeeze";
+    static const inline std::array<std::string, 10> s_touch_actions{
+        "/actions/default/in/TriggerTouch", "/actions/default/in/GripTouch",
+        "/actions/default/in/BumperTouch", "/actions/default/in/JoystickTouch",
+        "/actions/default/in/DPad_UpTouch", "/actions/default/in/DPad_RightTouch",
+        "/actions/default/in/DPad_DownTouch", "/actions/default/in/DPad_LeftTouch",
+        "/actions/default/in/StartButtonTouch", "/actions/default/in/BackButtonTouch"
+    };
+    static const inline std::string s_action_thumbrest_touch_left = "/actions/default/in/ThumbrestTouchLeft";
+    static const inline std::string s_action_thumbrest_touch_right = "/actions/default/in/ThumbrestTouchRight";
+
+public:
+    static std::shared_ptr<VR>& get();
+
+    std::string_view get_name() const override { return "VR"; }
+
+    std::optional<std::string> clean_initialize();
+    std::optional<std::string> on_initialize_d3d_thread() {
+        return clean_initialize();
+    }
+
+    std::vector<SidebarEntryInfo> get_sidebar_entries() override {
+        return {
+            {"Runtime", false},
+            {"Unreal", false},
+            {"Input", false},
+            {"Camera", false},
+            {"Keybinds", false},
+            {"Console/CVars", true},
+            {"Compatibility", true},
+            {"Debug", true},
+        };
+    }
+
+    // texture bounds to tell OpenVR which parts of the submitted texture to render (default - use the whole texture).
+    // Will be modified to accommodate forced symmetrical eye projection
+    vr::VRTextureBounds_t m_right_bounds{0.0f, 0.0f, 1.0f, 1.0f};
+    vr::VRTextureBounds_t m_left_bounds{0.0f, 0.0f, 1.0f, 1.0f};
+
+    void on_config_load(const utility::Config& cfg, bool set_defaults) override;
+    void on_config_save(utility::Config& cfg) override;
+    
+    void on_draw_ui() override;
+    void on_draw_sidebar_entry(std::string_view name) override;
+    void on_pre_imgui_frame() override;
+
+    void handle_keybinds();
+    void on_frame() override;
+
+    void on_present() override;
+    void on_post_present() override;
+
+    void on_device_reset() override {
+        m_duoview.retire();
+        get_runtime()->on_device_reset();
+
+        if (m_fake_stereo_hook != nullptr) {
+            m_fake_stereo_hook->on_device_reset();
+        }
+
+        if (m_is_d3d12) {
+            m_d3d12.on_reset(this);
+        } else {
+            m_d3d11.on_reset(this);
+        }
+    }
+
+    bool on_message(HWND wnd, UINT message, WPARAM w_param, LPARAM l_param) override;
+    void on_xinput_get_state(uint32_t* retval, uint32_t user_index, XINPUT_STATE* state) override;
+    void on_xinput_set_state(uint32_t* retval, uint32_t user_index, XINPUT_VIBRATION* vibration) override;
+    void update_imgui_state_from_xinput_state(XINPUT_STATE& state, bool is_vr_controller);
+
+    void on_pre_engine_tick(sdk::UGameEngine* engine, float delta) override;
+    void on_post_engine_tick(sdk::UGameEngine* engine, float delta) override;
+    void on_pre_calculate_stereo_view_offset(void* stereo_device, const int32_t view_index, Rotator<float>* view_rotation, 
+                                             const float world_to_meters, Vector3f* view_location, bool is_double) override;
+    void on_pre_viewport_client_draw(void* viewport_client, void* viewport, void* canvas) override;
+
+    void update_hmd_state(bool from_view_extensions = false, uint32_t frame_count = 0);
+    void update_action_states(bool from_stalled_xinput = false);
+    void update_dpad_gestures();
+
+    void reinitialize_renderer() {
+        if (m_is_d3d12) {
+            m_d3d12.force_reset();
+        } else {
+            m_d3d11.force_reset();
+        }
+    }
+
+    bool on_openxr_resolution_scale_changed(
+        uint32_t old_width,
+        uint32_t old_height,
+        uint32_t new_width,
+        uint32_t new_height);
+
+
+    Vector4f get_position(uint32_t index, bool grip = true)  const;
+    Vector4f get_velocity(uint32_t index)  const;
+    Vector4f get_angular_velocity(uint32_t index)  const;
+    Matrix4x4f get_hmd_rotation(uint32_t frame_count) const;
+    Matrix4x4f get_hmd_transform(uint32_t frame_count) const;
+    Matrix4x4f get_rotation(uint32_t index, bool grip = true)  const;
+    Matrix4x4f get_transform(uint32_t index, bool grip = true) const;
+    vr::HmdMatrix34_t get_raw_transform(uint32_t index) const;
+
+    Vector4f get_grip_position(uint32_t index) const {
+        return get_position(index, true);
+    }
+
+    Vector4f get_aim_position(uint32_t index) const {
+        return get_position(index, false);
+    }
+
+    Matrix4x4f get_grip_rotation(uint32_t index) const {
+        return get_rotation(index, true);
+    }
+
+    Matrix4x4f get_aim_rotation(uint32_t index) const {
+        return get_rotation(index, false);
+    }
+
+    Matrix4x4f get_grip_transform(uint32_t hand_index) const;
+    Matrix4x4f get_aim_transform(uint32_t hand_index) const;
+
+    Vector4f get_eye_offset(VRRuntime::Eye eye) const;
+    Vector4f get_current_offset();
+    
+    Matrix4x4f get_eye_transform(uint32_t index);
+    Matrix4x4f get_current_eye_transform(bool flip = false);
+    Matrix4x4f get_projection_matrix(VRRuntime::Eye eye, bool flip = false);
+    Matrix4x4f get_current_projection_matrix(bool flip = false);
+
+    uevr::prospi::trace::Recorder& prospi_camera_trace() noexcept { return m_prospi_camera_trace; }
+
+    bool is_action_active(vr::VRActionHandle_t action, vr::VRInputValueHandle_t source = vr::k_ulInvalidInputValueHandle) const;
+
+    bool is_action_active_any_joystick(vr::VRActionHandle_t action) const {
+        if (is_action_active(action, m_left_joystick)) {
+            return true;
+        }
+
+        if (is_action_active(action, m_right_joystick)) {
+            return true;
+        }
+
+        return false;
+    }
+    Vector2f get_joystick_axis(vr::VRInputValueHandle_t handle) const;
+    std::string get_controller_profile(vr::VRInputValueHandle_t source) const;
+    const char* get_controller_type(vr::VRInputValueHandle_t source) const;
+    uevr::steam_frame::DigitalInput get_action_state(vr::VRActionHandle_t action, vr::VRInputValueHandle_t source) const;
+    uevr::steam_frame::AnalogInput get_action_axis(vr::VRActionHandle_t action, vr::VRInputValueHandle_t source) const;
+
+    vr::VRActionHandle_t get_action_handle(std::string_view action_path) {
+        if (auto it = m_action_handles.find(action_path.data()); it != m_action_handles.end()) {
+            return it->second;
+        }
+
+        return vr::k_ulInvalidActionHandle;
+    }
+
+    Vector2f get_left_stick_axis() const;
+    Vector2f get_right_stick_axis() const;
+
+    void trigger_haptic_vibration(float seconds_from_now, float duration, float frequency, float amplitude, vr::VRInputValueHandle_t source = vr::k_ulInvalidInputValueHandle);
+    
+    float get_standing_height();
+    Vector4f get_standing_origin();
+    void set_standing_origin(const Vector4f& origin);
+
+    glm::quat get_rotation_offset();
+    void set_rotation_offset(const glm::quat& offset);
+    void recenter_view();
+    void recenter_horizon();
+
+    template<typename T = VRRuntime>
+    T* get_runtime() const {
+        return (T*)m_runtime.get();
+    }
+
+    runtimes::OpenXR* get_openxr_runtime() const {
+        return m_openxr.get();
+    }
+
+    runtimes::OpenVR* get_openvr_runtime() const {
+        return m_openvr.get();
+    }
+
+    bool is_prospi_cut_cadence_guard_active() const;
+    uint64_t get_prospi_cut_cadence_guard_generation() const {
+        return m_prospi_cut_cadence_guard_generation.load(std::memory_order_relaxed);
+    }
+
+    bool is_hmd_active() const {
+        if (m_disable_vr) {
+            return false;
+        }
+
+        auto runtime = get_runtime();
+
+        if (runtime == nullptr) {
+            return false;
+        }
+
+        return runtime->ready() || (m_stereo_emulation_mode && runtime->loaded);
+    }
+
+    auto get_hmd() const {
+        return m_openvr->hmd;
+    }
+
+    auto& get_openvr_poses() const {
+        return m_openvr->render_poses;
+    }
+
+    auto& get_overlay_component() {
+        return m_overlay_component;
+    }
+
+    vrmod::UILayerPoseBasis build_ui_layer_pose_basis(uint32_t render_frame_count);
+    void record_ui_layer_pose_sample(
+        const vrmod::UILayerPoseBasis* basis,
+        runtimes::OpenXR::SwapchainIndex swapchain,
+        XrEyeVisibility eye,
+        bool follow_view,
+        bool stabilizer_used,
+        const glm::quat& hmd_rotation,
+        const glm::quat& live_ui_rotation,
+        const glm::quat& applied_rotation,
+        const char* refusal_reason);
+
+    uint32_t get_hmd_width() const;
+    uint32_t get_hmd_height() const;
+
+    const auto& get_eyes() const {
+        return get_runtime()->eyes;
+    }
+
+    auto get_frame_count() const {
+        return m_frame_count;
+    }
+
+    auto& get_controllers() const {
+        return m_controllers;
+    }
+
+    bool is_using_controllers() const {
+        return m_controller_test_mode || (m_controllers_allowed->value() &&
+        is_hmd_active() && !m_controllers.empty() && (std::chrono::steady_clock::now() - m_last_controller_update) <= std::chrono::seconds((int32_t)m_motion_controls_inactivity_timer->value()));
+    }
+
+    bool is_using_controllers_within(std::chrono::seconds seconds) const {
+        return m_controllers_allowed->value() && is_hmd_active() && !m_controllers.empty() && (std::chrono::steady_clock::now() - m_last_controller_update) <= seconds;
+    }
+
+    int get_hmd_index() const {
+        return 0;
+    }
+
+    int get_left_controller_index() const {
+        const auto wants_swap = m_swap_controllers->value();
+
+        if (m_runtime->is_openxr()) {
+            return wants_swap ? 2 : 1;
+        } else if (m_runtime->is_openvr()) {
+            return !m_controllers.empty() ? (wants_swap ? m_controllers[1] : m_controllers[0]) : -1;
+        }
+
+        return -1;
+    }
+
+    int get_right_controller_index() const {
+        const auto wants_swap = m_swap_controllers->value();
+
+        if (m_runtime->is_openxr()) {
+            return wants_swap ? 1 : 2;
+        } else if (m_runtime->is_openvr()) {
+            return !m_controllers.empty() ? (wants_swap ? m_controllers[0] : m_controllers[1]) : -1;
+        }
+
+        return -1;
+    }
+
+    auto get_left_joystick() const {
+        if (!m_swap_controllers->value()) {
+            return m_left_joystick;
+        }
+
+        return m_right_joystick;
+    }
+
+    auto get_right_joystick() const {
+        if (!m_swap_controllers->value()) {
+            return m_right_joystick;
+        }
+
+        return m_left_joystick;
+    }
+
+    bool is_gui_enabled() const {
+        return m_enable_gui->value();
+    }
+
+    auto get_camera_forward_offset() const {
+        if (m_match_game_fov->value() && m_match_game_fov_dolly->value()) {
+            return m_camera_forward_offset->value() + m_game_fov_dolly_offset.load(std::memory_order_relaxed);
+        }
+
+        return m_camera_forward_offset->value();
+    }
+
+    auto get_camera_right_offset() const {
+        return m_camera_right_offset->value();
+    }
+
+    auto get_camera_up_offset() const {
+        return m_camera_up_offset->value() + m_prospi_camera_safety_up_offset.load(std::memory_order_relaxed);
+    }
+
+    struct CameraViewOffsets {
+        float forward{}, right{}, up{};
+        uevr::prospi::cut_guard::Status status{};
+    };
+    bool uses_prospi_camera_cut_guard() const;
+    CameraViewOffsets get_camera_view_offsets(const uevr::prospi::trace::Pose& input) const;
+
+    auto get_world_scale() const {
+        return m_world_scale->value();
+    }
+
+    // Tracking-space movement only; no origin/reference resets or eye changes.
+    glm::vec3 get_xyz_head_movement_gains() const {
+        if (!m_xyz_headscale_enabled->value() ||
+            m_xyz_headscale_hold_bypass.load(std::memory_order_relaxed)) {
+            return {1.0f, 1.0f, 1.0f};
+        }
+        const auto valid_gain = [](float v) {
+            return std::isfinite(v) && v >= 0.05f && v <= 5.0f ? v : 1.0f;
+        };
+        return {valid_gain(m_xyz_headscale_x->value()),
+                valid_gain(m_xyz_headscale_y->value()),
+                valid_gain(m_xyz_headscale_z->value())};
+    }
+
+    auto is_stereo_emulation_enabled() const {
+        return m_stereo_emulation_mode;
+    }
+
+    void reset_present_event() {
+        ResetEvent(m_present_finished_event);
+    }
+
+    void wait_for_present() {
+        if (!m_wait_for_present) {
+            return;
+        }
+
+        if (m_frame_count <= m_game_frame_count) {
+            //return;
+        }
+
+        if (WaitForSingleObject(m_present_finished_event, 11) == WAIT_TIMEOUT) {
+            //timed_out = true;
+        }
+
+        m_game_frame_count = m_frame_count;
+        //ResetEvent(m_present_finished_event);
+    }
+
+    auto& get_vr_mutex() {
+        return m_openvr_mtx;
+    }
+
+    bool is_using_mono() const { return uevr::mono::is_mono_family(m_rendering_method->value()); }
+    bool is_using_duoview_mono() const { return m_rendering_method->value() == RenderingMethod::DUOVIEW_MONO; }
+    bool is_duoview_renderer_active() const;
+    bool is_duoview_split_eye_enabled() const {
+        return is_duoview_renderer_active() && m_duo_split_eye_frozen.load(std::memory_order_acquire);
+    }
+    uevr::duoview::State& duoview_state() { return m_duoview; }
+    void duoview_start_draw() {
+        // Freeze per-draw policy BEFORE either UE camera/projection callback.
+        m_duo_split_eye_frozen.store(m_duo_split_eye->value(), std::memory_order_release);
+        m_duoview_draw_serial.fetch_add(1, std::memory_order_acq_rel);
+        m_duoview_candidate_key.store(nullptr, std::memory_order_release);
+        m_duoview_frozen_key.store(nullptr, std::memory_order_release);
+    }
+    uevr::duoview::FrameKey duoview_key() const {
+        return {mono_generation(), m_duoview_draw_serial.load(std::memory_order_acquire)};
+    }
+    uevr::duoview::FrameKey duoview_producer_key() const {
+        if (m_fake_stereo_hook && m_fake_stereo_hook->is_in_viewport_client_draw()) {
+            const auto candidate = m_duoview_candidate_key.load(std::memory_order_acquire);
+            if (candidate && candidate->generation == mono_generation()) return *candidate;
+        }
+        const auto frozen = m_duoview_frozen_key.load(std::memory_order_acquire);
+        if (frozen && frozen->generation == mono_generation()) return *frozen;
+        const auto candidate = m_duoview_candidate_key.load(std::memory_order_acquire);
+        if (candidate && candidate->generation == mono_generation()) return *candidate;
+        return duoview_key();
+    }
+    bool duoview_note_main_family(uint32_t, bool main, uint32_t count) {
+        const auto candidate = m_duoview_candidate_key.load(std::memory_order_acquire);
+        if (!candidate || candidate->generation != mono_generation() ||
+            !m_duoview.family(*candidate, main, count)) return false;
+        const auto frame = m_duoview.snapshot(*candidate);
+        if (!frame || !frame->mono_source_frame || !get_openxr_runtime() ||
+            !get_openxr_runtime()->has_mono_pose(*frame->mono_source_frame)) return false;
+        m_duoview_frozen_key.store(candidate, std::memory_order_release);
+        return true;
+    }
+    std::optional<uint32_t> duoview_mono_source_frame() const {
+        const auto frame = m_duoview.snapshot(duoview_producer_key());
+        return frame ? frame->mono_source_frame : std::optional<uint32_t>{};
+    }
+    // Reject corrupt/nonfinite persisted values before they reach GPU constants.
+    float duoview_visibility_absolute_tolerance() const {
+        const float v=m_duo_visibility_absolute->value();
+        return std::isfinite(v) ? (std::clamp)(v,0.1f,5.f) : 1.f;
+    }
+    float duoview_visibility_relative_tolerance() const {
+        const float v=m_duo_visibility_relative_percent->value();
+        return std::isfinite(v) ? (std::clamp)(v,0.25f,5.f)*0.01f : .015f;
+    }
+    bool duoview_foreground_refinement_enabled() const { return m_duo_foreground_refinement->value(); }
+    float duoview_foreground_edge_radius() const {
+        const float v=m_duo_foreground_edge_radius->value();
+        return std::isfinite(v) ? (std::clamp)(v,0.5f,2.f) : 1.f;
+    }
+    bool duoview_gaze_active() const { return m_duoview.settings().eye_tracked && m_duoview_gaze.active(); }
+    void configure_duoview();
+    void note_duoview_gpu_ms(float ms) { m_duo_gpu_ms.store(ms, std::memory_order_relaxed); }
+    void note_duoview_output_path(bool direct_xr) {
+        m_duoview_output_path.store(direct_xr ? 1 : 0, std::memory_order_relaxed);
+    }
+    void note_duoview_source_extents(uint64_t packed) {
+        m_duoview_source_extents.store(packed,std::memory_order_relaxed);
+    }
+    std::optional<uevr::duoview::ViewFrame> duoview_begin_frame();
+    void duoview_abort(const char* reason);
+    bool is_mono_transition_pending() const { return m_rendering_method->selection().pending(); }
+    bool is_mono_transition_waiting() const {
+        return m_mono_ready_generation.load(std::memory_order_acquire) != mono_generation();
+    }
+    bool is_mono_transition_quiescing() const {
+        return is_mono_transition_pending() &&
+            (!uevr::mono::is_mono_family(requested_rendering_method()) || mono_unavailable_reason() == nullptr);
+    }
+    uint64_t mono_generation() const { return m_rendering_method->selection().generation(); }
+    uint64_t mono_request_token() const { return m_rendering_method->selection().request_token(); }
+    int32_t requested_rendering_method() const { return m_rendering_method->requested_value(); }
+    bool has_unsupported_rendering_method() const { return !m_rendering_method->is_available(requested_rendering_method()); }
+    const char* mono_unavailable_reason() const;
+    bool service_mono_transition_present();
+    void service_mono_transition_game_thread();
+    bool mono_frame_gate_required() const {
+        const auto state = m_rendering_method->selection().snapshot();
+        return uevr::mono::needs_frame_gate(state.method, state.generation, m_mono_ready_generation.load(std::memory_order_acquire));
+    }
+    void note_mono_frame_ready(uint64_t generation) { m_mono_ready_generation.store(generation, std::memory_order_release); }
+    bool take_mono_main_view_update(uint32_t frame);
+    bool take_mono_attachment_update(uint32_t frame);
+    const char* mono_status() const { return m_mono_status.load(std::memory_order_acquire); }
+    void set_mono_status(const char* status) { m_mono_status.store(status, std::memory_order_release); }
+
+    bool is_using_afr() const {
+        if (is_using_mono()) { return false; }
+        return m_rendering_method->value() == RenderingMethod::ALTERNATING || 
+               m_rendering_method->value() == RenderingMethod::SYNCHRONIZED ||
+               m_extreme_compat_mode->value() == true;
+    }
+
+    bool is_using_native_stereo() const {
+        return m_rendering_method->value() == RenderingMethod::NATIVE_STEREO &&
+               !is_using_afr();
+    }
+
+    bool is_using_synchronized_afr() const {
+        return m_rendering_method->value() == RenderingMethod::SYNCHRONIZED ||
+               (m_extreme_compat_mode->value() && m_rendering_method->value() == RenderingMethod::NATIVE_STEREO);
+    }
+
+    bool is_using_strict_synchronized_afr() const {
+        return m_rendering_method->value() == RenderingMethod::SYNCHRONIZED;
+    }
+
+    bool is_nascar_code_preserving_mode() const {
+        static_assert(RenderingMethod::NATIVE_STEREO == 0 && RenderingMethod::SYNCHRONIZED == 1);
+        return uevr::nascar::is_target() &&
+            uevr::nascar::supports_rendering_method(m_rendering_method->value(), m_extreme_compat_mode->value());
+    }
+
+    bool should_ignore_native_stereo_fix_for_avowed_sync() const;
+    bool should_force_native_stereo_fix_same_pass() const;
+
+    SynchronizeStage get_synchronize_stage() {
+        return (SynchronizeStage) m_sync_mode->value();
+    }
+
+    SyncedSequentialMethod get_synced_sequential_method() const {
+        if (uevr::nascar::is_target() && is_using_strict_synchronized_afr()) {
+            return SyncedSequentialMethod::SKIP_TICK;
+        }
+        return (SyncedSequentialMethod)m_synced_afr_method->value();
+    }
+
+    uint32_t get_lowest_xinput_index() const {
+        return m_lowest_xinput_user_index;
+    }
+
+    auto& get_render_target_pool_hook() const {
+        return m_render_target_pool_hook;
+    }
+
+    void set_world_to_meters(float value) {
+        m_world_to_meters = value;
+    }
+
+    float get_world_to_meters() const {
+        return m_world_to_meters * m_world_scale->value();
+    }
+
+    float get_depth_scale() const {
+        return m_depth_scale->value();
+    }
+
+    bool is_depth_enabled() const {
+        return !is_using_mono() && m_enable_depth->value();
+    }
+
+    bool is_openxr_afr_depth_target_stability_enabled() const {
+        const auto runtime = get_runtime();
+        return m_openxr_afr_depth_target_stability->value() &&
+            m_enable_depth->value() &&
+            m_is_d3d12 &&
+            runtime != nullptr &&
+            runtime->is_openxr() &&
+            is_using_afr();
+    }
+
+    bool is_decoupled_pitch_enabled() const {
+        return m_decoupled_pitch->value();
+    }
+
+    bool is_decoupled_pitch_ui_adjust_enabled() const {
+        return m_decoupled_pitch_ui_adjust->value();
+    }
+
+    void set_decoupled_pitch(bool value) {
+        m_decoupled_pitch->value() = value;
+    }
+
+    void set_aim_allowed(bool value) {
+        m_aim_temp_disabled = !value;
+    }
+
+    bool is_aim_allowed() const {
+        return !m_aim_temp_disabled;
+    }
+
+    AimMethod get_aim_method() const {
+        if (m_aim_temp_disabled) {
+            return AimMethod::GAME;
+        }
+
+        return (AimMethod)m_aim_method->value();
+    }
+
+    void set_aim_method(AimMethod method) {
+        if ((size_t)method >= s_aim_method_names.size()) {
+            method = AimMethod::GAME;
+        }
+
+        m_aim_method->value() = method;
+    }
+
+    AimMethod get_movement_orientation() const {
+        return (AimMethod)m_movement_orientation->value();
+    }
+
+    float get_aim_speed() const {
+        return m_aim_speed->value();
+    }
+    
+    bool is_aim_multiplayer_support_enabled() const {
+        return m_aim_multiplayer_support->value();
+    }
+
+    bool is_aim_pawn_control_rotation_enabled() const {
+        return m_aim_use_pawn_control_rotation->value();
+    }
+
+    bool is_aim_modify_player_control_rotation_enabled() const {
+        return m_aim_modify_player_control_rotation->value();
+    }
+
+    bool is_aim_interpolation_enabled() const {
+        return m_aim_interp->value();
+    }
+    
+    bool is_any_aim_method_active() const {
+        return m_aim_method->value() > AimMethod::GAME && !m_aim_temp_disabled;
+    }
+
+    bool is_headlocked_aim_enabled() const {
+        return m_aim_method->value() == AimMethod::HEAD && !m_aim_temp_disabled;
+    }
+
+    bool is_controller_aim_enabled() const {
+        const auto value = m_aim_method->value();
+        return !m_aim_temp_disabled && (value == AimMethod::LEFT_CONTROLLER || value == AimMethod::RIGHT_CONTROLLER || value == AimMethod::TWO_HANDED_LEFT || value == AimMethod::TWO_HANDED_RIGHT);
+    }
+
+    bool is_controller_movement_enabled() const {
+        const auto value = m_movement_orientation->value();
+        return value == AimMethod::LEFT_CONTROLLER || value == AimMethod::RIGHT_CONTROLLER || value == AimMethod::TWO_HANDED_LEFT || value == AimMethod::TWO_HANDED_RIGHT;
+    }
+
+    bool wants_blueprint_load() const {
+        return m_load_blueprint_code->value();
+    }
+
+    bool is_splitscreen_compatibility_enabled() const {
+        if (is_using_mono()) { return false; }
+        if (uevr::nascar::is_target()) { return false; }
+        return m_splitscreen_compatibility_mode->value();
+    }
+
+    uint32_t get_requested_splitscreen_index() const {
+        return m_splitscreen_view_index->value();
+    }
+
+    bool is_sceneview_compatibility_enabled() const {
+        if (is_using_mono()) { return false; }
+        if (uevr::nascar::is_target()) { return false; }
+        return m_sceneview_compatibility_mode->value();
+    }
+
+    bool is_native_stereo_fix_enabled() const {
+        if (is_mono_transition_quiescing()) { return false; }
+        if (uevr::nascar::is_target()) {
+            return is_nascar_native_stereo_fix_requested() && m_fake_stereo_hook && m_fake_stereo_hook->is_nascar_native_ready();
+        }
+        if (should_ignore_native_stereo_fix_for_avowed_sync()) {
+            return false;
+        }
+        if (is_duoview_renderer_active()) { return true; }
+
+        return m_native_stereo_fix->value() &&
+            m_rendering_method->value() == RenderingMethod::NATIVE_STEREO &&
+            !is_using_afr();
+    }
+
+    bool is_native_stereo_fix_same_pass_enabled() const {
+        if (is_duoview_renderer_active()) return m_duoview.settings().native_fix_same_pass;
+        if (should_force_native_stereo_fix_same_pass()) {
+            return true;
+        }
+
+        return m_native_stereo_fix_same_pass->value();
+    }
+
+    bool is_native_stereo_fix_preserve_secondary_pass_enabled() const {
+        if (is_duoview_renderer_active() && !m_duoview.settings().native_fix_same_pass) return true;
+        return m_native_stereo_fix_preserve_secondary_pass->value();
+    }
+
+    bool is_native_stereo_fix_texture_array_submit_enabled() const {
+        if (uevr::nascar::is_target()) { return false; }
+        const auto runtime = get_runtime();
+        return m_native_stereo_fix_texture_array_submit->value() &&
+            is_native_stereo_fix_enabled() &&
+            !is_native_stereo_fix_same_pass_enabled() &&
+            m_is_d3d12 &&
+            runtime != nullptr &&
+            runtime->is_openxr() &&
+            !is_using_afr() &&
+            m_rendering_method->value() == RenderingMethod::NATIVE_STEREO;
+    }
+
+    bool is_stalker2_native_fix_experiment_enabled() const;
+    bool is_stalker2_sharpen_priority_enabled() const {
+        return m_stalker2_sharpen_priority->value() && is_stalker2_native_fix_experiment_enabled();
+    }
+
+    bool is_native_stereo_fix_async_openxr_wait_enabled() const {
+        const auto runtime = get_runtime();
+        return m_native_stereo_fix_async_openxr_wait->value() &&
+            is_native_stereo_fix_texture_array_submit_enabled() &&
+            runtime != nullptr &&
+            runtime->is_openxr();
+    }
+
+    bool is_dibr_rendering_method_selected() const {
+        const auto method = m_rendering_method->value();
+        return method == RenderingMethod::SYNTHETIC_DIBR ||
+            method == RenderingMethod::SYNTHETIC_DIBR_SINGLE_VIEW;
+    }
+
+    // This high-risk mode keeps the existing DIBR output path, but asks the
+    // renderer hook to omit the second engine scene view only after runtime
+    // validation has proven the main view family and depth source are stable.
+    bool is_dibr_single_view_requested() const {
+        return m_rendering_method->value() == RenderingMethod::SYNTHETIC_DIBR_SINGLE_VIEW;
+    }
+
+    // A lone DIBR reference view must cover the union of both eye frusta. The
+    // runtime crops that union back to each eye at submission. Keep the
+    // ordinary projection until the renderer has validated and activated the
+    // one-view path, so fallback frames remain indistinguishable from normal
+    // two-view DIBR.
+    bool is_dibr_single_view_projection_configured() const {
+        return is_dibr_single_view_requested() &&
+            is_dibr_preview_active() &&
+            m_fake_stereo_hook != nullptr &&
+            m_fake_stereo_hook->is_dibr_single_view_active();
+    }
+
+    // UE5.4+ can create SceneDepthZ through RDG, and some UE4 stereo paths
+    // expose a DSV-only depth texture even though the renderer later samples
+    // a depth SRV. The depth-copy capture remains separately opt-in because it
+    // inserts a self-contained copy on the game's command list.
+    bool is_dibr_preview_engine_supported() const {
+        return m_fake_stereo_hook != nullptr &&
+            (!m_fake_stereo_hook->has_double_precision() || m_dibr_ue5_rdg_depth_capture->value());
+    }
+
+    // DIBR depth tracing observes DSV allocation and, when injection happens
+    // later, exact live depth transitions. It never borrows a resource until a
+    // matching producer and state have been verified.
+    bool is_dibr_depth_trace_requested() const {
+        const auto runtime = get_runtime();
+        return is_dibr_rendering_method_selected() &&
+            m_is_d3d12 &&
+            runtime != nullptr &&
+            runtime->is_openxr() &&
+            !is_native_stereo_fix_enabled() &&
+            !m_extreme_compat_mode->value() &&
+            !m_sceneview_compatibility_mode->value() &&
+            !m_splitscreen_compatibility_mode->value() &&
+            !is_using_2d_screen() &&
+            !m_stereo_emulation_mode;
+    }
+
+    bool is_dibr_ue5_rdg_depth_capture_enabled() const {
+        return m_fake_stereo_hook != nullptr &&
+            m_dibr_ue5_rdg_depth_capture->value();
+    }
+
+    // DIBR is intentionally isolated from the existing rendering paths. The
+    // preview does not alter view counts, OpenXR timing, UI, or spectator work.
+    bool is_dibr_preview_active() const {
+        const auto runtime = get_runtime();
+        return is_dibr_rendering_method_selected() &&
+            is_dibr_preview_engine_supported() &&
+            m_is_d3d12 &&
+            runtime != nullptr &&
+            runtime->is_openxr() &&
+            !is_native_stereo_fix_enabled() &&
+            !m_extreme_compat_mode->value() &&
+            !m_sceneview_compatibility_mode->value() &&
+            !m_splitscreen_compatibility_mode->value() &&
+            !is_using_2d_screen() &&
+            !m_stereo_emulation_mode;
+    }
+
+    float get_dibr_disparity_pixels() const {
+        return m_dibr_disparity_pixels->value();
+    }
+
+    float get_dibr_reprojection_strength() const {
+        return m_dibr_reprojection_strength->value();
+    }
+
+    bool is_dibr_ui_footprint_reprojection_enabled() const {
+        return is_dibr_rendering_method_selected() &&
+            m_dibr_ui_footprint_reprojection->value();
+    }
+
+    bool is_dibr_ui_footprint_reprojection_debug_mask_enabled() const {
+        return is_dibr_ui_footprint_reprojection_enabled() &&
+            m_dibr_ui_footprint_reprojection_debug_mask->value();
+    }
+
+    float get_dibr_ui_footprint_reprojection_strength() const {
+        return m_dibr_ui_footprint_reprojection_strength->value();
+    }
+
+    float get_dibr_legacy_depth_curve() const {
+        return m_dibr_legacy_depth_curve->value();
+    }
+
+    float get_dibr_legacy_near_depth_cap() const {
+        return m_dibr_legacy_near_depth_cap->value();
+    }
+
+    bool is_dibr_depth_edge_stabilization_enabled() const {
+        return m_dibr_depth_edge_stabilization->value();
+    }
+
+    float get_dibr_depth_edge_threshold() const {
+        return m_dibr_depth_edge_threshold->value();
+    }
+
+    float get_dibr_depth_edge_stabilization_strength() const {
+        return m_dibr_depth_edge_stabilization_strength->value();
+    }
+
+    bool is_dibr_spatial_repair_enabled() const {
+        return m_dibr_spatial_repair->value();
+    }
+
+    bool is_dibr_spatial_repair_debug_mask_enabled() const {
+        return is_dibr_spatial_repair_enabled() && m_dibr_spatial_repair_debug_mask->value();
+    }
+
+    // This narrow quality pass is valid only after the guarded one-view path
+    // is live. Two-view DIBR and every non-DIBR rendering method stay exactly
+    // on their existing paths.
+    bool is_dibr_single_view_ui_edge_guard_enabled() const {
+        return is_dibr_single_view_projection_configured() &&
+            m_dibr_single_view_ui_edge_guard->value();
+    }
+
+    bool is_dibr_single_view_ui_edge_guard_debug_mask_enabled() const {
+        return is_dibr_single_view_ui_edge_guard_enabled() &&
+            m_dibr_single_view_ui_edge_guard_debug_mask->value();
+    }
+
+    bool is_dibr_reversed_depth_enabled() const {
+        return m_dibr_reversed_depth->value();
+    }
+
+    bool is_hitch_diagnostics_enabled() const {
+        return m_enable_hitch_diagnostics->value();
+    }
+
+    bool is_ahud_compatibility_enabled() const {
+        if (uevr::nascar::is_target()) { return false; }
+        return m_compatibility_ahud->value();
+    }
+
+    bool is_direct_aim_compatibility_enabled() const {
+        return m_compatibility_direct_aim->value();
+    }
+
+    bool is_controller_camera_conflict_guard_enabled() const {
+        return m_compatibility_controller_camera_guard->value();
+    }
+
+    bool is_head_turn_camera_stabilizer_enabled() const {
+        return m_compatibility_head_turn_camera_stabilizer->value();
+    }
+
+    bool is_ui_layer_pose_telemetry_enabled() const {
+        return m_compatibility_ui_layer_pose_telemetry->value();
+    }
+
+    bool is_ui_layer_pose_stabilizer_enabled() const {
+        return m_compatibility_ui_layer_pose_stabilizer->value();
+    }
+
+    bool is_swgr_bink_seek_budget_enabled() const {
+        return m_compatibility_swgr_bink_seek_budget->value();
+    }
+
+    bool is_dune_true_stereo_enabled() const {
+        const auto runtime = get_runtime();
+        return m_compatibility_dune_true_stereo->value() &&
+            m_is_d3d12 &&
+            runtime != nullptr &&
+            runtime->ready() &&
+            runtime->is_openxr() &&
+            is_hmd_active() &&
+            is_using_strict_synchronized_afr() &&
+            !is_using_2d_screen();
+    }
+
+    bool is_dune_native_dual_view_probe_enabled() const {
+        const auto runtime = get_runtime();
+        return m_compatibility_dune_native_dual_view_probe->value() &&
+            m_is_d3d12 &&
+            runtime != nullptr &&
+            runtime->ready() &&
+            runtime->is_openxr() &&
+            is_hmd_active() &&
+            m_rendering_method->value() == RenderingMethod::NATIVE_STEREO &&
+            !is_using_afr() &&
+            !is_native_stereo_fix_enabled() &&
+            !is_using_2d_screen();
+    }
+
+    bool is_daysgone_bend_ui_placement_fix_enabled() const {
+        return m_compatibility_daysgone_bend_ui_placement_fix->value();
+    }
+
+    bool is_xinput_gamepad_active_within(std::chrono::seconds seconds) const {
+        const auto last_update = m_last_xinput_update.load(std::memory_order_relaxed);
+        return last_update.time_since_epoch().count() != 0 &&
+            (std::chrono::steady_clock::now() - last_update) <= seconds;
+    }
+
+    bool is_controller_camera_conflict_guard_active() const;
+    void note_stalker2_transition_stress(const char* reason);
+    bool should_defer_stalker2_openxr_frame_for_transition(const char* reason);
+    bool is_native_openxr_async_wait_active() const;
+    bool request_native_openxr_async_wait();
+    void ensure_native_openxr_async_wait_worker();
+    void stop_native_openxr_async_wait_worker();
+    void native_openxr_async_wait_worker_loop(std::stop_token stop_token);
+
+    bool is_ghosting_fix_enabled() const {
+        if (is_using_mono() || is_mono_transition_quiescing()) { return false; }
+        if (uevr::nascar::is_target()) { return false; }
+        return m_ghosting_fix->value();
+    }
+
+    bool is_nascar_native_stereo_fix_requested() const {
+        return uevr::nascar::is_validated_build() && m_native_stereo_fix->value() &&
+            is_nascar_code_preserving_mode() && m_rendering_method->value() == RenderingMethod::NATIVE_STEREO &&
+            !is_using_afr() && !is_stereo_emulation_enabled() && !is_using_2d_screen();
+    }
+
+    bool is_nascar_ghosting_fix_requested() const {
+        return uevr::nascar::is_target() && m_ghosting_fix->value() &&
+            is_nascar_code_preserving_mode() && is_using_strict_synchronized_afr() &&
+            !is_stereo_emulation_enabled();
+    }
+
+    bool is_ghosting_fix_bootstrap_enabled() const {
+        return !is_using_mono() && !is_mono_transition_quiescing() && m_ghosting_fix_bootstrap_view_states->value();
+    }
+
+    auto& get_fake_stereo_hook() {
+        return m_fake_stereo_hook;
+    }
+
+    void set_pre_flattened_rotation(const glm::quat& rot) {
+        std::unique_lock _{m_decoupled_pitch_data.mtx};
+        m_decoupled_pitch_data.pre_flattened_rotation = rot;
+    }
+
+    auto get_pre_flattened_rotation() const {
+        std::shared_lock _{m_decoupled_pitch_data.mtx};
+        return m_decoupled_pitch_data.pre_flattened_rotation;
+    }
+
+    bool is_using_2d_screen() const {
+        return m_2d_screen_mode->value();
+    }
+
+    bool is_mixtape_auto_2d_active() const {
+        return m_mixtape_auto_2d_active.load(std::memory_order_relaxed);
+    }
+
+    bool is_halo_electra_cinematic_active() const {
+        return m_halo_electra_cinematic_active.load(std::memory_order_relaxed);
+    }
+
+    bool is_the_sinking_city_2_bink_ui_active() const {
+        return m_the_sinking_city_2_bink_ui_active.load(std::memory_order_acquire);
+    }
+
+    void set_windrose_meta_ui_2d_state_active(
+        std::string_view state_name,
+        uintptr_t state_id,
+        std::string_view source,
+        bool force_2d,
+        bool active);
+    void clear_windrose_meta_ui_2d_state(std::string_view reason);
+    std::string get_windrose_meta_ui_2d_status_text() const;
+
+    bool is_roomscale_enabled() const {
+        return m_roomscale_movement->value() && !m_aim_temp_disabled;
+    }
+
+    bool is_roomscale_sweep_enabled() const {
+        return m_roomscale_sweep->value();
+    }
+
+    bool is_dpad_shifting_enabled() const {
+        return m_dpad_shifting->value();
+    }
+
+    DPadMethod get_dpad_method() const {
+        return (DPadMethod)m_dpad_shifting_method->value();
+    }
+
+    bool is_snapturn_enabled() const {
+        return m_snapturn->value();
+    }
+
+    void set_snapturn_enabled(bool value) {
+        m_snapturn->value() = value;
+    }
+
+    float get_snapturn_js_deadzone() const {
+        return m_snapturn_joystick_deadzone->value();
+    }
+
+    int get_snapturn_angle() const {
+        return m_snapturn_angle->value();
+    }
+
+    float get_controller_pitch_offset() const {
+        return m_controller_pitch_offset->value();
+    }
+
+    bool should_skip_post_init_properties() const {
+        return m_compatibility_skip_pip->value();
+    }
+    
+    bool should_skip_uobjectarray_init() const {
+        return m_compatibility_skip_uobjectarray_init->value();
+    }
+
+    bool is_extreme_compatibility_mode_enabled() const {
+        return m_extreme_compat_mode->value();
+    }
+
+    int32_t get_horizontal_projection_override() const {
+        if (is_using_mono()) { return static_cast<int32_t>(HORIZONTAL_SYMMETRIC); }
+        if (is_dibr_single_view_projection_configured()) {
+            return static_cast<int32_t>(HORIZONTAL_SYMMETRIC);
+        }
+
+        return m_horizontal_projection_override->value();
+    }
+
+    int32_t get_vertical_projection_override() const {
+        if (is_using_mono()) { return static_cast<int32_t>(VERTICAL_SYMMETRIC); }
+        if (is_dibr_single_view_projection_configured()) {
+            return static_cast<int32_t>(VERTICAL_SYMMETRIC);
+        }
+
+        return m_vertical_projection_override->value();
+    }
+
+    bool should_grow_rectangle_for_projection_cropping() const {
+        return m_grow_rectangle_for_projection_cropping->value();
+    }
+
+    vrmod::D3D11Component& d3d11() {
+        return m_d3d11;
+    }
+
+    vrmod::D3D12Component& d3d12() {
+        return m_d3d12;
+    }
+
+    bool has_d3d12_game_ui_textures() const {
+        return m_is_d3d12 && m_d3d12.has_game_and_ui_textures();
+    }
+
+    uint32_t get_present_thread_id() const {
+        return m_present_thread_id;
+    }
+
+private:
+    Vector4f get_position_unsafe(uint32_t index) const;
+    Vector4f get_velocity_unsafe(uint32_t index) const;
+    Vector4f get_angular_velocity_unsafe(uint32_t index) const;
+
+private:
+    std::optional<std::string> initialize_openvr();
+    std::optional<std::string> initialize_openvr_input();
+    std::optional<std::string> initialize_openxr();
+    std::optional<std::string> initialize_openxr_input();
+    std::optional<std::string> initialize_openxr_swapchains();
+
+    bool detect_controllers();
+    bool is_any_action_down();
+    bool can_recover_gamepad_input() const;
+    void update_shf_auto_2d_mode(sdk::UGameEngine* engine);
+    void update_dispatch_auto_2d_mode(sdk::UGameEngine* engine);
+    void update_mixtape_auto_2d_mode(sdk::UGameEngine* engine);
+    void update_the_sinking_city_2_bink_ui_state(sdk::UGameEngine* engine);
+    void update_halo_electra_cinematic_state(sdk::UGameEngine* engine);
+    void update_windrose_meta_ui_auto_2d_mode();
+    void update_imgui_state_from_vr_controller_fallback();
+    void update_subnautica2_save_thumbnail_guard(sdk::UGameEngine* engine);
+    void update_subnautica2_native_water_compatibility(sdk::UGameEngine* engine);
+    void restore_subnautica2_native_water_cvars();
+    void update_1666amsterdam_native_postprocess_compatibility(sdk::UGameEngine* engine);
+    void restore_1666amsterdam_native_postprocess_cvars();
+    void update_daysgone_gbuffer_compatibility(sdk::UGameEngine* engine);
+    void restore_daysgone_gbuffer_cvar();
+    void update_everspace2_cinematic_bars(sdk::UGameEngine* engine);
+    struct HitchSnapshotDumpRequest;
+    void record_hitch_snapshot_sample(std::chrono::steady_clock::time_point now);
+    void dump_hitch_snapshot(std::chrono::steady_clock::duration tick_gap, const char* suspected_stall, bool bypass_cooldown = false);
+    void enqueue_hitch_snapshot_dump(HitchSnapshotDumpRequest&& request);
+    void hitch_snapshot_writer_loop(std::stop_token stop_token);
+    void stop_hitch_snapshot_writer();
+    static void write_hitch_snapshot_request(HitchSnapshotDumpRequest&& request);
+    struct UILayerPoseTelemetrySnapshot;
+    UILayerPoseTelemetrySnapshot get_ui_layer_pose_telemetry_snapshot();
+
+    std::optional<std::string> reinitialize_openvr() {
+        spdlog::info("Reinitializing OpenVR");
+        std::scoped_lock _{m_openvr_mtx};
+
+        m_runtime.reset();
+        m_runtime = std::make_shared<VRRuntime>();
+        m_openvr.reset();
+
+        // Reinitialize openvr input, hopefully this fixes the issue
+        m_controllers.clear();
+        m_controllers_set.clear();
+
+        auto e = initialize_openvr();
+
+        if (e) {
+            spdlog::error("Failed to reinitialize OpenVR: {}", *e);
+        }
+
+        return e;
+    }
+
+    std::optional<std::string> reinitialize_openxr() {
+        spdlog::info("Reinitializing OpenXR");
+        std::scoped_lock _{m_openvr_mtx};
+
+        // Build 49: OpenXR Reset Runtime constructs a NEW OpenXR object.
+        // Preserve the user's live binocular calibration across that
+        // replacement. Loading config.txt does NOT run on this reset path.
+        const bool saved_mono_eye_alignment_enabled =
+            m_openxr != nullptr && m_openxr->mono_eye_alignment_enabled->value();
+        const float saved_mono_eye_alignment_percent =
+            m_openxr != nullptr ? m_openxr->mono_eye_alignment_percent->value() : 0.0f;
+
+        if (m_is_d3d12) {
+            m_d3d12.openxr().destroy_swapchains();
+        } else {
+            m_d3d11.openxr().destroy_swapchains();
+        }
+
+        m_openxr.reset();
+        m_runtime.reset();
+        m_runtime = std::make_shared<VRRuntime>();
+
+        m_controllers.clear();
+        m_controllers_set.clear();
+
+        auto e = initialize_openxr();
+
+        // Restore BOTH the value and toggle, including when switching modes
+        // before the reset. Never alter a Mono projection or any GPU resource.
+        // Validate range defensively: invalid values reset safely to zero.
+        if (m_openxr != nullptr) {
+            const bool valid_percent =
+                std::isfinite(saved_mono_eye_alignment_percent) &&
+                saved_mono_eye_alignment_percent >= -3.0f &&
+                saved_mono_eye_alignment_percent <= 3.0f;
+            m_openxr->mono_eye_alignment_percent->value() =
+                valid_percent ? saved_mono_eye_alignment_percent : 0.0f;
+            m_openxr->mono_eye_alignment_enabled->value() =
+                valid_percent && saved_mono_eye_alignment_enabled;
+            spdlog::info("[OpenXR] Restored Mono Eye Alignment after runtime reset: enabled={}, total_percent={:.4f}",
+                m_openxr->mono_eye_alignment_enabled->value(),
+                m_openxr->mono_eye_alignment_percent->value());
+        }
+
+        if (e) {
+            spdlog::error("Failed to reinitialize OpenXR: {}", *e);
+        }
+
+        return e;
+    }
+
+    float m_nearz{ 0.1f };
+    float m_farz{ 3000.0f };
+    float m_world_to_meters{1.0f}; // Placeholder, it gets set later in a hook
+
+    std::unique_ptr<FFakeStereoRenderingHook> m_fake_stereo_hook{ std::make_unique<FFakeStereoRenderingHook>() };
+    std::unique_ptr<RenderTargetPoolHook> m_render_target_pool_hook{ std::make_unique<RenderTargetPoolHook>() };
+    std::unique_ptr<CVarManager> m_cvar_manager{ std::make_unique<CVarManager>() };
+
+    void add_components_vr() {
+        m_components = {
+            m_fake_stereo_hook.get(),
+            m_render_target_pool_hook.get(),
+            m_cvar_manager.get(),
+            &m_overlay_component
+        };
+    }
+
+    std::shared_ptr<VRRuntime> m_runtime{std::make_shared<VRRuntime>()}; // will point to the real runtime if it exists
+    std::shared_ptr<runtimes::OpenVR> m_openvr{std::make_shared<runtimes::OpenVR>()};
+    std::shared_ptr<runtimes::OpenXR> m_openxr{std::make_shared<runtimes::OpenXR>()};
+
+    mutable TracyLockable(std::recursive_mutex, m_openvr_mtx);
+    mutable TracyLockable(std::recursive_mutex, m_reinitialize_mtx);
+    mutable TracyLockable(std::recursive_mutex, m_actions_mtx);
+    mutable std::shared_mutex m_rotation_mtx{};
+
+    uevr::steam_frame::DigitalInput read_digital_input(vr::VRActionHandle_t action, vr::VRInputValueHandle_t source) const;
+    uevr::steam_frame::AnalogInput read_trigger_axis(vr::VRInputValueHandle_t source) const;
+    bool is_native_frame_source(vr::VRInputValueHandle_t source) const;
+    bool is_gamepad_shoulder_pressed(vr::VRInputValueHandle_t source) const;
+    uint8_t gamepad_trigger_value(vr::VRInputValueHandle_t source, uint8_t existing) const;
+    void apply_frame_gamepad_input(XINPUT_GAMEPAD& gamepad) const;
+    bool is_gamepad_face_action_active(vr::VRActionHandle_t normal, vr::VRActionHandle_t swapped) const;
+
+    std::vector<int32_t> m_controllers{};
+    std::unordered_set<int32_t> m_controllers_set{};
+
+    glm::vec3 m_overlay_rotation{-1.550f, 0.0f, -1.330f};
+    glm::vec4 m_overlay_position{0.0f, 0.06f, -0.07f, 1.0f};
+    
+    Vector4f m_standing_origin{ 0.0f, 1.5f, 0.0f, 0.0f };
+    glm::quat m_rotation_offset{ glm::identity<glm::quat>() };
+
+    HANDLE m_present_finished_event{CreateEvent(nullptr, TRUE, FALSE, nullptr)};
+
+    Vector4f m_raw_projections[2]{};
+
+    vrmod::D3D11Component m_d3d11{};
+    vrmod::D3D12Component m_d3d12{};
+    vrmod::OverlayComponent m_overlay_component;
+    bool m_disable_overlay{false};
+
+    // Action set handles
+    vr::VRActionSetHandle_t m_action_set{};
+    vr::VRActiveActionSet_t m_active_action_set{};
+
+    // Action handles
+    vr::VRActionHandle_t m_action_pose{ };
+    vr::VRActionHandle_t m_action_trigger{ };
+    vr::VRActionHandle_t m_action_grip{ };
+    vr::VRActionHandle_t m_action_grip_pose{ };
+    vr::VRActionHandle_t m_action_joystick{};
+    vr::VRActionHandle_t m_action_joystick_click{};
+
+    vr::VRActionHandle_t m_action_a_button_right{};
+    vr::VRActionHandle_t m_action_a_button_touch_right{};
+    vr::VRActionHandle_t m_action_b_button_right{};
+    vr::VRActionHandle_t m_action_b_button_touch_right{};
+
+    vr::VRActionHandle_t m_action_a_button_left{};
+    vr::VRActionHandle_t m_action_a_button_touch_left{};
+    vr::VRActionHandle_t m_action_b_button_left{};
+    vr::VRActionHandle_t m_action_b_button_touch_left{};
+
+    vr::VRActionHandle_t m_action_dpad_up{};
+    vr::VRActionHandle_t m_action_dpad_right{};
+    vr::VRActionHandle_t m_action_dpad_down{};
+    vr::VRActionHandle_t m_action_dpad_left{};
+
+    vr::VRActionHandle_t m_action_system_button{};
+    vr::VRActionHandle_t m_action_bumper{};
+    vr::VRActionHandle_t m_action_start_button{};
+    vr::VRActionHandle_t m_action_back_button{};
+    vr::VRActionHandle_t m_action_trigger_axis{};
+    vr::VRActionHandle_t m_action_squeeze{};
+    std::array<vr::VRActionHandle_t, 10> m_touch_actions{};
+    vr::VRActionHandle_t m_action_haptic{};
+    vr::VRActionHandle_t m_action_thumbrest_touch_left{};
+    vr::VRActionHandle_t m_action_thumbrest_touch_right{};
+
+    std::unordered_map<std::string, std::reference_wrapper<vr::VRActionHandle_t>> m_action_handles {
+        { s_action_pose, m_action_pose },
+        { s_action_grip_pose, m_action_grip_pose },
+        { s_action_trigger, m_action_trigger },
+        { s_action_grip, m_action_grip },
+        { s_action_joystick, m_action_joystick },
+        { s_action_joystick_click, m_action_joystick_click },
+
+        { s_action_a_button_left, m_action_a_button_left },
+        { s_action_b_button_left, m_action_b_button_left },
+        { s_action_a_button_touch_left, m_action_a_button_touch_left },
+        { s_action_b_button_touch_left, m_action_b_button_touch_left },
+
+        { s_action_a_button_right, m_action_a_button_right },
+        { s_action_b_button_right, m_action_b_button_right },
+        { s_action_a_button_touch_right, m_action_a_button_touch_right },
+        { s_action_b_button_touch_right, m_action_b_button_touch_right },
+
+        { s_action_dpad_up, m_action_dpad_up },
+        { s_action_dpad_right, m_action_dpad_right },
+        { s_action_dpad_down, m_action_dpad_down },
+        { s_action_dpad_left, m_action_dpad_left },
+
+        { s_action_system_button, m_action_system_button },
+        { s_action_bumper, m_action_bumper },
+        { s_action_start_button, m_action_start_button },
+        { s_action_back_button, m_action_back_button },
+        { s_action_trigger_axis, m_action_trigger_axis },
+        { s_action_squeeze, m_action_squeeze },
+        { s_touch_actions[0], m_touch_actions[0] },
+        { s_touch_actions[1], m_touch_actions[1] },
+        { s_touch_actions[2], m_touch_actions[2] },
+        { s_touch_actions[3], m_touch_actions[3] },
+        { s_touch_actions[4], m_touch_actions[4] },
+        { s_touch_actions[5], m_touch_actions[5] },
+        { s_touch_actions[6], m_touch_actions[6] },
+        { s_touch_actions[7], m_touch_actions[7] },
+        { s_touch_actions[8], m_touch_actions[8] },
+        { s_touch_actions[9], m_touch_actions[9] },
+        { s_action_thumbrest_touch_left, m_action_thumbrest_touch_left },
+        { s_action_thumbrest_touch_right, m_action_thumbrest_touch_right },
+
+        // Out
+        { "/actions/default/out/Haptic", m_action_haptic },
+    };
+
+    // Input sources
+    vr::VRInputValueHandle_t m_left_joystick{};
+    vr::VRInputValueHandle_t m_right_joystick{};
+
+    std::chrono::steady_clock::time_point m_last_controller_update{};
+    std::atomic<std::chrono::steady_clock::time_point> m_last_xinput_update{};
+    std::atomic<std::chrono::steady_clock::time_point> m_last_xinput_spoof_sent{};
+    std::chrono::steady_clock::time_point m_last_xinput_l3_r3_menu_open{};
+    std::chrono::steady_clock::time_point m_last_interaction_display{};
+    std::atomic<std::chrono::steady_clock::time_point> m_last_engine_tick{};
+    std::chrono::steady_clock::time_point m_last_mod_frame{};
+    std::chrono::steady_clock::time_point m_last_tick_gap_log{};
+    std::atomic_bool m_has_observed_xinput{false};
+    std::mutex m_gamepad_recovery_mtx{};
+    uevr::input_recovery::GamepadRecovery m_gamepad_recovery{}; // protected by m_gamepad_recovery_mtx
+
+    struct UILayerPoseTelemetrySnapshot {
+        uint64_t sample_count{};
+        uint64_t stabilizer_used_count{};
+        uint64_t invalid_basis_count{};
+        uint64_t follow_view_count{};
+        uint32_t last_render_frame_count{};
+        uint32_t last_openxr_internal_frame_count{};
+        uint32_t last_openxr_internal_render_frame_count{};
+        uint32_t last_pose_update_frame_count{};
+        uint32_t last_swapchain_index{};
+        int last_eye{};
+        bool last_basis_valid{};
+        bool last_stabilizer_used{};
+        bool last_follow_view{};
+        int last_ui_image_age_frames{-1};
+        int64_t last_pose_age_ms{-1};
+        double last_orientation_delta_deg{};
+        double max_orientation_delta_deg{};
+        double last_hmd_angular_velocity_deg_s{};
+        double max_hmd_angular_velocity_deg_s{};
+    };
+
+    struct HitchSnapshotSample {
+        std::chrono::steady_clock::time_point timestamp{};
+        uint64_t sequence{};
+        int frame_count{};
+        int render_frame_count{};
+        int rendering_method{};
+        bool hmd_active{};
+        bool runtime_loaded{};
+        bool runtime_ready{};
+        bool using_controllers{};
+        bool using_afr{};
+        bool native_stereo_fix{};
+        bool submitted{};
+        int64_t framework_frame_age_ms{-1};
+        int64_t mod_frame_age_ms{-1};
+        int64_t d3d12_frame_age_ms{-1};
+        int64_t xr_wait_age_ms{-1};
+        int64_t xr_begin_age_ms{-1};
+        int64_t xr_end_age_ms{-1};
+        int64_t pose_update_age_ms{-1};
+        int session_state{};
+        bool session_ready{};
+        bool frame_synced{};
+        bool frame_began{};
+        bool got_first_poses{};
+        bool got_first_valid_poses{};
+        bool accepted_relaxed_startup_poses{};
+        CVarManager::ChangeSnapshot cvar_change{};
+        vrmod::D3D12Component::HitchFrameSnapshot d3d12{};
+        UILayerPoseTelemetrySnapshot ui_layer_pose{};
+    };
+
+    struct HitchSnapshotDumpRequest {
+        std::filesystem::path path{};
+        std::chrono::steady_clock::time_point dump_time{};
+        int64_t tick_gap_ms{};
+        std::string suspected_stall{};
+        CVarManager::ChangeSnapshot latest_cvar_change{};
+        std::vector<HitchSnapshotSample> samples{};
+    };
+
+    static constexpr size_t HITCH_SNAPSHOT_RING_SIZE = 600;
+    static constexpr size_t HITCH_SNAPSHOT_MAX_PENDING_DUMPS = 1;
+    std::array<HitchSnapshotSample, HITCH_SNAPSHOT_RING_SIZE> m_hitch_snapshot_samples{};
+    size_t m_hitch_snapshot_cursor{};
+    bool m_hitch_snapshot_wrapped{};
+    uint64_t m_hitch_snapshot_sequence{};
+    uint32_t m_hitch_snapshot_dump_count{};
+    std::chrono::steady_clock::time_point m_last_hitch_snapshot_dump{};
+    std::jthread m_hitch_snapshot_writer_thread{};
+    std::mutex m_hitch_snapshot_writer_mutex{};
+    std::condition_variable m_hitch_snapshot_writer_cv{};
+    std::deque<HitchSnapshotDumpRequest> m_hitch_snapshot_dump_queue{};
+
+    std::chrono::steady_clock::time_point m_shf_auto_2d_last_sample{};
+    bool m_shf_auto_2d_active{false};
+    bool m_shf_auto_2d_previous_mode{false};
+    std::chrono::steady_clock::time_point m_dispatch_auto_2d_last_sample{};
+    bool m_dispatch_auto_2d_active{false};
+    bool m_dispatch_auto_2d_previous_mode{false};
+    std::chrono::steady_clock::time_point m_mixtape_auto_2d_last_sample{};
+    std::atomic_bool m_mixtape_auto_2d_active{false};
+    bool m_mixtape_auto_2d_previous_mode{false};
+    std::chrono::steady_clock::time_point m_the_sinking_city_2_bink_ui_last_sample{};
+    std::atomic_bool m_the_sinking_city_2_bink_ui_active{false};
+    std::chrono::steady_clock::time_point m_halo_electra_restore_after{};
+    std::atomic_bool m_halo_electra_cinematic_active{false};
+    struct WindroseMetaUiToken {
+        std::string name{};
+        std::string source{};
+        std::chrono::steady_clock::time_point entered_at{};
+    };
+
+    mutable std::mutex m_windrose_meta_ui_auto_2d_mtx{};
+    std::unordered_map<uintptr_t, WindroseMetaUiToken> m_windrose_meta_ui_auto_2d_tokens{};
+    std::chrono::steady_clock::time_point m_windrose_meta_ui_auto_2d_restore_after{};
+    bool m_windrose_meta_ui_auto_2d_active{false};
+    bool m_windrose_meta_ui_auto_2d_previous_mode{false};
+    std::string m_windrose_meta_ui_auto_2d_last_state{};
+    std::string m_windrose_meta_ui_auto_2d_last_source{};
+    uint32_t m_windrose_meta_ui_auto_2d_stale_clears{};
+    uint32_t m_post_focus_tick_gap_count{};
+    uint32_t m_post_focus_long_tick_gap_count{};
+    static constexpr size_t PROSPI_ROLLING_HITCH_GAP_RING_SIZE = 16;
+    std::array<std::chrono::steady_clock::time_point, PROSPI_ROLLING_HITCH_GAP_RING_SIZE> m_prospi_rolling_hitch_gaps{};
+    size_t m_prospi_rolling_hitch_gap_cursor{};
+    bool m_prospi_rolling_hitch_gap_wrapped{};
+    std::chrono::steady_clock::time_point m_last_prospi_rolling_hitch_snapshot{};
+
+    struct UILayerPoseSample {
+        std::chrono::steady_clock::time_point timestamp{};
+        uint64_t sequence{};
+        uint32_t render_frame_count{};
+        uint32_t openxr_internal_frame_count{};
+        uint32_t openxr_internal_render_frame_count{};
+        uint32_t pose_update_frame_count{};
+        uint32_t swapchain_index{};
+        int eye{};
+        bool basis_valid{};
+        bool stabilizer_allowed{};
+        bool stabilizer_used{};
+        bool follow_view{};
+        int ui_image_age_frames{-1};
+        int64_t pose_age_ms{-1};
+        double orientation_delta_deg{};
+        double hmd_angular_velocity_deg_s{};
+        const char* refusal_reason{"none"};
+    };
+
+    static constexpr size_t UI_LAYER_POSE_TELEMETRY_RING_SIZE = 512;
+    std::array<UILayerPoseSample, UI_LAYER_POSE_TELEMETRY_RING_SIZE> m_ui_layer_pose_samples{};
+    size_t m_ui_layer_pose_cursor{};
+    uint64_t m_ui_layer_pose_sequence{};
+    UILayerPoseTelemetrySnapshot m_ui_layer_pose_snapshot{};
+    std::chrono::steady_clock::time_point m_ui_layer_pose_last_log{};
+    std::chrono::steady_clock::time_point m_ui_layer_pose_last_rotation_time{};
+    glm::quat m_ui_layer_pose_last_live_rotation{1.0f, 0.0f, 0.0f, 0.0f};
+    std::mutex m_ui_layer_pose_telemetry_mtx{};
+
+    std::atomic<int64_t> m_stalker2_transition_stress_until_ms{0};
+    std::atomic<int64_t> m_stalker2_transition_first_stress_ms{0};
+    std::atomic<int64_t> m_stalker2_transition_last_stress_ms{0};
+    std::atomic<int64_t> m_stalker2_transition_last_defer_ms{0};
+    std::atomic<uint32_t> m_stalker2_transition_stress_events{0};
+    std::atomic<uint32_t> m_stalker2_transition_deferred_frames{0};
+
+    std::atomic_uint32_t m_lowest_xinput_user_index{};
+
+    std::chrono::nanoseconds m_last_input_delay{};
+    std::chrono::nanoseconds m_avg_input_delay{};
+
+    static const inline std::vector<std::string> s_sync_mode_names{
+        "Early",
+        "Late",
+        "Very Late",
+    };
+
+    static const inline std::vector<std::string> s_synced_afr_method_names {
+        "Skip Tick",
+        "Skip Draw",
+    };
+
+    static const inline std::vector<std::string> s_aim_method_names {
+        "Game",
+        "Head/HMD",
+        "Right Controller",
+        "Left Controller",
+        "Two Handed (Right)",
+        "Two Handed (Left)",
+    };
+
+    static const inline std::vector<std::string> s_dpad_method_names {
+        "Right Thumbrest + Left Joystick",
+        "Left Thumbrest + Right Joystick",
+        "Left Joystick (Disables Standard Joystick Input)",
+        "Right Joystick (Disables Standard Joystick Input)",
+        "Gesture (Head) + Left Joystick",
+        "Gesture (Head) + Right Joystick",
+        "Right Joystick Press + Left Joystick (Disables R3)",
+        "Left Joystick Press + Right Joystick (Disables L3)"
+    };
+
+    static const inline std::vector<std::string> s_horizontal_projection_override_names{
+        "Raw / default",
+        "Symmetrical",
+        "Mirrored",
+    };
+
+    static const inline std::vector<std::string> s_vertical_projection_override_names{
+        "Raw / default",
+        "Symmetrical",
+        "Matched",
+    };
+
+    enum DesktopMirrorMode : int32_t {
+        DESKTOP_MIRROR_FULL = 0,
+        DESKTOP_MIRROR_SCENE_ONLY = 1,
+    };
+
+    static const inline std::vector<std::string> s_desktop_mirror_mode_names{
+        "Full",
+        "Scene Only",
+    };
+
+    enum Subnautica2NativeWaterMode : int32_t {
+        SUBNAUTICA2_NATIVE_WATER_SAFE_REFLECTIONS = 0,
+        SUBNAUTICA2_NATIVE_WATER_NO_REFLECTIONS = 1,
+        SUBNAUTICA2_NATIVE_WATER_DISABLE_SINGLE_LAYER = 2,
+    };
+
+    static const inline std::vector<std::string> s_subnautica2_native_water_mode_names{
+        "Native Water Safe Reflections",
+        "Native Water No Reflections",
+        "Disable SingleLayerWater Fallback",
+    };
+
+    enum ProSpiCrowdCullingTriageMode : int32_t {
+        PROSPI_CROWD_CULLING_TRIAGE_OFF = 0,
+        PROSPI_CROWD_CULLING_TRIAGE_OCCLUSION_QUERIES = 1,
+        PROSPI_CROWD_CULLING_TRIAGE_HZB_OCCLUSION = 2,
+        PROSPI_CROWD_CULLING_TRIAGE_PRECOMPUTED_VISIBILITY = 3,
+        PROSPI_CROWD_CULLING_TRIAGE_CULL_DISTANCE = 4,
+        PROSPI_CROWD_CULLING_TRIAGE_FOLIAGE_CULLING = 5,
+        PROSPI_CROWD_CULLING_TRIAGE_INSTANCE_CULLING = 6,
+        PROSPI_CROWD_CULLING_TRIAGE_COMBINED_SAFE = 7,
+    };
+
+    static const inline std::vector<std::string> s_prospi_crowd_culling_triage_mode_names{
+        "Off / Restore",
+        "Disable Occlusion Queries",
+        "Disable HZB Occlusion",
+        "Disable Precomputed Visibility",
+        "Relax Cull Distance",
+        "Relax Foliage Culling",
+        "Disable Instance/GPU Culling",
+        "Combined UE4 Conservative",
+    };
+
+    enum ProSpiAutoCameraSequencerMode : int32_t {
+        PROSPI_AUTO_CAMERA_SEQUENCER_OBSERVE = 0,
+        PROSPI_AUTO_CAMERA_SEQUENCER_ASSIST = 1,
+        PROSPI_AUTO_CAMERA_SEQUENCER_LEARNED_ASSIST = 2,
+        PROSPI_AUTO_CAMERA_SEQUENCER_CALIBRATED_FRAMING = uevr::prospi::framing::calibrated_mode,
+    };
+
+    static const inline std::vector<std::string> s_prospi_auto_camera_sequencer_mode_names{
+        "Observe Only",
+        "Assist",
+        "Learned Assist",
+        "Calibrated Framing (Experimental)",
+    };
+
+    const std::unique_ptr<RenderingMethodSetting> m_rendering_method{
+        std::make_unique<RenderingMethodSetting>(generate_name("RenderingMethod"), uevr::mono::choices)};
+    // Legacy-style persistent options; never sampled by the XR compositor.
+    std::atomic<uint32_t> m_duo_ui_rejected_mask{0};
+    const ModSlider::Ptr m_duo_width{ModSlider::create(generate_name("DuoViewCropWidth"), .10f, 1.f, .50f)};
+    const ModSlider::Ptr m_duo_height{ModSlider::create(generate_name("DuoViewCropHeight"), .10f, 1.f, .50f)};
+    const ModSlider::Ptr m_duo_periphery{ModSlider::create(generate_name("DuoViewPeripheralScale"), .05f, .499f, .20f)};
+    const ModSlider::Ptr m_duo_density{ModSlider::create(generate_name("DuoViewFovealDensity"), .25f, 4.0f, 1.f)};
+    const ModSlider::Ptr m_duo_feather{ModSlider::create(generate_name("DuoViewFeather"), 0.f, .45f, .08f)};
+    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};
+    const ModToggle::Ptr m_duo_foreground_refinement{ModToggle::create(generate_name("DuoViewForegroundRefinement"), true)};
+    const ModSlider::Ptr m_duo_visibility_absolute{ModSlider::create(generate_name("DuoViewVisibilityAbsoluteTolerance"), .1f, 5.f, 1.f)};
+    const ModSlider::Ptr m_duo_visibility_relative_percent{ModSlider::create(generate_name("DuoViewVisibilityRelativeTolerancePercent"), .25f, 5.f, 1.5f)};
+    const ModSlider::Ptr m_duo_foreground_edge_radius{ModSlider::create(generate_name("DuoViewForegroundEdgeRadius"), .5f, 2.f, 1.f)};
+    const ModToggle::Ptr m_duo_gaze{ModToggle::create(generate_name("DuoViewEyeTracking"), true)};
+    const ModToggle::Ptr m_duo_border{ModToggle::create(generate_name("DuoViewDebugBorder"), false)};
+    const ModInt32::Ptr m_duo_debug_source{ModSliderInt32::create(generate_name("DuoViewDebugSource"), 0, 2, 0)};
+    const ModInt32::Ptr m_duo_fovea_view{ModSliderInt32::create(generate_name("DuoViewFoveaSourceView"), 0, 1, 0)};
+    const ModToggle::Ptr m_duo_stabilize{ModToggle::create(generate_name("DuoViewCropStability"), true)};
+    const ModSlider::Ptr m_duo_guard{ModSlider::create(generate_name("DuoViewCropGuard"), 0.f, .05f, .05f)};
+    const ModToggle::Ptr m_duo_shading{ModToggle::create(generate_name("DuoViewIndependentShading"), false)};
+    const ModToggle::Ptr m_duo_native_fix{ModToggle::create(generate_name("DuoViewNativeFixSamePass"), true)};
+    // Enabled by default only in this isolated experimental Build165 branch.
+    // Disabling restores the original Build165 centered producer cameras.
+    const ModToggle::Ptr m_duo_split_eye{ModToggle::create(generate_name("DuoView165NativeSplitEye"), true)};
+    std::atomic<bool> m_duo_split_eye_frozen{false};
+    const ModInt32::Ptr m_duo_quant{ModSliderInt32::create(generate_name("DuoViewQuantizationPixels"), 0, 16, 2)};
+    const ModInt32::Ptr m_duo_hold{ModSliderInt32::create(generate_name("DuoViewGazeHoldMs"), 50, 2000, 350)};
+    const ModInt32::Ptr m_duo_reacquire{ModSliderInt32::create(generate_name("DuoViewGazeReacquireSamples"), 1, 4, 2)};
+    const ModSlider::Ptr m_duo_offset_x{ModSlider::create(generate_name("DuoViewGazeOffsetX"), -.25f, .25f, 0.f)};
+    const ModSlider::Ptr m_duo_offset_y{ModSlider::create(generate_name("DuoViewGazeOffsetY"), -.25f, .25f, 0.f)};
+    // Nonlinear response: stillness lock / instantaneous full-speed saccade.
+    const ModSlider::Ptr m_duo_micro_gain{ModSlider::create(generate_name("DuoViewGazeMicroGain"), 0.f, 1.f, 0.f)};
+    const ModSlider::Ptr m_duo_breakout{ModSlider::create(generate_name("DuoViewGazeBreakout"), .005f, .25f, .035f)};
+    const ModSlider::Ptr m_duo_stillness{ModSlider::create(generate_name("DuoViewGazeStillness"), 0.f, .05f, .008f)};
+    const ModInt32::Ptr m_duo_relock{ModSliderInt32::create(generate_name("DuoViewGazeRelockSamples"), 1, 10, 3)};
+    const ModToggle::Ptr m_duo_direct_xr{ModToggle::create(generate_name("DuoViewDirectXROutput"), false)};
+    const ModToggle::Ptr m_duo_timing{ModToggle::create(generate_name("DuoViewGpuTiming"), false)};
+    std::atomic<float> m_duo_gpu_ms{-1.f};
+    std::atomic<int32_t> m_duoview_output_path{-1};
+    std::atomic<uint64_t> m_duoview_source_extents{0};
+    uevr::duoview::State m_duoview;
+    std::atomic<uint64_t> m_duoview_draw_serial{};
+    std::atomic<std::shared_ptr<const uevr::duoview::FrameKey>> m_duoview_candidate_key{};
+    std::atomic<std::shared_ptr<const uevr::duoview::FrameKey>> m_duoview_frozen_key{};
+    uevr::duoview::psvr2::Reader m_duoview_gaze;
+    std::atomic<bool> m_duoview_quarantined{false};
+    std::once_flag m_duoview_settings_once;
+    std::atomic<const char*> m_mono_status{"Not selected"};
+    std::atomic<uint64_t> m_mono_ready_generation{};
+    std::atomic<uint64_t> m_mono_main_view_token{}, m_mono_attachment_token{};
+    const ModCombo::Ptr m_synced_afr_method{ ModCombo::create(generate_name("SyncedSequentialMethod"), s_synced_afr_method_names, 1) };
+    const ModToggle::Ptr m_extreme_compat_mode{ ModToggle::create(generate_name("ExtremeCompatibilityMode"), false, true) };
+    const ModToggle::Ptr m_uncap_framerate{ ModToggle::create(generate_name("UncapFramerate"), true) };
+    const ModToggle::Ptr m_disable_blur_widgets{ ModToggle::create(generate_name("DisableBlurWidgets"), true) };
+    const ModToggle::Ptr m_disable_hdr_compositing{ ModToggle::create(generate_name("DisableHDRCompositing"), true, true) };
+    const ModToggle::Ptr m_disable_hzbocclusion{ ModToggle::create(generate_name("DisableHZBOcclusion"), true, true) };
+    const ModToggle::Ptr m_disable_instance_culling{ ModToggle::create(generate_name("DisableInstanceCulling"), true, true) };
+    const ModToggle::Ptr m_desktop_fix{ ModToggle::create(generate_name("DesktopRecordingFix_V2"), true) };
+    const ModCombo::Ptr m_desktop_mirror_mode{ ModCombo::create(generate_name("DesktopSpectatorViewMode"), s_desktop_mirror_mode_names, DESKTOP_MIRROR_FULL) };
+    const ModToggle::Ptr m_enable_gui{ ModToggle::create(generate_name("EnableGUI"), true) };
+    const ModToggle::Ptr m_enable_depth{ ModToggle::create(generate_name("PassDepthToRuntime"), false, true) };
+    const ModToggle::Ptr m_openxr_afr_depth_target_stability{ ModToggle::create(generate_name("OpenXRAFRDepthTargetStability"), false, true) };
+    const ModToggle::Ptr m_enable_hitch_diagnostics{ ModToggle::create(generate_name("EnableHitchDiagnostics"), false, true) };
+    const ModToggle::Ptr m_ktjl_openxr_factory_repair{ ModToggle::create(generate_name("KTJLOpenXRFactoryRepair"), false, true) };
+    const ModToggle::Ptr m_decoupled_pitch{ ModToggle::create(generate_name("DecoupledPitch"), false) };
+    const ModToggle::Ptr m_decoupled_pitch_ui_adjust{ ModToggle::create(generate_name("DecoupledPitchUIAdjust"), true) };
+    const ModToggle::Ptr m_load_blueprint_code{ ModToggle::create(generate_name("LoadBlueprintCode"), false, true) };
+    const ModToggle::Ptr m_2d_screen_mode{ ModToggle::create(generate_name("2DScreenMode"), false) };
+    const ModToggle::Ptr m_roomscale_movement{ ModToggle::create(generate_name("RoomscaleMovement"), false) };
+    const ModToggle::Ptr m_roomscale_sweep{ ModToggle::create(generate_name("RoomscaleMovementSweep"), true) };
+    const ModToggle::Ptr m_swap_controllers{ ModToggle::create(generate_name("SwapControllerInputs"), false) };
+    const ModCombo::Ptr m_horizontal_projection_override{ModCombo::create(generate_name("HorizontalProjectionOverride"), s_horizontal_projection_override_names)};
+    const ModCombo::Ptr m_vertical_projection_override{ModCombo::create(generate_name("VerticalProjectionOverride"), s_vertical_projection_override_names)};
+    const ModToggle::Ptr m_grow_rectangle_for_projection_cropping{ModToggle::create(generate_name("GrowRectangleForProjectionCropping"), false)};
+    const ModCombo::Ptr m_sync_mode{ ModCombo::create(generate_name("SynchronizationMode"), s_sync_mode_names, 2) };
+    const ModSlider::Ptr m_dibr_disparity_pixels{ ModSlider::create(generate_name("DIBRDisparityPixels"), 0.0f, 64.0f, 18.0f) };
+    const ModSlider::Ptr m_dibr_reprojection_strength{ ModSlider::create(generate_name("DIBRReprojectionStrength"), 0.0f, 2.0f, 1.0f) };
+    const ModSlider::Ptr m_dibr_legacy_depth_curve{ ModSlider::create(generate_name("DIBRLegacyDepthCurve"), 0.05f, 4.0f, 1.0f) };
+    const ModSlider::Ptr m_dibr_legacy_near_depth_cap{ ModSlider::create(generate_name("DIBRLegacyNearDepthCap"), 0.01f, 1.0f, 1.0f) };
+    const ModToggle::Ptr m_dibr_depth_edge_stabilization{ ModToggle::create(generate_name("DIBRDepthEdgeStabilization"), false) };
+    const ModSlider::Ptr m_dibr_depth_edge_threshold{ ModSlider::create(generate_name("DIBRDepthEdgeThreshold"), 0.0001f, 0.25f, 0.01f) };
+    const ModSlider::Ptr m_dibr_depth_edge_stabilization_strength{ ModSlider::create(generate_name("DIBRDepthEdgeStabilizationStrength"), 0.0f, 1.0f, 0.75f) };
+    const ModToggle::Ptr m_dibr_spatial_repair{ ModToggle::create(generate_name("DIBRSpatialRepair"), false) };
+    const ModToggle::Ptr m_dibr_spatial_repair_debug_mask{ ModToggle::create(generate_name("DIBRSpatialRepairDebugMask"), false) };
+    const ModToggle::Ptr m_dibr_ui_footprint_reprojection{ ModToggle::create(generate_name("DIBRUIFootprintReprojection"), false) };
+    const ModSlider::Ptr m_dibr_ui_footprint_reprojection_strength{ ModSlider::create(generate_name("DIBRUIFootprintReprojectionStrength"), 0.0f, 2.0f, 0.25f) };
+    const ModToggle::Ptr m_dibr_ui_footprint_reprojection_debug_mask{ ModToggle::create(generate_name("DIBRUIFootprintReprojectionDebugMask"), false) };
+    const ModToggle::Ptr m_dibr_single_view_ui_edge_guard{ ModToggle::create(generate_name("DIBRSingleViewUIEdgeGuard"), false) };
+    const ModToggle::Ptr m_dibr_single_view_ui_edge_guard_debug_mask{ ModToggle::create(generate_name("DIBRSingleViewUIEdgeGuardDebugMask"), false) };
+    const ModToggle::Ptr m_dibr_reversed_depth{ ModToggle::create(generate_name("DIBRReversedDepth"), true) };
+    const ModToggle::Ptr m_dibr_ue5_rdg_depth_capture{ ModToggle::create(generate_name("DIBRUE5RDGDepthCapture"), false) };
+
+    // Snap turn settings and globals
+    void gamepad_snapturn(XINPUT_STATE& state);
+    void process_snapturn();
+    
+    const ModToggle::Ptr m_snapturn{ ModToggle::create(generate_name("SnapTurn"), false) };
+    const ModSlider::Ptr m_snapturn_joystick_deadzone{ ModSlider::create(generate_name("SnapturnJoystickDeadzone"), 0.01f, 0.99f, 0.2f) };
+    const ModInt32::Ptr m_snapturn_angle{ ModSliderInt32::create(generate_name("SnapturnTurnAngle"), 1, 359, 45) };
+    bool m_snapturn_on_frame{false};
+    bool m_snapturn_left{false};
+    bool m_was_snapturn_run_on_input{false};
+
+    const ModSlider::Ptr m_controller_pitch_offset{ ModSlider::create(generate_name("ControllerPitchOffset"), -90.0f, 90.0f, 0.0f) };
+
+    // Aim method and movement orientation are not the same thing, but they can both have the same options
+    const ModCombo::Ptr m_aim_method{ ModCombo::create(generate_name("AimMethod"), s_aim_method_names, AimMethod::GAME) };
+    const ModCombo::Ptr m_movement_orientation{ ModCombo::create(generate_name("MovementOrientation"), s_aim_method_names, AimMethod::GAME) };
+    AimMethod m_previous_aim_method{ AimMethod::GAME };
+    const ModToggle::Ptr m_aim_use_pawn_control_rotation{ ModToggle::create(generate_name("AimUsePawnControlRotation"), false) };
+    const ModToggle::Ptr m_aim_modify_player_control_rotation{ ModToggle::create(generate_name("AimModifyPlayerControlRotation"), false) };
+    const ModToggle::Ptr m_aim_multiplayer_support{ ModToggle::create(generate_name("AimMPSupport"), false) };
+    const ModToggle::Ptr m_aim_interp{ ModToggle::create(generate_name("AimInterp"), true, true) };
+    const ModSlider::Ptr m_aim_speed{ ModSlider::create(generate_name("AimSpeed"), 0.01f, 25.0f, 15.0f) };
+    const ModToggle::Ptr m_dpad_shifting{ ModToggle::create(generate_name("DPadShifting"), true) };
+    const ModCombo::Ptr m_dpad_shifting_method{ ModCombo::create(generate_name("DPadShiftingMethod"), s_dpad_method_names, DPadMethod::RIGHT_TOUCH) };
+    
+    struct DPadGestureState {
+        std::recursive_mutex mtx{};
+        enum Direction : uint8_t {
+            NONE,
+            UP = 1 << 0,
+            RIGHT = 1 << 1,
+            DOWN = 1 << 2,
+            LEFT = 1 << 3,
+        };
+        uint8_t direction{NONE};
+    } m_dpad_gesture_state{};
+
+    //const ModToggle::Ptr m_headlocked_aim{ ModToggle::create(generate_name("HeadLockedAim"), false) };
+    //const ModToggle::Ptr m_headlocked_aim_controller_based{ ModToggle::create(generate_name("HeadLockedAimControllerBased"), false) };
+    const ModSlider::Ptr m_motion_controls_inactivity_timer{ ModSlider::create(generate_name("MotionControlsInactivityTimer"), 30.0f, 100.0f, 30.0f) };
+    const ModSlider::Ptr m_joystick_deadzone{ ModSlider::create(generate_name("JoystickDeadzone"), 0.01f, 0.9f, 0.2f) };
+    const ModSlider::Ptr m_camera_forward_offset{ ModSlider::create(generate_name("CameraForwardOffset"), -4000.0f, 4000.0f, 0.0f) };
+    const ModSlider::Ptr m_camera_right_offset{ ModSlider::create(generate_name("CameraRightOffset"), -4000.0f, 4000.0f, 0.0f) };
+    const ModSlider::Ptr m_camera_up_offset{ ModSlider::create(generate_name("CameraUpOffset"), -4000.0f, 4000.0f, 0.0f) };
+    const ModToggle::Ptr m_match_game_fov{ ModToggle::create(generate_name("MatchGameFOV"), false) };
+    const ModToggle::Ptr m_match_game_fov_dolly{ ModToggle::create(generate_name("MatchGameFOVDolly"), false) };
+    const ModSlider::Ptr m_match_game_fov_multiplier{ ModSlider::create(generate_name("MatchGameFOVMultiplier"), 0.1f, 3.0f, 1.0f) };
+    const ModSlider::Ptr m_match_game_fov_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVDollyDistance"), 10.0f, 50000.0f, 3000.0f) };
+    const ModToggle::Ptr m_match_game_fov_min_enabled{ ModToggle::create(generate_name("MatchGameFOVMinEnabled"), false) };
+    const ModSlider::Ptr m_match_game_fov_min{ ModSlider::create(generate_name("MatchGameFOVMin"), 5.0f, 120.0f, 40.0f) };
+    const ModToggle::Ptr m_match_game_fov_read_only_camera{ ModToggle::create(generate_name("MatchGameFOVReadOnlyCamera"), false) };
+    const ModToggle::Ptr m_match_game_fov_camera_cut_stabilizer{ ModToggle::create(generate_name("MatchGameFOVCameraCutStabilizer"), false) };
+    const ModSlider::Ptr m_match_game_fov_camera_cut_stabilizer_duration_ms{ ModSlider::create(generate_name("MatchGameFOVCameraCutStabilizerDurationMs"), 100.0f, 1500.0f, 500.0f) };
+    const ModSlider::Ptr m_match_game_fov_camera_cut_stabilizer_fov_delta{ ModSlider::create(generate_name("MatchGameFOVCameraCutStabilizerFOVDelta"), 1.0f, 45.0f, 10.0f) };
+    const ModSlider::Ptr m_match_game_fov_camera_cut_stabilizer_rotation_delta{ ModSlider::create(generate_name("MatchGameFOVCameraCutStabilizerRotationDelta"), 1.0f, 90.0f, 25.0f) };
+    const ModSlider::Ptr m_match_game_fov_camera_cut_stabilizer_location_delta{ ModSlider::create(generate_name("MatchGameFOVCameraCutStabilizerLocationDelta"), 25.0f, 10000.0f, 750.0f) };
+    const ModToggle::Ptr m_match_game_fov_generic_camera_presets{ ModToggle::create(generate_name("MatchGameFOVGenericCameraPresets"), false) };
+    const ModToggle::Ptr m_match_game_fov_generic_camera_presets_auto_apply{ ModToggle::create(generate_name("MatchGameFOVGenericCameraPresetsAutoApply"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_actual_clamp{ ModToggle::create(generate_name("MatchGameFOVProSpiActualClamp"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_actual_min{ ModSlider::create(generate_name("MatchGameFOVProSpiActualMin"), 10.0f, 60.0f, 20.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_center_field_actual_min{ ModSlider::create(generate_name("MatchGameFOVProSpiCenterFieldActualMin"), 10.0f, 60.0f, 20.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_upper_deck_actual_min{ ModSlider::create(generate_name("MatchGameFOVProSpiUpperDeckActualMin"), 10.0f, 60.0f, 17.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_plate_high_actual_min{ ModSlider::create(generate_name("MatchGameFOVProSpiPlateHighActualMin"), 10.0f, 60.0f, 15.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_deep_outfield_actual_min{ ModSlider::create(generate_name("MatchGameFOVProSpiDeepOutfieldActualMin"), 10.0f, 60.0f, 18.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_telephoto_perf_override{ ModToggle::create(generate_name("MatchGameFOVProSpiTelephotoPerfOverride"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_runtime_lod_cvar_switching{ ModToggle::create(generate_name("MatchGameFOVProSpiRuntimeLODCVarSwitching"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_telephoto_perf_trigger_fov{ ModSlider::create(generate_name("MatchGameFOVProSpiTelephotoPerfTriggerFOV"), 10.0f, 40.0f, 26.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_telephoto_perf_view_distance_scale{ ModSlider::create(generate_name("MatchGameFOVProSpiTelephotoPerfViewDistanceScale"), 0.10f, 2.0f, 0.50f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_telephoto_perf_static_mesh_lod_distance_scale{ ModSlider::create(generate_name("MatchGameFOVProSpiTelephotoPerfStaticMeshLODDistanceScale"), 0.10f, 4.0f, 2.00f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_telephoto_perf_skeletal_mesh_lod_bias{ ModSlider::create(generate_name("MatchGameFOVProSpiTelephotoPerfSkeletalMeshLODBias"), 0.0f, 4.0f, 1.0f) };
+    const ModToggle::Ptr m_prospi_balanced_player_preservation{
+        ModToggle::create(generate_name("ProSpiBalancedPlayerPreservation"), false)
+    };
+    const ModToggle::Ptr m_prospi_preserve_enabled_player_models{
+        ModToggle::create(generate_name("ProSpiPreserveEnabledPlayerModels"), false)
+    };
+    const ModToggle::Ptr m_prospi_remove_frame_pace{
+        ModToggle::create(generate_name("ProSpiRemoveFramePace"), false)
+    };
+
+    static const inline std::vector<std::string> s_prospi_camera_trace_detail_names{
+        "Light (1 Hz + cuts/marks)", "Detailed (30 Hz + bursts)",
+    };
+    const ModToggle::Ptr m_prospi_show_stadium_roofs{
+        ModToggle::create(generate_name("ProSpiShowStadiumRoofs"), false)
+    };
+    const ModToggle::Ptr m_match_game_fov_prospi_crowd_visibility_guard{ ModToggle::create(generate_name("MatchGameFOVProSpiCrowdVisibilityGuard"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_crowd_visibility_trigger_fov{ ModSlider::create(generate_name("MatchGameFOVProSpiCrowdVisibilityTriggerFOV"), 10.0f, 40.0f, 26.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_crowd_visibility_hold_seconds{ ModSlider::create(generate_name("MatchGameFOVProSpiCrowdVisibilityHoldSeconds"), 0.5f, 15.0f, 4.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_crowd_visibility_view_distance_scale{ ModSlider::create(generate_name("MatchGameFOVProSpiCrowdVisibilityViewDistanceScale"), 0.10f, 4.0f, 1.25f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_crowd_visibility_static_mesh_lod_distance_scale{ ModSlider::create(generate_name("MatchGameFOVProSpiCrowdVisibilityStaticMeshLODDistanceScale"), 0.10f, 4.0f, 0.50f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_crowd_visibility_skeletal_mesh_lod_bias{ ModSlider::create(generate_name("MatchGameFOVProSpiCrowdVisibilitySkeletalMeshLODBias"), 0.0f, 4.0f, 0.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_crowd_visibility_skeletal_radius_scale{ ModSlider::create(generate_name("MatchGameFOVProSpiCrowdVisibilitySkeletalRadiusScale"), 0.25f, 8.0f, 2.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_crowd_culling_triage{ ModToggle::create(generate_name("MatchGameFOVProSpiCrowdCullingTriage"), false) };
+    const ModCombo::Ptr m_match_game_fov_prospi_crowd_culling_triage_mode{ ModCombo::create(generate_name("MatchGameFOVProSpiCrowdCullingTriageMode"), s_prospi_crowd_culling_triage_mode_names, PROSPI_CROWD_CULLING_TRIAGE_OFF) };
+    const ModToggle::Ptr m_match_game_fov_prospi_crowd_culling_triage_auto_cycle{ ModToggle::create(generate_name("MatchGameFOVProSpiCrowdCullingTriageAutoCycle"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_crowd_culling_triage_cycle_seconds{ ModSlider::create(generate_name("MatchGameFOVProSpiCrowdCullingTriageCycleSeconds"), 1.0f, 10.0f, 3.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_crowd_culling_triage_trigger_fov{ ModSlider::create(generate_name("MatchGameFOVProSpiCrowdCullingTriageTriggerFOV"), 10.0f, 45.0f, 26.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_crowd_culling_triage_hold_seconds{ ModSlider::create(generate_name("MatchGameFOVProSpiCrowdCullingTriageHoldSeconds"), 0.5f, 15.0f, 4.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_mesh_triage{ ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorMeshTriage"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_mesh_triage_auto_refresh{ ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorMeshTriageAutoRefresh"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_mesh_triage_inflate_bounds{ ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorMeshTriageInflateBounds"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_spectator_mesh_triage_bounds_scale{ ModSlider::create(generate_name("MatchGameFOVProSpiSpectatorMeshTriageBoundsScale"), 1.0f, 100.0f, 20.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_mesh_triage_disable_distance_cull{ ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorMeshTriageDisableDistanceCull"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_mesh_triage_force_visibility{ ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorMeshTriageForceVisibility"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_line_mesh_freeze{ ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorLineMeshFreeze"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_material_override{ ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorMaterialOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_spectator_material_alpha{ ModSlider::create(generate_name("MatchGameFOVProSpiSpectatorMaterialAlpha"), 0.0f, 4.0f, 1.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_spectator_material_fade{ ModSlider::create(generate_name("MatchGameFOVProSpiSpectatorMaterialFade"), 0.0f, 4.0f, 1.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_spectator_material_lod{ ModSlider::create(generate_name("MatchGameFOVProSpiSpectatorMaterialLOD"), -4.0f, 4.0f, 0.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_world_cull_override{
+        ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullOverride"), false)
+    };
+    const ModSlider::Ptr m_match_game_fov_prospi_spectator_world_cull_horizontal_scale{
+        ModSlider::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullHorizontalScale"), 0.001f, 128.0f, 0.125f)
+    };
+    const ModSlider::Ptr m_match_game_fov_prospi_spectator_world_cull_vertical_scale{
+        ModSlider::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullVerticalScale"), 0.001f, 128.0f, 0.125f)
+    };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_world_cull_horizontal_cap_enabled{
+        ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullHorizontalCapEnabled"), true)
+    };
+    const ModSlider::Ptr m_match_game_fov_prospi_spectator_world_cull_horizontal_cap{
+        ModSlider::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullHorizontalCap"), 0.01f, 64.0f, 0.5f)
+    };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_world_cull_vertical_cap_enabled{
+        ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullVerticalCapEnabled"), true)
+    };
+    const ModSlider::Ptr m_match_game_fov_prospi_spectator_world_cull_vertical_cap{
+        ModSlider::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullVerticalCap"), 0.01f, 64.0f, 0.5f)
+    };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_world_cull_expand_depth{
+        ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullExpandDepth"), false)
+    };
+    const ModToggle::Ptr m_match_game_fov_prospi_spectator_world_cull_lod_override{
+        ModToggle::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullLODOverride"), false)
+    };
+    const ModSlider::Ptr m_match_game_fov_prospi_spectator_world_cull_lod_slope_scale{
+        ModSlider::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullLODSlopeScale"), 0.0625f, 4.0f, 1.0f)
+    };
+    const ModSlider::Ptr m_match_game_fov_prospi_spectator_world_cull_lod_bias_offset{
+        ModSlider::create(generate_name("MatchGameFOVProSpiSpectatorWorldCullLODBiasOffset"), -8.0f, 8.0f, 0.0f)
+    };
+    const ModToggle::Ptr m_match_game_fov_prospi_camera_safety_guard{ ModToggle::create(generate_name("MatchGameFOVProSpiCameraSafetyGuard"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_camera_safety_field_rule{ ModToggle::create(generate_name("MatchGameFOVProSpiCameraSafetyFieldRule"), true) };
+    const ModToggle::Ptr m_match_game_fov_prospi_camera_safety_baseline_rule{ ModToggle::create(generate_name("MatchGameFOVProSpiCameraSafetyBaselineRule"), true) };
+    const ModToggle::Ptr m_match_game_fov_prospi_camera_safety_stand_rule{ ModToggle::create(generate_name("MatchGameFOVProSpiCameraSafetyStandRule"), true) };
+    const ModToggle::Ptr m_match_game_fov_prospi_camera_safety_outfield_rule{ ModToggle::create(generate_name("MatchGameFOVProSpiCameraSafetyOutfieldRule"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_field_min_z{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyFieldMinZ"), -500.0f, 2500.0f, 80.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_baseline_min_z{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyBaselineMinZ"), -500.0f, 3000.0f, 400.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_stand_min_z{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyStandMinZ"), -500.0f, 4000.0f, 700.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_outfield_min_z{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyOutfieldMinZ"), -500.0f, 3000.0f, 350.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_max_up_offset{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyMaxUpOffset"), 0.0f, 4000.0f, 1200.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_dolly_cap_strength{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyDollyCapStrength"), 0.0f, 1.0f, 1.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_baseline_x_min{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyBaselineXMin"), 0.0f, 10000.0f, 2000.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_baseline_y_min{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyBaselineYMin"), -20000.0f, 5000.0f, -7000.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_baseline_y_max{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyBaselineYMax"), -5000.0f, 10000.0f, 1500.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_stand_x_min{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyStandXMin"), 0.0f, 10000.0f, 2500.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_stand_y_min{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyStandYMin"), -10000.0f, 10000.0f, -1500.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_stand_y_max{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyStandYMax"), -5000.0f, 15000.0f, 4500.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_telephoto_trigger_fov{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyTelephotoTriggerFOV"), 5.0f, 60.0f, 26.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_camera_safety_outfield_y_max{ ModSlider::create(generate_name("MatchGameFOVProSpiCameraSafetyOutfieldYMax"), -20000.0f, 5000.0f, -6000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_auto_camera_sequencer{ ModToggle::create(generate_name("MatchGameFOVProSpiAutoCameraSequencer"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_native_focus_guard{ ModToggle::create(generate_name("MatchGameFOVProSpiNativeFocusGuard"), false) };
+    const ModToggle::Ptr m_prospi_camera_trace_enabled{ ModToggle::create(generate_name("ProSpiCameraTrace"), false) };
+    const ModCombo::Ptr m_prospi_camera_trace_detail{ ModCombo::create(generate_name("ProSpiCameraTraceDetail"), s_prospi_camera_trace_detail_names, 0) };
+    const ModKey::Ptr m_prospi_camera_trace_bad_key{ ModKey::create(generate_name("ProSpiCameraTraceBadKey"), VK_F6) };
+    const ModKey::Ptr m_prospi_camera_trace_good_key{ ModKey::create(generate_name("ProSpiCameraTraceGoodKey"), VK_F7) };
+    const ModKey::Ptr m_prospi_camera_trace_toggle_key{ ModKey::create(generate_name("ProSpiCameraTraceToggleKey"), VK_F9) };
+    const ModString::Ptr m_prospi_camera_trace_stadium{ ModString::create(generate_name("ProSpiCameraTraceStadium"), "unspecified") };
+    const ModToggle::Ptr m_match_game_fov_prospi_cinematic_camera_assist{ ModToggle::create(generate_name("MatchGameFOVProSpiCinematicCameraAssist"), false) };
+    const ModCombo::Ptr m_match_game_fov_prospi_auto_camera_sequencer_mode{ ModCombo::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerMode"), s_prospi_auto_camera_sequencer_mode_names, PROSPI_AUTO_CAMERA_SEQUENCER_ASSIST) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_trigger_fov{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerTriggerFOV"), 5.0f, 60.0f, 26.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_low_camera_max_z{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerLowCameraMaxZ"), -500.0f, 5000.0f, 1400.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_field_cap{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerFieldCap"), 10.0f, 15000.0f, 1800.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_baseline_cap{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerBaselineCap"), 10.0f, 15000.0f, 1600.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_stand_cap{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerStandCap"), 10.0f, 15000.0f, 900.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_outfield_cap{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerOutfieldCap"), 10.0f, 15000.0f, 2200.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_smoothing{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerSmoothing"), 0.0f, 0.95f, 0.25f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_match_location_radius{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerMatchLocationRadius"), 250.0f, 15000.0f, 3500.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_match_yaw_radius{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerMatchYawRadius"), 2.0f, 90.0f, 28.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_match_pitch_radius{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerMatchPitchRadius"), 2.0f, 90.0f, 22.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_match_fov_radius{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerMatchFOVRadius"), 1.0f, 60.0f, 16.0f) };
+    const ModSlider::Ptr m_match_game_fov_prospi_auto_camera_sequencer_match_min_confidence{ ModSlider::create(generate_name("MatchGameFOVProSpiAutoCameraSequencerMatchMinConfidence"), 0.05f, 1.0f, 0.35f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_gameplay_behind_plate_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiGameplayBehindPlateDollyOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_gameplay_behind_plate_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiGameplayBehindPlateDollyDistance"), 10.0f, 50000.0f, 3000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_home_plate_waist_high_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiHomePlateWaistHighDollyOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_home_plate_waist_high_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiHomePlateWaistHighDollyDistance"), 10.0f, 50000.0f, 530.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_tv_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiTVDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_tv_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiTVDollyDistance"), 10.0f, 50000.0f, 10000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_opening_aerial_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiOpeningAerialDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_opening_aerial_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiOpeningAerialDollyDistance"), 10.0f, 50000.0f, 4000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_behind_plate_wide_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiBehindPlateWideDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_behind_plate_wide_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiBehindPlateWideDollyDistance"), 10.0f, 50000.0f, 2000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_behind_plate_elevated_sweep_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiBehindPlateElevatedSweepDollyOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_behind_plate_elevated_sweep_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiBehindPlateElevatedSweepDollyDistance"), 10.0f, 50000.0f, 2000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_home_plate_waist_high_reverse_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiHomePlateWaistHighReverseDollyOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_home_plate_waist_high_reverse_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiHomePlateWaistHighReverseDollyDistance"), 10.0f, 50000.0f, 530.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_low_plate_corner_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiLowPlateCornerDollyOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_low_plate_corner_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiLowPlateCornerDollyDistance"), 10.0f, 50000.0f, 530.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_third_base_sweep_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiThirdBaseSweepDollyOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_third_base_sweep_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiThirdBaseSweepDollyDistance"), 10.0f, 50000.0f, 750.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_left_field_corner_wide_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiLeftFieldCornerWideDollyOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_left_field_corner_wide_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiLeftFieldCornerWideDollyDistance"), 10.0f, 50000.0f, 3500.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_first_base_corner_low_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiFirstBaseCornerLowDollyOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_first_base_corner_low_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiFirstBaseCornerLowDollyDistance"), 10.0f, 50000.0f, 750.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_first_base_infield_low_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiFirstBaseInfieldLowDollyOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_first_base_infield_low_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiFirstBaseInfieldLowDollyDistance"), 10.0f, 50000.0f, 750.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_center_field_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiCenterFieldDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_center_field_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiCenterFieldDollyDistance"), 10.0f, 50000.0f, 10000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_center_field_high_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiCenterFieldHighDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_center_field_high_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiCenterFieldHighDollyDistance"), 10.0f, 50000.0f, 10000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_deep_outfield_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiDeepOutfieldDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_deep_outfield_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiDeepOutfieldDollyDistance"), 10.0f, 50000.0f, 5000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_home_plate_sky_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiHomePlateSkyDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_home_plate_sky_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiHomePlateSkyDollyDistance"), 10.0f, 50000.0f, 4000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_upper_deck_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiUpperDeckDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_upper_deck_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiUpperDeckDollyDistance"), 10.0f, 50000.0f, 7000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_home_sky_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiHomeSkyDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_home_sky_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiHomeSkyDollyDistance"), 10.0f, 50000.0f, 7000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_third_base_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiThirdBaseDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_third_base_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiThirdBaseDollyDistance"), 10.0f, 50000.0f, 7000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_third_base_relay_low_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiThirdBaseRelayLowDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_third_base_relay_low_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiThirdBaseRelayLowDollyDistance"), 10.0f, 50000.0f, 250.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_third_base_outfield_line_low_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiThirdBaseOutfieldLineLowDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_third_base_outfield_line_low_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiThirdBaseOutfieldLineLowDollyDistance"), 10.0f, 50000.0f, 1000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_third_base_foul_territory_low_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiThirdBaseFoulTerritoryLowDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_third_base_foul_territory_low_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiThirdBaseFoulTerritoryLowDollyDistance"), 10.0f, 50000.0f, 1000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_third_base_wide_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiThirdBaseWideDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_third_base_wide_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiThirdBaseWideDollyDistance"), 10.0f, 50000.0f, 8000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_first_base_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiFirstBaseDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_first_base_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiFirstBaseDollyDistance"), 10.0f, 50000.0f, 7000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_first_base_wide_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiFirstBaseWideDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_first_base_wide_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiFirstBaseWideDollyDistance"), 10.0f, 50000.0f, 8000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_first_base_outfield_line_low_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiFirstBaseOutfieldLineLowDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_first_base_outfield_line_low_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiFirstBaseOutfieldLineLowDollyDistance"), 10.0f, 50000.0f, 1000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_backstop_high_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiBackstopHighDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_backstop_high_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiBackstopHighDollyDistance"), 10.0f, 50000.0f, 5000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_right_field_corner_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiRightFieldCornerDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_right_field_corner_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiRightFieldCornerDollyDistance"), 10.0f, 50000.0f, 7000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_right_field_line_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiRightFieldLineDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_right_field_line_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiRightFieldLineDollyDistance"), 10.0f, 50000.0f, 7000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_right_center_field_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiRightCenterFieldDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_right_center_field_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiRightCenterFieldDollyDistance"), 10.0f, 50000.0f, 10000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_plate_high_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiPlateHighDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_plate_high_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiPlateHighDollyDistance"), 10.0f, 50000.0f, 1500.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_home_plate_overhead_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiHomePlateOverheadDollyOverride"), true) };
+    const ModSlider::Ptr m_match_game_fov_prospi_home_plate_overhead_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiHomePlateOverheadDollyDistance"), 10.0f, 50000.0f, 2500.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_generic_telephoto_dolly_override{ ModToggle::create(generate_name("MatchGameFOVProSpiGenericTelephotoDollyOverride"), false) };
+    const ModSlider::Ptr m_match_game_fov_prospi_generic_telephoto_dolly_distance{ ModSlider::create(generate_name("MatchGameFOVProSpiGenericTelephotoDollyDistance"), 10.0f, 50000.0f, 3000.0f) };
+    const ModToggle::Ptr m_match_game_fov_prospi_camera_calibration_auto{ ModToggle::create(generate_name("MatchGameFOVProSpiCameraCalibrationAuto"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_field_map_flip_x{ ModToggle::create(generate_name("MatchGameFOVProSpiFieldMapFlipX"), false) };
+    const ModToggle::Ptr m_match_game_fov_prospi_field_map_flip_y{ ModToggle::create(generate_name("MatchGameFOVProSpiFieldMapFlipY"), false) };
+    const ModSlider::Ptr m_camera_fov_distance_multiplier{ ModSlider::create(generate_name("CameraFOVDistanceMultiplier"), 0.00f, 1000.0f, 0.0f) };
+    const ModSlider::Ptr m_world_scale{ ModSlider::create(generate_name("WorldScale"), 0.01f, 10.0f, 1.0f) };
+    // Opt-in XYZ translation scaling; never affects the stock World Scale or IPD.
+    const ModToggle::Ptr m_xyz_headscale_enabled{ ModToggle::create(generate_name("XYZHeadScalingEnabled"), false) };
+    const ModSlider::Ptr m_xyz_headscale_x{ ModSlider::create(generate_name("XYZHeadScaleX"), 0.05f, 5.0f, 1.0f) };
+    const ModSlider::Ptr m_xyz_headscale_y{ ModSlider::create(generate_name("XYZHeadScaleY"), 0.05f, 5.0f, 1.0f) };
+    const ModSlider::Ptr m_xyz_headscale_z{ ModSlider::create(generate_name("XYZHeadScaleZ"), 0.05f, 5.0f, 1.0f) };
+    const ModKey::Ptr m_xyz_headscale_toggle_key{ ModKey::create(generate_name("XYZHeadScaleToggleKey")) };
+    const ModKey::Ptr m_xyz_headscale_hold_bypass_key{ ModKey::create(generate_name("XYZHeadScaleHoldBypassKey")) };
+    std::atomic<bool> m_xyz_headscale_hold_bypass{ false };
+    const ModSlider::Ptr m_depth_scale{ ModSlider::create(generate_name("DepthScale"), 0.01f, 1.0f, 1.0f) };
+
+    const ModToggle::Ptr m_ghosting_fix{ ModToggle::create(generate_name("GhostingFix"), false) };
+    const ModToggle::Ptr m_ghosting_fix_bootstrap_view_states{ ModToggle::create(generate_name("GhostingFixBootstrapViewStates"), false) };
+    const ModToggle::Ptr m_native_stereo_fix{ ModToggle::create(generate_name("NativeStereoFix"), false) };
+    const ModToggle::Ptr m_native_stereo_fix_same_pass{ ModToggle::create(generate_name("NativeStereoFixSamePass"), true) };
+    const ModToggle::Ptr m_native_stereo_fix_preserve_secondary_pass{ ModToggle::create(generate_name("NativeStereoFixPreserveSecondaryPass"), true) };
+    const ModToggle::Ptr m_native_stereo_fix_texture_array_submit{ ModToggle::create(generate_name("NativeStereoFixTextureArraySubmit"), false) };
+    const ModToggle::Ptr m_native_stereo_fix_async_openxr_wait{ ModToggle::create(generate_name("NativeStereoFixAsyncOpenXRWait"), false) };
+    const ModToggle::Ptr m_stalker2_native_pair_experiment{ ModToggle::create(generate_name("Stalker2NativePairExperiment"), false) };
+    const ModToggle::Ptr m_stalker2_sharpen_priority{ ModToggle::create(generate_name("Stalker2SharpenExistingPriority"), false) };
+
+    const ModSlider::Ptr m_custom_z_near{ ModSlider::create(generate_name("CustomZNear"), 0.001f, 100.0f, 0.01f, true) };
+    const ModToggle::Ptr m_custom_z_near_enabled{ ModToggle::create(generate_name("EnableCustomZNear"), false, true) };
+
+    const ModToggle::Ptr m_splitscreen_compatibility_mode{ ModToggle::create(generate_name("Compatibility_SplitScreen"), false, true) };
+    const ModInt32::Ptr m_splitscreen_view_index{ ModInt32::create(generate_name("SplitscreenViewIndex"), 0, true) };
+
+    const ModToggle::Ptr m_sceneview_compatibility_mode{ ModToggle::create(generate_name("Compatibility_SceneView"), false, true) };
+
+    const ModToggle::Ptr m_compatibility_skip_pip{ ModToggle::create(generate_name("Compatibility_SkipPostInitProperties"), false, true) };
+    const ModToggle::Ptr m_compatibility_skip_uobjectarray_init{ ModToggle::create(generate_name("Compatibility_SkipUObjectArrayInit"), false, true) };
+
+    const ModToggle::Ptr m_compatibility_ahud{ ModToggle::create(generate_name("Compatibility_AHUD"), false, true) };
+    const ModToggle::Ptr m_compatibility_direct_aim{ ModToggle::create(generate_name("Compatibility_DirectAimFallback"), false, true) };
+    const ModToggle::Ptr m_compatibility_controller_camera_guard{ ModToggle::create(generate_name("Compatibility_ControllerCameraGuard"), false, true) };
+    const ModToggle::Ptr m_compatibility_head_turn_camera_stabilizer{ ModToggle::create(generate_name("Compatibility_HeadTurnCameraStabilizer"), false, true) };
+    const ModToggle::Ptr m_compatibility_ui_layer_pose_telemetry{ ModToggle::create(generate_name("Compatibility_UILayerPoseTelemetry"), false, true) };
+    const ModToggle::Ptr m_compatibility_ui_layer_pose_stabilizer{ ModToggle::create(generate_name("Compatibility_UILayerPoseStabilizer"), false, true) };
+    const ModToggle::Ptr m_compatibility_swgr_bink_seek_budget{ ModToggle::create(generate_name("Compatibility_SWGRBinkSeekBudget"), false, true) };
+    const ModToggle::Ptr m_compatibility_fullscreen_16x9_cameras{ ModToggle::create(generate_name("Compatibility_Fullscreen16x9Cameras"), false, true) };
+    const ModSlider::Ptr m_compatibility_fullscreen_16x9_camera_aspect{ ModSlider::create(generate_name("Compatibility_Fullscreen16x9CameraAspect"), 0.0f, 4.0f, 0.0f, true) };
+    const ModToggle::Ptr m_compatibility_subnautica2_native_water{ ModToggle::create(generate_name("Compatibility_Subnautica2NativeWater"), false, true) };
+    const ModCombo::Ptr m_subnautica2_native_water_mode{ ModCombo::create(generate_name("Subnautica2NativeWaterMode"), s_subnautica2_native_water_mode_names, SUBNAUTICA2_NATIVE_WATER_SAFE_REFLECTIONS) };
+    const ModToggle::Ptr m_compatibility_1666amsterdam_native_postprocess{ ModToggle::create(generate_name("Compatibility_1666AmsterdamNativePostProcess"), true, true) };
+    const ModToggle::Ptr m_compatibility_daysgone_bend_ui_placement_fix{ ModToggle::create(generate_name("Compatibility_DaysGoneBendUIPlacementFix"), false, true) };
+    const ModToggle::Ptr m_compatibility_daysgone_gbuffer_safe_mode{ ModToggle::create(generate_name("Compatibility_DaysGoneGBufferSafeMode"), false, true) };
+    const ModToggle::Ptr m_compatibility_everspace2_remove_cinematic_bars{ ModToggle::create(generate_name("Compatibility_Everspace2RemoveCinematicBars"), false, true) };
+    const ModToggle::Ptr m_compatibility_dune_true_stereo{ ModToggle::create(generate_name("Compatibility_DuneTrueStereo"), false, true) };
+    const ModToggle::Ptr m_compatibility_dune_native_dual_view_probe{ ModToggle::create(generate_name("Compatibility_DuneNativeDualViewProbe"), false, true) };
+
+    struct Fullscreen16x9CameraCompatState {
+        bool was_enabled{false};
+        void* last_pcm{nullptr};
+        void* last_camera{nullptr};
+        void* last_camera_component{nullptr};
+        float last_aspect{0.0f};
+        std::chrono::steady_clock::time_point last_camera_poll{};
+        std::chrono::steady_clock::time_point last_apply{};
+        std::chrono::steady_clock::time_point last_log{};
+        std::chrono::steady_clock::time_point burst_until{};
+    } m_fullscreen_16x9_camera_compat{};
+
+    // Keybinds
+    const ModKey::Ptr m_keybind_recenter{ ModKey::create(generate_name("RecenterViewKey")) };
+    const ModKey::Ptr m_keybind_recenter_horizon{ ModKey::create(generate_name("RecenterHorizonKey")) };
+    const ModKey::Ptr m_keybind_set_standing_origin{ ModKey::create(generate_name("ResetStandingOriginKey")) };
+
+    const ModKey::Ptr m_keybind_load_camera_0{ ModKey::create(generate_name("LoadCamera0Key")) };
+    const ModKey::Ptr m_keybind_load_camera_1{ ModKey::create(generate_name("LoadCamera1Key")) };
+    const ModKey::Ptr m_keybind_load_camera_2{ ModKey::create(generate_name("LoadCamera2Key")) };
+
+    const ModKey::Ptr m_keybind_toggle_2d_screen{ ModKey::create(generate_name("Toggle2DScreenKey")) };
+    const ModKey::Ptr m_keybind_disable_vr{ ModKey::create(generate_name("DisableVRKey")) };
+    bool m_disable_vr{false}; // definitely should not be persistent
+
+    const ModKey::Ptr m_keybind_toggle_gui{ ModKey::create(generate_name("ToggleSlateGUIKey")) };
+    
+    const ModString::Ptr m_requested_runtime_name{ ModString::create("Frontend_RequestedRuntime", "unset") };
+
+    const ModToggle::Ptr m_lerp_camera_pitch{ ModToggle::create(generate_name("LerpCameraPitch"), false) };
+    const ModToggle::Ptr m_lerp_camera_yaw{ ModToggle::create(generate_name("LerpCameraYaw"), false) };
+    const ModToggle::Ptr m_lerp_camera_roll{ ModToggle::create(generate_name("LerpCameraRoll"), false) };
+    const ModSlider::Ptr m_lerp_camera_speed{ ModSlider::create(generate_name("LerpCameraSpeed"), 0.01f, 10.0f, 1.0f) };
+
+    std::chrono::high_resolution_clock::time_point m_last_lerp_update{};
+
+    struct DecoupledPitchData {
+        mutable std::shared_mutex mtx{};
+        glm::quat pre_flattened_rotation{};
+    } m_decoupled_pitch_data{};
+
+    struct CameraFreeze {
+        glm::vec3 position{};
+        glm::vec3 rotation{}; // euler
+        bool position_frozen{false};
+        bool rotation_frozen{false};
+
+        bool position_wants_freeze{false};
+        bool rotation_wants_freeze{false};
+    } m_camera_freeze{};
+
+    struct CameraLerp {
+        glm::vec3 last_position{};
+        glm::vec3 last_rotation{};
+    } m_camera_lerp{};
+
+    struct HeadTurnCameraStabilizer {
+        bool has_camera_sample{false};
+        bool has_hmd_sample{false};
+        bool active{false};
+        uint32_t stable_frames{0};
+        glm::vec3 last_stable_position{};
+        glm::vec3 last_stable_rotation{};
+        glm::quat last_hmd_rotation{};
+        std::chrono::steady_clock::time_point last_hmd_time{};
+        std::chrono::steady_clock::time_point stabilize_until{};
+    } m_head_turn_camera_stabilizer{};
+
+    struct CameraData {
+        glm::vec3 offset{};
+        float world_scale{1.0f};
+        bool decoupled_pitch{false};
+        bool decoupled_pitch_ui_adjust{true};
+    };
+
+    struct ProSpiCameraCalibration {
+        std::string camera_id{};
+        std::string preset_name{};
+        float actual_min_fov{20.0f};
+        float dolly_distance{3000.0f};
+        float projection_multiplier{1.0f};
+        bool has_pose{false};
+        int32_t preset{0};
+        glm::vec3 location{};
+        glm::vec3 rotation{};
+        float raw_fov{0.0f};
+    };
+
+    struct ProSpiFieldMapSample {
+        bool valid{false};
+        uint64_t sequence{};
+        std::string camera_id{};
+        std::string preset_name{};
+        int32_t preset{};
+        glm::vec3 location{};
+        glm::vec3 rotation{};
+        float raw_fov{};
+        float dolly_distance{3000.0f};
+        float actual_min_fov{20.0f};
+        float projection_multiplier{1.0f};
+        bool calibration_applied{false};
+        bool auto_dolly_applied{false};
+        int64_t timestamp_ms{};
+    };
+
+    struct GenericCameraPreset {
+        std::string camera_id{};
+        float min_fov{5.0f};
+        float dolly_distance{3000.0f};
+        float projection_multiplier{1.0f};
+        bool read_only_camera{true};
+    };
+
+    struct GameCameraSample {
+        bool valid{false};
+        uintptr_t player_camera_manager{};
+        glm::vec3 location{};
+        glm::vec3 rotation{};
+        float raw_fov{};
+        std::string camera_id{};
+        std::chrono::steady_clock::time_point timestamp{};
+    };
+
+    struct GameCameraProjectionState {
+        bool valid{false};
+        float game_fov_for_matching{};
+        float effective_fov{};
+        float active_dolly_distance{};
+        float active_fov_multiplier{1.0f};
+    };
+
+    struct CameraCutState {
+        bool has_previous_sample{false};
+        bool has_last_output{false};
+        bool stabilizing{false};
+        GameCameraSample previous_sample{};
+        GameCameraSample last_cut_from{};
+        GameCameraSample last_cut_to{};
+        GameCameraProjectionState last_output{};
+        GameCameraProjectionState blend_from{};
+        GameCameraProjectionState blend_to{};
+        std::chrono::steady_clock::time_point cut_time{};
+        std::chrono::steady_clock::time_point stabilize_until{};
+    };
+
+    std::array<CameraData, 3> m_camera_datas{};
+    void save_cameras();
+    void load_cameras();
+    void load_camera(int index);
+    void save_camera(int index);
+    void save_prospi_camera_calibrations();
+    void load_prospi_camera_calibrations();
+    void save_current_prospi_camera_calibration();
+    void clear_current_prospi_camera_calibration();
+    void clear_current_prospi_preset_calibrations();
+    std::string get_current_prospi_camera_id();
+    void record_prospi_field_map_sample(
+        const std::string& camera_id,
+        int32_t preset,
+        std::string_view preset_name,
+        const glm::vec3& location,
+        const glm::vec3& rotation,
+        float raw_fov,
+        float dolly_distance,
+        float actual_min_fov,
+        float projection_multiplier,
+        bool calibration_applied,
+        bool auto_dolly_applied);
+    std::vector<ProSpiFieldMapSample> get_prospi_field_map_samples_snapshot();
+    ProSpiFieldMapSample get_last_detected_prospi_camera_sample();
+    ProSpiFieldMapSample get_selected_prospi_field_map_sample();
+    void select_prospi_field_map_sample(const ProSpiFieldMapSample& sample);
+    bool apply_prospi_tuning_to_camera(
+        const ProSpiFieldMapSample& sample,
+        float dolly_distance,
+        float projection_multiplier,
+        bool save = true);
+    void draw_prospi_field_map_visualizer();
+    void save_generic_camera_presets();
+    void load_generic_camera_presets();
+    void save_current_generic_camera_preset();
+    void clear_current_generic_camera_preset();
+    std::string get_current_game_camera_id();
+
+    void update_fullscreen_16x9_camera_compatibility(sdk::UGameEngine* engine);
+    void update_game_fov();
+    void update_prospi_camera_trace_control();
+    void clear_prospi_balanced_player_visibility_cache();
+    void update_prospi_player_visibility_guard();
+    void attempt_hook_prospi_player_visibility();
+    static void prospi_player_visibility_hook(safetyhook::Context& ctx);
+    void update_prospi_frame_pace_override(sdk::UGameEngine* engine);
+    void restore_prospi_frame_pace_override();
+    void attempt_hook_prospi_frame_pace();
+    static void prospi_frame_pace_hook(safetyhook::Context& ctx);
+    void attempt_hook_prospi_frame_end_vsync();
+    static void prospi_frame_end_vsync_hook(safetyhook::Context& ctx);
+    void attempt_hook_prospi_max_tick_rate();
+    static void prospi_max_tick_rate_hook(safetyhook::Context& ctx);
+    void attempt_hook_prospi_spectator_world_cull();
+    static void prospi_spectator_world_cull_hook(safetyhook::Context& ctx);
+    float get_game_fov() const;
+    float get_game_fov_scale(float base_half_fov) const;
+    float get_game_fov_dolly_offset() const;
+    auto get_desktop_mirror_mode() const { return static_cast<DesktopMirrorMode>(m_desktop_mirror_mode->value()); }
+
+public:
+    VR() {
+        m_options = {
+            *m_duo_width, *m_duo_height, *m_duo_periphery, *m_duo_density,
+            *m_duo_foreground_refinement, *m_duo_visibility_absolute, *m_duo_visibility_relative_percent, *m_duo_foreground_edge_radius,
+            *m_duo_feather, *m_duo_sharpen, *m_duo_gaze, *m_duo_border, *m_duo_debug_source,
+            *m_duo_fovea_view, *m_duo_timing, *m_duo_direct_xr, *m_duo_stabilize, *m_duo_guard,
+            *m_duo_native_fix, *m_duo_split_eye, *m_duo_quant, *m_duo_hold, *m_duo_reacquire,
+            *m_duo_offset_x, *m_duo_offset_y,
+            *m_duo_micro_gain, *m_duo_breakout, *m_duo_stillness, *m_duo_relock,
+            *m_rendering_method,
+            *m_synced_afr_method,
+            *m_extreme_compat_mode,
+            *m_uncap_framerate,
+            *m_disable_hdr_compositing,
+            *m_disable_hzbocclusion,
+            *m_disable_instance_culling,
+            *m_desktop_fix,
+            *m_desktop_mirror_mode,
+            *m_enable_gui,
+            *m_enable_depth,
+            *m_openxr_afr_depth_target_stability,
+            *m_enable_hitch_diagnostics,
+            *m_ktjl_openxr_factory_repair,
+            *m_decoupled_pitch,
+            *m_decoupled_pitch_ui_adjust,
+            *m_load_blueprint_code,
+            *m_2d_screen_mode,
+            *m_roomscale_movement,
+            *m_roomscale_sweep,
+            *m_swap_controllers,
+            *m_horizontal_projection_override,
+            *m_vertical_projection_override,
+            *m_grow_rectangle_for_projection_cropping,
+            *m_dibr_disparity_pixels,
+            *m_dibr_reprojection_strength,
+            *m_dibr_legacy_depth_curve,
+            *m_dibr_legacy_near_depth_cap,
+            *m_dibr_depth_edge_stabilization,
+            *m_dibr_depth_edge_threshold,
+            *m_dibr_depth_edge_stabilization_strength,
+            *m_dibr_spatial_repair,
+            *m_dibr_spatial_repair_debug_mask,
+            *m_dibr_ui_footprint_reprojection,
+            *m_dibr_ui_footprint_reprojection_strength,
+            *m_dibr_ui_footprint_reprojection_debug_mask,
+            *m_dibr_single_view_ui_edge_guard,
+            *m_dibr_single_view_ui_edge_guard_debug_mask,
+            *m_dibr_reversed_depth,
+            *m_dibr_ue5_rdg_depth_capture,
+            *m_snapturn,
+            *m_snapturn_joystick_deadzone,
+            *m_snapturn_angle,
+            *m_controller_pitch_offset,
+            *m_aim_method,
+            *m_movement_orientation,
+            *m_aim_use_pawn_control_rotation,
+            *m_aim_modify_player_control_rotation,
+            *m_aim_multiplayer_support,
+            *m_aim_speed,
+            *m_aim_interp,
+            *m_dpad_shifting,
+            *m_dpad_shifting_method,
+            *m_motion_controls_inactivity_timer,
+            *m_joystick_deadzone,
+            *m_camera_forward_offset,
+            *m_camera_right_offset,
+            *m_camera_up_offset,
+            *m_match_game_fov,
+            *m_match_game_fov_dolly,
+            *m_match_game_fov_multiplier,
+            *m_match_game_fov_dolly_distance,
+            *m_match_game_fov_min_enabled,
+            *m_match_game_fov_min,
+            *m_match_game_fov_read_only_camera,
+            *m_match_game_fov_camera_cut_stabilizer,
+            *m_match_game_fov_camera_cut_stabilizer_duration_ms,
+            *m_match_game_fov_camera_cut_stabilizer_fov_delta,
+            *m_match_game_fov_camera_cut_stabilizer_rotation_delta,
+            *m_match_game_fov_camera_cut_stabilizer_location_delta,
+            *m_match_game_fov_generic_camera_presets,
+            *m_match_game_fov_generic_camera_presets_auto_apply,
+            *m_match_game_fov_prospi_actual_clamp,
+            *m_match_game_fov_prospi_actual_min,
+            *m_match_game_fov_prospi_center_field_actual_min,
+            *m_match_game_fov_prospi_upper_deck_actual_min,
+            *m_match_game_fov_prospi_plate_high_actual_min,
+            *m_match_game_fov_prospi_deep_outfield_actual_min,
+            *m_match_game_fov_prospi_telephoto_perf_override,
+            *m_match_game_fov_prospi_runtime_lod_cvar_switching,
+            *m_match_game_fov_prospi_telephoto_perf_trigger_fov,
+            *m_match_game_fov_prospi_telephoto_perf_view_distance_scale,
+            *m_match_game_fov_prospi_telephoto_perf_static_mesh_lod_distance_scale,
+            *m_match_game_fov_prospi_telephoto_perf_skeletal_mesh_lod_bias,
+            *m_prospi_balanced_player_preservation,
+            *m_prospi_preserve_enabled_player_models,
+            *m_prospi_remove_frame_pace,
+            *m_prospi_show_stadium_roofs,
+            *m_match_game_fov_prospi_crowd_visibility_guard,
+            *m_match_game_fov_prospi_crowd_visibility_trigger_fov,
+            *m_match_game_fov_prospi_crowd_visibility_hold_seconds,
+            *m_match_game_fov_prospi_crowd_visibility_view_distance_scale,
+            *m_match_game_fov_prospi_crowd_visibility_static_mesh_lod_distance_scale,
+            *m_match_game_fov_prospi_crowd_visibility_skeletal_mesh_lod_bias,
+            *m_match_game_fov_prospi_crowd_visibility_skeletal_radius_scale,
+            *m_match_game_fov_prospi_crowd_culling_triage,
+            *m_match_game_fov_prospi_crowd_culling_triage_mode,
+            *m_match_game_fov_prospi_crowd_culling_triage_auto_cycle,
+            *m_match_game_fov_prospi_crowd_culling_triage_cycle_seconds,
+            *m_match_game_fov_prospi_crowd_culling_triage_trigger_fov,
+            *m_match_game_fov_prospi_crowd_culling_triage_hold_seconds,
+            *m_match_game_fov_prospi_spectator_mesh_triage,
+            *m_match_game_fov_prospi_spectator_mesh_triage_auto_refresh,
+            *m_match_game_fov_prospi_spectator_mesh_triage_inflate_bounds,
+            *m_match_game_fov_prospi_spectator_mesh_triage_bounds_scale,
+            *m_match_game_fov_prospi_spectator_mesh_triage_disable_distance_cull,
+            *m_match_game_fov_prospi_spectator_mesh_triage_force_visibility,
+            *m_match_game_fov_prospi_spectator_material_override,
+            *m_match_game_fov_prospi_spectator_material_alpha,
+            *m_match_game_fov_prospi_spectator_material_fade,
+            *m_match_game_fov_prospi_spectator_material_lod,
+            *m_match_game_fov_prospi_spectator_world_cull_override,
+            *m_match_game_fov_prospi_spectator_world_cull_horizontal_scale,
+            *m_match_game_fov_prospi_spectator_world_cull_vertical_scale,
+            *m_match_game_fov_prospi_spectator_world_cull_horizontal_cap_enabled,
+            *m_match_game_fov_prospi_spectator_world_cull_horizontal_cap,
+            *m_match_game_fov_prospi_spectator_world_cull_vertical_cap_enabled,
+            *m_match_game_fov_prospi_spectator_world_cull_vertical_cap,
+            *m_match_game_fov_prospi_spectator_world_cull_expand_depth,
+            *m_match_game_fov_prospi_spectator_world_cull_lod_override,
+            *m_match_game_fov_prospi_spectator_world_cull_lod_slope_scale,
+            *m_match_game_fov_prospi_spectator_world_cull_lod_bias_offset,
+            *m_match_game_fov_prospi_camera_safety_guard,
+            *m_match_game_fov_prospi_camera_safety_field_rule,
+            *m_match_game_fov_prospi_camera_safety_baseline_rule,
+            *m_match_game_fov_prospi_camera_safety_stand_rule,
+            *m_match_game_fov_prospi_camera_safety_outfield_rule,
+            *m_match_game_fov_prospi_camera_safety_field_min_z,
+            *m_match_game_fov_prospi_camera_safety_baseline_min_z,
+            *m_match_game_fov_prospi_camera_safety_stand_min_z,
+            *m_match_game_fov_prospi_camera_safety_outfield_min_z,
+            *m_match_game_fov_prospi_camera_safety_max_up_offset,
+            *m_match_game_fov_prospi_camera_safety_dolly_cap_strength,
+            *m_match_game_fov_prospi_camera_safety_baseline_x_min,
+            *m_match_game_fov_prospi_camera_safety_baseline_y_min,
+            *m_match_game_fov_prospi_camera_safety_baseline_y_max,
+            *m_match_game_fov_prospi_camera_safety_stand_x_min,
+            *m_match_game_fov_prospi_camera_safety_stand_y_min,
+            *m_match_game_fov_prospi_camera_safety_stand_y_max,
+            *m_match_game_fov_prospi_camera_safety_telephoto_trigger_fov,
+            *m_match_game_fov_prospi_camera_safety_outfield_y_max,
+            *m_match_game_fov_prospi_auto_camera_sequencer,
+            *m_match_game_fov_prospi_native_focus_guard,
+            *m_prospi_camera_trace_enabled,
+            *m_prospi_camera_trace_detail,
+            *m_prospi_camera_trace_bad_key,
+            *m_prospi_camera_trace_good_key,
+            *m_prospi_camera_trace_toggle_key,
+            *m_prospi_camera_trace_stadium,
+            *m_match_game_fov_prospi_cinematic_camera_assist,
+            *m_match_game_fov_prospi_auto_camera_sequencer_mode,
+            *m_match_game_fov_prospi_auto_camera_sequencer_trigger_fov,
+            *m_match_game_fov_prospi_auto_camera_sequencer_low_camera_max_z,
+            *m_match_game_fov_prospi_auto_camera_sequencer_field_cap,
+            *m_match_game_fov_prospi_auto_camera_sequencer_baseline_cap,
+            *m_match_game_fov_prospi_auto_camera_sequencer_stand_cap,
+            *m_match_game_fov_prospi_auto_camera_sequencer_outfield_cap,
+            *m_match_game_fov_prospi_auto_camera_sequencer_smoothing,
+            *m_match_game_fov_prospi_auto_camera_sequencer_match_location_radius,
+            *m_match_game_fov_prospi_auto_camera_sequencer_match_yaw_radius,
+            *m_match_game_fov_prospi_auto_camera_sequencer_match_pitch_radius,
+            *m_match_game_fov_prospi_auto_camera_sequencer_match_fov_radius,
+            *m_match_game_fov_prospi_auto_camera_sequencer_match_min_confidence,
+            *m_match_game_fov_prospi_gameplay_behind_plate_dolly_override,
+            *m_match_game_fov_prospi_gameplay_behind_plate_dolly_distance,
+            *m_match_game_fov_prospi_home_plate_waist_high_dolly_override,
+            *m_match_game_fov_prospi_home_plate_waist_high_dolly_distance,
+            *m_match_game_fov_prospi_tv_dolly_override,
+            *m_match_game_fov_prospi_tv_dolly_distance,
+            *m_match_game_fov_prospi_opening_aerial_dolly_override,
+            *m_match_game_fov_prospi_opening_aerial_dolly_distance,
+            *m_match_game_fov_prospi_behind_plate_wide_dolly_override,
+            *m_match_game_fov_prospi_behind_plate_wide_dolly_distance,
+            *m_match_game_fov_prospi_behind_plate_elevated_sweep_dolly_override,
+            *m_match_game_fov_prospi_behind_plate_elevated_sweep_dolly_distance,
+            *m_match_game_fov_prospi_home_plate_waist_high_reverse_dolly_override,
+            *m_match_game_fov_prospi_home_plate_waist_high_reverse_dolly_distance,
+            *m_match_game_fov_prospi_low_plate_corner_dolly_override,
+            *m_match_game_fov_prospi_low_plate_corner_dolly_distance,
+            *m_match_game_fov_prospi_third_base_sweep_dolly_override,
+            *m_match_game_fov_prospi_third_base_sweep_dolly_distance,
+            *m_match_game_fov_prospi_left_field_corner_wide_dolly_override,
+            *m_match_game_fov_prospi_left_field_corner_wide_dolly_distance,
+            *m_match_game_fov_prospi_first_base_corner_low_dolly_override,
+            *m_match_game_fov_prospi_first_base_corner_low_dolly_distance,
+            *m_match_game_fov_prospi_first_base_infield_low_dolly_override,
+            *m_match_game_fov_prospi_first_base_infield_low_dolly_distance,
+            *m_match_game_fov_prospi_center_field_dolly_override,
+            *m_match_game_fov_prospi_center_field_dolly_distance,
+            *m_match_game_fov_prospi_center_field_high_dolly_override,
+            *m_match_game_fov_prospi_center_field_high_dolly_distance,
+            *m_match_game_fov_prospi_deep_outfield_dolly_override,
+            *m_match_game_fov_prospi_deep_outfield_dolly_distance,
+            *m_match_game_fov_prospi_home_plate_sky_dolly_override,
+            *m_match_game_fov_prospi_home_plate_sky_dolly_distance,
+            *m_match_game_fov_prospi_upper_deck_dolly_override,
+            *m_match_game_fov_prospi_upper_deck_dolly_distance,
+            *m_match_game_fov_prospi_home_sky_dolly_override,
+            *m_match_game_fov_prospi_home_sky_dolly_distance,
+            *m_match_game_fov_prospi_third_base_dolly_override,
+            *m_match_game_fov_prospi_third_base_dolly_distance,
+            *m_match_game_fov_prospi_third_base_relay_low_dolly_override,
+            *m_match_game_fov_prospi_third_base_relay_low_dolly_distance,
+            *m_match_game_fov_prospi_third_base_outfield_line_low_dolly_override,
+            *m_match_game_fov_prospi_third_base_outfield_line_low_dolly_distance,
+            *m_match_game_fov_prospi_third_base_foul_territory_low_dolly_override,
+            *m_match_game_fov_prospi_third_base_foul_territory_low_dolly_distance,
+            *m_match_game_fov_prospi_third_base_wide_dolly_override,
+            *m_match_game_fov_prospi_third_base_wide_dolly_distance,
+            *m_match_game_fov_prospi_first_base_dolly_override,
+            *m_match_game_fov_prospi_first_base_dolly_distance,
+            *m_match_game_fov_prospi_first_base_wide_dolly_override,
+            *m_match_game_fov_prospi_first_base_wide_dolly_distance,
+            *m_match_game_fov_prospi_first_base_outfield_line_low_dolly_override,
+            *m_match_game_fov_prospi_first_base_outfield_line_low_dolly_distance,
+            *m_match_game_fov_prospi_backstop_high_dolly_override,
+            *m_match_game_fov_prospi_backstop_high_dolly_distance,
+            *m_match_game_fov_prospi_right_field_corner_dolly_override,
+            *m_match_game_fov_prospi_right_field_corner_dolly_distance,
+            *m_match_game_fov_prospi_right_field_line_dolly_override,
+            *m_match_game_fov_prospi_right_field_line_dolly_distance,
+            *m_match_game_fov_prospi_right_center_field_dolly_override,
+            *m_match_game_fov_prospi_right_center_field_dolly_distance,
+            *m_match_game_fov_prospi_plate_high_dolly_override,
+            *m_match_game_fov_prospi_plate_high_dolly_distance,
+            *m_match_game_fov_prospi_home_plate_overhead_dolly_override,
+            *m_match_game_fov_prospi_home_plate_overhead_dolly_distance,
+            *m_match_game_fov_prospi_generic_telephoto_dolly_override,
+            *m_match_game_fov_prospi_generic_telephoto_dolly_distance,
+            *m_match_game_fov_prospi_camera_calibration_auto,
+            *m_match_game_fov_prospi_field_map_flip_x,
+            *m_match_game_fov_prospi_field_map_flip_y,
+            *m_world_scale,
+            *m_xyz_headscale_enabled,
+            *m_xyz_headscale_x, *m_xyz_headscale_y, *m_xyz_headscale_z,
+            *m_xyz_headscale_toggle_key, *m_xyz_headscale_hold_bypass_key,
+            *m_depth_scale,
+            *m_custom_z_near,
+            *m_custom_z_near_enabled,
+            *m_ghosting_fix,
+            *m_ghosting_fix_bootstrap_view_states,
+            *m_native_stereo_fix,
+            *m_native_stereo_fix_same_pass,
+            *m_native_stereo_fix_preserve_secondary_pass,
+            *m_native_stereo_fix_texture_array_submit,
+            *m_native_stereo_fix_async_openxr_wait,
+            *m_stalker2_native_pair_experiment,
+            *m_stalker2_sharpen_priority,
+            *m_splitscreen_compatibility_mode,
+            *m_splitscreen_view_index,
+            *m_compatibility_skip_pip,
+            *m_compatibility_skip_uobjectarray_init,
+            *m_compatibility_ahud,
+            *m_compatibility_direct_aim,
+            *m_compatibility_controller_camera_guard,
+            *m_compatibility_head_turn_camera_stabilizer,
+            *m_compatibility_ui_layer_pose_telemetry,
+            *m_compatibility_ui_layer_pose_stabilizer,
+            *m_compatibility_swgr_bink_seek_budget,
+            *m_compatibility_fullscreen_16x9_cameras,
+            *m_compatibility_fullscreen_16x9_camera_aspect,
+            *m_compatibility_subnautica2_native_water,
+            *m_subnautica2_native_water_mode,
+            *m_compatibility_1666amsterdam_native_postprocess,
+            *m_compatibility_daysgone_bend_ui_placement_fix,
+            *m_compatibility_daysgone_gbuffer_safe_mode,
+            *m_compatibility_everspace2_remove_cinematic_bars,
+            *m_compatibility_dune_true_stereo,
+            *m_compatibility_dune_native_dual_view_probe,
+            *m_sceneview_compatibility_mode,
+            *m_keybind_recenter,
+            *m_keybind_recenter_horizon,
+            *m_keybind_set_standing_origin,
+            *m_keybind_load_camera_0,
+            *m_keybind_load_camera_1,
+            *m_keybind_load_camera_2,
+            *m_keybind_toggle_2d_screen,
+            *m_keybind_disable_vr,
+            *m_keybind_toggle_gui,
+            *m_requested_runtime_name,
+            *m_show_fps,
+            *m_show_statistics,
+            *m_controllers_allowed,
+            *m_lerp_camera_pitch,
+            *m_lerp_camera_yaw,
+            *m_lerp_camera_roll,
+            *m_lerp_camera_speed,
+            *m_sync_mode,
+        };
+
+        add_components_vr();
+    }
+
+private:
+    bool m_stereo_emulation_mode{false}; // not a good config option, just for debugging
+    bool m_wait_for_present{true};
+    const ModToggle::Ptr m_controllers_allowed{ ModToggle::create(generate_name("ControllersAllowed"), true) };
+    bool m_controller_test_mode{false};
+    std::atomic<float> m_game_fov{0.0f};
+    std::atomic<float> m_game_fov_raw{0.0f};
+    std::atomic<float> m_game_fov_base{0.0f};
+    std::atomic<float> m_game_fov_dolly_offset{0.0f};
+    uevr::prospi::cut_guard::Publication m_prospi_camera_cut_offsets;
+    std::atomic<bool> m_game_fov_valid{false};
+    std::atomic<int32_t> m_match_game_fov_prospi_preset{0};
+    std::atomic<float> m_match_game_fov_prospi_actual_min_active{0.0f};
+    std::atomic<bool> m_match_game_fov_prospi_calibration_applied{false};
+    std::atomic<float> m_match_game_fov_prospi_calibration_dolly_distance_active{0.0f};
+    std::atomic<float> m_match_game_fov_prospi_calibration_multiplier_active{1.0f};
+    std::atomic<float> m_match_game_fov_prospi_calibration_actual_min_active{0.0f};
+    std::atomic<bool> m_match_game_fov_prospi_tv_override_active{false};
+    std::atomic<float> m_match_game_fov_prospi_auto_dolly_distance_active{0.0f};
+    std::atomic<bool> m_match_game_fov_prospi_telephoto_perf_active{false};
+    std::atomic<bool> m_match_game_fov_prospi_crowd_visibility_active{false};
+    std::atomic<bool> m_match_game_fov_read_only_camera_active{false};
+    std::atomic<bool> m_match_game_fov_would_write_game_camera{false};
+    std::atomic<bool> m_match_game_fov_camera_cut_stabilizer_active{false};
+    std::atomic<int32_t> m_match_game_fov_camera_cut_stabilizer_remaining_ms{0};
+    std::atomic<bool> m_match_game_fov_generic_camera_preset_applied{false};
+    std::atomic<bool> m_match_game_fov_generic_camera_tracking_active{false};
+    std::atomic<int64_t> m_prospi_cut_cadence_guard_until_ms{0};
+    std::atomic<uint64_t> m_prospi_cut_cadence_guard_generation{0};
+    std::mutex m_prospi_camera_calibration_mtx{};
+    std::unordered_map<std::string, ProSpiCameraCalibration> m_prospi_camera_calibrations{};
+    std::string m_prospi_current_camera_id{};
+    struct ProSpiCameraCutHistoryEntry {
+        std::string camera_id{};
+        std::string preset_name{};
+        glm::vec3 location{};
+        glm::vec3 rotation{};
+        float raw_fov{0.0f};
+        float actual_min_fov{0.0f};
+        float projection_multiplier{1.0f};
+        float dolly_distance{0.0f};
+        float effective_fov{0.0f};
+        bool calibration_applied{false};
+        bool wrote_fov{false};
+        uint64_t sequence{0};
+        std::chrono::steady_clock::time_point last_seen{};
+    };
+    std::mutex m_prospi_camera_history_mtx{};
+    uevr::prospi::trace::Recorder m_prospi_camera_trace{};
+    uevr::prospi::trace::SamplingPolicy m_prospi_camera_trace_sampling{};
+    uevr::prospi::trace::CameraProbe m_prospi_camera_trace_probe{};
+    uevr::prospi::trace::CameraProbe m_prospi_native_focus_probe{};
+    std::atomic<int32_t> m_prospi_native_focus_status{};
+    std::atomic<float> m_prospi_native_focus_dolly_before{}, m_prospi_native_focus_dolly_after{};
+    std::atomic<float> m_prospi_native_focus_lift_before{}, m_prospi_native_focus_lift_after{};
+    uevr::prospi::roof::VisibilityGuard m_prospi_roof_visibility{};
+    std::atomic<bool> m_prospi_camera_trace_requested{};
+    std::atomic<uint32_t> m_prospi_camera_trace_markers{};
+    std::array<std::atomic<int32_t>, 3> m_prospi_camera_trace_keys{VK_F6, VK_F7, VK_F9};
+    bool m_prospi_camera_trace_start_attempted{}, m_prospi_camera_trace_previous_write{};
+    uint32_t m_prospi_camera_trace_key_edges{};
+    std::deque<ProSpiCameraCutHistoryEntry> m_prospi_camera_cut_history{};
+    std::string m_prospi_selected_history_camera_id{};
+    uint64_t m_prospi_camera_cut_sequence{0};
+    std::string m_prospi_last_recorded_camera_id{};
+    int32_t m_prospi_last_recorded_preset{0};
+    glm::vec3 m_prospi_last_recorded_location{};
+    glm::vec3 m_prospi_last_recorded_rotation{};
+    float m_prospi_last_recorded_raw_fov{0.0f};
+    std::chrono::steady_clock::time_point m_prospi_last_recorded_time{};
+    int32_t m_prospi_selected_history_preset_index{0};
+    bool m_prospi_sticky_preset_valid{false};
+    int32_t m_prospi_sticky_preset{0};
+    glm::vec3 m_prospi_sticky_location{};
+    glm::vec3 m_prospi_sticky_rotation{};
+    float m_prospi_sticky_raw_fov{0.0f};
+    bool m_prospi_sticky_calibration_valid{false};
+    ProSpiCameraCalibration m_prospi_sticky_calibration{};
+    std::string m_prospi_sticky_camera_id{};
+    std::mutex m_prospi_field_map_mtx{};
+    std::array<ProSpiFieldMapSample, 64> m_prospi_field_map_samples{};
+    size_t m_prospi_field_map_next{};
+    size_t m_prospi_field_map_count{};
+    uint64_t m_prospi_field_map_sequence{};
+    ProSpiFieldMapSample m_prospi_last_detected_camera{};
+    ProSpiFieldMapSample m_prospi_selected_field_map_camera{};
+    float m_prospi_tune_camera_dolly_distance{3000.0f};
+    float m_prospi_tune_camera_projection_multiplier{1.0f};
+    bool m_prospi_telephoto_perf_baselines_valid{false};
+    float m_prospi_telephoto_perf_baseline_view_distance_scale{1.0f};
+    float m_prospi_telephoto_perf_baseline_static_mesh_lod_distance_scale{1.0f};
+    int m_prospi_telephoto_perf_baseline_skeletal_mesh_lod_bias{0};
+    bool m_prospi_telephoto_perf_override_applied{false};
+    bool m_prospi_telephoto_perf_pending_valid{false};
+    bool m_prospi_telephoto_perf_pending_state{false};
+    std::chrono::steady_clock::time_point m_prospi_telephoto_perf_pending_since{};
+    bool m_prospi_telephoto_perf_target_valid{false};
+    float m_prospi_telephoto_perf_target_view_distance_scale{1.0f};
+    float m_prospi_telephoto_perf_target_static_mesh_lod_distance_scale{1.0f};
+    int m_prospi_telephoto_perf_target_skeletal_mesh_lod_bias{0};
+    bool m_prospi_telephoto_perf_line_mode{false};
+    std::chrono::steady_clock::time_point m_prospi_line_telephoto_perf_hold_until{};
+    bool m_prospi_crowd_visibility_baselines_valid{false};
+    bool m_prospi_crowd_visibility_baseline_view_distance_valid{false};
+    bool m_prospi_crowd_visibility_baseline_static_mesh_lod_valid{false};
+    bool m_prospi_crowd_visibility_baseline_skeletal_lod_bias_valid{false};
+    bool m_prospi_crowd_visibility_baseline_skeletal_radius_valid{false};
+    bool m_prospi_crowd_visibility_baseline_fov_affects_hlod_valid{false};
+    float m_prospi_crowd_visibility_baseline_view_distance_scale{1.0f};
+    float m_prospi_crowd_visibility_baseline_static_mesh_lod_distance_scale{1.0f};
+    int m_prospi_crowd_visibility_baseline_skeletal_mesh_lod_bias{0};
+    float m_prospi_crowd_visibility_baseline_skeletal_mesh_lod_radius_scale{1.0f};
+    int m_prospi_crowd_visibility_baseline_fov_affects_hlod{1};
+    bool m_prospi_crowd_visibility_applied{false};
+    bool m_prospi_crowd_visibility_target_valid{false};
+    float m_prospi_crowd_visibility_target_view_distance_scale{1.0f};
+    float m_prospi_crowd_visibility_target_static_mesh_lod_distance_scale{1.0f};
+    int m_prospi_crowd_visibility_target_skeletal_mesh_lod_bias{0};
+    float m_prospi_crowd_visibility_target_skeletal_mesh_lod_radius_scale{1.0f};
+    bool m_prospi_crowd_visibility_target_line_mode{false};
+    std::chrono::steady_clock::time_point m_prospi_crowd_visibility_hold_until{};
+    struct ProSpiCrowdCullingTriageBaseline {
+        bool is_int{true};
+        bool valid{false};
+        int int_value{0};
+        float float_value{0.0f};
+    };
+    std::unordered_map<std::wstring, ProSpiCrowdCullingTriageBaseline> m_prospi_crowd_culling_triage_baselines{};
+    std::chrono::steady_clock::time_point m_prospi_crowd_culling_triage_hold_until{};
+    std::chrono::steady_clock::time_point m_prospi_crowd_culling_triage_next_cycle{};
+    bool m_prospi_crowd_culling_triage_applied{false};
+    int32_t m_prospi_crowd_culling_triage_last_mode{0};
+    std::atomic<bool> m_prospi_crowd_culling_triage_active{false};
+    std::atomic<int32_t> m_prospi_crowd_culling_triage_mode_active{0};
+    std::atomic<int32_t> m_prospi_crowd_culling_triage_set_count{0};
+    std::atomic<int32_t> m_prospi_crowd_culling_triage_missing_count{0};
+    struct ProSpiSpectatorMeshBaseline {
+        sdk::UObject* mesh{nullptr};
+        bool bounds_scale_valid{false};
+        float bounds_scale{1.0f};
+        bool ld_max_draw_distance_valid{false};
+        float ld_max_draw_distance{0.0f};
+        bool cached_max_draw_distance_valid{false};
+        float cached_max_draw_distance{0.0f};
+        bool min_draw_distance_valid{false};
+        float min_draw_distance{0.0f};
+        bool never_distance_cull_valid{false};
+        bool never_distance_cull{false};
+        bool allow_cull_distance_volume_valid{false};
+        bool allow_cull_distance_volume{true};
+        bool visible_valid{false};
+        bool visible{true};
+        bool hidden_in_game_valid{false};
+        bool hidden_in_game{false};
+    };
+    ProSpiSpectatorMeshBaseline m_prospi_spectator_mesh_baseline{};
+    sdk::UObject* m_prospi_spectator_controller{nullptr};
+    sdk::UObject* m_prospi_spectator_mesh_component{nullptr};
+    sdk::UObject* m_prospi_spectator_line_mesh_intersection{nullptr};
+    std::vector<sdk::UObject*> m_prospi_spectator_materials{};
+    std::chrono::steady_clock::time_point m_prospi_spectator_mesh_next_scan{};
+    bool m_prospi_spectator_mesh_applied{false};
+    bool m_prospi_spectator_mesh_last_inflate_bounds{false};
+    bool m_prospi_spectator_mesh_last_disable_distance_cull{false};
+    bool m_prospi_spectator_mesh_last_force_visibility{false};
+    float m_prospi_spectator_mesh_last_bounds_scale{1.0f};
+    bool m_prospi_spectator_material_last_override{false};
+    float m_prospi_spectator_material_last_alpha{1.0f};
+    float m_prospi_spectator_material_last_fade{1.0f};
+    float m_prospi_spectator_material_last_lod{0.0f};
+    bool m_prospi_spectator_line_mesh_freeze_applied{false};
+    sdk::UObject* m_prospi_spectator_line_mesh_freeze_object{nullptr};
+    uint8_t m_prospi_spectator_line_mesh_original_active{0};
+    bool m_prospi_spectator_line_mesh_original_active_valid{false};
+    sdk::UObject* m_prospi_spectator_line_mesh_writable_object{nullptr};
+    bool m_prospi_spectator_line_mesh_writable_checked{false};
+    bool m_prospi_spectator_line_mesh_writable{false};
+    std::atomic<bool> m_prospi_spectator_mesh_refresh_requested{false};
+    std::atomic<bool> m_prospi_spectator_mesh_found{false};
+    std::atomic<bool> m_prospi_spectator_mesh_applied_status{false};
+    std::atomic<uintptr_t> m_prospi_spectator_controller_address{0};
+    std::atomic<uintptr_t> m_prospi_spectator_mesh_address{0};
+    std::atomic<uintptr_t> m_prospi_spectator_line_mesh_address{0};
+    std::atomic<int32_t> m_prospi_spectator_line_mesh_active_value{-1};
+    std::atomic<int32_t> m_prospi_spectator_mesh_assets_count{-1};
+    std::atomic<int32_t> m_prospi_spectator_mesh_materials_count{-1};
+    std::atomic<int32_t> m_prospi_spectator_mesh_motion_count{-1};
+    std::atomic<int32_t> m_prospi_spectator_mesh_spectator_mesh_present{-1};
+    std::atomic<int32_t> m_prospi_spectator_mesh_scan_count{0};
+    std::atomic<int32_t> m_prospi_spectator_mesh_write_count{0};
+    std::atomic<int32_t> m_prospi_spectator_mesh_missing_count{0};
+    std::atomic<int32_t> m_prospi_spectator_line_mesh_write_count{0};
+    std::atomic<int32_t> m_prospi_spectator_line_mesh_missing_count{0};
+    std::atomic<int32_t> m_prospi_spectator_material_param_attempt_count{0};
+    std::atomic<int32_t> m_prospi_spectator_material_param_write_count{0};
+    enum class ProSpiPlayerVisibilityMode : uint8_t {
+        OFF = 0,
+        BALANCED = 1,
+        AGGRESSIVE = 2,
+    };
+    struct ProSpiBalancedPlayerVisibilitySlot {
+        std::atomic<uintptr_t> state_address{0};
+        std::atomic<int64_t> last_relevant_ms{0};
+        std::atomic<uint64_t> generation{0};
+    };
+    static constexpr size_t PROSPI_BALANCED_PLAYER_SLOT_COUNT = 4;
+    static constexpr size_t PROSPI_RECENT_PLAYER_HISTORY_COUNT = 256;
+    static constexpr int64_t PROSPI_RECENT_PLAYER_HISTORY_MS = 3000;
+    static constexpr int64_t PROSPI_PREVIOUS_SHOT_HANDOFF_MS = 500;
+    static constexpr int64_t PROSPI_BALANCED_PLAYER_HOLD_MS = 8000;
+    static constexpr int64_t PROSPI_BALANCED_REPLACEMENT_GUARD_MS = 750;
+    static constexpr int64_t PROSPI_BALANCED_CAMERA_RESET_DEBOUNCE_MS = 350;
+    safetyhook::MidHook m_prospi_player_visibility_hook{};
+    bool m_prospi_player_visibility_hook_attempted{false};
+    std::atomic<bool> m_prospi_player_visibility_guard_enabled{false};
+    std::atomic<uint8_t> m_prospi_player_visibility_mode{
+        static_cast<uint8_t>(ProSpiPlayerVisibilityMode::OFF)
+    };
+    std::atomic<int32_t> m_prospi_player_visibility_hook_status{0};
+    std::atomic<uintptr_t> m_prospi_player_visibility_hook_address{0};
+    std::atomic<int64_t> m_prospi_player_visibility_now_ms{0};
+    std::atomic<uint64_t> m_prospi_player_visibility_balanced_generation{1};
+    std::array<ProSpiBalancedPlayerVisibilitySlot, PROSPI_BALANCED_PLAYER_SLOT_COUNT>
+        m_prospi_balanced_player_visibility_slots{};
+    uint64_t m_prospi_player_visibility_last_cut_generation{0};
+    int64_t m_prospi_player_visibility_last_cache_reset_ms{0};
+    ProSpiFieldMapSample m_prospi_player_visibility_last_camera_sample{};
+    std::atomic<uint64_t> m_prospi_player_visibility_call_count{0};
+    std::atomic<uint64_t> m_prospi_player_visibility_forced_count{0};
+    std::atomic<uint64_t> m_prospi_player_visibility_intentional_off_count{0};
+    std::atomic<uint64_t> m_prospi_player_visibility_rejected_count{0};
+    std::atomic<uint64_t> m_prospi_player_visibility_balanced_learned_count{0};
+    std::atomic<uint64_t> m_prospi_player_visibility_balanced_evicted_count{0};
+    std::atomic<uint64_t> m_prospi_player_visibility_balanced_expired_count{0};
+    std::atomic<uint64_t> m_prospi_player_visibility_balanced_skipped_count{0};
+    std::atomic<uint64_t> m_prospi_player_visibility_camera_reset_count{0};
+    std::atomic<uint64_t> m_prospi_player_visibility_debounced_reset_count{0};
+    std::atomic<int64_t> m_prospi_player_visibility_last_log_ms{0};
+    safetyhook::MidHook m_prospi_frame_pace_hook{};
+    safetyhook::MidHook m_prospi_frame_end_vsync_hook{};
+    safetyhook::MidHook m_prospi_max_tick_rate_hook{};
+    bool m_prospi_frame_pace_hook_attempted{false};
+    bool m_prospi_frame_end_vsync_hook_attempted{false};
+    bool m_prospi_max_tick_rate_hook_attempted{false};
+    sdk::IConsoleCommand* m_prospi_set_frame_pace_command{nullptr};
+    sdk::IConsoleVariable* m_prospi_sync_interval_cvar{nullptr};
+    sdk::IConsoleVariable* m_prospi_vsync_cvar{nullptr};
+    sdk::IConsoleVariable* m_prospi_max_fps_cvar{nullptr};
+    bool m_prospi_frame_pace_baselines_valid{false};
+    int32_t m_prospi_sync_interval_baseline{1};
+    int32_t m_prospi_vsync_baseline{0};
+    float m_prospi_max_fps_baseline{0.0f};
+    sdk::UGameEngine* m_prospi_frame_pace_engine{nullptr};
+    int32_t m_prospi_frame_pace_engine_index{-1};
+    int32_t m_prospi_frame_pace_engine_serial{0};
+    bool m_prospi_use_fixed_frame_rate_baseline{false};
+    float m_prospi_fixed_frame_rate_baseline{0.0f};
+    std::chrono::steady_clock::time_point m_prospi_frame_pace_next_check{};
+    std::atomic<bool> m_prospi_frame_pace_override_enabled{false};
+    std::atomic<bool> m_prospi_frame_pace_active{false};
+    std::atomic<int32_t> m_prospi_frame_pace_hook_status{0};
+    std::atomic<int32_t> m_prospi_frame_end_vsync_hook_status{0};
+    std::atomic<int32_t> m_prospi_max_tick_rate_hook_status{0};
+    std::atomic<int32_t> m_prospi_frame_pace_command_status{0};
+    std::atomic<uintptr_t> m_prospi_frame_pace_hook_address{0};
+    std::atomic<uintptr_t> m_prospi_frame_end_vsync_hook_address{0};
+    std::atomic<uintptr_t> m_prospi_max_tick_rate_hook_address{0};
+    std::atomic<int32_t> m_prospi_frame_pace_current_sync_interval{-1};
+    std::atomic<int32_t> m_prospi_frame_pace_current_vsync{-1};
+    std::atomic<float> m_prospi_frame_pace_current_max_fps{-1.0f};
+    std::atomic<int32_t> m_prospi_frame_pace_current_use_fixed_frame_rate{-1};
+    std::atomic<float> m_prospi_frame_pace_current_fixed_frame_rate{-1.0f};
+    std::atomic<int64_t> m_prospi_frame_pace_last_native_request{-1};
+    std::atomic<uint64_t> m_prospi_frame_pace_native_override_count{0};
+    std::atomic<int32_t> m_prospi_frame_end_vsync_last_native{-1};
+    std::atomic<uint64_t> m_prospi_frame_end_vsync_observed_count{0};
+    std::atomic<uint64_t> m_prospi_frame_end_vsync_bypass_count{0};
+    std::atomic<float> m_prospi_max_tick_rate_last_native{-1.0f};
+    std::atomic<uint64_t> m_prospi_max_tick_rate_observed_count{0};
+    std::atomic<uint64_t> m_prospi_max_tick_rate_override_count{0};
+    std::atomic<uint64_t> m_prospi_frame_pace_command_count{0};
+    std::atomic<uint64_t> m_prospi_fixed_frame_rate_override_count{0};
+    std::atomic<uint64_t> m_prospi_frame_pace_reassert_count{0};
+    safetyhook::MidHook m_prospi_spectator_world_cull_hook{};
+    bool m_prospi_spectator_world_cull_hook_attempted{false};
+    std::atomic<bool> m_prospi_spectator_world_cull_hooked{false};
+    std::atomic<bool> m_prospi_spectator_world_cull_layout_validated{false};
+    std::atomic<bool> m_prospi_spectator_world_cull_override_enabled{false};
+    std::atomic<bool> m_prospi_spectator_world_cull_expand_depth_enabled{false};
+    std::atomic<bool> m_prospi_spectator_world_cull_lod_override_enabled{false};
+    std::atomic<bool> m_prospi_spectator_world_cull_horizontal_cap_enabled{true};
+    std::atomic<bool> m_prospi_spectator_world_cull_vertical_cap_enabled{true};
+    std::atomic<uintptr_t> m_prospi_spectator_world_cull_hook_address{0};
+    std::atomic<uint64_t> m_prospi_spectator_world_cull_call_count{0};
+    std::atomic<uint64_t> m_prospi_spectator_world_cull_rejected_count{0};
+    std::atomic<float> m_prospi_spectator_world_cull_horizontal_scale{0.125f};
+    std::atomic<float> m_prospi_spectator_world_cull_vertical_scale{0.125f};
+    std::atomic<float> m_prospi_spectator_world_cull_horizontal_cap{0.5f};
+    std::atomic<float> m_prospi_spectator_world_cull_vertical_cap{0.5f};
+    std::atomic<float> m_prospi_spectator_world_cull_lod_slope_scale{1.0f};
+    std::atomic<float> m_prospi_spectator_world_cull_lod_bias_offset{0.0f};
+    std::atomic<float> m_prospi_spectator_world_cull_last_horizontal_before{0.0f};
+    std::atomic<float> m_prospi_spectator_world_cull_last_horizontal_after{0.0f};
+    std::atomic<float> m_prospi_spectator_world_cull_last_vertical_before{0.0f};
+    std::atomic<float> m_prospi_spectator_world_cull_last_vertical_after{0.0f};
+    std::atomic<float> m_prospi_spectator_world_cull_last_lod_slope_before{0.0f};
+    std::atomic<float> m_prospi_spectator_world_cull_last_lod_slope_after{0.0f};
+    std::atomic<float> m_prospi_spectator_world_cull_last_lod_bias_before{0.0f};
+    std::atomic<float> m_prospi_spectator_world_cull_last_lod_bias_after{0.0f};
+    std::atomic<int32_t> m_prospi_spectator_world_cull_last_num_instances{0};
+    std::atomic<int32_t> m_prospi_spectator_world_cull_last_num_views{0};
+    std::atomic<int32_t> m_prospi_spectator_world_cull_last_num_lods{0};
+    std::atomic<int64_t> m_prospi_spectator_world_cull_last_log_ms{0};
+    std::atomic<bool> m_prospi_camera_safety_active{false};
+    std::atomic<int32_t> m_prospi_camera_safety_zone{0};
+    std::atomic<float> m_prospi_camera_safety_min_z{0.0f};
+    std::atomic<float> m_prospi_camera_safety_predicted_z{0.0f};
+    std::atomic<float> m_prospi_camera_safety_up_offset{0.0f};
+    std::atomic<float> m_prospi_camera_safety_dolly_before{0.0f};
+    std::atomic<float> m_prospi_camera_safety_dolly_after{0.0f};
+    bool m_prospi_camera_safety_logged_active{false};
+    int32_t m_prospi_camera_safety_logged_zone{0};
+    std::atomic<bool> m_prospi_auto_camera_sequencer_active{false};
+    std::atomic<int32_t> m_prospi_auto_camera_sequencer_zone{0};
+    std::atomic<float> m_prospi_auto_camera_sequencer_dolly_before{0.0f};
+    std::atomic<float> m_prospi_auto_camera_sequencer_dolly_after{0.0f};
+    std::atomic<int32_t> m_prospi_auto_camera_sequencer_play_mode{0};
+    std::atomic<int32_t> m_prospi_auto_camera_sequencer_source{0};
+    std::atomic<float> m_prospi_auto_camera_sequencer_confidence{0.0f};
+    std::atomic<float> m_prospi_auto_camera_sequencer_fov_before{0.0f};
+    std::atomic<float> m_prospi_auto_camera_sequencer_fov_after{0.0f};
+    std::atomic<int32_t> m_prospi_calibrated_framing_status{0};
+    uevr::prospi::celebration::FocusContinuity m_prospi_celebration_focus;
+    uevr::prospi::trace::CameraProbe m_prospi_celebration_identity_probe;
+    bool m_prospi_auto_camera_sequencer_logged_active{false};
+    int32_t m_prospi_auto_camera_sequencer_logged_zone{0};
+    std::string m_prospi_auto_camera_sequencer_logged_camera_id{};
+    std::chrono::steady_clock::time_point m_prospi_auto_camera_sequencer_last_log_time{};
+    std::string m_prospi_auto_camera_sequencer_last_camera_id{};
+    int32_t m_prospi_auto_camera_sequencer_last_zone{0};
+    int32_t m_prospi_auto_camera_sequencer_last_play_mode{0};
+    float m_prospi_auto_camera_sequencer_last_dolly{0.0f};
+    bool m_prospi_auto_camera_sequencer_last_valid{false};
+    std::chrono::steady_clock::time_point m_prospi_auto_camera_sequencer_last_ball_follow_time{};
+    bool m_prospi_auto_camera_observation_valid{false};
+    glm::vec3 m_prospi_auto_camera_observation_location{};
+    glm::vec3 m_prospi_auto_camera_observation_rotation{};
+    float m_prospi_auto_camera_observation_raw_fov{0.0f};
+    std::chrono::steady_clock::time_point m_prospi_auto_camera_observation_time{};
+    bool m_prospi_cutscene_segment_active{false};
+    float m_prospi_cutscene_segment_focus_distance{0.0f};
+    int32_t m_prospi_cutscene_segment_safety_zone{0};
+    std::chrono::steady_clock::time_point m_prospi_cutscene_segment_started_at{};
+    std::mutex m_prospi_auto_camera_sequencer_mtx{};
+    std::string m_prospi_auto_camera_sequencer_match_label{};
+    std::mutex m_generic_camera_preset_mtx{};
+    std::unordered_map<std::string, GenericCameraPreset> m_generic_camera_presets{};
+    std::string m_current_game_camera_id{};
+    GenericCameraPreset m_active_generic_camera_preset{};
+    CameraCutState m_camera_cut_state{};
+
+    const ModToggle::Ptr m_show_fps{ ModToggle::create(generate_name("ShowFPSOverlay"), false) };
+    bool m_show_fps_state{ false };
+
+    const ModToggle::Ptr m_show_statistics{ ModToggle::create(generate_name("ShowStatsOverlay"), false) };
+    bool m_show_statistics_state{ false };
+
+    void update_statistics_overlay(sdk::UGameEngine* engine);
+    
+
+    int m_game_frame_count{};
+    int m_frame_count{};
+    int m_render_frame_count{};
+    int m_last_frame_count{-1};
+    int m_left_eye_frame_count{0};
+    int m_right_eye_frame_count{0};
+
+    bool m_submitted{false};
+
+    // == 1 or == 0
+    uint8_t m_left_eye_interval{0};
+    uint8_t m_right_eye_interval{1};
+
+    bool m_first_config_load{true};
+    bool m_first_submit{true};
+    bool m_is_d3d12{false};
+    bool m_hitch_diagnostics_enabled_last_frame{false};
+    bool m_backbuffer_inconsistency{false};
+    bool m_init_finished{false};
+    bool m_has_hw_scheduling{false}; // hardware accelerated GPU scheduling
+    std::atomic_bool m_spoofed_gamepad_connection{false};
+    bool m_aim_temp_disabled{false};
+    bool m_subnautica2_save_thumbnail_guard_done{false};
+    bool m_subnautica2_save_thumbnail_fallback_logged{false};
+    bool m_subnautica2_save_thumbnail_guard_warned_exhausted{false};
+    bool m_subnautica2_save_thumbnail_guard_found_candidate{false};
+    std::jthread m_native_openxr_async_wait_thread{};
+    std::mutex m_native_openxr_async_wait_mtx{};
+    std::condition_variable m_native_openxr_async_wait_cv{};
+    std::atomic_bool m_native_openxr_async_wait_inflight{false};
+    bool m_native_openxr_async_wait_pending{false};
+    uint32_t m_subnautica2_save_thumbnail_guard_full_sweeps{0};
+    uint32_t m_subnautica2_save_thumbnail_guard_patched_objects{0};
+    int32_t m_subnautica2_save_thumbnail_guard_cursor{0};
+    std::unordered_map<uintptr_t, bool> m_subnautica2_save_thumbnail_guard_class_cache{};
+    bool m_subnautica2_native_water_cvars_applied{false};
+    bool m_subnautica2_native_water_cvars_logged{false};
+    uint32_t m_subnautica2_native_water_cvar_attempts{0};
+    int32_t m_subnautica2_native_water_last_mode{-1};
+    std::chrono::steady_clock::time_point m_subnautica2_native_water_next_apply{};
+    std::unordered_map<std::wstring, int> m_subnautica2_native_water_previous_ints{};
+    bool m_1666amsterdam_native_postprocess_cvars_applied{false};
+    bool m_1666amsterdam_native_postprocess_cvars_logged{false};
+    uint32_t m_1666amsterdam_native_postprocess_cvar_attempts{0};
+    std::chrono::steady_clock::time_point m_1666amsterdam_native_postprocess_next_apply{};
+    std::unordered_map<std::wstring, int> m_1666amsterdam_native_postprocess_previous_ints{};
+    bool m_daysgone_gbuffer_cvar_applied{false};
+    bool m_daysgone_gbuffer_cvar_logged{false};
+    bool m_daysgone_gbuffer_previous_valid{false};
+    int m_daysgone_gbuffer_previous_value{1};
+    uint32_t m_daysgone_gbuffer_cvar_attempts{0};
+    std::chrono::steady_clock::time_point m_daysgone_gbuffer_next_apply{};
+    struct Everspace2CinematicBarState {
+        void* hud_class{nullptr};
+        void* processed_hud{nullptr};
+        int32_t processed_index{-1};
+        int32_t processed_serial{0};
+        int32_t scan_cursor{0};
+        uint32_t removed_instances{0};
+        bool was_enabled{false};
+        bool invalid_layout_logged{false};
+        std::chrono::steady_clock::time_point next_class_lookup{};
+        std::chrono::steady_clock::time_point next_scan{};
+    } m_everspace2_cinematic_bars{};
+
+    struct {
+        bool draw{false};
+        bool was_moving_left{false};
+        bool was_moving_right{false};
+        uint8_t page{0};
+        uint8_t num_pages{3};
+    } m_rt_modifier{};
+
+    bool m_disable_projection_matrix_override{ false };
+    bool m_disable_view_matrix_override{false};
+    bool m_disable_backbuffer_size_override{false};
+
+    uint32_t m_present_thread_id{};
+
+    struct XInputContext {
+        struct PadContext {
+            using Func = std::function<void(const XINPUT_STATE&, bool is_vr_controller)>;
+            std::optional<Func> update{};
+            XINPUT_STATE state{};
+        };
+
+        PadContext gamepad{};
+        PadContext vr_controller{};
+        
+        TracyLockable(std::recursive_mutex, mtx);
+
+        struct VRState {
+            class StickState {
+            public:
+                bool was_pressed(bool current_state) {
+                    if (!current_state) {
+                        is_pressed = false;
+                        return false;
+                    }
+
+                    const auto now = std::chrono::steady_clock::now();
+                    if (is_pressed && now - initial_press > std::chrono::milliseconds(500)) {
+                        return true;
+                    }
+
+                    if (!is_pressed) {
+                        initial_press = now;
+                        is_pressed = true;
+                        return true;
+                    }
+
+                    return false;
+                } 
+            
+            private:
+                std::chrono::steady_clock::time_point initial_press{};
+                bool is_pressed{false};
+            };
+
+            StickState left_stick_up{};
+            StickState left_stick_down{};
+            StickState left_stick_left{};
+            StickState left_stick_right{};
+        } vr;
+
+        void enqueue(bool is_vr_controller, const XINPUT_STATE& in_state, PadContext::Func func) {
+            ZoneScopedN(__FUNCTION__);
+
+            std::scoped_lock _{mtx};
+            if (is_vr_controller) {
+                vr_controller.update = func;
+                vr_controller.state = in_state;
+            } else {
+                gamepad.update = func;
+                gamepad.state = in_state;
+            }
+        }
+
+        void update() {
+            ZoneScopedN(__FUNCTION__);
+
+            std::scoped_lock _{mtx};
+
+            if (vr_controller.update) {
+                (*vr_controller.update)(vr_controller.state, true);
+                vr_controller.update.reset();
+            }
+
+            if (gamepad.update) {
+                (*gamepad.update)(gamepad.state, false);
+                gamepad.update.reset();
+            }
+        }
+
+        bool headlocked_begin_held{false};
+        bool menu_longpress_begin_held{false};
+        std::chrono::steady_clock::time_point headlocked_begin{};
+        std::chrono::steady_clock::time_point menu_longpress_begin{};
+    } m_xinput_context{};
+
+    static std::string actions_json;
+    static std::string binding_rift_json;
+    static std::string bindings_oculus_touch_json;
+    static std::string bindings_frame_controller_json;
+    static std::string binding_vive;
+    static std::string bindings_vive_controller;
+    static std::string bindings_knuckles;
+
+    const std::unordered_map<std::string, std::string> m_binding_files {
+        { "actions.json", actions_json },
+        { "binding_rift.json", binding_rift_json },
+        { "bindings_oculus_touch.json", bindings_oculus_touch_json },
+        { "bindings_frame_controller.json", bindings_frame_controller_json },
+        { "binding_vive.json", binding_vive },
+        { "bindings_vive_controller.json", bindings_vive_controller },
+        { "bindings_knuckles.json", bindings_knuckles }
+    };
+
+    friend class vrmod::D3D11Component;
+    friend class vrmod::D3D12Component;
+    friend class vrmod::OverlayComponent;
+    friend class FFakeStereoRenderingHook;
+};

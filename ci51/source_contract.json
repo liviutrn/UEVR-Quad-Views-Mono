@@ -1,0 +1,66 @@
+{
+  "src/mods/VR.cpp": {
+    "before_lf_sha256": "22e8351db23696275d5ea8b03d1b58b1a99ac7ce0ef4f778be8dcba13297dc0f",
+    "after_lf_sha256": "7f3397a873430c3598d9e5ff4f307cc31a4c510c28bbb4119f387c0abef4e8af"
+  },
+  "src/mods/VR.hpp": {
+    "before_lf_sha256": "ce9fdd2d6059401d6c09abe8b706a77bd54e1b08fe46de72c497042995a1a64e",
+    "after_lf_sha256": "52b5886103c5ceb950390898a6e3a6722d2a7534d8c3f4bbc5a12927c1c5a6b6"
+  },
+  "src/mods/vr/FFakeStereoRenderingHook.cpp": {
+    "before_lf_sha256": "c16d6f10aec364bc03d22909efb9a7eb7cbb8c9652d2111cbe42b7cbdef68e7b",
+    "after_lf_sha256": "e7204d31dfdd6c9e25bb5e9d7f900b5ebea923d9c4fbfa689d659506b586dbed"
+  },
+  "src/mods/vr/D3D12Component.cpp": {
+    "before_lf_sha256": "9d43139541618d34cd6f61f79678db11972c441efcb0170ec2b771fa765736b6",
+    "after_lf_sha256": "972bb39c0b8325ce0d21f54df689bb0d6b15363991d4538e212a5b139ea8486f"
+  },
+  "src/mods/vr/DuoViewD3D12.hpp": {
+    "before_lf_sha256": "5afbfe06b8c965fa77ef6d9474e1b100b7a9133a864e9cad2a35eb63760eea30",
+    "after_lf_sha256": "99fd7ce2e2b6da852a418ae16016c204d1c03dd7793a24ebf02582b7500aa8f2"
+  },
+  "src/mods/vr/DuoViewSurfaceD3D12.hpp": {
+    "before_lf_sha256": "6cfb93ef473ae23030063815b169f1c6bb2b1d9e701ee1241788f8fae79b64c3",
+    "after_lf_sha256": "d13e62680bd4be6d19cd0e935737aece46a3085880310b04b9e45d50d4c8f73c"
+  },
+  "src/mods/vr/DuoViewSurfaceReproject.hlsl": {
+    "before_lf_sha256": "03f96eca221601943d7440e5a79dc190471729837ec530596243130d7c06f01b",
+    "after_lf_sha256": "fac70cc1522181169bac03d5fe43973c8b0e5644667f9f9bf079c08c99ccabf8"
+  },
+  "src/mods/vr/DuoViewNgxGuide.hpp": {
+    "before_lf_sha256": null,
+    "after_lf_sha256": "6ed2fda5d5f6f9a5bb1aa86b2c427ba9f46730f2e83b58053199fe521305bbe7"
+  },
+  "src/mods/vr/d3d12/DuoViewNgxObserver.hpp": {
+    "before_lf_sha256": "11ee7da34ee13088606ef49c9d444afda4531502a47a27c6086c88acfd493320",
+    "after_lf_sha256": "6ef362129ee3a72d98bcb254fa975be0e29539962cfe2014804c0a254d6b1b5c"
+  },
+  "src/mods/vr/d3d12/StockDibrDepth.hpp": {
+    "before_lf_sha256": "d7a1e99767a793da1480593afbc78c3a33a3c5722d7547f56a0e94ec9e73b2cb",
+    "after_lf_sha256": "f419d3bf2fc523143f84332e0703a3d9545fc07ce7bfa5a372b0f8e891605cfe"
+  },
+  "src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp": {
+    "before_lf_sha256": "63a7f59e61658fcc0bc76dc9586cd9563f05a303a749f5ec2bbbd4fa7435acb1",
+    "after_lf_sha256": "3e843785331125b6072f747a9689d9b290c0d9e523d9c3ad92a951ee07edb482"
+  },
+  "src/mods/vr/DuoViewComposite.hlsl": {
+    "before_lf_sha256": null,
+    "after_lf_sha256": "62647bb8bd2bb1a7e90ed23825a8b0ade1cca0c2b6b341fe064f06fc377eab8a"
+  },
+  "src/mods/vr/DuoViewCompositeRaster.hlsl": {
+    "before_lf_sha256": null,
+    "after_lf_sha256": "4a39561b74c87fe4334333e7e62b019fc916f6a277d5fa76bfd79ea8c307c4b3"
+  },
+  "src/mods/vr/DuoViewNativeCompositeRaster.hlsl": {
+    "before_lf_sha256": null,
+    "after_lf_sha256": "fce1d9a4bb38bef628e255bead05f10ca213a0f3e928d94502bde7551ac5de90"
+  },
+  "src/mods/vr/DuoViewGlamaryeFovea.hlsl": {
+    "before_lf_sha256": null,
+    "after_lf_sha256": "0b9b15bdfbac000e1906dd7cdb169586465301513c945699b145e1837780d426"
+  },
+  "src/mods/vr/DuoViewDepthDiagnosticRaster.hlsl": {
+    "before_lf_sha256": null,
+    "after_lf_sha256": "20dffae8abe1ca1cb62edc592a31ccd4e252b11f5be09c028b7d56dd83c5431c"
+  }
+}
