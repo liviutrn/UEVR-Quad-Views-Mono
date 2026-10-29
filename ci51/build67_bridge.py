@@ -38,8 +38,8 @@ class ProducerBridge final {
 public:
     void publish(const ProducerTicket& ticket) {
         std::lock_guard guard(mutex_);
-        // Reject mixed/incomplete owners and equal-size ambiguous roles.
-        current_=ticket && ticket.roles==3u &&
+        // Reject out-of-range owners and equal-size ambiguous roles; single-role\n        // RHI handoffs are valid. Two matching roles are required only at pairing.
+        current_=ticket && (ticket.roles & ~3u)==0u &&
             (ticket.outputs[0]!=ticket.outputs[2] || ticket.outputs[1]!=ticket.outputs[3])
             ? ticket : ProducerTicket{};
         timestamp_=Clock::now();
