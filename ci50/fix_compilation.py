@@ -81,3 +81,20 @@ replace("src/mods/vr/DuoViewGeometry.hpp",
     const auto pw = (std::min)(round_size(output_width * peripheral_scale),fw-1u);
     const auto ph = (std::min)(round_size(output_height * peripheral_scale),fh-1u);""")
 print("CI50: actual producer periphery is strictly smaller on both axes after rounding")
+
+# Match Cheeky's successful post-Evaluate NGX observation point: snapshot
+# input guides only after the game/native DLSS SR evaluation returned success.
+replace("src/mods/vr/d3d12/DuoViewNgxObserver.hpp",
+    """        const bool outermost=(interception_depth++==0);
+        if(outermost)self.inspect(cmd,handle,p);
+        // Always call the original native DLSS implementation.
+        const auto result=self.hooks[N].call<uint32_t>(cmd,handle,p,callback);
+        --interception_depth;
+        return result;""",
+    """        const bool outermost=(interception_depth++==0);
+        // Forward native NGX first, following Cheeky's guide publication point.
+        const auto result=self.hooks[N].call<uint32_t>(cmd,handle,p,callback);
+        if(outermost && succeeded(result))self.inspect(cmd,handle,p);
+        --interception_depth;
+        return result;""")
+print("CI50: Cheeky-style successful NGX post-Evaluate input snapshot")
