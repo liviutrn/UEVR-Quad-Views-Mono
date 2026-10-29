@@ -447,6 +447,15 @@ jobs:
           ./ci51-baseline-gpu-tests.exe *> evidence/ci51-baseline-gpu-tests.log
           $code=$LASTEXITCODE; Get-Content evidence/ci51-baseline-gpu-tests.log
           if ($code -ne 0) { throw 'CI51 baseline WARP capture/stereo regression failed' }
+          # Exercise ALL original R5 DSV resource/queue/fence invariants BEFORE
+          # the intentional CI69 NGX-only refactor retires their source path.
+          # This preserves hard evidence of baseline safety without requiring
+          # removed DSV selection to exist in the released backend.
+          $env:UEVR_DUOVIEW_NGX_DEPTH='0'
+          python workspace/stock_dibr/run_tests.py backend r5_tests *> evidence/r5-baseline-tests.log
+          $code=$LASTEXITCODE; Get-Content evidence/r5-baseline-tests.log | Select-Object -Last 100
+          if ($code -ne 0) { throw "Original R5 baseline WARP/policy regression ($code)" }
+          Remove-Item Env:UEVR_DUOVIEW_NGX_DEPTH -ErrorAction SilentlyContinue
           python workspace/ci69/apply.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI69 NGX-only source patch failed' }
           python workspace/ci51/embed_shaders.py backend *> evidence/ci51-shader-build.log
@@ -494,15 +503,10 @@ jobs:
           }
           & $fxc.FullName /nologo /T cs_5_0 /E CSBackwardTargetDepth /Fo evidence/hybrid-shaders/CSBackwardTargetDepth.cso workspace/duoview/stereo/synthesis_v1/StereoBackwardGather.hlsl
           if ($LASTEXITCODE -ne 0) { throw 'Backward shader failed' }
-      - name: Verify original R5 depth, GPU, queue and transaction fixtures
-        shell: pwsh
-        run: |
-          # These original R5 tests intentionally validate the legacy DSV depth path.
-          # Disable CI50 NGX-first mode for this fixture only; production remains NGX-first.
-          $env:UEVR_DUOVIEW_NGX_DEPTH='0'
-          python workspace/stock_dibr/run_tests.py backend r5_tests *> evidence/r5-tests.log
-          $code=$LASTEXITCODE; Get-Content evidence/r5-tests.log | Select-Object -Last 100
-          if ($code -ne 0) { throw "R5 WARP/policy regression ($code)" }
+      # CI69 removes legacy DSV-source selection. The original R5 DSV
+      # resource/queue/fence tests run against the preserved pre-CI69
+      # production baseline above. CI69 post-refactor DX12 depth/readback
+      # and stereo behavior is tested by gpu_manual_tests.cpp.
       - name: Verify pinned production geometry and pair-state contracts
         shell: pwsh
         run: |
