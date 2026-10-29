@@ -25,7 +25,7 @@
   },
   "src/mods/vr/DuoViewSurfaceReproject.hlsl": {
     "before_lf_sha256": "03f96eca221601943d7440e5a79dc190471729837ec530596243130d7c06f01b",
-    "after_lf_sha256": "19dd10e0ae8a205d0ff8e563bb315b5980bb18a0bb54975bdab61798735ce176"
+    "after_lf_sha256": "b3a208c4dffd0f645d3465dc00450fd0defb89d3051cf12e58ea3f46f0d79eaa"
   },
   "src/mods/vr/DuoViewNgxGuide.hpp": {
     "before_lf_sha256": null,

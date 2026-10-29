@@ -120,6 +120,10 @@ struct BackwardSurfaceOutput {
     float4 color : SV_TARGET0;
     float depth : SV_DEPTH;
 };
+float DuoLeftVisibilityZ(int2 pixel) {
+    if(any(pixel<ActiveDepthMin(LeftDepthRect))||any(pixel>ActiveDepthMax(LeftDepthRect)))return -1;
+    return LeftEyeForwardZ(LeftSourceDepth.Load(int3(pixel,0)));
+}
 BackwardSurfaceOutput PSBackwardSurface(VertexOut i) {
     BackwardSurfaceOutput o=(BackwardSurfaceOutput)0;
     o.color=0;o.depth=(MeshConfig.w&4u)!=0 ? 0.f : 1.f;
@@ -127,24 +131,23 @@ BackwardSurfaceOutput PSBackwardSurface(VertexOut i) {
     const float2 coordinate=RightDepthRect.xy+(targetUV+MeshJitter.zw)*RightDepthRect.zw-0.5f;
     const int2 origin=int2(floor(coordinate));
     const float2 fraction=frac(coordinate);
-    float4 depths=0;float nearest=1.e30f,farthest=0,nearestDepth=o.depth;
-    bool allValid=true;
-    [unroll] for(uint k=0;k<4;++k) {
-        const int2 p=origin+int2(k&1u,k>>1u);
-        if(any(p<ActiveDepthMin(RightDepthRect))||any(p>ActiveDepthMax(RightDepthRect))) {
-            allValid=false;depths[k]=o.depth;continue;
-        }
-        depths[k]=RightSourceDepth.Load(int3(p,0));
-        const float z=RightEyeForwardZ(depths[k]);
-        if(z<=0){allValid=false;continue;}
-        if(z<nearest){nearest=z;nearestDepth=depths[k];}
-        farthest=max(farthest,z);
-    }
-    if(farthest>0)o.depth=(nearestDepth-DepthViewportRanges.z)/(DepthViewportRanges.w-DepthViewportRanges.z);
-    // Do not create geometry by linearly averaging foreground and background.
-    // Fine source foreground can still win the subsequent depth-tested pass.
-    if(!allValid || farthest-nearest>MeshQuality.x+MeshQuality.y*nearest)return o;
-    const float d=lerp(lerp(depths[0],depths[1],fraction.x),lerp(depths[2],depths[3],fraction.x),fraction.y);
+    if(any(origin<ActiveDepthMin(RightDepthRect)) || any(origin+int2(1,1)>ActiveDepthMax(RightDepthRect)))return o;
+    // Explicit lanes avoid FXC's dynamically-indexed l-value/unroll limitations.
+    const float4 depths=float4(RightSourceDepth.Load(int3(origin,0)),
+        RightSourceDepth.Load(int3(origin+int2(1,0),0)),
+        RightSourceDepth.Load(int3(origin+int2(0,1),0)),
+        RightSourceDepth.Load(int3(origin+int2(1,1),0)));
+    const float4 zs=float4(RightEyeForwardZ(depths.x),RightEyeForwardZ(depths.y),
+        RightEyeForwardZ(depths.z),RightEyeForwardZ(depths.w));
+    const float4 validZ=float4(zs.x>0?zs.x:1.e30f,zs.y>0?zs.y:1.e30f,
+        zs.z>0?zs.z:1.e30f,zs.w>0?zs.w:1.e30f);
+    const float nearest=min(min(validZ.x,validZ.y),min(validZ.z,validZ.w));
+    const float farthest=max(max(zs.x,zs.y),max(zs.z,zs.w));
+    const float nearestDepth=validZ.x==nearest?depths.x:validZ.y==nearest?depths.y:validZ.z==nearest?depths.z:depths.w;
+    if(nearest<1.e29f)o.depth=(nearestDepth-DepthViewportRanges.z)/(DepthViewportRanges.w-DepthViewportRanges.z);
+    // Never average foreground and background into a non-existent surface.
+    if(any(zs<=0) || farthest-nearest>MeshQuality.x+MeshQuality.y*nearest)return o;
+    const float d=lerp(lerp(depths.x,depths.y,fraction.x),lerp(depths.z,depths.w,fraction.x),fraction.y);
     const float nd=(d-DepthViewportRanges.z)/(DepthViewportRanges.w-DepthViewportRanges.z);
     o.depth=nd;
     const float4 h=mul(TargetEyeFromClip,float4(2*targetUV.x-1,1-2*targetUV.y,nd,1));
@@ -160,21 +163,17 @@ BackwardSurfaceOutput PSBackwardSurface(VertexOut i) {
     // Conservative nearest-surface validation prevents a foreground color tap
     // from leaking onto the target background at character/weapon silhouettes.
     const float radius=MeshQuality.z;
-    float closest=1.e30f;
-    [unroll] for(uint tap=0;tap<8;++tap) {
-        // Always validate the real bilinear color footprint before expanding
-        // the guard. Expanded corners alone can miss a one-texel foreground.
-        int2 p=0;
-        if(tap<4)p=int2(floor(sourceCoord))+int2(tap&1u,tap>>1u);
-        else {
-            const float2 offset=float2((tap&1u)!=0?radius:-radius,(tap&2u)!=0?radius:-radius);
-            p=int2(floor(sourceCoord+offset+.5f));
-        }
-        if(any(p<ActiveDepthMin(LeftDepthRect))||any(p>ActiveDepthMax(LeftDepthRect)))return o;
-        const float z=LeftEyeForwardZ(LeftSourceDepth.Load(int3(p,0)));
-        if(z<=0)return o;
-        closest=min(closest,z);
-    }
+    const int2 center=int2(floor(sourceCoord));
+    const float4 central=float4(DuoLeftVisibilityZ(center),DuoLeftVisibilityZ(center+int2(1,0)),
+        DuoLeftVisibilityZ(center+int2(0,1)),DuoLeftVisibilityZ(center+int2(1,1)));
+    const float4 expanded=float4(
+        DuoLeftVisibilityZ(int2(floor(sourceCoord+float2(-radius,-radius)+.5f))),
+        DuoLeftVisibilityZ(int2(floor(sourceCoord+float2(radius,-radius)+.5f))),
+        DuoLeftVisibilityZ(int2(floor(sourceCoord+float2(-radius,radius)+.5f))),
+        DuoLeftVisibilityZ(int2(floor(sourceCoord+float2(radius,radius)+.5f))));
+    if(any(central<=0) || any(expanded<=0))return o;
+    const float closest=min(min(min(central.x,central.y),min(central.z,central.w)),
+        min(min(expanded.x,expanded.y),min(expanded.z,expanded.w)));
     if(abs(sourceZ-closest)>MeshQuality.x+MeshQuality.y*sourceZ)return o;
     o.color=float4(LeftNative(CropUv.xy+sourceUV*(CropUv.zw-CropUv.xy)).rgb,1);
     return o;
