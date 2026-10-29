@@ -419,6 +419,9 @@ jobs:
       - name: Verify original R5 depth, GPU, queue and transaction fixtures
         shell: pwsh
         run: |
+          # These original R5 tests intentionally validate the legacy DSV depth path.
+          # Disable CI50 NGX-first mode for this fixture only; production remains NGX-first.
+          $env:UEVR_DUOVIEW_NGX_DEPTH='0'
           python workspace/stock_dibr/run_tests.py backend r5_tests *> evidence/r5-tests.log
           $code=$LASTEXITCODE; Get-Content evidence/r5-tests.log | Select-Object -Last 100
           if ($code -ne 0) { throw "R5 WARP/policy regression ($code)" }
