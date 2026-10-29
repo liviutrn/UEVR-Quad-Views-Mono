@@ -437,6 +437,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI51 final source contract failed' }
           python workspace/ci51/build67_bridge.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Build67 source patch failed' }
+          # Generate original CI51 production shader bytecode before baseline GPU compile.
+          python workspace/ci51/embed_shaders.py backend *> evidence/ci51-baseline-shaders.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci51-baseline-shaders.log
+          if ($code -ne 0) { throw 'CI51 original shaders unavailable for baseline WARP fixture' }
           # Preserve original CI51/67 GPU regression before intentional manual-pair refactor.
           cl /nologo /std:c++20 /EHsc /W4 /Ibackend/src workspace/ci51/gpu_tests.cpp /Fe:ci51-baseline-gpu-tests.exe /link d3d12.lib dxgi.lib d3dcompiler.lib
           if ($LASTEXITCODE -ne 0) { throw 'CI51 baseline WARP fixture compile failed' }
