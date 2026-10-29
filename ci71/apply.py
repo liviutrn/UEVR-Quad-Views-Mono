@@ -27,6 +27,26 @@ def run(root):
  edit(sh,"        if(!MeshPoint(base+offsets[tri+k],points[k],uvs[k],ws[k]))return o;",
  """        if(!MeshPoint(clamp(base+offsets[tri+k],ActiveDepthMin(MeshDepthRect()),
                     ActiveDepthMax(MeshDepthRect())),points[k],uvs[k],ws[k]))return o;""")
+ edit(sh,"    const float nearest=min(points[0].z,min(points[1].z,points[2].z));",
+ """    if(stride>1u && MeshConfig.z!=0u) {
+        // Critical silhouette guard: stride-2 geometry must not miss a
+        // one-texel fine foreground. Inspect cell edge midpoints + centre
+        // BEFORE forwarding LEFT geometry into RIGHT eye. We may discard
+        // uncertain triangles but must never stretch across real depth.
+        float guardNear=min(points[0].z,min(points[1].z,points[2].z));
+        float guardFar=max(points[0].z,max(points[1].z,points[2].z));
+        const int2 mids[5]={int2(1,0),int2(0,1),int2(1,1),
+                             int2(2,1),int2(1,2)};
+        [unroll] for(int p=0;p<5;++p) {
+            const int2 at=clamp(base+mids[p],ActiveDepthMin(MeshDepthRect()),
+                                ActiveDepthMax(MeshDepthRect()));
+            const float z=LeftEyeForwardZ(MeshDeviceDepth(at));
+            if(z<=0.f)return o;
+            guardNear=min(guardNear,z);guardFar=max(guardFar,z);
+        }
+        if(guardFar-guardNear>MeshEdge.x+MeshEdge.y*guardNear)return o;
+    }
+    const float nearest=min(points[0].z,min(points[1].z,points[2].z));""")
  edit(sh,"    bool allOcclude=true;\n    [unroll] for(int y=0;y<2;++y)",
          "    bool allOcclude=true;\n    uint targetFarther=0;\n    [unroll] for(int y=0;y<2;++y)")
  edit(sh,"        if(hybrid && occludes)return true;\n        allOcclude=allOcclude && occludes;\n    }\n    return !hybrid && allOcclude;",
