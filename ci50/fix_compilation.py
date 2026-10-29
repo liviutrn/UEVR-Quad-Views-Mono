@@ -139,3 +139,34 @@ replace("src/mods/VR.cpp",
     '"Enable DSV/RDG capture below, then leave and re-enter rendering method ID6 to activate the observer. Stereo output depends on the mode selected below; successful capture does not validate matching eye/stage."',
     '"DLSS capture is automatically enabled in STALKER 2 DuoView stereo. Use the synthesized-stereo checkbox below; R5/DSV diagnostics are optional. Correct image correspondence must still be checked in a headset."')
 print("CI50: NGX auto capture & one-switch stereo UI independent of R5 manual opt-in")
+
+# Never label a partial collection as a completed six-input DLSS capture.
+# The request stays pending until the selected pair's immutable producer
+# snapshots include both depths, both colors, and both motion textures.
+replace("src/mods/vr/d3d12/StockDibrDepth.hpp",
+    """        if(!enabled || !snapshot_armed) return result;
+        result.reserve(Capacity);""",
+    """        if(!enabled || !snapshot_armed) return result;
+        if(ngx_depth_requested() && duoview_source_sizes[0] &&
+           (!selected_left_serial || !selected_right_serial)) return result;
+        result.reserve(Capacity);""")
+replace("src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp",
+    """        return left_ready && right_ready && (!require_complete_snapshot_ || depth_ready);""",
+    """        if(require_complete_snapshot_) {
+            const bool any_ngx=std::any_of(images_.begin(),images_.end(),
+                [](const Image& im){return im.label.starts_with("ngx_");});
+            if(any_ngx) {
+                constexpr const char* required[]={
+                    "ngx_left_fovea_depth", "ngx_left_fovea_color", "ngx_left_fovea_motion",
+                    "ngx_right_periphery_depth", "ngx_right_periphery_color", "ngx_right_periphery_motion"};
+                for(const auto* label:required) {
+                    if(std::none_of(images_.begin(),images_.end(),
+                        [&](const Image& im){return im.label==label;})) {
+                        excluded_.push_back(std::string("Incomplete NGX six-input capture: ")+label);
+                        return false;
+                    }
+                }
+            }
+        }
+        return left_ready && right_ready && (!require_complete_snapshot_ || depth_ready);""")
+print("CI50: six-input diagnostics publish atomically or retain pending capture request")
