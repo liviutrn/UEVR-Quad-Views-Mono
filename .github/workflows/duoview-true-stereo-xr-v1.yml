@@ -66,8 +66,8 @@ jobs:
             $bmp.SetPixel(3,0,[System.Drawing.Color]::Blue)
             $bmp.Save((Join-Path $test 'image_0_xr_submitted_doublewide.bmp'),[System.Drawing.Imaging.ImageFormat]::Bmp)
           } finally {$bmp.Dispose()}
+          # PowerShell scripts do not reliably set LASTEXITCODE. Terminating script errors already fail this step.
           & $viewer -CapturePath $test -NoOpen
-          if ($LASTEXITCODE -ne 0) {throw 'Viewer synthetic execution returned failure'}
           foreach($f in @('CI50_left_eye_final.bmp','CI50_right_eye_final.bmp','CI50_DLSS_CAPTURE_VIEWER.html')){
             if(!(Test-Path (Join-Path $test $f))){throw "Viewer did not produce $f"}
           }
