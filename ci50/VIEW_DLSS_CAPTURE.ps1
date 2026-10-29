@@ -1,4 +1,4 @@
-param([string]$CapturePath = "")
+param([string]$CapturePath = "", [switch]$NoOpen)
 $ErrorActionPreference = "Stop"
 $root = Join-Path $env:TEMP "UEVR_DuoViewCaptures"
 if (-not $CapturePath) {
@@ -57,7 +57,7 @@ li{margin:4px 0}details{margin:15px 0}</style></head><body>
 $target = Join-Path $CapturePath "CI50_DLSS_CAPTURE_VIEWER.html"
 [System.IO.File]::WriteAllText($target, $html, [System.Text.Encoding]::UTF8)
 Write-Host "DuoView capture viewer created: $target"
-Start-Process $target
+if (-not $NoOpen) { Start-Process $target }
  } | Select-Object -First 1
 if ($xr) {
     try {
