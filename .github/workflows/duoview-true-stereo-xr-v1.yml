@@ -20,6 +20,7 @@ on:
       - experiment/ci69-ngx-manual-only-20261029
     paths:
       - ci51/**
+      - ci69/**
       - ci48/payload.b64
       - ci49/payload.b64
       - ci50/upgrade_p1.b64
