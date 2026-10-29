@@ -1,5 +1,5 @@
-name: DuoView CI70 independent DLSS diagnostic preview Windows build
-run-name: DuoView CI70 NGX single-source debug - Windows build (#${{ github.run_number }})
+name: DuoView CI71 left-anchored mode 5 edge-stability Windows build
+run-name: DuoView CI71 LEFT anchored depth edge stabilization - Windows build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -19,10 +19,12 @@ on:
       - experiment/ci67-ngx-cross-thread-20261029
       - experiment/ci69-ngx-manual-only-20261029
       - experiment/ci70-safe-ngx-single-preview-20261029
+      - experiment/ci71-left-anchor-edge-stability-20261029
     paths:
       - ci51/**
       - ci69/**
       - ci70/**
+      - ci71/**
       - ci48/payload.b64
       - ci49/payload.b64
       - ci50/upgrade_p1.b64
@@ -462,6 +464,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI69 NGX-only source patch failed' }
           python workspace/ci70/apply.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI70 independent NGX preview source patch failed' }
+          python workspace/ci71/apply.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI71 left-anchored stereo source patch failed' }
           python workspace/ci51/embed_shaders.py backend *> evidence/ci51-shader-build.log
           $code=$LASTEXITCODE; Get-Content evidence/ci51-shader-build.log
           if ($code -ne 0) { throw 'CI51 final production shader compile failed' }
@@ -485,6 +489,16 @@ jobs:
           ./ci70-gpu-preview-tests.exe *> evidence/ci70-gpu-preview-tests.log
           $code=$LASTEXITCODE; Get-Content evidence/ci70-gpu-preview-tests.log
           if ($code -ne 0) { throw 'CI70 independent LEFT/RIGHT NGX preview WARP regression failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src workspace/ci71/metric_depth_tests.cpp /Fe:ci71-metric-depth-tests.exe
+          if ($LASTEXITCODE -ne 0) { throw 'CI71 physical depth metric fixture compilation failed' }
+          ./ci71-metric-depth-tests.exe *> evidence/ci71-metric-depth-tests.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci71-metric-depth-tests.log
+          if ($code -ne 0) { throw 'CI71 physical depth geometry contract failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /Ibackend/src workspace/ci71/gpu_left_anchor_tests.cpp /Fe:ci71-gpu-left-anchor-tests.exe /link d3d12.lib dxgi.lib d3dcompiler.lib
+          if ($LASTEXITCODE -ne 0) { throw 'CI71 left-anchored mode 5 GPU WARP compile failed' }
+          ./ci71-gpu-left-anchor-tests.exe *> evidence/ci71-gpu-left-anchor-tests.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci71-gpu-left-anchor-tests.log
+          if ($code -ne 0) { throw 'CI71 left-anchored mode 5 GPU WARP test failed' }
       - name: Compile stereo synthesis and hybrid z-owner-forward-fuse shaders
         shell: pwsh
         run: |
@@ -600,7 +614,7 @@ jobs:
 
           Copy-Item workspace/ci51/README_TEST_BUILD.md package/READ_FIRST.txt
           @'
-          DuoView CI70 — independent DLSS previews; unsafe stereo opt-in, diagnostic release candidate
+          DuoView CI71 — left-anchored mode 5 edge-stability, physical depth validation, experimental
           Manual LEFT/RIGHT feature pinning and independent NGX depth-gallery capture. DSV copying disabled for DuoView.
           Not headset-validated; the captured depth still requires matched eye identity.
           Check DLSS source list, capture gallery BMPs, pin two distinct NGX features, then use mode 4 first.
@@ -643,27 +657,27 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'TRUE STEREO XR V1') { throw 'Missing or stale actual stereo headset instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-CI70-Experimental-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-CI71-Experimental-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
           Copy-Item package/final-generated-source-sha256.json evidence/final-public-source/
           Copy-Item workspace/ci51/README_TEST_BUILD.md evidence/final-public-source/
-          $sourceZip="UEVR-DuoView-CI70-Public-Source-${{ github.run_number }}.zip"
+          $sourceZip="UEVR-DuoView-CI71-Public-Source-${{ github.run_number }}.zip"
           Compress-Archive -Path evidence/final-public-source/* -DestinationPath $sourceZip -Force
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI70-Experimental-${{ github.run_number }}
+          name: UEVR-DuoView-CI71-Experimental-${{ github.run_number }}
           path: |
-            UEVR-DuoView-CI70-Experimental-*.zip
-            UEVR-DuoView-CI70-Experimental-*.zip.sha256
+            UEVR-DuoView-CI71-Experimental-*.zip
+            UEVR-DuoView-CI71-Experimental-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI70-Public-Source-${{ github.run_number }}
-          path: UEVR-DuoView-CI70-Public-Source-*.zip
+          name: UEVR-DuoView-CI71-Public-Source-${{ github.run_number }}
+          path: UEVR-DuoView-CI71-Public-Source-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
