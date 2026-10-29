@@ -118,3 +118,27 @@ replace("src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp",
     "    static float decode_depth(const uint8_t* p,DXGI_FORMAT fmt) {\n",
     "    static float decode_depth(const uint8_t* p,DXGI_FORMAT fmt) {\n        if(fmt==DXGI_FORMAT_R16_FLOAT) {\n            uint16_t half{};std::memcpy(&half,p,2);return half_to_float(half);\n        }\n")
 print("CI50: accepts and visualizes real DLSS float16/float32 depth planes")
+
+# Keep the one-switch user experience: ID6 + stereo automatically enables
+# the stock capture transaction owner and NGX observer. No prerequisite
+# manual R5 toggle or leaving/re-entering the rendering mode.
+replace("src/mods/vr/D3D12Component.cpp",
+    """        m_stock_dibr_scope = is_stalker2_current_game() &&
+            (vr->is_dibr_depth_trace_requested() || vr->is_duoview_renderer_active()) &&
+            vr->is_dibr_ue5_rdg_depth_capture_enabled();""",
+    """        const bool auto_ngx_stereo = vr->is_duoview_renderer_active() &&
+            m_duo_stereo_mode.load(std::memory_order_acquire)>=4u &&
+            stock_dibr::ngx::Observer::requested();
+        m_stock_dibr_scope = is_stalker2_current_game() &&
+            (vr->is_dibr_depth_trace_requested() || vr->is_duoview_renderer_active()) &&
+            (vr->is_dibr_ue5_rdg_depth_capture_enabled() || auto_ngx_stereo);""")
+replace("src/mods/VR.cpp",
+    'm_dibr_ue5_rdg_depth_capture->draw("R5 DSV/RDG capture in DuoView (experimental, opt-in)");',
+    'm_dibr_ue5_rdg_depth_capture->draw("Advanced R5/DSV capture diagnostics (optional)");')
+replace("src/mods/VR.cpp",
+    "if (m_dibr_ue5_rdg_depth_capture->value()) {",
+    "if (is_using_duoview_mono() || requested_rendering_method() == RenderingMethod::DUOVIEW_MONO || m_dibr_ue5_rdg_depth_capture->value()) {")
+replace("src/mods/VR.cpp",
+    '"Enable DSV/RDG capture below, then leave and re-enter rendering method ID6 to activate the observer. Stereo output depends on the mode selected below; successful capture does not validate matching eye/stage."',
+    '"DLSS capture is automatically enabled in STALKER 2 DuoView stereo. Use the synthesized-stereo checkbox below; R5/DSV diagnostics are optional. Correct image correspondence must still be checked in a headset."')
+print("CI50: NGX auto capture & one-switch stereo UI independent of R5 manual opt-in")
