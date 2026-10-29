@@ -1,6 +1,8 @@
 #include "mods/vr/DuoViewNgxGuide.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <thread>
+#include <chrono>
 #include <vector>
 using namespace uevr::duoview::ngx;
 void need(bool v,const char* why){if(!v)throw std::runtime_error(why);}
@@ -30,6 +32,20 @@ int main()try {
  invalid=planes;invalid[0].plane=Plane::motion;need(!complete_snapshot(invalid,100,200,42,3),"duplicate plane");
  auto wrong_role=b;wrong_role.output_width=800;wrong_role.output_height=600;need(!same_pair(a,wrong_role,42,3),"wrong role output contract");
  a.jitter_x=.5f;a.jitter_y=-.25f;const auto j=a.jitter_uv();need(j[0]==.5f/400.f && j[1]==-.25f/300.f,"jitter uses input not output pixels");
+ // Build67: observe a complete RHI source pair on a distinct NGX CPU thread.
+ auto& bridge=producer_bridge();bridge.reset();
+ need(!bridge.resolve(800,600),"no ticket must reject");
+ std::thread producer([&]{bridge.publish(t);});producer.join();
+ ProducerTicket transfer{};
+ std::thread consumer([&]{transfer=bridge.resolve(800,600);});consumer.join();
+ need(transfer==t,"cross-thread producer transfer failed");
+ need(!bridge.resolve(799,600),"unrelated NGX output not accepted");
+ need(!bridge.resolve(800,600,std::chrono::milliseconds{-1}),"stale interval accepted");
+ bridge.publish(ambiguous);need(!bridge.resolve(800,600),"ambiguous owner must invalidate");
+ bridge.publish(t);bridge.publish({});need(!bridge.resolve(320,240),"empty handoff must clear owner");
+ const auto counters=bridge.counters();
+ need(counters.published>=2 && counters.empty>=2 && counters.resolved>=1 &&
+      counters.stale>=1 && counters.shape_rejected>=1,"bridge counters");
  std::cout<<"PASS: exact roles, ambiguity, late injection, Create/Release reuse, RR classification, packet/frame/generation pairing, atomic0..6 planes and jitter units\n";
  return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
