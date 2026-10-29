@@ -71,3 +71,13 @@ replace("src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp",
     "q[0]=encode((im.format==DXGI_FORMAT_R16G16B16A16_FLOAT || im.format==DXGI_FORMAT_R32G32B32A32_FLOAT) ? component(p,im.format,2) : x);",
     "q[0]=encode((im.format==DXGI_FORMAT_R11G11B10_FLOAT || im.format==DXGI_FORMAT_R16G16B16A16_FLOAT || im.format==DXGI_FORMAT_R32G32B32A32_FLOAT) ? component(p,im.format,2) : x);")
 print("CI50: packed HDR and 10-bit color capture previews supported")
+
+# The nominal 0.499 scale is insufficient at small or quantized dimensions.
+# Enforce strict role separation in the *actual producer layout*, after
+# rounding both axes. Do not merely clamp the depth selector's metadata.
+replace("src/mods/vr/DuoViewGeometry.hpp",
+    "    const auto pw = round_size(output_width * peripheral_scale);\n    const auto ph = round_size(output_height * peripheral_scale);",
+    """    if(fw<=1 || fh<=1)return {};
+    const auto pw = (std::min)(round_size(output_width * peripheral_scale),fw-1u);
+    const auto ph = (std::min)(round_size(output_height * peripheral_scale),fh-1u);""")
+print("CI50: actual producer periphery is strictly smaller on both axes after rounding")
