@@ -221,6 +221,26 @@ jobs:
           print('Build48 source payload unpacked')
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Build48 unpack failed' }
+          @'
+          import hashlib,json,pathlib
+          root=pathlib.Path("backend")
+          contract=json.loads(pathlib.Path("workspace/ci48/hashes.json").read_text(encoding="utf-8"))
+          for relative,identity in contract.items():
+              expected=identity["old_sha256"]
+              file=root/relative
+              if expected is None or not file.is_file():
+                  continue
+              raw=file.read_bytes()
+              if hashlib.sha256(raw).hexdigest()==expected:
+                  continue
+              normalized=raw.replace(b"\r\n",b"\n")
+              if normalized!=raw and hashlib.sha256(normalized).hexdigest()==expected:
+                  file.write_bytes(normalized)
+                  print("Build48 verified CRLF normalization:",relative)
+              else:
+                  raise RuntimeError("Build48 source changed, not a line-ending-only difference: "+relative)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Build48 exact baseline / line-ending verification failed' }
           python workspace/ci48/apply.py backend *> evidence/build48-source-guard.log
           $code=$LASTEXITCODE; Get-Content evidence/build48-source-guard.log
           if ($code -ne 0) { throw 'Build48 hash-guarded patch failed' }
