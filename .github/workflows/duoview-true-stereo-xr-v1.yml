@@ -428,6 +428,8 @@ jobs:
       - name: Apply CI51 final public source and validate actual NGX snapshot and shader paths
         shell: pwsh
         run: |
+          python workspace/ci51/test_source_overlay.py
+          if ($LASTEXITCODE -ne 0) { throw 'CI51 line-ending and tamper contract regression' }
           python workspace/ci51/apply.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI51 final source contract failed' }
           python workspace/ci51/embed_shaders.py backend *> evidence/ci51-shader-build.log

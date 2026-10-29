@@ -7,7 +7,7 @@ pending=[]
 for rel,expected in contract.items():
     relative=Path(rel)
     if '..' in relative.parts or relative.is_absolute():raise RuntimeError('Unsafe public source path')
-    current=backend/relative;replacement=(source/'production'/relative).read_bytes()
+    current=backend/relative;replacement=(source/'production'/relative).read_bytes().replace(b'\r\n',b'\n')
     if hashlib.sha256(replacement).hexdigest()!=expected['after_lf_sha256']:raise RuntimeError('Overlay integrity: '+rel)
     existing=hashlib.sha256(current.read_bytes().replace(b'\r\n',b'\n')).hexdigest() if current.exists() else None
     if existing==expected['after_lf_sha256']:continue
