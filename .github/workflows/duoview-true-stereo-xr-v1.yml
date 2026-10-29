@@ -1,5 +1,5 @@
-name: DuoView Build48 - Windows source and headset trial
-run-name: DuoView Build48 - Windows full build (#${{ github.run_number }})
+name: DuoView CI49 - NGX DLSS depth experimental Windows build
+run-name: DuoView CI49 NGX - Windows full build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -10,8 +10,10 @@ on:
       - experiment/ci32-stereo-reconstruction-20261028
       - experiment/ci33-surface-stereo-20261028
       - experiment/ci48-stability-pre-dlss-20261029
+      - experiment/ci49-ngx-dlss-depth-20261029
     paths:
       - ci48/payload.b64
+      - ci49/payload.b64
   pull_request:
     branches:
       - build-182
@@ -300,6 +302,31 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Build48 integration verification failed' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Build48 whitespace issues' }
+      - name: Apply CI49 Cheeky-inspired NGX DLSS SR depth experiment
+        shell: pwsh
+        run: |
+          @'
+          import base64,io,lzma,tarfile,pathlib
+          root=pathlib.Path("workspace").resolve()
+          payload=root/"ci49/payload.b64"
+          blob=lzma.decompress(base64.b64decode(payload.read_text().strip()))
+          with tarfile.open(fileobj=io.BytesIO(blob),mode="r:") as archive:
+              for item in archive.getmembers():
+                  p=pathlib.PurePosixPath(item.name)
+                  if not item.isfile() or not p.parts or p.parts[0]!="ci49" or ".." in p.parts:
+                      raise RuntimeError("unsafe CI49 payload path")
+                  dst=root.joinpath(*p.parts);dst.parent.mkdir(parents=True,exist_ok=True)
+                  dst.write_bytes(archive.extractfile(item).read())
+          print("CI49 source overlay unpacked")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'CI49 source unpack rejected' }
+          python workspace/ci49/apply.py backend *> evidence/ci49-ngx-source.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci49-ngx-source.log
+          if ($code -ne 0) { throw 'CI49 source overlay hash/patch guard failed' }
+          python workspace/ci49/test.py
+          if ($LASTEXITCODE -ne 0) { throw 'CI49 explicit source contract failed' }
+          git -C backend diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'CI49 source diff whitespace regression' }
       - name: Compile stereo synthesis and hybrid z-owner-forward-fuse shaders
         shell: pwsh
         run: |
@@ -512,6 +539,7 @@ jobs:
           Pinned restricted SDK: 3cffbc82429b6165ceec2714f0f0d9ae48f55596
           Pinned frontend: 60be4b0f9a646109fd9fdf448bacd41477234091
           '@ | Set-Content package/READ_FIRST.txt
+          Add-Content package/READ_FIRST.txt 'CI49 NGX-SR DEPTH EXPERIMENT: Enable ONLY by setting environment variable UEVR_DUOVIEW_NGX_DEPTH=1 in STALKER2 process BEFORE UEVR inject. Enable R5 and DuoView ID6, split-eye on, Stereo mode 4 then 5. NGX output extents must identify TWO distinct fresh roles; otherwise fallback to Build48 DSV depth selector. Mode0 and all builds without env var remain Build48. Depth state/eye/fov and headset comfort unverified. Do NOT co-inject Cheeky/OFXR until hook compatibility tested.'
           Add-Content package/READ_FIRST.txt 'Build48 experimental depth stability; manual LEFT/RIGHT pins and backups, Auto stickiness, capture diagnostics. No DLSS-input hook. Depth-producer frame/eye attribution unverified. Keep Build45 as rollback. Peripheral scale 0.5, modes 0->4->5.'
           @{
             schema_version=1; source_commit=$env:GITHUB_SHA;
@@ -525,6 +553,9 @@ jobs:
             depth_pass_jitter_authenticated=$false;
             provenance_contract_tested=$true; producer_authenticated=$false;
             hybrid_live_dispatch=$false;
+            ci49_ngx_sr_input_opt_in=$true; ngx_user_headset_verified=$false;
+            ngx_role_assignment='frozen output extent, unique match; no frame token';
+            ngx_fallback='Build48 DSV Auto/manual';
             unread_depth_retention_tested=$true;
             mode='experimental-ci33-source-depth-surfaces'; stable_release=$false
           } | ConvertTo-Json | Set-Content package/BUILD_STATUS.json
