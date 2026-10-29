@@ -28,15 +28,17 @@ def run(root):
  """        if(!MeshPoint(clamp(base+offsets[tri+k],ActiveDepthMin(MeshDepthRect()),
                     ActiveDepthMax(MeshDepthRect())),points[k],uvs[k],ws[k]))return o;""")
  edit(sh,"    bool allOcclude=true;\n    [unroll] for(int y=0;y<2;++y)",
-         "    bool allOcclude=true;\n    uint strongOccluders=0;\n    [unroll] for(int y=0;y<2;++y)")
+         "    bool allOcclude=true;\n    uint targetFarther=0;\n    [unroll] for(int y=0;y<2;++y)")
  edit(sh,"        if(hybrid && occludes)return true;\n        allOcclude=allOcclude && occludes;\n    }\n    return !hybrid && allOcclude;",
- """        if(hybrid && (MeshConfig.w&8u)==0u && occludes)return true;
-        strongOccluders+=occludes?1u:0u;
+ """        // A single proven nearer RIGHT sample vetoes LEFT background.
+        if(hybrid && occludes)return true;
+        if(z>0 && candidateZ+MeshVisibility.x+MeshVisibility.y*candidateZ<z)
+            ++targetFarther;
         allOcclude=allOcclude && occludes;
     }
-    // A single unstable low-res RIGHT texel cannot erase a high-res
-    // LEFT silhouette. Require 3 of 4 proven closer target depths.
-    return hybrid ? strongOccluders>=3u : allOcclude;""")
+    // Veto unsupported LEFT-only foreground when at least 3 of 4
+    // target-depth samples prove the LEFT surface is unexpectedly nearer.
+    return hybrid ? ((MeshConfig.w&8u)!=0u && targetFarther>=3u) : allOcclude;""")
  edit(sh,"""    const float nearestDepth=validZ.x==nearest?depths.x:validZ.y==nearest?depths.y:validZ.z==nearest?depths.z:depths.w;
     if(nearest<1.e29f)o.depth=(nearestDepth-DepthViewportRanges.z)/(DepthViewportRanges.w-DepthViewportRanges.z);""",
  """    // Do NOT prewrite target depth for pixels whose color reconstruction
@@ -66,7 +68,7 @@ def run(root):
         const float nearCount=dot(nearMembers,float4(1,1,1,1));
         const float farCount=dot(farMembers,float4(1,1,1,1));
         if(nearCount>=3.f && farCount<3.f)supported=nearMembers;
-        else if(farCount>=3.f && nearCount<3.f)supported=farMembers;
+        else if(farCount>=3.f && nearCount<3.f)return o; // nearer foreground vetoes background fill
         else return o; // unresolved silhouette: no fake intermediate depth
     }
     const float4 coeff=weights*supported;
