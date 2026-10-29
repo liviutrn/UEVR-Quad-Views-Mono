@@ -1,5 +1,5 @@
-name: DuoView True Stereo XR V1 — two-eye compositor and R5 candidate control
-run-name: DuoView TRUE Stereo XR and Dual-Depth WARP (#${{ github.run_number }})
+name: DuoView Build48 - Windows source and headset trial
+run-name: DuoView Build48 - Windows full build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -9,6 +9,9 @@ on:
       - experiment/ci31-provenance-audit-20261028
       - experiment/ci32-stereo-reconstruction-20261028
       - experiment/ci33-surface-stereo-20261028
+      - experiment/ci48-stability-pre-dlss-20261029
+    paths:
+      - ci48/payload.b64
   pull_request:
     branches:
       - build-182
@@ -199,6 +202,43 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Surface camera-relative geometry failed' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Surface integration source whitespace conflict' }
+      - name: Install exact Build48 patch and run policy regressions
+        shell: pwsh
+        run: |
+          @'
+          import base64,io,lzma,tarfile,pathlib
+          root=pathlib.Path('workspace').resolve()
+          src=root/'ci48/payload.b64'
+          if not src.is_file(): raise RuntimeError('Upload the provided ci48/payload.b64 first')
+          blob=lzma.decompress(base64.b64decode(src.read_text(encoding='ascii')))
+          with tarfile.open(fileobj=io.BytesIO(blob),mode='r:') as archive:
+              for member in archive.getmembers():
+                  p=pathlib.PurePosixPath(member.name)
+                  if not member.isfile() or not p.parts or p.parts[0]!='ci48' or '..' in p.parts:
+                      raise RuntimeError('Invalid Build48 payload path')
+                  dest=root.joinpath(*p.parts);dest.parent.mkdir(parents=True,exist_ok=True)
+                  dest.write_bytes(archive.extractfile(member).read())
+          print('Build48 source payload unpacked')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Build48 unpack failed' }
+          python workspace/ci48/apply.py backend *> evidence/build48-source-guard.log
+          $code=$LASTEXITCODE; Get-Content evidence/build48-source-guard.log
+          if ($code -ne 0) { throw 'Build48 hash-guarded patch failed' }
+          foreach ($t in @('adversarial48_tests','auto_pair_review_tests','depth_pin_policy_tests','observed_pass_adversarial_tests')) {
+            cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr/d3d12 "workspace/ci48/$t.cpp" "/Fe:$t.exe"
+            if ($LASTEXITCODE -ne 0) { throw "Build48 $t compile failed" }
+            & "./$t.exe" *> "evidence/$t.log"
+            $code=$LASTEXITCODE; Get-Content "evidence/$t.log"
+            if ($code -ne 0) { throw "Build48 $t regression failed" }
+          }
+          python workspace/ci48/test_capture_audit.py
+          if ($LASTEXITCODE -ne 0) { throw 'Capture audit 47A failed' }
+          python workspace/ci48/test_capture_audit48.py
+          if ($LASTEXITCODE -ne 0) { throw 'Capture audit Build48 failed' }
+          python workspace/ci48/test_integration48.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Build48 integration verification failed' }
+          git -C backend diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Build48 whitespace issues' }
       - name: Compile stereo synthesis and hybrid z-owner-forward-fuse shaders
         shell: pwsh
         run: |
@@ -307,6 +347,7 @@ jobs:
           Copy-Item evidence/duoview-stage1-edits.json package/
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
+          Copy-Item workspace/ci48/hashes.json package/ci48-production-hashes.json
           @'
           DuoView TRUE STEREO XR V1 — EXPERIMENTAL HEADSET BUILD (REVIEW FIXES)
           Build branch: experiment/ci33-surface-stereo-20261028.
@@ -410,6 +451,7 @@ jobs:
           Pinned restricted SDK: 3cffbc82429b6165ceec2714f0f0d9ae48f55596
           Pinned frontend: 60be4b0f9a646109fd9fdf448bacd41477234091
           '@ | Set-Content package/READ_FIRST.txt
+          Add-Content package/READ_FIRST.txt 'Build48 experimental depth stability; manual LEFT/RIGHT pins and backups, Auto stickiness, capture diagnostics. No DLSS-input hook. Depth-producer frame/eye attribution unverified. Keep Build45 as rollback. Peripheral scale 0.5, modes 0->4->5.'
           @{
             schema_version=1; source_commit=$env:GITHUB_SHA;
             source_repository='liviutrn/UEVR-Quad-Views-Mono';
