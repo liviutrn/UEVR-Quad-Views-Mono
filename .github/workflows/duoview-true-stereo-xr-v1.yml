@@ -267,6 +267,24 @@ jobs:
           if ($initial_code -ne 0) { Write-Host 'Original verifier reported a Windows-only post-patch line-ending difference; canonical output independently verified and normalized' }
           python workspace/ci48/windows_macro_compat.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Build48 exact MSVC macro compatibility correction failed' }
+          @'
+          import hashlib,pathlib,re
+          expected={
+           "src/mods/vr/d3d12/StockDibrDepth.hpp":("686589b4db6292854334f8ad560e9e56786358aba2ddda7514e0ba33b1990304","05518e186645fa2a6a55dcf0767afff5b33534da0c58d463b5ff64a586f6f8d6"),
+           "src/mods/vr/D3D12Component.hpp":("922192a285c6c51595e58a4decc06aece24e0d38a26439919311472931f19ccb","83fe03ed7bcf26dfad6c8f4464ee884a2317b8760467d8614036cbe5dcad8164")
+          }
+          for relative,(before,after) in expected.items():
+              file=pathlib.Path("backend")/relative
+              raw=file.read_bytes()
+              if hashlib.sha256(raw).hexdigest()!=before:
+                  raise RuntimeError("Build48 namespace source hash did not match approved input: "+relative)
+              revised=re.sub(rb"(?<!:)duoview::depthpin::",b"::duoview::depthpin::",raw)
+              if revised==raw or hashlib.sha256(revised).hexdigest()!=after:
+                  raise RuntimeError("Build48 explicit global namespace patch output mismatch: "+relative)
+              file.write_bytes(revised)
+              print("Build48 explicit namespace qualifier verified",relative)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Build48 namespace collision fix did not satisfy source identity contract' }
           foreach ($t in @('adversarial48_tests','auto_pair_review_tests','depth_pin_policy_tests','observed_pass_adversarial_tests')) {
             cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr/d3d12 "workspace/ci48/$t.cpp" "/Fe:$t.exe"
             if ($LASTEXITCODE -ne 0) { throw "Build48 $t compile failed" }
