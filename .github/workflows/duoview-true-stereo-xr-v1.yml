@@ -567,6 +567,13 @@ jobs:
           '@ | Set-Content package/VIEW_DLSS_CAPTURE.cmd -Encoding ascii
 
           Copy-Item workspace/ci51/README_TEST_BUILD.md package/READ_FIRST.txt
+          @'
+          DuoView CI67 — cross-thread NGX guide source bridge
+          New experimental DLSS depth-association fix for CI51 / Build66 failures.
+          Not headset-validated; the captured depth still requires matched eye identity.
+          Check [DuoView][NGX] producerBridge counters after gameplay.
+          See BUILD_STATUS.json and the matching Actions source archive.
+          '@ | Set-Content package/BUILD67_NOTES.txt
           @{
             schema_version=2; source_commit=$env:GITHUB_SHA;
             source_repository='liviutrn/UEVR-Quad-Views-Mono';
@@ -576,11 +583,11 @@ jobs:
             ci51_full_matrix_periphery=$true; ci51_quality_sliders=$true;
             ci51_ngx_six_plane_structural_gate=$true; ci51_direct_compute_snapshots=$true;
             ngx_inputs_post_evaluate_state='NON_PIXEL_SHADER_RESOURCE per NVIDIA guide3.4';
-            ngx_role_assignment='RHI color packet association and exact role dimensions; per-pass camera unverified';
+            ngx_role_assignment='bounded cross-thread RHI source interval, exact output roles, strict same-packet pair; per-pass camera unverified';
             ngx_fallback='Mono, without DSV substitution'; ngx_observer_default='enabled';
             motion_vectors_captured=$true; motion_vectors_used_for_temporal_reconstruction=$false;
             depth_eye_frame_stage_identity_verified=$false; depth_pass_jitter_authenticated=$false;
-            mode='experimental-ci51-ngx-dual-depth'; stable_release=$false
+            mode='experimental-ci67-ngx-thread-bridge'; stable_release=$false; ci67_thread_bridge=$true
           } | ConvertTo-Json | Set-Content package/BUILD_STATUS.json
           # Stage234 manifest predates the final R5/stereo overlays. Hash the
           # actual generated public sources and embedded bytecode as built.
@@ -604,27 +611,27 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'TRUE STEREO XR V1') { throw 'Missing or stale actual stereo headset instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-TrueStereo-XR-V1-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-CI67-Experimental-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
           Copy-Item package/final-generated-source-sha256.json evidence/final-public-source/
           Copy-Item workspace/ci51/README_TEST_BUILD.md evidence/final-public-source/
-          $sourceZip="UEVR-DuoView-CI51-Public-Source-${{ github.run_number }}.zip"
+          $sourceZip="UEVR-DuoView-CI67-Public-Source-${{ github.run_number }}.zip"
           Compress-Archive -Path evidence/final-public-source/* -DestinationPath $sourceZip -Force
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-TrueStereo-XR-V1-${{ github.run_number }}
+          name: UEVR-DuoView-CI67-Experimental-${{ github.run_number }}
           path: |
-            UEVR-DuoView-TrueStereo-XR-V1-*.zip
-            UEVR-DuoView-TrueStereo-XR-V1-*.zip.sha256
+            UEVR-DuoView-CI67-Experimental-*.zip
+            UEVR-DuoView-CI67-Experimental-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI51-Public-Source-${{ github.run_number }}
-          path: UEVR-DuoView-CI51-Public-Source-*.zip
+          name: UEVR-DuoView-CI67-Public-Source-${{ github.run_number }}
+          path: UEVR-DuoView-CI67-Public-Source-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
