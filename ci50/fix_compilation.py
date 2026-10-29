@@ -98,3 +98,23 @@ replace("src/mods/vr/d3d12/DuoViewNgxObserver.hpp",
         --interception_depth;
         return result;""")
 print("CI50: Cheeky-style successful NGX post-Evaluate input snapshot")
+
+# User-fixed fovea: the immutable producer settings, not merely the selector
+# metadata, must be 0.5 x 0.5. Hide now-inert crop sliders in this CI build.
+replace("src/mods/VR.cpp",
+    ".crop_width=m_duo_width->value(), .crop_height=m_duo_height->value(),",
+    ".crop_width=.50f, .crop_height=.50f,")
+replace("src/mods/VR.cpp",
+    'm_duo_width->draw("Fovea width / full FOV");\n                m_duo_height->draw("Fovea height / full FOV");',
+    'ImGui::TextUnformatted("Fovea fixed: 0.50 x 0.50 of each eye FOV");')
+print("CI50: fixed 0.50 x 0.50 fovea enforced at producer configuration")
+
+# NGX inputs can be R32_FLOAT or R16_FLOAT SRV surfaces.  Do not discard
+# authentic DLSS depth snapshots just because a DSV-specific decoder was used.
+replace("src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp",
+    "f==DXGI_FORMAT_R24G8_TYPELESS || f==DXGI_FORMAT_R16_TYPELESS;",
+    "f==DXGI_FORMAT_R24G8_TYPELESS || f==DXGI_FORMAT_R16_TYPELESS ||\n            f==DXGI_FORMAT_R32_FLOAT || f==DXGI_FORMAT_R16_FLOAT;")
+replace("src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp",
+    "    static float decode_depth(const uint8_t* p,DXGI_FORMAT fmt) {\n",
+    "    static float decode_depth(const uint8_t* p,DXGI_FORMAT fmt) {\n        if(fmt==DXGI_FORMAT_R16_FLOAT) {\n            uint16_t half{};std::memcpy(&half,p,2);return half_to_float(half);\n        }\n")
+print("CI50: accepts and visualizes real DLSS float16/float32 depth planes")
