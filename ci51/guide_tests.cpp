@@ -39,6 +39,13 @@ int main()try {
  ProducerTicket transfer{};
  std::thread consumer([&]{transfer=bridge.resolve(800,600);});consumer.join();
  need(transfer==t,"cross-thread producer transfer failed");
+ auto one=t;one.roles=1;bridge.publish(one);
+ need(bridge.resolve(800,600)==one,"single LEFT source handoff valid");
+ need(!bridge.resolve(320,240),"LEFT source cannot claim RIGHT output");
+ one.roles=2;bridge.publish(one);
+ need(bridge.resolve(320,240)==one,"single RIGHT source handoff valid");
+ need(!bridge.resolve(800,600),"RIGHT source cannot claim LEFT output");
+ bridge.publish(t);
  need(!bridge.resolve(799,600),"unrelated NGX output not accepted");
  need(!bridge.resolve(800,600,std::chrono::milliseconds{-1}),"stale interval accepted");
  bridge.publish(ambiguous);need(!bridge.resolve(800,600),"ambiguous owner must invalidate");
