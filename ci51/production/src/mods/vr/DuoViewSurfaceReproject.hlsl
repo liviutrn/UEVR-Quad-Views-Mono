@@ -121,13 +121,13 @@ struct BackwardSurfaceOutput {
     float depth : SV_DEPTH;
 };
 BackwardSurfaceOutput PSBackwardSurface(VertexOut i) {
-    BackwardSurfaceOutput o;
+    BackwardSurfaceOutput o=(BackwardSurfaceOutput)0;
     o.color=0;o.depth=(MeshConfig.w&4u)!=0 ? 0.f : 1.f;
     const float2 targetUV=CropUv.xy+i.uv*(CropUv.zw-CropUv.xy);
     const float2 coordinate=RightDepthRect.xy+(targetUV+MeshJitter.zw)*RightDepthRect.zw-0.5f;
     const int2 origin=int2(floor(coordinate));
     const float2 fraction=frac(coordinate);
-    float depths[4];float nearest=1.e30f,farthest=0,nearestDepth=o.depth;
+    float4 depths=0;float nearest=1.e30f,farthest=0,nearestDepth=o.depth;
     bool allValid=true;
     [unroll] for(uint k=0;k<4;++k) {
         const int2 p=origin+int2(k&1u,k>>1u);
@@ -160,13 +160,16 @@ BackwardSurfaceOutput PSBackwardSurface(VertexOut i) {
     // Conservative nearest-surface validation prevents a foreground color tap
     // from leaking onto the target background at character/weapon silhouettes.
     const float radius=MeshQuality.z;
-    const float2 taps[4]={float2(-radius,-radius),float2(radius,-radius),float2(-radius,radius),float2(radius,radius)};
     float closest=1.e30f;
     [unroll] for(uint tap=0;tap<8;++tap) {
         // Always validate the real bilinear color footprint before expanding
         // the guard. Expanded corners alone can miss a one-texel foreground.
-        const int2 p=tap<4 ? int2(floor(sourceCoord))+int2(tap&1u,tap>>1u)
-            : int2(floor(sourceCoord+taps[tap&3u]+.5f));
+        int2 p=0;
+        if(tap<4)p=int2(floor(sourceCoord))+int2(tap&1u,tap>>1u);
+        else {
+            const float2 offset=float2((tap&1u)!=0?radius:-radius,(tap&2u)!=0?radius:-radius);
+            p=int2(floor(sourceCoord+offset+.5f));
+        }
         if(any(p<ActiveDepthMin(LeftDepthRect))||any(p>ActiveDepthMax(LeftDepthRect)))return o;
         const float z=LeftEyeForwardZ(LeftSourceDepth.Load(int3(p,0)));
         if(z<=0)return o;
