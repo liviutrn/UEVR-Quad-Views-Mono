@@ -21,3 +21,10 @@ replace("src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp",
     "q[0]=encode(im.bytes_per_pixel>=8 ? component(p,im.format,2) : x);",
     "q[0]=encode((im.format==DXGI_FORMAT_R16G16B16A16_FLOAT || im.format==DXGI_FORMAT_R32G32B32A32_FLOAT) ? component(p,im.format,2) : x);")
 print("CI50: corrected two-channel float preview bounds")
+
+# CI50 is a stereo-first experimental build: ID6 starts in mode 5,
+# while absent NGX pairs still produce the protected mono fallback.
+replace("src/mods/vr/D3D12Component.hpp",
+    "std::atomic<uint32_t> m_duo_stereo_mode{0};",
+    "std::atomic<uint32_t> m_duo_stereo_mode{5};")
+print("CI50: default synthesized stereo ON for DuoView ID6")
