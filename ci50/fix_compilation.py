@@ -133,11 +133,8 @@ replace("src/mods/vr/D3D12Component.cpp",
             (vr->is_dibr_depth_trace_requested() || vr->is_duoview_renderer_active()) &&
             (vr->is_dibr_ue5_rdg_depth_capture_enabled() || auto_ngx_stereo);""")
 replace("src/mods/VR.cpp",
-    'm_dibr_ue5_rdg_depth_capture->draw("R5 DSV/RDG capture in DuoView (experimental, opt-in)");',
-    'm_dibr_ue5_rdg_depth_capture->draw("Advanced R5/DSV capture diagnostics (optional)");')
-replace("src/mods/VR.cpp",
-    "if (m_dibr_ue5_rdg_depth_capture->value()) {",
-    "if (is_using_duoview_mono() || requested_rendering_method() == RenderingMethod::DUOVIEW_MONO || m_dibr_ue5_rdg_depth_capture->value()) {")
+    'm_dibr_ue5_rdg_depth_capture->draw("R5 DSV/RDG capture in DuoView (experimental, opt-in)");\n                if (m_dibr_ue5_rdg_depth_capture->value()) {',
+    'm_dibr_ue5_rdg_depth_capture->draw("Advanced R5/DSV capture diagnostics (optional)");\n                if (is_using_duoview_mono() || requested_rendering_method() == RenderingMethod::DUOVIEW_MONO || m_dibr_ue5_rdg_depth_capture->value()) {')
 replace("src/mods/VR.cpp",
     '"Enable DSV/RDG capture below, then leave and re-enter rendering method ID6 to activate the observer. Stereo output depends on the mode selected below; successful capture does not validate matching eye/stage."',
     '"DLSS capture is automatically enabled in STALKER 2 DuoView stereo. Use the synthesized-stereo checkbox below; R5/DSV diagnostics are optional. Correct image correspondence must still be checked in a headset."')
