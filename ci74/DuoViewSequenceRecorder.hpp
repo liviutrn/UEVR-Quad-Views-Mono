@@ -284,6 +284,10 @@ public:
            !supported(x.Format)||!supported(l.Format)||!supported(r.Format))return false;
         const unsigned eyeW=unsigned(x.Width/2),eyeY=unsigned(x.Height/2);
         const unsigned cx=eyeW/2;
+        // GPU copies are non-transactional: a later failed crop must not
+        // release readbacks already referenced by a submitted command list.
+        // submit() quarantines them if the full recording was rejected.
+        f->recorded=true;
         // Native same-pixel crops in each final XR eye, not JPEG resizes.
         if(!copy(cmd,f->patches[0],xr,cx,eyeY)||
            !copy(cmd,f->patches[1],xr,eyeW+cx,eyeY)||
