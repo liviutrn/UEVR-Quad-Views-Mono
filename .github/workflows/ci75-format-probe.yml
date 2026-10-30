@@ -1,0 +1,24 @@
+name: CI75 GPU depth format probe
+on:
+  push:
+    branches: [experiment/ci75-lossless-diagnostic-recorder-20261030]
+    paths: [diagnostics_tests/ci75_format_probe.cpp, .github/workflows/ci75-format-probe.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  owned-depth-formats:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Check exact cropped copies for supported owned depth and MV formats
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Ici75 diagnostics_tests/ci75_format_probe.cpp /Fe:format-probe.exe /link d3d12.lib dxgi.lib windowscodecs.lib ole32.lib uuid.lib
+          if ($LASTEXITCODE -ne 0) { throw 'Format probe compile failed' }
+          ./format-probe.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Owned depth/MV cropped copy format probe failed' }
