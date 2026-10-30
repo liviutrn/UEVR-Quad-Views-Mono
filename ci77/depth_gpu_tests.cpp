@@ -325,17 +325,17 @@ void test_temporal_weight_reduces_same_surface_noise(StabilizeFixture& fixture) 
     need(z < 10.2f && z > 10.f, "same-surface temporal history was not blended");
     need(std::abs(z - 10.1f) < .01f, "temporal weight did not reduce same-surface depth noise");
 
-    // The production near-field cutoff should disable history even when the
+    // The production near_parameters-field cutoff should disable history even when the
     // previous surface is otherwise compatible and would blend without it.
-    Parameters near;
-    near.previous_range_weight[2] = .9f;
-    near.previous_range_weight[3] = 1.f;
-    near.edge_tolerances = {1.f, 0.f, .5f, 80.f};
+    Parameters near_parameters;
+    near_parameters.previous_range_weight[2] = .9f;
+    near_parameters.previous_range_weight[3] = 1.f;
+    near_parameters.edge_tolerances = {1.f, 0.f, .5f, 80.f};
     const auto near_current = constant_depth(50.f);
     const auto near_previous = constant_depth(49.5f);
-    const auto near_result = fixture.render(near_current, near_previous, near);
+    const auto near_result = fixture.render(near_current, near_previous, near_parameters);
     need(std::abs(at(near_result, 12, 8) - at(near_current, 12, 8)) < 1.e-6f,
-         "near-field cutoff did not bypass otherwise compatible temporal history");
+         "near_parameters-field cutoff did not bypass otherwise compatible temporal history");
 }
 
 void test_new_foreground_rejects_old_background(StabilizeFixture& fixture) {
@@ -351,7 +351,7 @@ void test_new_foreground_rejects_old_background(StabilizeFixture& fixture) {
 void test_history_holds_supported_foreground_endpoint_at_edge(StabilizeFixture& fixture) {
     Parameters p;
     p.current_range_jitter[2] = .6f; // source footprint: 0.4 foreground, 0.6 background
-    p.edge_tolerances = {5.f, 0.f, 1.5f, 80.f}; // centimeter tolerance and production near cutoff
+    p.edge_tolerances = {5.f, 0.f, 1.5f, 80.f}; // centimeter tolerance and production near_parameters cutoff
     const float backgroundRaw=1.f/1000.f,foregroundRaw=1.f/500.f;
     std::vector<float> current(PixelCount, backgroundRaw); // background Z=1000cm
     for (UINT y = 0; y < Height; ++y)
