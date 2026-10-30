@@ -549,6 +549,8 @@ jobs:
           if ($code -ne 0) { throw 'CI75 decoder/analyzer tests failed' }
           python workspace/ci76/apply.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI76 production integration failed' }
+          python workspace/ci76/adapt_legacy_tests.py workspace
+          if ($LASTEXITCODE -ne 0) { throw 'CI76 GPU fixture recovery adaptation failed' }
           python workspace/ci51/embed_shaders.py backend *> evidence/ci51-shader-build.log
           $code=$LASTEXITCODE; Get-Content evidence/ci51-shader-build.log
           if ($code -ne 0) { throw 'CI51 final production shader compile failed' }

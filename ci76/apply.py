@@ -29,12 +29,12 @@ def apply(root):
  replace(depth,'                if(wait_foreign(left) && wait_foreign(right)) {',
  '''                if(wait_foreign(left) && wait_foreign(right)) {
                     namespace recovery=uevr::duoview::ngx::recovery;
-                    const recovery::Observation observed{true,
+                    const recovery::Observation recovery_observation{true,
                         {uint64_t(left.ngx_guide.feature),left.ngx_out_width,left.ngx_out_height,
                          uint64_t(right.ngx_guide.feature),right.ngx_out_width,right.ngx_out_height},
                         epoch,{left.serial,right.serial},
                         {left.ngx_guide.evaluation,right.ngx_guide.evaluation}};
-                    const auto recovered=ngx_recovery.observe(observed);
+                    const auto recovered=ngx_recovery.observe(recovery_observation);
                     if(!recovered.allow) {
                         std::ostringstream status;
                         status<<"CI76_NGX_RECOVERY "<<unsigned(recovered.consecutive_fresh_pairs)
