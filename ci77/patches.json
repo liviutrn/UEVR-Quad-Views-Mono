@@ -141,8 +141,8 @@
       ]
     },
     "src/mods/vr/d3d12/DuoViewDiagnosticRecorder.hpp": {
-      "before_sha256": "5e621544fe6609edb2ba392ae02f7c64f4c162bda66db721a66a300b16db6966",
-      "after_sha256": "e1a0ca6d0b967347ca35902b162eddeaacafa3ff35c80da7aa61f8cbe4e6271c",
+      "before_sha256": "728cef12ba4f587e6d45c85bc7bb232676e3cad23fb68bf3e1dc595c83e3c269",
+      "after_sha256": "c048aa1089cc67b3fa8b3d44557855b9ec490a009d9f0c6264573c1e0b08ed4e",
       "blocks": [
         {
           "old": "            if(s.name==\"full_source_right\"&&issued_%32!=16)continue;\n            Plane p;p.input=std::move(s);\n            if(!p.input.resource&&p.input.name!=\"xr_left\"&&p.input.name!=\"xr_right\"&&\n               p.input.name!=\"synthetic_right\"&&p.input.name!=\"synthetic_left\") {\n                p.omitted=\"resource unavailable on selected evaluation\";\n                if(p.input.required){std::lock_guard lock(mutex_);++rejected_;return {};}\n            } else if(!allocate(dev,p)) {\n",

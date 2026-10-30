@@ -1,8 +1,10 @@
 """Apply CI77 only to exact verified generated CI76 production sources."""
 from pathlib import Path
-import hashlib,json,sys
+import hashlib,json,os,sys
 
-def digest(s):return hashlib.sha256(s.encode()).hexdigest()
+COMMIT=os.environ.get('GITHUB_SHA','UNVERSIONED_LOCAL_BUILD')
+# CI75 writes the build's own commit into the recorder header, so fingerprints are taken with it masked.
+def digest(s):return hashlib.sha256(s.replace(COMMIT,'@BUILD_COMMIT@').encode()).hexdigest()
 def apply(root):
  root=Path(root);here=Path(__file__).resolve().parent;spec=json.loads((here/'patches.json').read_text(encoding='utf-8'));pending={}
  for rel,change in spec['patches'].items():
