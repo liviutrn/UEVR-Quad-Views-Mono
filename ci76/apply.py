@@ -127,7 +127,7 @@ def apply(root):
  '''                ImGui::TextUnformatted("Fovea fixed: 0.50 x 0.50 of each eye FOV");
                 ImGui::TextWrapped("CI76: one image owner per stereo pixel; fresh-pair recovery after resize/dropout. Foreground MPC readback: %s",duoview_foreground_mpc_verified()?"verified":"unverified");''')
  replace(cpp,'                                    <<",\\\"world_to_meters\\\":"',
- '''                                    <<",\\\"composition\\\":\\\"CI76_EXCLUSIVE_CURRENT_FRAME\\\""
+ '''                                    <<",\\\"composition\\\":"<<cap::quote(!recorded?"NO_VALID_OUTPUT":stereo_recorded&&effective_stereo_mode>=4u?"CI76_EXCLUSIVE_CURRENT_FRAME":stereo_mode&&!stereo_recorded?"CI76_CURRENT_RIGHT_MONO":"BASELINE_MONO_OR_LEGACY")
                                     <<",\\\"foreground_mpc_verified\\\":"<<(vr->duoview_foreground_mpc_verified()?"true":"false")
                                     <<",\\\"foreground_mpc_values\\\":["<<cap::number(vr->duoview_foreground_mpc_values()[0])
                                     <<","<<cap::number(vr->duoview_foreground_mpc_values()[1])<<"]"
