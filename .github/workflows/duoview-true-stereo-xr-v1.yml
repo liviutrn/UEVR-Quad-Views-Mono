@@ -517,6 +517,11 @@ jobs:
           ./ci73-gpu-conservative-tests.exe *> evidence/ci73-gpu-conservative-tests.log
           $code=$LASTEXITCODE; Get-Content evidence/ci73-gpu-conservative-tests.log
           if ($code -ne 0) { throw 'CI73 conservative stereo foreground/gather WARP regression failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src workspace/ci73/coordinate_tests.cpp /Fe:ci73-coordinate-tests.exe
+          if ($LASTEXITCODE -ne 0) { throw 'CI73 moving fovea crop / NGX subrect test compilation failed' }
+          ./ci73-coordinate-tests.exe *> evidence/ci73-coordinate-tests.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci73-coordinate-tests.log
+          if ($code -ne 0) { throw 'CI73 moving crop / depth pixel mapping failed' }
       - name: Compile stereo synthesis and hybrid z-owner-forward-fuse shaders
         shell: pwsh
         run: |
