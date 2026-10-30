@@ -71,4 +71,53 @@ if __name__=="__main__":
  b='const bool chooseFovea=feather>=0.25f;'
  if text.count(a)!=1:raise RuntimeError("CI73 crop seam threshold source drift")
  p.write_text(text.replace(a,b))
+ # CI73 root-cause correction: the extra alpha-neighborhood guard erased
+ # eight stable planar pixels because the synthetic mask has no samples beyond
+ # the cropped source edge. Replace with physical RIGHT depth discontinuity
+ # detection. Smooth matching planes keep all 56 pixels; actual foreground
+ # boundaries fail closed to native RIGHT.
+ p=root/"src/mods/vr/DuoViewStereoCompositeRaster.hlsl"
+ text=p.read_text()
+ old='''        // Full 5-tap support near silhouette, or native RIGHT fallback.
+        const float2 stepUV=1.f/float2(FoveaRect.zw);
+        const float4 projected=SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local),0);
+        float coverage=projected.a;
+        coverage=min(coverage,SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local+float2(stepUV.x,0)),0).a);
+        coverage=min(coverage,SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local-float2(stepUV.x,0)),0).a);
+        coverage=min(coverage,SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local+float2(0,stepUV.y)),0).a);
+        coverage=min(coverage,SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local-float2(0,stepUV.y)),0).a);
+        return coverage>=.995f ? float4(projected.rgb/max(projected.a,1.e-5f),1.f)
+                                : float4(realRight.rgb,1.f);'''
+ new='''        const float4 projected=SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local),0);
+        // Do not reject a smooth surface just because the synthetic-alpha
+        // footprint lies near the cropped ROI edge. A true RIGHT-depth edge
+        // is the relevant criterion for fail-closed native-eye fallback.
+        return projected.a>=.995f && !CI73RightDepthEdge(uv)
+             ? float4(projected.rgb/max(projected.a,1.e-5f),1.f)
+             : float4(realRight.rgb,1.f);'''
+ if text.count(old)!=1:raise RuntimeError("CI73 smooth-plane alpha 5-tap fix drift")
+ text=text.replace(old,new)
+ marker='float4 CI73StableComposite(float2 uv,bool right) {'
+ helper='''bool CI73RightDepthEdge(float2 uv) {
+    const int2 lo=ActiveDepthMin(RightDepthRect);
+    const int2 hi=ActiveDepthMax(RightDepthRect);
+    const int2 p=ActiveDepthTexel(uv,RightDepthRect);
+    const float z0=RightEyeForwardZ(RightSourceDepth.Load(int3(p,0)));
+    const float z1=RightEyeForwardZ(RightSourceDepth.Load(int3(clamp(p+int2(1,0),lo,hi),0)));
+    const float z2=RightEyeForwardZ(RightSourceDepth.Load(int3(clamp(p+int2(0,1),lo,hi),0)));
+    const float z3=RightEyeForwardZ(RightSourceDepth.Load(int3(clamp(p+int2(1,1),lo,hi),0)));
+    if(min(min(z0,z1),min(z2,z3))<=0.f)return true;
+    const float nearest=min(min(z0,z1),min(z2,z3));
+    const float farthest=max(max(z0,z1),max(z2,z3));
+    return farthest-nearest > 2.f*(StereoCheck.x+StereoCheck.y*nearest);
+}
+'''
+ if text.count(marker)!=1:raise RuntimeError("CI73 helper source drift")
+ p.write_text(text.replace(marker,helper+marker))
  print("CI73 applied: optional conservative pixel-owner, mono near-field, no displaced-eye RGB blend; preserved CI71/CI72")
