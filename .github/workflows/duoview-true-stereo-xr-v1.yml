@@ -1,5 +1,5 @@
-name: DuoView CI73 three-method conservative/CI71/CI72 stereo A/B Windows build
-run-name: DuoView CI73 stability first + CI71/CI72 A/B - Windows build (#${{ github.run_number }})
+name: DuoView CI74 compact sequence capture (preserves CI73 stereo)
+run-name: DuoView CI74 stationary jitter recorder - Windows build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -22,6 +22,7 @@ on:
       - experiment/ci71-left-anchor-edge-stability-20261029
       - experiment/ci72-research-inverse-gather-ab-20261030
       - experiment/ci73-conservative-stereo-quality-20261030
+      - experiment/ci74-stationary-jitter-sequence-20261030
     paths:
       - ci51/**
       - ci69/**
@@ -29,6 +30,7 @@ on:
       - ci71/**
       - ci72/**
       - ci73/**
+      - ci74/**
       - ci48/payload.b64
       - ci49/payload.b64
       - ci50/upgrade_p1.b64
@@ -474,6 +476,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI72 research target-depth alternative patch failed' }
           python workspace/ci73/apply.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI73 conservative stability source patch failed' }
+          python workspace/ci74/apply.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI74 recorder source patch failed' }
           python workspace/ci51/embed_shaders.py backend *> evidence/ci51-shader-build.log
           $code=$LASTEXITCODE; Get-Content evidence/ci51-shader-build.log
           if ($code -ne 0) { throw 'CI51 final production shader compile failed' }
@@ -522,6 +526,11 @@ jobs:
           ./ci73-coordinate-tests.exe *> evidence/ci73-coordinate-tests.log
           $code=$LASTEXITCODE; Get-Content evidence/ci73-coordinate-tests.log
           if ($code -ne 0) { throw 'CI73 moving crop / depth pixel mapping failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /Iworkspace/ci74 workspace/ci74/zip_tests.cpp /Fe:ci74-zip-tests.exe /link d3d12.lib dxgi.lib windowscodecs.lib ole32.lib uuid.lib
+          if ($LASTEXITCODE -ne 0) { throw 'CI74 ZIP/recorder unit-test compilation failed' }
+          ./ci74-zip-tests.exe *> evidence/ci74-zip-tests.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci74-zip-tests.log
+          if ($code -ne 0) { throw 'CI74 ZIP/recorder test failed' }
       - name: Compile stereo synthesis and hybrid z-owner-forward-fuse shaders
         shell: pwsh
         run: |
