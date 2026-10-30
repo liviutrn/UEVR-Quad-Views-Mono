@@ -314,7 +314,7 @@ public:
             c.previous_range_weight[2]=history_valid_[eye]?history_weight:0.f;
             c.previous_range_weight[3]=history_valid_[eye]?1.f:0.f;
             c.edge_tolerances[0]=2.f;c.edge_tolerances[1]=.015f;
-            c.edge_tolerances[2]=1.5f;c.edge_tolerances[3]=0.f;
+            c.edge_tolerances[2]=1.5f;c.edge_tolerances[3]=80.f;
             const auto old_view=history_valid_[eye]?previous_viewport_[eye]:views[eye];
             c.previous_rect[0]=old_view.x;c.previous_rect[1]=old_view.y;
             c.previous_rect[2]=old_view.width;c.previous_rect[3]=old_view.height;

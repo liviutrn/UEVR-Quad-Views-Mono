@@ -324,6 +324,18 @@ void test_temporal_weight_reduces_same_surface_noise(StabilizeFixture& fixture) 
     const float z = z_from_raw(at(result, 12, 8));
     need(z < 10.2f && z > 10.f, "same-surface temporal history was not blended");
     need(std::abs(z - 10.1f) < .01f, "temporal weight did not reduce same-surface depth noise");
+
+    // The production near-field cutoff should disable history even when the
+    // previous surface is otherwise compatible and would blend without it.
+    Parameters near;
+    near.previous_range_weight[2] = .9f;
+    near.previous_range_weight[3] = 1.f;
+    near.edge_tolerances = {1.f, 0.f, .5f, 80.f};
+    const auto near_current = constant_depth(50.f);
+    const auto near_previous = constant_depth(49.5f);
+    const auto near_result = fixture.render(near_current, near_previous, near);
+    need(std::abs(at(near_result, 12, 8) - at(near_current, 12, 8)) < 1.e-6f,
+         "near-field cutoff did not bypass otherwise compatible temporal history");
 }
 
 void test_new_foreground_rejects_old_background(StabilizeFixture& fixture) {
@@ -334,6 +346,42 @@ void test_new_foreground_rejects_old_background(StabilizeFixture& fixture) {
     const auto result = fixture.render(constant_depth(2.f), constant_depth(10.f), p);
     need(std::abs(at(result, 12, 8) - .5f) < 1.e-6f,
          "old background history contaminated a new foreground depth");
+}
+
+void test_history_holds_supported_foreground_endpoint_at_edge(StabilizeFixture& fixture) {
+    Parameters p;
+    p.current_range_jitter[2] = .6f; // source footprint: 0.4 foreground, 0.6 background
+    p.edge_tolerances = {5.f, 0.f, 1.5f, 80.f}; // centimeter tolerance and production near cutoff
+    const float backgroundRaw=1.f/1000.f,foregroundRaw=1.f/500.f;
+    std::vector<float> current(PixelCount, backgroundRaw); // background Z=1000cm
+    for (UINT y = 0; y < Height; ++y)
+        current[size_t(y) * Width + 15] = foregroundRaw; // foreground Z=500cm
+    const auto previous_foreground = constant_depth(500.f);
+
+    p.previous_range_weight[2] = .9f;
+    p.previous_range_weight[3] = 0.f;
+    const auto spatial_only = fixture.render(current, previous_foreground, p);
+    need(std::abs(at(spatial_only, 15, 8) - backgroundRaw) < 1.e-6f,
+         "current spatial footprint did not select the 0.6-support background");
+
+    p.previous_range_weight[3] = 1.f;
+    const auto retained = fixture.render(current, previous_foreground, p);
+    need(std::abs(at(retained, 15, 8) - foregroundRaw) < 1.e-6f,
+         "history did not retain the supported foreground endpoint at the edge");
+    need(std::abs(at(retained, 16, 8) - backgroundRaw) < 1.e-6f,
+         "history retained foreground where the current footprint has no foreground support");
+}
+
+void test_invalid_sky_support_does_not_fill_foreground(StabilizeFixture& fixture) {
+    Parameters p;
+    p.current_range_jitter[2] = .1f; // 0.9 invalid/sky, 0.1 valid foreground
+    p.edge_tolerances = {.01f, 0.f, .5f, 0.f};
+    std::vector<float> current(PixelCount, 0.f); // raw zero is invalid/sky for 1/Z
+    for (UINT y = 0; y < Height; ++y)
+        current[size_t(y) * Width + 16] = .5f;
+    const auto result = fixture.render(current, constant_depth(100.f), p);
+    need(std::abs(at(result, 15, 8)) < 1.e-7f,
+         "low-support foreground filled a footprint dominated by invalid sky");
 }
 
 void test_camera_reprojection_tracks_motion(StabilizeFixture& fixture) {
@@ -393,6 +441,8 @@ int main(int argc, char** argv) try {
     test_step_has_no_fictional_intermediate_z(fixture);
     test_temporal_weight_reduces_same_surface_noise(fixture);
     test_new_foreground_rejects_old_background(fixture);
+    test_history_holds_supported_foreground_endpoint_at_edge(fixture);
+    test_invalid_sky_support_does_not_fill_foreground(fixture);
     test_camera_reprojection_tracks_motion(fixture);
     test_reset_bypasses_history(fixture);
     std::cout << "PASS actual PSStabilizeDepth on D3D11 WARP: jitter, edges, temporal rejection, motion reprojection, reset\n";

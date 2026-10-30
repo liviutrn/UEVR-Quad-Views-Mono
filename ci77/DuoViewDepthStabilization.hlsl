@@ -73,10 +73,10 @@ float StabilizeSpatial(int2 pixel, int2 size, out float selectedZ) {
 
     // Pick the locally best-supported same-surface cluster. Ties prefer the
     // nearer surface, so a foreground edge can never be blended into sky.
-    float bestSupport=-1.f,bestZ=1.e30f;
+    float bestSupport=-1.f,bestZ=1.e30f,invalidSupport=0.f;
     int best=-1;
     [unroll] for(int i=0;i<4;++i) {
-        if(z[i]<=0.f)continue;
+        if(z[i]<=0.f) {invalidSupport+=weight[i];continue;}
         float support=0.f;
         const float tolerance=EdgeTolerances.x+EdgeTolerances.y*z[i];
         [unroll] for(int j=0;j<4;++j)
@@ -84,6 +84,14 @@ float StabilizeSpatial(int2 pixel, int2 size, out float selectedZ) {
         if(support>bestSupport+1.e-6f || (abs(support-bestSupport)<=1.e-6f&&z[i]<bestZ)) {
             bestSupport=support;bestZ=z[i];best=i;
         }
+    }
+    // Do not let a tiny valid foreground tap paint over a majority-sky
+    // footprint. Preserve the closest invalid/sky source sample in that case.
+    if(best>=0&&bestSupport<0.5f&&invalidSupport>bestSupport) {
+        int skyTap=-1;float skyWeight=-1.f;
+        [unroll] for(int k=0;k<4;++k)
+            if(z[k]<=0.f&&weight[k]>skyWeight){skyTap=k;skyWeight=weight[k];}
+        if(skyTap>=0)return raw[skyTap];
     }
     if(best<0) {
         int nearest=0;
@@ -100,8 +108,44 @@ float StabilizeSpatial(int2 pixel, int2 size, out float selectedZ) {
     return interpolatedRaw;
 }
 
+// A previous foreground endpoint may be retained at a current edge only
+// while the current jittered source footprint still contains that same
+// foreground surface. Return the current-frame device-depth endpoint; never
+// blend it with incompatible current background depth.
+bool CurrentForegroundEndpoint(int2 pixel,int2 size,float historyZ,float currentZ,
+                               out float endpointRaw,out float support) {
+    endpointRaw=0.f;support=0.f;
+    const int2 lo=ActiveMin(size,ActiveRect),hi=ActiveMax(size,ActiveRect);
+    const float2 sampleCoord=float2(pixel)+CurrentRangeJitter.zw;
+    const int2 base=int2(floor(sampleCoord));
+    const float2 f=frac(sampleCoord);
+    const int2 tapOffset[4]={int2(0,0),int2(1,0),int2(0,1),int2(1,1)};
+    const float weights[4]={(1.f-f.x)*(1.f-f.y),f.x*(1.f-f.y),
+                             (1.f-f.x)*f.y,f.x*f.y};
+    float rawSum=0.f;
+    const float sameSurfaceTolerance=EdgeTolerances.x+EdgeTolerances.y*historyZ;
+    [unroll] for(int k=0;k<4;++k) {
+        const int2 p=clamp(base+tapOffset[k],lo,hi);
+        const float raw=CurrentDepth.Load(int3(p,0));
+        const float z=ForwardZ(raw,CurrentRangeJitter.xy,CurrentProjection);
+        if(z<=0.f||abs(z-historyZ)>sameSurfaceTolerance)continue;
+        const float nearerTolerance=EdgeTolerances.x+EdgeTolerances.y*z;
+        if(z+nearerTolerance>=currentZ)continue;
+        support+=weights[k];rawSum+=weights[k]*raw;
+    }
+    if(support<=1.e-7f)return false;
+    endpointRaw=rawSum/support;
+    return true;
+}
+
 float TemporalBlend(int2 pixel, float currentRaw, float currentZ, int2 size) {
     if(PreviousRangeWeight.w<0.5f||PreviousRangeWeight.z<=0.f||currentZ<=0.f)return currentRaw;
+    float effectiveHistoryWeight=saturate(min(PreviousRangeWeight.z,0.9f));
+    // Production config supplies the near-field cutoff in EdgeTolerances.w.
+    // Hands and other close moving objects follow the current frame directly.
+    if(EdgeTolerances.w>0.f)
+        effectiveHistoryWeight*=saturate((currentZ-EdgeTolerances.w)/120.f);
+    if(effectiveHistoryWeight<=0.f)return currentRaw;
     const float2 uv=PixelToUV(float2(pixel)+0.5f,ActiveRect);
     const float currentSpan=CurrentRangeJitter.y-CurrentRangeJitter.x;
     if(abs(currentSpan)<1.e-7f)return currentRaw;
@@ -121,8 +165,9 @@ float TemporalBlend(int2 pixel, float currentRaw, float currentZ, int2 size) {
     const int2 tapOffset[4]={int2(0,0),int2(1,0),int2(0,1),int2(1,1)};
     const float weights[4]={(1.f-fraction.x)*(1.f-fraction.y),fraction.x*(1.f-fraction.y),
                              (1.f-fraction.x)*fraction.y,fraction.x*fraction.y};
-    float support=0.f,zsum=0.f;
+    float support=0.f,zsum=0.f,edgeHistorySupport=0.f,edgeScore=0.f,edgeRaw=0.f;
     const float tolerance=EdgeTolerances.x+EdgeTolerances.y*currentZ;
+    const float minEdgeSupport=0.5f-0.25f*saturate(effectiveHistoryWeight/0.9f);
     [unroll] for(int k=0;k<4;++k) {
         const int2 p=origin+tapOffset[k];
         if(any(p<lo)||any(p>hi))continue;
@@ -144,13 +189,30 @@ float TemporalBlend(int2 pixel, float currentRaw, float currentZ, int2 size) {
                                        .5f-.5f*currentClip.y/currentClip.w);
         const float2 projectedPixel=ActiveRect.xy+projectedUV*ActiveRect.zw-0.5f;
         if(length(projectedPixel-float2(pixel))>EdgeTolerances.z)continue;
+        const float nearerTolerance=EdgeTolerances.x+EdgeTolerances.y*historyInCurrent.z;
+        if(historyInCurrent.z+nearerTolerance<currentZ) {
+            if(EdgeTolerances.w>0.f&&historyInCurrent.z<=EdgeTolerances.w)continue;
+            float currentEndpoint,currentForegroundSupport;
+            if(CurrentForegroundEndpoint(pixel,size,historyInCurrent.z,currentZ,
+                    currentEndpoint,currentForegroundSupport)&&currentForegroundSupport>=minEdgeSupport) {
+                edgeHistorySupport+=weights[k];
+                const float score=weights[k]*currentForegroundSupport;
+                if(score>edgeScore) {edgeScore=score;edgeRaw=currentEndpoint;}
+            }
+            continue;
+        }
+        // Old background never overrides a nearer surface that appeared now.
+        if(historyInCurrent.z>currentZ+tolerance)continue;
         if(abs(historyInCurrent.z-currentZ)>tolerance)continue;
         support+=weights[k];zsum+=weights[k]*historyInCurrent.z;
     }
+    // Keep only a current-supported foreground endpoint. This is bounded edge
+    // hysteresis, not a cross-surface depth average.
+    if(edgeScore>0.f&&edgeHistorySupport>=0.5f)return edgeRaw;
     // Require meaningful same-surface coverage before reusing history.
     if(support<0.15f)return currentRaw;
     const float historyZ=zsum/support;
-    const float weight=saturate(min(PreviousRangeWeight.z,0.9f))*saturate(support);
+    const float weight=effectiveHistoryWeight*saturate(support);
     const float blendedZ=lerp(currentZ,historyZ,weight);
     return RawFromForwardZ(blendedZ,CurrentRangeJitter.xy,CurrentProjection);
 }
