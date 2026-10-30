@@ -54,15 +54,15 @@ int main(int argc,char**argv)try{
  D3D11_VIEWPORT vp{0,0,64,24,0,1};c->RSSetViewports(1,&vp);c->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);c->VSSetShader(vs.Get(),nullptr,0);c->PSSetShader(ps.Get(),nullptr,0);
  auto*buffer=b.Get();c->PSSetConstantBuffers(0,1,&buffer);D3D11_SAMPLER_DESC sd{};sd.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP;sd.MaxAnisotropy=1;sd.MaxLOD=D3D11_FLOAT32_MAX;sd.ComparisonFunc=D3D11_COMPARISON_ALWAYS;ComPtr<ID3D11SamplerState>sam;hr(d->CreateSamplerState(&sd,&sam),"sampler");auto*sm=sam.Get();c->PSSetSamplers(0,1,&sm);
  uint64_t mixed=0,checks=0,opaque_green=0,partial_green=0,near_outer_green=0;
- for(float alpha:{0.f,.25f,.5f,.75f,.99f,1.f})for(bool near:{false,true}){
-  std::array<ComPtr<ID3D11Texture2D>,6> tex;std::array<ComPtr<ID3D11ShaderResourceView>,6> views;float red[]{1,0,0,1},blue[]{0,0,1,1},green[]{0,alpha,0,alpha};float z=near?10.f/50.f:10.f/200.f;
+ for(float alpha:{0.f,.25f,.5f,.75f,.99f,1.f})for(bool is_near:{false,true}){
+  std::array<ComPtr<ID3D11Texture2D>,6> tex;std::array<ComPtr<ID3D11ShaderResourceView>,6> views;float red[]{1,0,0,1},blue[]{0,0,1,1},green[]{0,alpha,0,alpha};float z=is_near?10.f/50.f:10.f/200.f;
   texture(4,red,tex[0],views[0]);texture(4,blue,tex[1],views[1]);texture(1,&z,tex[2],views[2]);texture(1,&z,tex[3],views[3]);texture(4,green,tex[4],views[4]);texture(4,green,tex[5],views[5]);
   std::array<ID3D11ShaderResourceView*,6> raw{};for(unsigned i=0;i<6;++i)raw[i]=views[i].Get();c->PSSetShaderResources(0,6,raw.data());c->UpdateSubresource(b.Get(),0,nullptr,data.data(),0,0);c->Draw(3,0);c->CopyResource(read.Get(),out.Get());D3D11_MAPPED_SUBRESOURCE map{};hr(c->Map(read.Get(),0,D3D11_MAP_READ,0,&map),"map");
   for(unsigned y=0;y<24;++y)for(unsigned x=0;x<64;++x){auto*pix=reinterpret_cast<const float*>(static_cast<const unsigned char*>(map.pData)+y*map.RowPitch)+4*x;unsigned nonzero=0;for(unsigned k=0;k<3;++k)if(pix[k]>.001f)++nonzero;if(nonzero>1)++mixed;++checks;
-   if(pix[1]>.999f){if(alpha==1&&!near)++opaque_green;if(alpha<.995f)++partial_green;if(near&&(x%32<8||x%32>=24||y<6||y>=18))++near_outer_green;}
+   if(pix[1]>.999f){if(alpha==1&&!is_near)++opaque_green;if(alpha<.995f)++partial_green;if(is_near&&(x%32<8||x%32>=24||y<6||y>=18))++near_outer_green;}
   }c->Unmap(read.Get(),0);std::array<ID3D11ShaderResourceView*,6> empty{};c->PSSetShaderResources(0,6,empty.data());
  }
  std::cout<<"pixels="<<checks<<" mixed_owners="<<mixed<<" opaque_synthetic="<<opaque_green<<" unsupported_synthetic="<<partial_green<<" near_periphery_warp="<<near_outer_green<<"\n";
- if(before)need(mixed>0,"CI75 ghosting witness not reproduced");else{need(mixed==0,"displaced image mixing");need(opaque_green>0,"all-native cheat");need(partial_green==0,"partial synthetic support selected");need(near_outer_green==0,"near periphery warped");}
+ if(before)need(mixed>0,"CI75 ghosting witness not reproduced");else{need(mixed==0,"displaced image mixing");need(opaque_green>0,"all-native cheat");need(partial_green==0,"partial synthetic support selected");need(near_outer_green==0,"is_near periphery warped");}
  return 0;
 }catch(const std::exception&e){std::cerr<<e.what()<<"\n";return 1;}
