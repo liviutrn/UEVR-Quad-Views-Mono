@@ -17,6 +17,7 @@ int main(){
     std::ifstream file(path,std::ios::binary);
     assert(bool(file));char prefix[4]{};file.read(prefix,4);
     assert(prefix[0]=='P'&&prefix[1]=='K'&&prefix[2]==3&&prefix[3]==4);
+    file.close(); // Windows requires closing the read handle before removal.
     std::filesystem::remove(path);
     return 0;
 }
