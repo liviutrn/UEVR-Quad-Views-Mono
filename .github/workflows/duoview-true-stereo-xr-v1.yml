@@ -1,5 +1,5 @@
-name: DuoView CI77 stabilized depth and LEFT geometry Windows build
-run-name: DuoView CI77 depth stabilization + LEFT geometry - Windows build (#${{ github.run_number }})
+name: DuoView CI77b stabilized depth and thin geometry Windows build
+run-name: DuoView CI77b stabilized depth + pixel footprints - Windows build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -563,16 +563,21 @@ jobs:
           ./ci77-depth-gpu.exe backend/src/mods/vr/DuoViewDepthStabilization.hlsl *> evidence/ci77-depth-gpu.log
           $code=$LASTEXITCODE; Get-Content evidence/ci77-depth-gpu.log
           if ($code -ne 0) { throw 'CI77 actual depth-stabilization GPU behavior failed' }
-          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr workspace/ci77/depth_class_gpu_tests.cpp /Fe:ci77-depth-class.exe /link d3d12.lib d3dcompiler.lib dxgi.lib
+          cl /nologo /std:c++20 /EHsc /W4 /WX /wd4100 /Ibackend/src/mods/vr workspace/ci77/depth_class_gpu_tests.cpp /Fe:ci77-depth-class.exe /link d3d12.lib d3dcompiler.lib dxgi.lib
           if ($LASTEXITCODE -ne 0) { throw 'CI77 depth resource integration fixture compilation failed' }
           ./ci77-depth-class.exe *> evidence/ci77-depth-class.log
           $code=$LASTEXITCODE; Get-Content evidence/ci77-depth-class.log
           if ($code -ne 0) { throw 'CI77 actual depth resource/state integration failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX workspace/ci77/footprint_gpu_tests.cpp /Fe:ci77-footprint.exe /link d3d11.lib d3dcompiler.lib dxgi.lib
+          if ($LASTEXITCODE -ne 0) { throw 'CI77b footprint GPU fixture compilation failed' }
+          ./ci77-footprint.exe backend/src/mods/vr/DuoViewSurfaceReproject.hlsl backend/src/mods/vr *> evidence/ci77-footprint-gpu.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci77-footprint-gpu.log
+          if ($code -ne 0) { throw 'CI77b actual production footprint geometry failed' }
           @'
           #include "DuoViewD3D12.hpp"
           int main(){uevr::duoview::dx12::DepthStabilizer s; s.reset(); return 0;}
           '@ | Set-Content ci77-header.cpp -Encoding ascii
-          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr ci77-header.cpp /Fe:ci77-header.exe /link d3d12.lib d3dcompiler.lib dxgi.lib
+          cl /nologo /std:c++20 /EHsc /W4 /WX /wd4100 /Ibackend/src/mods/vr ci77-header.cpp /Fe:ci77-header.exe /link d3d12.lib d3dcompiler.lib dxgi.lib
           if ($LASTEXITCODE -ne 0) { throw 'CI77 integrated compositor header compilation failed' }
           cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src workspace/ci51/guide_tests.cpp /Fe:ci51-guide-tests.exe
           if ($LASTEXITCODE -ne 0) { throw 'CI51 guide fixture compilation failed' }
@@ -737,7 +742,8 @@ jobs:
           Copy-Item workspace/ci75/README.md package/CI75_RECORDER_README.md
           Copy-Item workspace/ci76/README.md package/CI76_STABILITY_CHANGES.md
           Copy-Item workspace/ci77/README.md package/CI77_DEPTH_STABILIZATION.md
-          Copy-Item workspace/ci75/analyze_capture.py package/ANALYZE_CI75_CAPTURE.py
+          Copy-Item workspace/ci77/ASTRA_REVIEW.md package/CI77b_ASTRA_REVIEW.md
+          Copy-Item workspace/ci77/analyze_capture.py package/ANALYZE_CI75_CAPTURE.py
           @'
           DuoView CI77 — stabilized depth before reconstruction; high-resolution LEFT geometry
           Manual LEFT/RIGHT feature pinning and independent NGX depth-gallery capture. DSV copying disabled for DuoView.
@@ -758,7 +764,7 @@ jobs:
             ngx_fallback='Mono, no DSV candidate substitution'; ngx_observer_default='enabled'; ngx_manual_gallery=$true; ngx_dsv_copy_disabled=$true;
             motion_vectors_captured='optional diagnostic if input compatible'; motion_vectors_used_for_temporal_reconstruction=$false;
             depth_eye_frame_stage_identity_verified=$false; depth_pass_jitter_authenticated=$false;
-            mode='experimental-ci77-stabilized-depth-left-geometry'; ci77_depth_phase_correction=$true; ci77_camera_reprojected_depth_history=$true; ci77_left_geometry_primary=$true; ci77_processed_depth_preview=$true; ci76_exclusive_owners=$true; ci76_same_feature_resize=$true; ci76_pair_recovery=8; ci76_mpc_readback=$true; stable_release=$false; ci69_manual_ngx=$true;
+            mode='experimental-ci77-stabilized-depth-left-geometry'; ci77_depth_phase_correction=$true; ci77_camera_reprojected_depth_history=$true; ci77_left_geometry_primary=$true; ci77b_pixel_footprints_configurable=$true; ci77_processed_depth_preview=$true; ci76_exclusive_owners=$true; ci76_same_feature_resize=$true; ci76_pair_recovery=8; ci76_mpc_readback=$true; stable_release=$false; ci69_manual_ngx=$true;
             ci74_right_owner_mask_jitter_compensated=$true; ci74_target_footprint_centered=$true;
             ci75_lossless_sequence_recorder=$true; ci75_sequence_schema='duoview-diagnostic-sequence-2';
             ci75_upload_part_limit_bytes=20971520; ci75_size_truncation=$false

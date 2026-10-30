@@ -1,4 +1,4 @@
-# CI77 — depth stabilization before reconstruction
+# CI77b — stabilized depth and measured pixel footprints
 
 Experimental successor to CI76 build106. This build prioritizes stable depth guides and high-resolution LEFT geometry, with direct raw/processed visual comparison. A Windows build and GPU tests do not certify headset quality.
 
@@ -7,6 +7,7 @@ Experimental successor to CI76 build106. This build prioritizes stable depth gui
 Stereo and quality → Advanced stereo and capture diagnostics:
 
 - **CI77: Stabilize depth before reconstruction / preview** (default ON). OFF restores raw guides and legacy A/B reconstruction choices.
+- **CI77b: Preserve thin geometry (pixel footprints)** (default ON). Represents each measured depth pixel by its half-pixel footprint so isolated stems survive. OFF selects the old connected triangles for comparison.
 - **Temporal depth stabilization (camera reprojection)** (default ON). OFF retains phase correction on each current frame.
 - **Depth history weight (%)**: default75, range0–90. Larger weights retain more compatible history. This controls depth, not a blend of displaced eye images.
 - **Display pinned DLSS depth**: LEFT, RIGHT or both. It samples the same processed textures used by stereo when stabilization is ON; RAW textures when OFF. Both NGX guides must be pinned for stabilized viewing.
@@ -17,6 +18,8 @@ For visual verification stand still near a static high-contrast boundary, then m
 
 With stabilization ON, right-foveal geometry is projected from full-resolution LEFT depth. The old coarse RIGHT inverse gather is bypassed even if its legacy strategy toggle remains checked. RIGHT depth only conservatively tests visibility; mixed coarse foreground/background footprints do not independently veto sharp LEFT geometry. Foveal and full-FOV guide histories remain separate.
 
+The optional pixel-footprint topology avoids discarding isolated measured foreground pixels merely because adjacent pixels belong to the background. It keeps real camera transforms and hardware depth competition; it does not invent invisible source color. See `ASTRA_REVIEW.md` for capture measurements and limitations.
+
 The entire available native LEFT crop is retained up to its boundary. LEFT peripheral near geometry is no longer deliberately replaced with the RIGHT-camera hand. Actual disocclusions still have limited source data and require fallback.
 
 ## Recording
@@ -25,4 +28,4 @@ The existing recorder keeps its complete sequence and20MiB ZIP part scheme. Capt
 
 ## Scope
 
-The source game's DLSS sequence remains intact; stabilization removes its phase from our reconstruction guides. Camera-reprojected history must reject inconsistent surfaces and reset when sources/layouts change. Dynamic geometry and previously unseen surfaces cannot be made correct by holding an old depth map. No claim of zero remaining headset jitter, native-stereo equivalence or measured RTX5070 cost is made before in-game validation.
+The source game's DLSS sequence remains intact; stabilization removes its phase from our reconstruction guides. Camera-reprojected history rejects inconsistent surfaces and stale sources; moving gaze uses the correct prior foveal crop. Bounded foreground edge retention requires both current and prior support and never averages foreground with background. Temporal influence fades out below 200cm and is disabled at/below 80cm to reduce hand-motion lag. Dynamic geometry and previously unseen surfaces cannot be made correct by holding an old depth map. No claim of zero remaining headset jitter, native-stereo equivalence or measured RTX5070 cost is made before in-game validation.

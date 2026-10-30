@@ -1,0 +1,44 @@
+[
+  {
+    "frame": 0,
+    "valid_points": 341532,
+    "unrepresented_points": 62285,
+    "fraction_unrepresented": 0.1823694412236628,
+    "triangle_reject_fraction": 0.5881379099398771
+  },
+  {
+    "frame": 16,
+    "valid_points": 342201,
+    "unrepresented_points": 62424,
+    "fraction_unrepresented": 0.1824191045613543,
+    "triangle_reject_fraction": 0.5877603494585113
+  },
+  {
+    "frame": 32,
+    "valid_points": 340428,
+    "unrepresented_points": 62109,
+    "fraction_unrepresented": 0.18244386478198032,
+    "triangle_reject_fraction": 0.5902474693889255
+  },
+  {
+    "frame": 48,
+    "valid_points": 341992,
+    "unrepresented_points": 62181,
+    "fraction_unrepresented": 0.18182004257409531,
+    "triangle_reject_fraction": 0.5861506992037775
+  },
+  {
+    "frame": 64,
+    "valid_points": 341741,
+    "unrepresented_points": 62320,
+    "fraction_unrepresented": 0.1823603255096696,
+    "triangle_reject_fraction": 0.587356025196188
+  },
+  {
+    "frame": 80,
+    "valid_points": 342182,
+    "unrepresented_points": 62273,
+    "fraction_unrepresented": 0.1819879479341403,
+    "triangle_reject_fraction": 0.5864355423011116
+  }
+]
