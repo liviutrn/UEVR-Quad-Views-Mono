@@ -484,6 +484,8 @@ jobs:
       - name: Apply CI51 final public source and validate actual NGX snapshot and shader paths
         shell: pwsh
         run: |
+          function Show-Tail($f){ if (Test-Path $f) { $t=(Get-Content $f -Tail 30) -join '%0A'; Write-Host "::error::LOG TAIL [$f]%0A$t" } }
+          trap { Write-Host "::error::BUILD-STEP-FAILED: $($_.Exception.Message)"; $l=Get-ChildItem evidence -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($l) { Show-Tail $l.FullName }; exit 1 }
           python workspace/ci51/test_source_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'CI51 line-ending and tamper contract regression' }
           python workspace/ci51/apply.py backend
@@ -553,17 +555,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI76 production integration failed' }
           python workspace/ci76/adapt_legacy_tests.py workspace
           if ($LASTEXITCODE -ne 0) { throw 'CI76 GPU fixture recovery adaptation failed' }
-          python workspace/ci77/apply.py backend
-          if ($LASTEXITCODE -ne 0) { throw 'CI77 stabilized-depth production integration failed' }
+          python workspace/ci77/apply.py backend *> evidence/ci77-apply.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci77-apply.log
+          if ($code -ne 0) { throw 'CI77 stabilized-depth production integration failed' }
           python workspace/ci77/embed_shaders.py backend *> evidence/ci51-shader-build.log
           $code=$LASTEXITCODE; Get-Content evidence/ci51-shader-build.log
           if ($code -ne 0) { throw 'CI51 final production shader compile failed' }
-          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr workspace/ci77/depth_gpu_tests.cpp /Fe:ci77-depth-gpu.exe /link d3d11.lib d3dcompiler.lib dxgi.lib
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr workspace/ci77/depth_gpu_tests.cpp /Fe:ci77-depth-gpu.exe /link d3d11.lib d3dcompiler.lib dxgi.lib *> evidence/ci77-cl-depth-gpu.log
           if ($LASTEXITCODE -ne 0) { throw 'CI77 depth WARP fixture compilation failed' }
           ./ci77-depth-gpu.exe backend/src/mods/vr/DuoViewDepthStabilization.hlsl *> evidence/ci77-depth-gpu.log
           $code=$LASTEXITCODE; Get-Content evidence/ci77-depth-gpu.log
           if ($code -ne 0) { throw 'CI77 actual depth-stabilization GPU behavior failed' }
-          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr workspace/ci77/depth_class_gpu_tests.cpp /Fe:ci77-depth-class.exe /link d3d12.lib d3dcompiler.lib dxgi.lib
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr workspace/ci77/depth_class_gpu_tests.cpp /Fe:ci77-depth-class.exe /link d3d12.lib d3dcompiler.lib dxgi.lib *> evidence/ci77-cl-depth-class.log
           if ($LASTEXITCODE -ne 0) { throw 'CI77 depth resource integration fixture compilation failed' }
           ./ci77-depth-class.exe *> evidence/ci77-depth-class.log
           $code=$LASTEXITCODE; Get-Content evidence/ci77-depth-class.log
@@ -572,7 +575,7 @@ jobs:
           #include "DuoViewD3D12.hpp"
           int main(){uevr::duoview::dx12::DepthStabilizer s; s.reset(); return 0;}
           '@ | Set-Content ci77-header.cpp -Encoding ascii
-          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr ci77-header.cpp /Fe:ci77-header.exe /link d3d12.lib d3dcompiler.lib dxgi.lib
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr ci77-header.cpp /Fe:ci77-header.exe /link d3d12.lib d3dcompiler.lib dxgi.lib *> evidence/ci77-cl-header.log
           if ($LASTEXITCODE -ne 0) { throw 'CI77 integrated compositor header compilation failed' }
           cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src workspace/ci51/guide_tests.cpp /Fe:ci51-guide-tests.exe
           if ($LASTEXITCODE -ne 0) { throw 'CI51 guide fixture compilation failed' }
