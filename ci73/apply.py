@@ -36,4 +36,30 @@ if __name__=="__main__":
  b='if(MeshConfig.z==0u && MeshQuality.w>=7.5f && targetZ<80.f)discard;'
  if text.count(a)!=1:raise RuntimeError("CI73 forward model near veto anchor drift")
  p.write_text(text.replace(a,b))
+ # Close the RIGHT-fovea transition gap: high-res LEFT reconstruction must
+ # have a 5-texel neighborhood with stable confidence, not merely one valid
+ # center pixel, before replacing native RIGHT color.
+ p=root/"src/mods/vr/DuoViewStereoCompositeRaster.hlsl"
+ text=p.read_text()
+ old='''        const float4 projected=SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local),0);
+        return projected.a>=.99f ? float4(projected.rgb/max(projected.a,1.e-5f),1.f)
+                                 : float4(realRight.rgb,1.f);'''
+ new='''        // Full 5-tap support near silhouette, or native RIGHT fallback.
+        const float2 stepUV=1.f/float2(FoveaRect.zw);
+        const float4 projected=SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local),0);
+        float coverage=projected.a;
+        coverage=min(coverage,SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local+float2(stepUV.x,0)),0).a);
+        coverage=min(coverage,SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local-float2(stepUV.x,0)),0).a);
+        coverage=min(coverage,SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local+float2(0,stepUV.y)),0).a);
+        coverage=min(coverage,SyntheticRightFovea.SampleLevel(
+            LinearClamp,saturate(local-float2(0,stepUV.y)),0).a);
+        return coverage>=.995f ? float4(projected.rgb/max(projected.a,1.e-5f),1.f)
+                                : float4(realRight.rgb,1.f);'''
+ if text.count(old)!=1:raise RuntimeError("CI73 right-fovea 5-tap edge stability anchor drift")
+ p.write_text(text.replace(old,new))
  print("CI73 applied: optional conservative pixel-owner, mono near-field, no displaced-eye RGB blend; preserved CI71/CI72")
