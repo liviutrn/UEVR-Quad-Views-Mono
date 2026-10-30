@@ -62,4 +62,13 @@ if __name__=="__main__":
                                 : float4(realRight.rgb,1.f);'''
  if text.count(old)!=1:raise RuntimeError("CI73 right-fovea 5-tap edge stability anchor drift")
  p.write_text(text.replace(old,new))
+ # CI73 planar WARP A/B: 48/56 high-resolution coverage, exactly 8
+ # native RIGHT pixels came from the crop seam feather threshold. Keep a
+ # single owner (no color crossfade), but move the hard seam outward.
+ p=root/"src/mods/vr/DuoViewStereoCompositeRaster.hlsl"
+ text=p.read_text()
+ a='const bool chooseFovea=feather>=0.50f;'
+ b='const bool chooseFovea=feather>=0.25f;'
+ if text.count(a)!=1:raise RuntimeError("CI73 crop seam threshold source drift")
+ p.write_text(text.replace(a,b))
  print("CI73 applied: optional conservative pixel-owner, mono near-field, no displaced-eye RGB blend; preserved CI71/CI72")
