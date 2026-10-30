@@ -95,8 +95,8 @@ float4 VS(uint id:SV_VertexID):SV_POSITION {
         for(unsigned y=0;y<RH;++y)for(unsigned x=0;x<RW;++x) {
             const float u=(float(x)+.5f-jitter[0])/RW;
             const float v=(float(y)+.5f-jitter[1])/RH;
-            const bool near=scene==0?u<.47f:scene==1?v<.54f:u+.6f*v<.82f;
-            const float z=near?50.f:200.f;
+            const bool foreground=scene==0?u<.47f:scene==1?v<.54f:u+.6f*v<.82f;
+            const float z=foreground?50.f:200.f;
             depth[(RY+y)*DW+RX+x]=reversed?10.f/z:1.f-10.f/z;
         }
         set("RightDepthRect",{float(RX),float(RY),float(RW),float(RH)});
@@ -122,14 +122,14 @@ float4 VS(uint id:SV_VertexID):SV_POSITION {
             const float dx=RX+u*RW+jitter[0],dy=RY+v*RH+jitter[1];
             const int cx=std::clamp(int(std::floor(dx)),int(RX),int(RX+RW-1));
             const int cy=std::clamp(int(std::floor(dy)),int(RY),int(RY+RH-1));
-            bool near=false;
-            for(int j=-1;j<=1;++j)for(int i=-1;i<=1;++i)near=near||zAt(cx+i,cy+j)<80.f;
+            bool foreground=false;
+            for(int j=-1;j<=1;++j)for(int i=-1;i<=1;++i)foreground=foreground||zAt(cx+i,cy+j)<80.f;
             const int ox=int(std::floor(dx-.5f)),oy=int(std::floor(dy-.5f));
             const std::array<float,4> zs{zAt(ox,oy),zAt(ox+1,oy),zAt(ox,oy+1),zAt(ox+1,oy+1)};
             const auto [mn,mx]=std::minmax_element(zs.begin(),zs.end());
             const bool edge=*mx-*mn>2.f*(1.f+.015f*(*mn));
             auto* pixel=reinterpret_cast<const float*>(static_cast<const unsigned char*>(mapped.pData)+size_t(y)*mapped.RowPitch)+x*4;
-            const bool bad=(pixel[0]>.5f)!=near||(pixel[1]>.5f)!=edge;
+            const bool bad=(pixel[0]>.5f)!=foreground||(pixel[1]>.5f)!=edge;
             ++checks;if(bad){++errors;if(jitter[0]||jitter[1])++nonzero_phase_errors;else ++zero_phase_errors;}
         }
         ctx->Unmap(readback.Get(),0);
