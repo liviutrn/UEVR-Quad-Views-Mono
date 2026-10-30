@@ -1,0 +1,44 @@
+name: CI74 depth jitter audit
+on:
+  push:
+    branches: [fix/ci74-depth-jitter-alignment-20261030]
+    paths: [ci74/**, .github/workflows/ci74-depth-jitter-audit.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actual-shader-regression:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Assemble exact public CI73 shader audit subset
+        shell: pwsh
+        run: |
+          python workspace/ci74/assemble_public_audit.py workspace audit_backend
+          if ($LASTEXITCODE -ne 0) { throw 'Public shader assembly failed' }
+      - name: Compile mask probe and reproduce the original CI73 regression
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX workspace/ci74/mask_gpu_tests.cpp /Fe:ci74-mask-gpu.exe /link d3d11.lib d3dcompiler.lib dxgi.lib
+          if ($LASTEXITCODE -ne 0) { throw 'Mask probe compilation failed' }
+          ./ci74-mask-gpu.exe audit_backend/src/mods/vr/DuoViewStereoCompositeRaster.hlsl --expect-regression
+          if ($LASTEXITCODE -ne 0) { throw 'Original shader did not reproduce regression' }
+      - name: Apply correction and require exact production mask agreement
+        shell: pwsh
+        run: |
+          python workspace/ci74/apply.py audit_backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI74 exact patch failed' }
+          ./ci74-mask-gpu.exe audit_backend/src/mods/vr/DuoViewStereoCompositeRaster.hlsl
+          if ($LASTEXITCODE -ne 0) { throw 'Corrected shader mask mismatch' }
+      - name: Check per-view crop jitter projection math and negative controls
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Iaudit_backend/src workspace/ci74/coordinate_tests.cpp /Fe:ci74-coordinates.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Coordinate test compilation failed' }
+          ./ci74-coordinates.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Coordinate regression failed' }
