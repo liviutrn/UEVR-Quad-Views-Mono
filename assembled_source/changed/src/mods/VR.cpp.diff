@@ -1,0 +1,753 @@
+diff --git a/src/mods/VR.cpp b/src/mods/VR.cpp
+index a4ff6a9..fdd9945 100644
+--- a/src/mods/VR.cpp
++++ b/src/mods/VR.cpp
+@@ -1,6 +1,7 @@
+ #include <sdk/ReflectedNameCall.hpp>
+ #define NOMINMAX
+ 
++#include "vr/DuoViewNgxGuide.hpp"
+ #include "vr/ProSpiNativeFocusGuard.hpp"
+ #include "vr/ControllerTouchBindings.hpp"
+ #include "vr/StockFrameBindingMigration.hpp"
+@@ -57,6 +58,7 @@
+ #include "utility/Logging.hpp"
+ 
+ #include "VR.hpp"
++#include <cstring>
+ #include "vr/Stalker2NativePolicy.hpp"
+ #include "UObjectHook.hpp"
+ #include "GameSpecific.hpp"
+@@ -3992,6 +3994,12 @@ bool VR::should_ignore_native_stereo_fix_for_avowed_sync() const {
+ }
+ 
+ bool VR::should_force_native_stereo_fix_same_pass() const {
++    if (is_duoview_renderer_active()) {
++        if (!m_duoview.settings().native_fix_same_pass ||
++            is_using_afr() || !stalker2_native_fix_requires_same_pass_cached()) { return false; }
++        SPDLOG_INFO_ONCE("[DuoView][NativeStereoFix] Preserving the validated same-pass STALKER 2 layout");
++        return true;
++    }
+     if (is_using_mono()) { return false; }
+     if (!m_native_stereo_fix->value() || is_using_afr() || !stalker2_native_fix_requires_same_pass_cached()) {
+         return false;
+@@ -4006,6 +4014,7 @@ bool VR::should_force_native_stereo_fix_same_pass() const {
+ }
+ 
+ bool VR::is_stalker2_native_fix_experiment_enabled() const {
++    if (is_duoview_renderer_active()) { return false; }
+     if (!m_stalker2_native_pair_experiment->value() || !is_native_stereo_fix_enabled() ||
+         !g_framework || !g_framework->is_dx12()) { return false; }
+     static const bool target = [] {
+@@ -8746,6 +8755,169 @@ void VR::on_post_engine_tick(sdk::UGameEngine* engine, float delta) {
+         return;
+     }
+ 
++    // STALKER 2 DuoView foreground parity. Automatic only while ID6 is active.
++    // The game can overwrite MPC_FOV after a tick, so merely setting these
++    // scalars once on entry is not robust. Read each tick but only WRITE on
++    // observed drift. Resolve/capture the MPC only once per live UObject.
++    // Both source views consume the same world MPC; no per-view FOV rewriting.
++    {
++        struct ForegroundMPCState {
++            uintptr_t world_id{};
++            std::optional<sdk::object_liveness::Identity> world_identity{};
++            sdk::UObject* collection{};
++            std::optional<sdk::object_liveness::Identity> collection_identity{};
++            sdk::UObject* library{};
++            std::optional<sdk::object_liveness::Identity> library_identity{};
++            sdk::UFunction* getter{};
++            sdk::UFunction* setter{};
++            float original_enabled{};
++            float original_depth{};
++            bool active{};
++        };
++        static ForegroundMPCState fg{};
++        const auto reconcile_foreground = [&]() {
++            m_duo_mpc_verified.store(false);
++            const bool requested = is_duoview_renderer_active();
++            if (!requested && !fg.active) return;
++
++            auto* world = engine != nullptr ? engine->get_world() : nullptr;
++            if (!world) { fg = {}; return; }
++
++            const uintptr_t world_id = reinterpret_cast<uintptr_t>(world);
++            if (fg.world_id != 0 &&
++                (fg.world_id != world_id || !fg.world_identity ||
++                 !sdk::is_current_object(*fg.world_identity))) {
++                // Never write saved scalars into another game world.
++                fg = {};
++            }
++            if (!requested && !fg.active) return;
++
++            // Revalidate cached UObject identity each tick: cached pointers
++            // must never be used after GC, including an in-world asset reload.
++            if (fg.collection &&
++                (!fg.collection_identity ||
++                 !sdk::is_current_object(*fg.collection_identity))) {
++                fg = {};
++            }
++            if (!requested && !fg.active) return;
++            if (!fg.collection) {
++                sdk::UObject* unique_collection{};
++                for (auto* object : get_live_objects_by_class_name(
++                         L"Class /Script/Engine.MaterialParameterCollection")) {
++                    if (object && object->get_full_name().ends_with(L".MPC_FOV")) {
++                        if (unique_collection) {
++                            SPDLOG_WARNING_EVERY_N_SEC(5,
++                                "[DuoView][Foreground] ambiguous MPC_FOV asset; refusing override");
++                            return;
++                        }
++                        unique_collection = object;
++                    }
++                }
++                if (!unique_collection) return;
++                const auto observed_world = sdk::observe_uobject(
++                    static_cast<sdk::UObjectBase*>(world));
++                const auto observed_collection = sdk::observe_uobject(
++                    static_cast<sdk::UObjectBase*>(unique_collection));
++                if (!observed_world || !observed_collection ||
++                    !sdk::is_current_object(observed_world->identity) ||
++                    !sdk::is_current_object(observed_collection->identity)) return;
++                fg.world_id = world_id;
++                fg.world_identity = observed_world->identity;
++                fg.collection = unique_collection;
++                fg.collection_identity = observed_collection->identity;
++            }
++
++            // Reflection method lookups are also cached per activation;
++            // only cheap UObject identity checks remain on the fast path.
++            if (!fg.library || !fg.library_identity ||
++                !sdk::is_current_object(*fg.library_identity)) {
++                auto* klass = sdk::find_uobject<sdk::UClass>(
++                    L"Class /Script/Engine.KismetMaterialLibrary");
++                auto* library = klass != nullptr ? klass->get_class_default_object() : nullptr;
++                auto* getter = klass != nullptr ? klass->find_function(L"GetScalarParameterValue") : nullptr;
++                auto* setter = klass != nullptr ? klass->find_function(L"SetScalarParameterValue") : nullptr;
++                if (!library || !getter || !setter) return;
++                const auto observed = sdk::observe_uobject(
++                    static_cast<sdk::UObjectBase*>(library));
++                if (!observed || !sdk::is_current_object(observed->identity)) return;
++                fg.library = library;
++                fg.library_identity = observed->identity;
++                fg.getter = getter;
++                fg.setter = setter;
++            }
++
++            const auto read = [&](std::wstring_view parameter, float& value) {
++                sdk::ReflectedNameCall call{fg.getter};
++                if (!call.write(L"WorldContextObject", static_cast<sdk::UObject*>(world)) ||
++                    !call.write(L"Collection", fg.collection) ||
++                    !call.write_name(L"ParameterName", sdk::OwnedFName{parameter}) ||
++                    !call.field(L"ReturnValue", sizeof(float)) ||
++                    !call.invoke(fg.library)) return false;
++                value = call.read<float>(L"ReturnValue");
++                return std::isfinite(value);
++            };
++            const auto write = [&](std::wstring_view parameter, float value) {
++                sdk::ReflectedNameCall call{fg.setter};
++                return call.write(L"WorldContextObject", static_cast<sdk::UObject*>(world)) &&
++                    call.write(L"Collection", fg.collection) &&
++                    call.write_name(L"ParameterName", sdk::OwnedFName{parameter}) &&
++                    call.write(L"ParameterValue", value) && call.invoke(fg.library);
++            };
++
++            float current_enabled{}, current_depth{};
++            if (!read(L"IsFOVEnabled", current_enabled) ||
++                !read(L"DepthScale", current_depth)) return;
++
++            if (requested && !fg.active) {
++                // Preserve the live baseline for restoration on mode exit.
++                fg.original_enabled = current_enabled;
++                fg.original_depth = current_depth;
++                fg.active = true;
++                SPDLOG_INFO("[DuoView][Foreground] MPC_FOV activated; cached asset; "
++                            "conditional updates only (original IsFOVEnabled={}, DepthScale={})",
++                            fg.original_enabled, fg.original_depth);
++            }
++            const float wanted_enabled = requested ? 0.0f : fg.original_enabled;
++            const float wanted_depth = requested ? 1.0f : fg.original_depth;
++            constexpr float epsilon = 0.0001f;
++
++            // No setter calls once the game values are already correct.
++            // If STALKER 2 rewrites either value every tick, correct it in
++            // this SAME tick to preserve the proven v186.1 foreground fix.
++            const bool enabled_ok = std::abs(current_enabled - wanted_enabled) <= epsilon ||
++                                    write(L"IsFOVEnabled", wanted_enabled);
++            const bool depth_ok = std::abs(current_depth - wanted_depth) <= epsilon ||
++                                  write(L"DepthScale", wanted_depth);
++            // Verify writes by actual getter values. When no write was
++            // needed the values already read are the confirmation.
++            float verified_enabled=current_enabled,verified_depth=current_depth;
++            const bool reread_enabled=std::abs(current_enabled-wanted_enabled)<=epsilon ||
++                read(L"IsFOVEnabled",verified_enabled);
++            const bool reread_depth=std::abs(current_depth-wanted_depth)<=epsilon ||
++                read(L"DepthScale",verified_depth);
++            const bool verified=enabled_ok && depth_ok && reread_enabled && reread_depth &&
++                std::abs(verified_enabled-wanted_enabled)<=epsilon &&
++                std::abs(verified_depth-wanted_depth)<=epsilon;
++            m_duo_mpc_enabled.store(verified_enabled);m_duo_mpc_depth.store(verified_depth);
++            m_duo_mpc_verified.store(requested && verified);
++            if (!verified) {
++                SPDLOG_WARNING_EVERY_N_SEC(5,
++                    "[DuoView][Foreground] MPC_FOV readback verification failed; foreground projection remains unverified");
++                return;
++            }
++            if (!requested) {
++                fg = {};
++                SPDLOG_INFO("[DuoView][Foreground] restored original MPC_FOV scalars");
++            }
++        };
++        try {
++            reconcile_foreground();
++        } catch (...) {
++            SPDLOG_WARNING_EVERY_N_SEC(5,
++                "[DuoView][Foreground] MPC access failed; refusing unsafe write");
++        }
++    }
++
+     // Some Supermassive camera paths rewrite crop/aspect state during engine
+     // tick. Reapply the opt-in compatibility after game tick, but keep it to
+     // the active camera only; broad object sweeps caused cadence/flicker issues.
+@@ -13324,7 +13496,7 @@ bool VR::service_mono_transition_present() {
+         set_mono_status("Unsupported rendering method ID; preserved in profile, select a supported method");
+         return true;
+     }
+-    const bool entering = selection.requested() == RenderingMethod::MONO;
++    const bool entering = uevr::mono::is_mono_family(selection.requested());
+     if (is_using_mono() || entering) {
+         if (const auto reason = mono_unavailable_reason()) {
+             set_mono_status(reason);
+@@ -13354,8 +13526,15 @@ bool VR::service_mono_transition_present() {
+ void VR::service_mono_transition_game_thread() {
+     auto& selection = m_rendering_method->selection();
+     if (!selection.pending()) { return; }
+-    if (selection.requested() == RenderingMethod::MONO && mono_unavailable_reason() != nullptr) { return; }
++    if (uevr::mono::is_mono_family(selection.requested()) && mono_unavailable_reason() != nullptr) { return; }
+     if (!selection.commit_at_game_frame_boundary()) { return; }
++    m_duoview.retire();
++    if (m_fake_stereo_hook) m_fake_stereo_hook->duoview_delivery.retire(mono_generation());
++    m_duoview_candidate_key.store(nullptr, std::memory_order_release);
++    m_duoview_frozen_key.store(nullptr, std::memory_order_release);
++    m_duo_shading->value()=false;
++    configure_duoview();
++    if (selection.active() == RenderingMethod::DUOVIEW_MONO) m_duoview_quarantined.store(false, std::memory_order_release);
+     m_mono_main_view_token = 0;
+     m_mono_attachment_token = 0;
+     m_openxr->reset_mono_projection_history();
+@@ -13721,6 +13900,7 @@ void VR::on_config_load(const utility::Config& cfg, bool set_defaults) {
+ 
+     // Load camera offsets
+     load_cameras();
++    configure_duoview();
+     load_prospi_camera_calibrations();
+     load_generic_camera_presets();
+ }
+@@ -14698,6 +14878,12 @@ void VR::on_pre_imgui_frame() {
+ 
+ void VR::handle_keybinds() {
+     ZoneScopedN(__FUNCTION__);
++    // Sample keys on the game thread once per frame, not per render view.
++    if (m_xyz_headscale_toggle_key->is_key_down_once()) {
++        m_xyz_headscale_enabled->toggle();
++    }
++    m_xyz_headscale_hold_bypass.store(
++        m_xyz_headscale_hold_bypass_key->is_key_down(), std::memory_order_relaxed);
+ 
+     if (m_keybind_recenter->is_key_down_once()) {
+         recenter_view();
+@@ -15236,8 +15422,11 @@ void VR::on_draw_sidebar_entry(std::string_view name) {
+         if (has_unsupported_rendering_method()) {
+             ImGui::TextWrapped("Unsupported rendering method ID %d is preserved; select an available method.", requested_rendering_method());
+         }
+-        if (is_using_mono() || requested_rendering_method() == RenderingMethod::MONO || is_mono_transition_pending()) {
+-            ImGui::TextWrapped("Mono (Experimental): one centered, head-tracked scene for both eyes; no binocular scene depth. DX11/DX12 with OpenXR. Native Fix, Ghost Fix/bootstrap and depth submission are inactive in Mono; saved preferences are retained.");
++        if (is_using_mono() || uevr::mono::is_mono_family(requested_rendering_method()) || is_mono_transition_pending()) {
++            if (!is_using_duoview_mono()) ImGui::TextWrapped("Mono (Experimental): one centered, head-tracked scene for both eyes; no binocular scene depth. DX11/DX12 with OpenXR. Native Fix, Ghost Fix/bootstrap and depth submission are inactive in Mono; saved preferences are retained.");
++            if (is_using_duoview_mono() || requested_rendering_method() == RenderingMethod::DUOVIEW_MONO) {
++                ImGui::TextWrapped(is_duoview_renderer_active() ? (duoview_gaze_active() ? "DuoView: eye-tracked native sources (PSVR2 Toolkit active)" : "DuoView: held crop / center fallback (gaze unavailable)") : "DuoView ID6: original Joey Mono fallback / DuoView inactive");
++            }
+             ImGui::TextWrapped("Mono: %s", mono_status());
+             if (const auto reason = mono_unavailable_reason()) { ImGui::TextWrapped("Unavailable: %s", reason); }
+             if (is_mono_transition_pending()) {
+@@ -15245,6 +15434,304 @@ void VR::on_draw_sidebar_entry(std::string_view name) {
+                     uevr::mono::label(requested_rendering_method()), uevr::mono::label(m_rendering_method->value()));
+             }
+         }
++        if (is_using_duoview_mono() || requested_rendering_method() == RenderingMethod::DUOVIEW_MONO) {
++            if (ImGui::TreeNode("DuoView — stereo and quality")) {
++                ImGui::TextWrapped("Two native UE views: LEFT high-resolution fovea and RIGHT full-field periphery. Synthesized stereo fills the missing view regions using DLSS depth from both eyes. Native eye separation is preserved.");
++                    int stereo_mode=int(m_d3d12.duoview_stereo_mode());
++                    bool stereo_reverse=m_d3d12.duoview_stereo_reverse();
++                    const char* mode_labels[]={
++                        "0 - V3 MONO (baseline / recovery)",
++                        "1 - Legacy reconstructed stereo",
++                        "2 - Legacy stereo + blue right-eye tint (proof)",
++                        "3 - Legacy fovea-only stereo",
++                        "4 - SURFACE FOVEA only (recommended isolation)",
++                        "5 - SURFACE FOVEA + PERIPHERY (recommended full stereo)",
++                        "6 - COVERAGE: green/cyan reconstructed; red/magenta fallback"};
++                    bool stereo_enabled=stereo_mode!=0;
++                    bool mode_changed=ImGui::Checkbox("Enable synthesized stereo (DLSS depth)",&stereo_enabled);
++                    if(mode_changed) {
++                        stereo_mode=stereo_enabled?5:0;
++                        if(stereo_enabled) { m_duo_split_eye->value()=true; stereo_reverse=false; }
++                    }
++                    if(mode_changed)m_d3d12.duoview_stereo_config(uint32_t(stereo_mode),stereo_reverse);
++                    if(stereo_mode && !m_duo_split_eye->value())
++                        ImGui::TextWrapped("Stereo requires native LEFT/RIGHT sources. Enable synthesized stereo again to restore the source setup.");
++                    ImGui::TextWrapped("Output: %s",m_d3d12.duoview_stereo_output_status());
++                    ImGui::Text("XR copies submitted: %llu | rejected: %llu | recorded: %llu",
++                        static_cast<unsigned long long>(m_d3d12.duoview_stereo_frames()),
++                        static_cast<unsigned long long>(m_d3d12.duoview_stereo_rejected_frames()),
++                        static_cast<unsigned long long>(m_d3d12.duoview_stereo_recorded_frames()));
++                ImGui::TextWrapped("Unavailable or mismatched guide pairs use the mono fallback. Output status above reports the actual path; headset image quality still requires validation.");
++                if(ImGui::TreeNode("Advanced stereo and capture diagnostics")) {
++                    if(ImGui::Combo("Stereo output mode",&stereo_mode,mode_labels,7) |
++                       ImGui::Checkbox("Reverse parallax sign (diagnostic)",&stereo_reverse))
++                        m_d3d12.duoview_stereo_config(uint32_t(stereo_mode),stereo_reverse);
++                    ImGui::TextWrapped("Modes 1-3 are legacy comparisons. Mode 4 isolates the synthetic right fovea; mode 5 enables both reconstructed regions; mode 6 shows coverage.");
++                    ImGui::Separator();
++                    ImGui::TextUnformatted("DLSS DEPTH SOURCES — MANUAL ASSIGNMENT");
++                    ImGui::TextWrapped("These are actual NGX DLSS-SR evaluations. Choose LEFT fovea and RIGHT periphery explicitly. Pins preserve the selected feature across resolution changes; a released/replaced DLSS feature needs a re-pin. Stereo resumes after 8 fresh compatible pairs.");
++                    const auto ngx_sources=uevr::duoview::ngx::manual_registry().browse();
++                    const auto ngx_pins=uevr::duoview::ngx::manual_registry().pins();
++                    ImGui::Text("Observed NGX sources: %d",int(ngx_sources.size()));
++                    for(size_t i=0;i<ngx_sources.size();++i) {
++                        const auto& candidate=ngx_sources[i];
++                        ImGui::PushID(int(i));
++                        const bool selected_l=ngx_pins[0]==std::array<uintptr_t,3>{candidate.feature,candidate.output_width,candidate.output_height};
++                        const bool selected_r=ngx_pins[1]==std::array<uintptr_t,3>{candidate.feature,candidate.output_width,candidate.output_height};
++                        ImGui::Text("#%zu: %ux%u output, %ux%u DLSS input; feature 0x%llx gen %llu %s%s",
++                            i+1,candidate.output_width,candidate.output_height,candidate.input_width,
++                            candidate.input_height,static_cast<unsigned long long>(candidate.feature),
++                            static_cast<unsigned long long>(candidate.generation),
++                            selected_l?"[LEFT] ":"",selected_r?"[RIGHT]":"");
++                        const auto age=uevr::duoview::ngx::manual_registry().age_ms(candidate);
++                        const bool fresh=age<=3000u;
++                        ImGui::Text("Age %llu ms | %s | feature class %u %s",
++                            static_cast<unsigned long long>(age),fresh?"LIVE":"STALE - cannot pin",
++                            candidate.kind,candidate.create_observed?"create verified":"kind uncertain");
++                        if(!fresh)ImGui::BeginDisabled();
++                        if(ImGui::Button("Use as LEFT (fovea)")) {
++                            if(!uevr::duoview::ngx::manual_registry().pin(0,candidate.feature,candidate.output_width,candidate.output_height))
++                                SPDLOG_WARN("[DuoView][ManualNGX] LEFT pin rejected; stale or duplicate source");
++                        }
++                        ImGui::SameLine();
++                        if(ImGui::Button("Use as RIGHT (periphery)")) {
++                            if(!uevr::duoview::ngx::manual_registry().pin(1,candidate.feature,candidate.output_width,candidate.output_height))
++                                SPDLOG_WARN("[DuoView][ManualNGX] RIGHT pin rejected; stale or duplicate source");
++                        }
++                        if(!fresh)ImGui::EndDisabled();
++                        ImGui::PopID();
++                    }
++                    if(ImGui::Button("Clear LEFT selection"))uevr::duoview::ngx::manual_registry().clear(0);
++                    ImGui::SameLine();
++                    if(ImGui::Button("Clear RIGHT selection"))uevr::duoview::ngx::manual_registry().clear(1);
++                    ImGui::TextWrapped("Depth visualizations: use Capture NGX gallery below, then open the depth-preview BMP files from the capture folder. NGX guides can be visualized without being paired. Manual stereo requires two fresh compatible source buffers; mismatches fall back to mono.");
++                    const auto depth_result=m_d3d12.duoview_latest_depth_selection();
++                    ImGui::TextWrapped("Live NGX pairing: %s",depth_result.c_str());
++                    m_duo_depth_stabilization->draw("CI77: Stabilize depth before reconstruction / preview");
++                    if(m_duo_depth_stabilization->value()) {
++                        m_duo_depth_temporal->draw("Temporal depth stabilization (camera reprojection)");
++                        if(m_duo_depth_temporal->value())m_duo_depth_history->draw("Depth history weight (%)");
++                        m_duo_detail_transfer->draw("CI78: RIGHT fovea = real RIGHT image + LEFT detail (OFF = CI77)");
++                    }
++                    ImGui::TextWrapped("Preview: %s. This is the same depth sampled by surface reconstruction. Stabilization ON uses LEFT high-resolution geometry for the right fovea; RIGHT depth only tests visibility. History rejects incompatible surfaces and resets after source/layout changes.",m_duo_depth_stabilization->value()?"STABILIZED depth":"RAW DLSS depth");
++                    int preview_mode=int(m_d3d12.duoview_preview_mode());
++                    const char* preview_labels[]={"0 - Normal image","1 - LEFT DLSS depth","2 - RIGHT DLSS depth","3 - Both depth previews"};
++                    if(ImGui::Combo("Display pinned DLSS depth",&preview_mode,preview_labels,4)) {
++                        if(preview_mode!=0)m_d3d12.duoview_stereo_config(0,false);
++                        m_d3d12.duoview_select_candidates(0,0,uint32_t(preview_mode));
++                    }
++                    bool unsafe_stereo=m_d3d12.duoview_unverified_stereo_opt_in();
++                    if(ImGui::Checkbox("Allow UNVERIFIED manual stereo (experimental only)",&unsafe_stereo))
++                        m_d3d12.duoview_allow_unverified_stereo(unsafe_stereo);
++                    ImGui::TextWrapped("OFF by default. Nearby DLSS evaluations do NOT prove a shared Unreal frame or physical eye. Avoid extended headset use in experimental mode.");
++                    if (ImGui::Button("Capture DLSS depth candidate gallery (all NGX sources)")) {
++                        const auto id=m_d3d12.request_duoview_diagnostic_capture();
++                        if(id) SPDLOG_INFO("[DuoView][Capture] Requested manual capture #{}",id);
++                        else SPDLOG_WARN("[DuoView][Capture] Busy or source guides not yet available");
++                    }
++                    ImGui::TextWrapped("Each press saves a NEW folder: Windows TEMP\\UEVR_DuoViewCaptures\\capture_N");
++                    ImGui::TextWrapped("Saves all observed NGX depth candidates plus optional DLSS color/motion, source colors, stereo output and a manifest. Independent of paired-stereo activation; capture times out after 5 seconds.");
++                    ImGui::Text("Pending capture request: %llu",static_cast<unsigned long long>(m_d3d12.duoview_diagnostic_capture_pending()));
++                    ImGui::Separator();
++                    if(ImGui::Button("RECORD lossless stereo + depth (2s / 96 frames)")) {
++                        const auto id=m_d3d12.request_duoview_sequence_capture();
++                        if(id)SPDLOG_INFO("[DuoView][CI75] Armed diagnostic sequence {}",id);
++                        else SPDLOG_WARN("[DuoView][CI75] Capture busy or ID6 unavailable");
++                    }
++                    const auto sequence_status=m_d3d12.duoview_sequence_status();
++                    ImGui::TextWrapped("%s",sequence_status.c_str());
++                    if(ImGui::SmallButton("Copy diagnostic folder")) {
++                        try {const auto folder=(std::filesystem::temp_directory_path()/"UEVR_DuoViewDiagnostics").string();ImGui::SetClipboardText(folder.c_str());}
++                        catch(...){SPDLOG_WARN("[DuoView][CI75] Could not resolve diagnostics folder");}
++                    }
++                    ImGui::TextWrapped("3s countdown: close menu and fix gaze on an unstable edge. Records up to 2s or 96 consecutive genuine frames: native eye/source crops, exact selected depths, synthetic coverage and available NGX motion. Lossless PNG data; all frames retained across numbered ZIPs <=20 MiB each. Upload ALL parts + index from TEMP\\UEVR_DuoViewDiagnostics. Capturing adds overhead; input eye/frame identity remains explicitly unverified.");
++                    ImGui::TreePop();
++                }
++                if (ImGui::Button("Restore DuoView quality defaults")) {
++                    m_duo_width->value()=.50f; m_duo_height->value()=.50f;
++                    m_duo_periphery->value()=.20f; m_duo_density->value()=1.f;
++                    m_duo_feather->value()=.08f; m_duo_sharpen->value()=1.f; m_duo_gaze->value()=true;
++                    m_duo_border->value()=false; m_duo_fovea_view->value()=0; m_duo_split_eye->value()=true;
++                    m_duo_foreground_refinement->value()=true;
++                    m_duo_left_anchor->value()=true;
++                    m_duo_research_backward->value()=false;
++                    m_duo_conservative_stereo->value()=false;
++                    m_duo_visibility_absolute->value()=1.f;
++                    m_duo_visibility_relative_percent->value()=1.5f;
++                    m_duo_foreground_edge_radius->value()=1.f;
++                    m_duo_debug_source->value()=0;
++                    m_duo_direct_xr->value()=false;
++                    m_duo_native_fix->value()=true; m_duo_quant->value()=2;
++                    m_duo_hold->value()=350; m_duo_reacquire->value()=2;
++                    m_duo_offset_x->value()=0.f; m_duo_offset_y->value()=0.f;
++                    m_duo_micro_gain->value()=0.f; m_duo_breakout->value()=.035f;
++                    m_duo_stillness->value()=.008f; m_duo_relock->value()=3;
++                }
++                ImGui::TextUnformatted("Fovea fixed: 0.50 x 0.50 of each eye FOV");
++                ImGui::TextWrapped("CI76: one image owner per stereo pixel; fresh-pair recovery after resize/dropout. Foreground MPC readback: %s",duoview_foreground_mpc_verified()?"verified":"unverified");
++                m_duo_periphery->draw("Peripheral resolution scale");
++                 if(ImGui::IsItemActive() || ImGui::IsItemDeactivatedAfterEdit())
++                     m_duo_periphery_edit_ms.store(GetTickCount64());
++                 ImGui::TextWrapped("Peripheral resizing applies after editing settles; selected DLSS features are preserved where possible.");
++                m_duo_density->draw("Foveal pixel density");
++                m_duo_feather->draw("Blend feather width");
++                m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");
++                ImGui::TextWrapped("Sharpening runs after DLSS inside the fovea. Disable a separate Glamarye OpenXR layer to avoid sharpening twice. Stereo keeps separate eye output; the mono path can reuse its sharpened image.");
++                if(ImGui::TreeNode("Advanced stereo quality")) {
++                m_duo_left_anchor->draw("Mode 5: LEFT-anchored edge stabilization (GPU cost)");
++                ImGui::TextWrapped("ON: high-res LEFT geometry forward mesh at 2-pixel stride, RIGHT-depth edge-aware upsampling and 3/4 occlusion consensus. OFF: original mode 5 for A/B. Native disparity unchanged; no untracked temporal depth smoothing.");
++                m_duo_research_backward->draw("Mode 5 strategy: RESEARCH target-RIGHT-depth inverse gather (OFF = CI71)");
++                ImGui::TextWrapped("OFF: original CI71 LEFT-forward anchored method, unchanged. ON: research-guided 2x2 RIGHT-depth hypothesis search, high-resolution LEFT-depth consistency, native RIGHT-color fallback, no invented depth/disparity. Applies to true stereo Mode 5; change live for A/B. Both strategies require manual DLSS pins.");
++                m_duo_conservative_stereo->draw("CI73: Conservative Stable Stereo (third A/B strategy)");
++                ImGui::TextWrapped("With CI77 depth stabilization ON, high-resolution LEFT geometry overrides these legacy A/B strategies. Turn stabilization OFF to compare the previous algorithms. Exclusive image ownership remains active.");
++                m_duo_foreground_refinement->draw("Preserve fine foreground (extra GPU work)");
++                m_duo_visibility_absolute->draw("Depth visibility tolerance (UE units / cm)");
++                m_duo_visibility_relative_percent->draw("Depth visibility tolerance (%)");
++                m_duo_foreground_edge_radius->draw("Foreground edge guard (source depth texels)");
++                ImGui::TextWrapped("Lower tolerances favor actual RIGHT-view fallback over uncertain synthesized detail. A larger edge guard reduces foreground leaks but increases native low-resolution fallback.");
++                ImGui::TreePop();
++                }
++                m_duo_gaze->draw("Eye tracking");
++                if(ImGui::TreeNode("Advanced source and gaze controls")) {
++                m_duo_border->draw("Blend border highlight");
++                m_duo_debug_source->draw("Source diagnostic: 0 Blend / 1 Periphery / 2 Fovea");
++                if (m_duo_split_eye->value())
++                    ImGui::TextUnformatted("Split eye: fixed assignment fovea=UE0 LEFT; periphery=UE1 RIGHT");
++                else m_duo_fovea_view->draw("Fovea UE source view (0 or 1)");
++                m_duo_stabilize->draw("Stable gaze crop (OpenNR r10 policy)");
++                if (m_duo_stabilize->value()) m_duo_guard->draw("Crop centre guard (fraction of crop)");
++                m_duo_native_fix->draw("Native Stereo Fix shading (OFF = stock secondary-pass)");
++                m_duo_split_eye->draw("Native LEFT fovea / RIGHT periphery cameras");
++                ImGui::TextUnformatted("Split-eye toggle applies at NEXT UE draw boundary, never within a source pair.");
++                ImGui::TextWrapped("ON: UE0 LEFT cropped fovea + UE1 RIGHT full-field periphery, with their native eye origins/projections. Stereo mode 0 still shows the SAME combined image in both eyes; modes 4/5 construct the missing stereo surfaces. OFF restores the earlier mono producer cameras and is not recommended for stereo modes 4/5.");
++                ImGui::TextWrapped("Native Stereo Fix shading controls the UE secondary-pass label: ON uses PRIMARY shading; OFF preserves SECONDARY shading. Compare lighting in the same scene.");
++                m_duo_quant->draw("Gaze quantization (0=off, 1-16 fovea pixels)");
++                m_duo_hold->draw("Blink / tracking-loss ray hold (milliseconds)");
++                m_duo_reacquire->draw("Consistent samples after large post-blink jump (1=instant)");
++                m_duo_offset_x->draw("Fovea horizontal offset (also in fixed mode)");
++                m_duo_offset_y->draw("Fovea vertical / height offset (also in fixed mode)");
++                ImGui::TextWrapped("Adaptive response: small gaze movement holds or follows slowly; large movement jumps 1:1 and follows at full speed; then automatically locks when steady. No heavy temporal smoothing.");
++                m_duo_micro_gain->draw("Small gaze movement gain (0=locked; 1=full)");
++                m_duo_breakout->draw("Fast 1:1 breakout (fraction of full view)");
++                m_duo_stillness->draw("Stillness threshold per gaze sample (fraction of view)");
++                m_duo_relock->draw("Quiet samples before fovea relocks");
++                if (m_duo_stillness->value() >= m_duo_breakout->value())
++                    ImGui::TextWrapped("Stillness must be below breakout; the conflicting setting is rejected, all other controls keep working.");
++                ImGui::TreePop();
++                }
++                if(ImGui::TreeNode("Performance and delivery diagnostics")) {
++                ImGui::Text("DuoView delivery: %llu copied / %llu held / %llu empty or failed",
++                    static_cast<unsigned long long>(m_openxr->duoview_copy_submits.load()),
++                    static_cast<unsigned long long>(m_openxr->duoview_hold_submits.load()),
++                    static_cast<unsigned long long>(m_openxr->duoview_empty_submits.load()));
++                if (m_fake_stereo_hook) {
++                    const auto d=m_fake_stereo_hook->duoview_delivery.counts();
++                    ImGui::TextWrapped("Transactions: %llu produced / %llu RHI pairs / %llu matched / %llu enqueued / %llu unique XR",
++                        (unsigned long long)d.produced, (unsigned long long)d.ready, (unsigned long long)d.matched,
++                        (unsigned long long)d.enqueued, (unsigned long long)d.submitted);
++                    ImGui::TextWrapped("Duplicate Presents: %llu / overwritten before XR: %llu / failures: %llu / unproven: %llu",
++                        (unsigned long long)d.duplicate_presents, (unsigned long long)d.overwritten,
++                        (unsigned long long)d.failed, (unsigned long long)d.blocked);
++                }
++                if (ImGui::Button("Reset DuoView delivery counters")) {
++                    if (m_fake_stereo_hook) m_fake_stereo_hook->duoview_delivery.reset_counts();
++                    m_openxr->duoview_copy_submits=0; m_openxr->duoview_hold_submits=0;
++                    m_openxr->duoview_empty_submits=0;
++                }
++                m_duo_direct_xr->draw("Direct XR output (experimental A/B)");
++                ImGui::TextWrapped("Direct XR selects the compatible double-wide output route. Stereo still composes distinct eye views. Compare GPU timing in the same scene; either route may be faster.");
++                m_duo_timing->draw("GPU timing: DuoView raster/output (excludes UE and source gather)");
++                if (m_duo_timing->value()) {
++                    const float ms=m_duo_gpu_ms.load(std::memory_order_relaxed);
++                    if (ms >= 0.f) ImGui::Text("DuoView raster/output: %.3f ms GPU (last retired slot; excludes UE and source gather)", ms);
++                    else ImGui::TextUnformatted("GPU timing: waiting for a completed command slot");
++                }
++                const auto output_path=m_duoview_output_path.load(std::memory_order_relaxed);
++                if (output_path < 0) ImGui::TextUnformatted("XR output path: waiting for a submitted DuoView frame");
++                else ImGui::Text("Last submitted XR output path: %s",
++                    output_path ? "direct double-wide raster" : "composite and copy compatibility route");
++                const auto source_extents=m_duoview_source_extents.load(std::memory_order_relaxed);
++                const auto primary_width=static_cast<uint32_t>((source_extents>>48)&0xffffu);
++                const auto primary_height=static_cast<uint32_t>((source_extents>>32)&0xffffu);
++                const auto secondary_width=static_cast<uint32_t>((source_extents>>16)&0xffffu);
++                const auto secondary_height=static_cast<uint32_t>(source_extents&0xffffu);
++                if (primary_width && primary_height && secondary_width && secondary_height)
++                    ImGui::Text("Native source allocations: primary %ux%u, secondary %ux%u",
++                        primary_width,primary_height,secondary_width,secondary_height);
++                ImGui::TextWrapped("These are Native color-resource allocations. They do not prove the depth, G-buffer, Lumen, or other UE pass extents; measure those with a GPU capture.");
++                const auto counts=m_duoview_gaze.counters();
++                ImGui::Text("PSVR2 gaze: fresh=%llu held=%llu invalid=%llu expired=%llu unavailable=%llu",
++                    static_cast<unsigned long long>(counts.fresh),
++                    static_cast<unsigned long long>(counts.reused),
++                    static_cast<unsigned long long>(counts.invalid),
++                    static_cast<unsigned long long>(counts.expired),
++                    static_cast<unsigned long long>(counts.unavailable));
++                if (counts.age_ms == UINT32_MAX) ImGui::TextUnformatted("Last gaze sample: unavailable");
++                else ImGui::Text("Last gaze sample: %u ms", counts.age_ms);
++                ImGui::TreePop();
++                }
++                configure_duoview();
++                const auto rejected=m_duo_ui_rejected_mask.load(std::memory_order_acquire);
++                if (rejected) {
++                    ImGui::TextWrapped("Control warning: one or more requested sliders are invalid; "
++                        "only those individual settings are rejected. All valid changes remain active.");
++                    const struct { uint32_t mask; const char* label; } conflicts[]={
++                        {uevr::duoview::reject_width,"Fovea width"},
++                        {uevr::duoview::reject_height,"Fovea height"},
++                        {uevr::duoview::reject_periphery,"Peripheral scale"},
++                        {uevr::duoview::reject_density,"Foveal density"},
++                        {uevr::duoview::reject_feather,"Feather"},
++                        {uevr::duoview::reject_sharpen,"Glamarye strength"},
++                        {uevr::duoview::reject_fovea_view,"Fovea source view"},
++                        {uevr::duoview::reject_diagnostic,"Source diagnostic"},
++                        {uevr::duoview::reject_guard,"Crop guard"},
++                        {uevr::duoview::reject_quant,"Quantization"},
++                        {uevr::duoview::reject_hold,"Blink hold"},
++                        {uevr::duoview::reject_reacquire,"Reacquisition"},
++                        {uevr::duoview::reject_offset_u,"Horizontal offset"},
++                        {uevr::duoview::reject_offset_v,"Vertical offset"},
++                        {uevr::duoview::reject_micro,"Small movement gain"},
++                        {uevr::duoview::reject_breakout,"Fast breakout"},
++                        {uevr::duoview::reject_still,"Stillness threshold"},
++                        {uevr::duoview::reject_relock,"Relock samples"}};
++                    for (const auto& bad:conflicts) {
++                        if (rejected & bad.mask) ImGui::BulletText("Not applied: %s",bad.label);
++                    }
++                } else ImGui::TextUnformatted("DuoView controls: validated and accepted for next render frame");
++                if(ImGui::TreeNode("Applied frame details")) {
++                const auto applied=m_duoview.settings();
++                ImGui::Text("Active Fovea W/H: %.3f / %.3f, density %.3f, periphery %.3f",
++                    applied.crop_width,applied.crop_height,applied.foveal_density,applied.peripheral_scale);
++                ImGui::Text("Active Eye Tracking: %s, Native shading: %s, fixed offsets X/Y: %.3f / %.3f",
++                    applied.eye_tracked ? "ON" : "OFF",
++                    applied.native_fix_same_pass ? "ON" : "OFF",
++                    applied.gaze_offset_u,applied.gaze_offset_v);
++                if (const auto snap=m_duoview.snapshot(duoview_producer_key())) {
++                    const auto& layout=snap->config.layout;
++                    ImGui::Text("Fovea %ux%u; peripheral %ux%u; output %ux%u",
++                        layout.fovea.width,layout.fovea.height,
++                        layout.periphery.width,layout.periphery.height,
++                        layout.atlas_width/2,layout.atlas_height);
++                    ImGui::Text("Fovea UE%u; periphery UE%u; gaze %s",
++                        snap->config.settings.fovea_view,1u-snap->config.settings.fovea_view,
++                        snap->gaze_valid ? "tracking" : "held crop / center fallback");
++                    ImGui::Text("View histories: %s; primary shading constructor: %s",
++                        snap->scene_states[0] && snap->scene_states[1]
++                            ? (snap->scene_states[0]!=snap->scene_states[1] ? "separate" : "shared") : "unobserved",
++                        snap->shading_applied ? "applied" :
++                            (snap->config.settings.independent_shading ? "requested / waiting for safe pair" : "OFF"));
++                    ImGui::Text("Applied crop centre (%.3f, %.3f), scene pixels: %.2f million",
++                        snap->config.gaze.u,snap->config.gaze.v,
++                        uevr::duoview::rendered_pixels(layout)/1000000.);
++                }
++                // Active/applied values and precise per-field rejections appear
++                // directly above; never claim the entire settings set is frozen.
++                ImGui::TextWrapped("Diagnostic 1 isolates the full-FOV peripheral pass. Diagnostic 2 isolates the foveal pass (dark outside crop). Compare shadows/lighting in the same scene.");
++                ImGui::TreePop();
++                }
++                ImGui::TreePop();
++            }
++        }
+         if (rendering_method_changed && !is_mono_transition_pending() && get_runtime() != nullptr) {
+             // Method 4 owns a union projection while active. Rebuild the
+             // runtime matrices when users switch into or out of it instead of
+@@ -15256,6 +15743,13 @@ void VR::on_draw_sidebar_entry(std::string_view name) {
+         }
+ 
+         m_world_scale->draw("World Scale");
++        ImGui::Separator();
++        ImGui::TextUnformatted("Head Movement XYZ Scaling (independent of World Scale)");
++        m_xyz_headscale_enabled->draw("Enable Head XYZ Scaling");
++        m_xyz_headscale_x->draw("Head X - Left/Right");
++        m_xyz_headscale_y->draw("Head Y - Up/Down");
++        m_xyz_headscale_z->draw("Head Z - Forward/Back");
++        ImGui::TextWrapped("Scales only HMD translation relative to the existing standing origin. Rotation, eye separation, controller poses and World Scale are unchanged. Set toggle and hold-bypass keys in Keybinds.");
+         m_depth_scale->draw("Depth Scale");
+ 
+         m_disable_hzbocclusion->draw("Disable HZBOcclusion");
+@@ -15296,6 +15790,8 @@ void VR::on_draw_sidebar_entry(std::string_view name) {
+                         "This can unblock UE4/UE5 games where SceneDepthZ is DSV-only or RDG-owned.");
+                 }
+ 
++                if (std::string_view{m_d3d12.get_dibr_preview_status()} != "ready")
++                    ImGui::TextWrapped("DIBR tuning has no effect until live depth capture and synthesis are ready.");
+                 if (ImGui::TreeNode("DIBR quality tuning")) {
+                     m_dibr_depth_edge_stabilization->draw("Enable Depth-Edge Stabilization");
+                     if (m_dibr_depth_edge_stabilization->value()) {
+@@ -16729,6 +17225,13 @@ void VR::on_draw_sidebar_entry(std::string_view name) {
+         }
+ 
+         ImGui::SetNextItemOpen(true, ImGuiCond_::ImGuiCond_Once);
++        if (ImGui::TreeNode("Head Movement XYZ Keys")) {
++            m_xyz_headscale_toggle_key->draw("Toggle XYZ Head Scaling");
++            m_xyz_headscale_hold_bypass_key->draw("Hold to Disable XYZ Scaling");
++            ImGui::TextWrapped("Hold bypass temporarily restores normal 1x head translation; it never changes the saved enabled setting. Both bindings default to Unbound.");
++            ImGui::TreePop();
++        }
++
+         if (ImGui::TreeNode("Overlay/Runtime Keys")) {
+             m_keybind_toggle_2d_screen->draw("Toggle 2D Screen Mode Key");
+             m_keybind_toggle_gui->draw("Toggle In-Game UI Key");
+@@ -17717,3 +18220,138 @@ void VR::update_statistics_overlay(sdk::UGameEngine* engine) {
+         m_show_statistics_state = m_show_statistics->value();
+     }
+ }
++
++// Update the immutable state from persisted controls only on changes.
++void VR::configure_duoview() {
++    // Validate ALL independent settings separately. Do not let one invalid
++    // option veto any other valid controls. Latch the reconciled immutable
++    // Settings atomically on the next UE frame; never alter native source size.
++    const auto current = m_duoview.settings();
++     const auto peripheral_edit=m_duo_periphery_edit_ms.load();
++     const bool peripheral_editing=peripheral_edit && GetTickCount64()-peripheral_edit<250;
++    uevr::duoview::Settings candidate{
++        .crop_width=.50f, .crop_height=.50f,
++        .peripheral_scale=peripheral_editing?current.peripheral_scale:(std::min)(m_duo_periphery->value(),.499f), .foveal_density=m_duo_density->value(),
++        .feather_fraction=m_duo_feather->value(), .sharpen_strength=m_duo_sharpen->value(), .debug_border=m_duo_border->value(),
++        .eye_tracked=m_duo_gaze->value(), .fovea_view=static_cast<uint32_t>(m_duo_fovea_view->value()),
++        .diagnostic_view=static_cast<uint32_t>(m_duo_debug_source->value()),
++        .gpu_timing=m_duo_timing->value(), .direct_xr_output=m_duo_direct_xr->value(), .stabilize_crop=m_duo_stabilize->value(),
++        .guard_fraction=m_duo_guard->value(), .independent_shading=false,
++        .native_fix_same_pass=m_duo_native_fix->value(),
++        .gaze_quant_pixels=static_cast<uint32_t>(m_duo_quant->value()),
++        .gaze_hold_ms=m_duo_hold->value(), .gaze_reacquire_samples=m_duo_reacquire->value(),
++        .gaze_offset_u=m_duo_offset_x->value(), .gaze_offset_v=m_duo_offset_y->value(),
++        .gaze_micro_gain=m_duo_micro_gain->value(),
++        .gaze_breakout_radius=m_duo_breakout->value(),
++        .gaze_still_radius=m_duo_stillness->value(),
++        .gaze_relock_samples=static_cast<uint32_t>(m_duo_relock->value())};
++    // Preserve legacy Build165 source-selector expression and validation.
++    // The split experiment merely overrides the candidate before it is latched.
++    const bool source_split = (m_fake_stereo_hook && m_fake_stereo_hook->is_in_viewport_client_draw())
++        ? m_duo_split_eye_frozen.load(std::memory_order_acquire) : m_duo_split_eye->value();
++    if (source_split) candidate.fovea_view = 0u;
++    const auto checked=uevr::duoview::reconcile_ui_settings(candidate,current);
++    candidate=checked.settings;
++    m_duo_ui_rejected_mask.store(checked.rejected,std::memory_order_release);
++    if (checked.rejected) {
++        SPDLOG_WARNING_EVERY_N_SEC(5,
++            "[DuoView][Controls] Rejected invalid UI fields mask=0x{:X}; "
++            "requested periphery={:.6f}, density={:.6f}; active width={:.3f} height={:.3f} periphery={:.6f} density={:.3f}",
++            checked.rejected,m_duo_periphery->value(),m_duo_density->value(),candidate.crop_width,candidate.crop_height,
++            candidate.peripheral_scale,candidate.foveal_density);
++    }
++    if (current.crop_width==candidate.crop_width && current.crop_height==candidate.crop_height &&
++        current.peripheral_scale==candidate.peripheral_scale && current.foveal_density==candidate.foveal_density &&
++        current.feather_fraction==candidate.feather_fraction && current.sharpen_strength==candidate.sharpen_strength &&
++        current.debug_border==candidate.debug_border &&
++        current.eye_tracked==candidate.eye_tracked && current.fovea_view==candidate.fovea_view &&
++        current.diagnostic_view==candidate.diagnostic_view && current.gpu_timing==candidate.gpu_timing &&
++        current.direct_xr_output==candidate.direct_xr_output &&
++        current.stabilize_crop==candidate.stabilize_crop && current.guard_fraction==candidate.guard_fraction &&
++        current.independent_shading==candidate.independent_shading &&
++        current.native_fix_same_pass==candidate.native_fix_same_pass &&
++        current.gaze_quant_pixels==candidate.gaze_quant_pixels &&
++        current.gaze_hold_ms==candidate.gaze_hold_ms &&
++        current.gaze_reacquire_samples==candidate.gaze_reacquire_samples &&
++        current.gaze_offset_u==candidate.gaze_offset_u &&
++        current.gaze_offset_v==candidate.gaze_offset_v &&
++        current.gaze_micro_gain==candidate.gaze_micro_gain &&
++        current.gaze_breakout_radius==candidate.gaze_breakout_radius &&
++        current.gaze_still_radius==candidate.gaze_still_radius &&
++        current.gaze_relock_samples==candidate.gaze_relock_samples) return;
++    if (!m_duoview.configure(candidate))
++        SPDLOG_WARNING_EVERY_N_SEC(2, "[DuoView][Controls] Internal validated settings rejected; retaining prior frame and reporting for diagnosis");
++}
++
++// Stage 5: sample native PSVR2 gaze ONCE per immutable source frame.
++ // CAPI unavailable or invalid => fixed center. Never adjust mid-frame.
++bool VR::is_duoview_renderer_active() const {
++    if (!is_using_duoview_mono() || !m_is_d3d12 || m_duoview_quarantined.load(std::memory_order_acquire)) return false;
++    const auto runtime = get_runtime();
++    if (!runtime || !runtime->is_openxr()) return false;
++    static const bool stalker2 = [] {
++        const auto path = utility::get_module_pathw(utility::get_executable());
++        return path && uevr::stalker2_native::is_executable(*path);
++    }();
++    return stalker2;
++}
++
++std::optional<uevr::duoview::ViewFrame> VR::duoview_begin_frame() {
++    if (!is_duoview_renderer_active() || !m_fake_stereo_hook ||
++        !m_fake_stereo_hook->is_in_viewport_client_draw()) return {};
++    std::call_once(m_duoview_settings_once, [this] { configure_duoview(); });
++    const auto runtime = get_runtime();
++    if (const auto candidate=m_duoview_candidate_key.load(std::memory_order_acquire)) {
++        if (candidate->generation==mono_generation()) {
++            if (const auto found=m_duoview.snapshot(*candidate)) return found;
++        }
++    }
++    const auto source_frame = runtime->internal_frame_count;
++    if (!get_openxr_runtime() || !get_openxr_runtime()->has_mono_pose(source_frame)) {
++        set_mono_status("Waiting: DuoView has no exact OpenXR Mono pose token yet");
++        return {};
++    }
++    const auto key = duoview_key();
++    auto projection = get_projection_matrix(VRRuntime::Eye::LEFT);
++    const float near_plane=sdk::globals::get_near_clipping_plane();
++    if (!std::isfinite(near_plane) || near_plane<=0.f) return {};
++    projection[3][2]=near_plane;
++    std::array<float, 16> frozen{};
++    std::memcpy(frozen.data(), &projection[0][0], sizeof(frozen));
++    const auto eye=get_eye_transform(0);
++    const std::array<float,9> optical{
++        eye[0][0],eye[0][1],eye[0][2],
++        eye[1][0],eye[1][1],eye[1][2],
++        eye[2][0],eye[2][1],eye[2][2]};
++    const auto settings=m_duoview.settings();
++    m_duoview_gaze.set_recovery_controls(static_cast<uint32_t>(settings.gaze_hold_ms),
++        static_cast<uint32_t>(settings.gaze_reacquire_samples));
++    // Important: two native EYE projections, frozen for this producer frame.
++    // The left projection is cropped by apply_frame_projection DURING Unreal
++    // CalculateStereoProjectionMatrix. This does not render full then crop pixels.
++    const bool split_eye = is_duoview_split_eye_enabled();
++    std::array<float, 16> frozen_right{};
++    if (split_eye) {
++        auto right = get_projection_matrix(VRRuntime::Eye::RIGHT);
++        right[3][2] = near_plane;
++        std::memcpy(frozen_right.data(), &right[0][0], sizeof(frozen_right));
++    }
++    auto frame=m_duoview.begin(key, get_hmd_width(), get_hmd_height(), frozen,
++        [this, frozen, optical]() -> std::optional<uevr::duoview::UV> {
++            return m_duoview_gaze.read_uv(frozen,optical);
++        }, GetTickCount64(), source_frame, split_eye, frozen_right);
++    if (frame) m_duoview_candidate_key.store(
++        std::make_shared<const uevr::duoview::FrameKey>(key), std::memory_order_release);
++    return frame;
++}
++
++void VR::duoview_abort(const char* reason) {
++    if (!is_using_duoview_mono()) return;
++    SPDLOG_WARNING_EVERY_N_SEC(2, "[DuoView] Quarantining two-view path; continuing original Mono inside ID6: {}", reason);
++    m_duoview_quarantined.store(true, std::memory_order_release);
++    m_duoview.retire();
++    if (m_fake_stereo_hook) m_fake_stereo_hook->duoview_delivery.retire(mono_generation());
++    m_duoview_candidate_key.store(nullptr, std::memory_order_release);
++    m_duoview_frozen_key.store(nullptr, std::memory_order_release);
++    set_mono_status("DuoView fault: rendering original Mono inside ID6; reselect ID6 to retry");
++}

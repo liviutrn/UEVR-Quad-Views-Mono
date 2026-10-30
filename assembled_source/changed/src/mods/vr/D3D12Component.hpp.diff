@@ -1,0 +1,211 @@
+diff --git a/src/mods/vr/D3D12Component.hpp b/src/mods/vr/D3D12Component.hpp
+index b02a54e..6b635a1 100644
+--- a/src/mods/vr/D3D12Component.hpp
++++ b/src/mods/vr/D3D12Component.hpp
+@@ -24,7 +24,12 @@
+ 
+ #include "d3d12/CommandContext.hpp"
+ #include "d3d12/DIBRPreview.hpp"
++#include "d3d12/StockDibrDepth.hpp"
++#include "d3d12/DuoViewDiagnosticDump.hpp"
++#include "d3d12/DuoViewDiagnosticRecorder.hpp"
++#include <memory>
+ #include "d3d12/TextureContext.hpp"
++#include "DuoViewD3D12.hpp"
+ #include "UIAlpha.hpp"
+ #include "UIComposition.hpp"
+ #include "Stalker2NativeD3D12.hpp"
+@@ -42,6 +47,7 @@ public:
+     {
+ 
+     }
++    ~D3D12Component();
+ 
+     vr::EVRCompositorError on_frame(VR* vr);
+     void on_post_present(VR* vr);
+@@ -99,7 +105,96 @@ public:
+     bool has_game_and_ui_textures() const;
+     const char* get_dibr_preview_status() const { return m_dibr_slots[0].preview.status_name(); }
+     std::string get_dibr_preview_failure_reason() const { return m_dibr_slots[0].preview.failure_reason(); }
+-    std::string get_dibr_preview_depth_trace_summary() const { return m_dibr_depth_capture.depth_trace_summary(); }
++    std::string get_dibr_preview_depth_trace_summary() const { return m_stock_dibr_scope ? m_stock_dibr_depth->summary() : m_dibr_depth_capture.depth_trace_summary(); }
++    int duoview_depth_candidate_count() const {
++        return m_stock_dibr_scope ? int(m_stock_dibr_depth->preview_count()) : 0;
++    }
++    std::string duoview_depth_candidate_inventory() const {
++        return m_stock_dibr_scope ? m_stock_dibr_depth->preview_inventory() :
++            "R5 capture inactive: enable R5 observer and re-enter DuoView ID6";
++    }
++    stock_dibr::DepthCapture::Browser duoview_depth_browser() const {
++        return m_stock_dibr_scope ? m_stock_dibr_depth->browse_preview_candidates() :
++            stock_dibr::DepthCapture::Browser{};
++    }
++    bool duoview_pin_depth(int role,bool backup,
++        const ::duoview::depthpin::Fingerprint& expected) {
++        return m_stock_dibr_scope && m_stock_dibr_depth->pin_preview_candidate(role,backup,expected);
++    }
++    void duoview_clear_depth_pins(int role) {
++        if(m_stock_dibr_scope)m_stock_dibr_depth->clear_preview_pins(role);
++    }
++    std::string duoview_pinned_depth_status() const {
++        return m_stock_dibr_scope ? m_stock_dibr_depth->preview_pin_status() :
++            "Capture inactive; enable R5 and re-enter rendering method ID6";
++    }
++    std::string duoview_latest_depth_selection() const {
++        return m_stock_dibr_scope ? m_stock_dibr_depth->selection_status() :
++            "Capture inactive; depth selection not running";
++    }
++    uint32_t duoview_stereo_mode() const {return m_duo_stereo_mode.load();}
++    bool duoview_stereo_reverse() const {return m_duo_stereo_reverse.load();}
++    uint64_t duoview_stereo_frames() const {return m_duo_stereo_frames.load();}
++    uint64_t duoview_stereo_recorded_frames() const {return m_duo_stereo_recorded_frames.load();}
++    uint64_t duoview_stereo_rejected_frames() const {return m_duo_stereo_reject_frames.load();}
++    const char* duoview_stereo_output_status() const {
++        switch(m_duo_stereo_output.load()) {
++        case 1:return "EXPERIMENTAL STEREO copy submitted (source identity UNVERIFIED)";
++        case 2:return "WAITING / REJECTED stereo: V3 mono copied; depth/config details in log";
++        case 3:return "XR copy not submitted; prior displayed output is not measured";
++        default:return "V3 mode 0 mono copy";
++        }
++    }
++    void duoview_stereo_config(uint32_t mode,bool reverse) {
++        m_duo_stereo_mode.store((std::min)(mode,6u),std::memory_order_release);
++        m_duo_stereo_reverse.store(reverse,std::memory_order_release);
++    }
++    int duoview_left_choice() const {return m_duo_left_choice.load();}
++    int duoview_right_choice() const {return m_duo_right_choice.load();}
++    uint32_t duoview_preview_mode() const {return m_duo_preview_mode.load();}
++    void duoview_allow_unverified_stereo(bool enabled) {
++        m_duo_unverified_stereo_opt_in.store(enabled,std::memory_order_release);
++    }
++    bool duoview_unverified_stereo_opt_in() const {
++        return m_duo_unverified_stereo_opt_in.load(std::memory_order_acquire);
++    }
++    void duoview_select_candidates(int l,int r,uint32_t mode) {
++        m_duo_left_choice.store((std::max)(0,l));
++        m_duo_right_choice.store((std::max)(0,r));
++        m_duo_preview_mode.store(mode<=3?mode:0);
++    }
++    uint64_t request_duoview_diagnostic_capture() {
++        if(!m_stock_dibr_scope)return 0;
++        uint64_t expected=0;
++        const auto id=m_duo_snapshot_serial.fetch_add(1,std::memory_order_relaxed)+1;
++        if(!m_duo_snapshot_pending.compare_exchange_strong(expected,id,std::memory_order_acq_rel))
++            return 0; // never silently replace a still-pending request
++        m_duo_snapshot_start.store(GetTickCount64(),std::memory_order_release);
++        m_stock_dibr_depth->arm_diagnostic_capture();
++        return id;
++    }
++    uint64_t duoview_diagnostic_capture_pending() const {
++        return m_duo_snapshot_pending.load(std::memory_order_acquire);
++    }
++    uint64_t request_duoview_sequence_capture() {
++        if(!m_stock_dibr_scope||!m_stock_dibr_depth)return 0;
++        std::lock_guard lock(m_duo_sequence_mutex);
++        if(m_duo_sequence&&m_duo_sequence->active())return 0;
++        const auto id=m_duo_sequence_serial.fetch_add(1)+1;
++        m_duo_sequence=std::make_shared<uevr::duoview::capture75::Recorder>(id);
++        m_stock_dibr_depth->set_sequence_motion_capture(true);
++        return id;
++    }
++    std::string duoview_sequence_status() const {
++        std::lock_guard lock(m_duo_sequence_mutex);
++        return m_duo_sequence?m_duo_sequence->status():"No diagnostic sequence";
++    }
++
++    void invalidate_dibr_single_view_readiness() {
++        m_dibr_single_view_preview_ready.store(false, std::memory_order_release);
++        m_dibr_single_view_ready_frames.store(0, std::memory_order_release);
++        m_dibr_single_view_generation.fetch_add(1, std::memory_order_acq_rel);
++    }
+ 
+     struct DIBRSingleViewReadiness {
+         uint64_t generation{};
+@@ -278,12 +373,52 @@ private:
+         d3d12::TextureContext present_tex{};
+         d3d12::DIBRPreview preview{};
+         d3d12::CommandContext commands{};
++        std::vector<ComPtr<ID3D12Resource>> in_flight_resources{};
++        bool preview_recording_pending{};
++        bool quarantined{};
++
++        ~DIBRFrameSlot() {
++            if (commands.references_retired() || commands.wait(2000)) {
++                preview.abort_recording();
++                preview.note_submission_retired();
++                return;
++            }
++
++            commands.quarantine_untracked_objects();
++            preview.quarantine_resources();
++            d3d12::dibr_transaction::retain_untracked_com_object(present_tex.texture.Get());
++            d3d12::dibr_transaction::retain_untracked_unique(present_tex.rtv_heap);
++            d3d12::dibr_transaction::retain_untracked_unique(present_tex.srv_heap);
++            for (auto& resource : in_flight_resources) {
++                d3d12::dibr_transaction::retain_untracked_com_object(resource.Get());
++            }
++        }
+     };
+ 
+     // Capture runs every frame. Each frame slot has independent source,
+     // output, descriptors and command allocator so one slow DIBR dispatch
+     // cannot stall the CPU before the next frame is recorded.
+     d3d12::DIBRPreview m_dibr_depth_capture{};
++    std::shared_ptr<stock_dibr::DepthCapture> m_stock_dibr_depth{std::make_shared<stock_dibr::DepthCapture>()};
++    std::atomic<uint64_t> m_duo_snapshot_serial{0};
++    std::atomic<uint64_t> m_duo_snapshot_pending{0};
++    std::atomic<uint64_t> m_duo_snapshot_start{0};
++    mutable std::mutex m_duo_sequence_mutex;
++    std::shared_ptr<uevr::duoview::capture75::Recorder> m_duo_sequence;
++    std::atomic<uint64_t> m_duo_sequence_serial{0};
++    std::atomic<int> m_duo_left_choice{0}, m_duo_right_choice{0};
++    std::atomic<uint32_t> m_duo_preview_mode{0};
++    std::atomic<bool> m_duo_unverified_stereo_opt_in{false};
++    // Opt-in only: without the R5 observer, stereo is NOT ready at ID6 startup.
++    // Starting at mode 1 can trigger compositor rejection and switch away from
++    // DuoView before the user can enable capture/re-enter ID6.
++    std::atomic<uint32_t> m_duo_stereo_mode{5};
++    std::atomic<bool> m_duo_stereo_reverse{false};
++    std::atomic<uint64_t> m_duo_stereo_frames{0};
++    std::atomic<uint64_t> m_duo_stereo_recorded_frames{0};
++    std::atomic<uint64_t> m_duo_stereo_reject_frames{0};
++    std::atomic<uint32_t> m_duo_stereo_output{0};
++    bool m_stock_dibr_scope{};
+     std::array<DIBRFrameSlot, DIBR_FRAME_SLOT_COUNT> m_dibr_slots{};
+     uint32_t m_dibr_slot_cursor{};
+     d3d12::TextureContext* m_dibr_active_present_tex{};
+@@ -298,6 +433,16 @@ private:
+     uint32_t m_dibr_ui_alpha_snapshot_height{};
+     DXGI_FORMAT m_dibr_ui_alpha_snapshot_format{DXGI_FORMAT_UNKNOWN};
+     bool m_dibr_ui_alpha_captured_this_frame{};
++    bool m_dibr_ui_alpha_recorded_this_frame{};
++    struct DibrUiProducer {
++        ComPtr<ID3D12Resource> resource{};
++        ComPtr<ID3D12Fence> fence{};
++        ComPtr<ID3D12CommandQueue> queue{};
++        uint64_t value{};
++    };
++    std::vector<DibrUiProducer> m_dibr_ui_producers{};
++    ComPtr<ID3D12CommandQueue> m_dibr_ui_frame_queue{};
++    void retire_dibr_ui_producers();
+     std::atomic<uint64_t> m_dibr_single_view_generation{1};
+     std::atomic<uint64_t> m_dibr_single_view_source_signature{};
+     std::atomic<uint32_t> m_dibr_single_view_ready_frames{};
+@@ -430,7 +575,8 @@ private:
+             D3D12_BOX* src_box = nullptr,
+             std::optional<std::function<void(d3d12::CommandContext&, ID3D12Resource*)>> post_copy_commands = std::nullopt,
+             ID3D12Resource* retained_mono_source = nullptr,
+-            std::shared_ptr<uevr::stalker2_native::PairFrame> retained_stalker_pair = nullptr);
++            std::shared_ptr<uevr::stalker2_native::PairFrame> retained_stalker_pair = nullptr,
++            std::optional<std::function<void(d3d12::CommandContext&, d3d12::dibr_transaction::ExecuteResult)>> submission_result = std::nullopt);
+ 
+         bool copy(uint32_t swapchain_idx, ID3D12Resource* src,
+             D3D12_RESOURCE_STATES src_state = D3D12_RESOURCE_STATE_PRESENT, D3D12_BOX* src_box = nullptr)
+@@ -507,6 +653,7 @@ private:
+             uint64_t framework_ui_last_submitted_generation{0};
+         };
+ 
++        std::unordered_map<d3d12::CommandContext*, std::unique_ptr<uevr::duoview::dx12::Compositor>> duoview_compositors;
+         std::unordered_map<uint32_t, SwapchainContext> contexts{};
+         std::recursive_mutex mtx{};
+         std::array<uint32_t, 2> last_resolution{};

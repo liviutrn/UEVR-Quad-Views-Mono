@@ -1,0 +1,758 @@
+diff --git a/src/mods/vr/FFakeStereoRenderingHook.cpp b/src/mods/vr/FFakeStereoRenderingHook.cpp
+index 4285898..3875431 100644
+--- a/src/mods/vr/FFakeStereoRenderingHook.cpp
++++ b/src/mods/vr/FFakeStereoRenderingHook.cpp
+@@ -27,6 +27,7 @@
+ 
+ #include <nlohmann/json.hpp>
+ #include "NativeFrameDiagnosticsJson.hpp"
++#include "DuoViewNgxGuide.hpp"
+ #include <spdlog/spdlog.h>
+ #include <utility/Memory.hpp>
+ #include <utility/Module.hpp>
+@@ -120,6 +121,7 @@
+ #include "../../utility/BuildIdentity.hpp"
+ 
+ #include "FFakeStereoRenderingHook.hpp"
++#include "DuoViewGeometry.hpp"
+ #include "CompatibilityPolicy.hpp"
+ #include "BodycamTextureLayout.hpp"
+ #include "HellraiserCaptureLayout.hpp"
+@@ -20852,6 +20854,7 @@ void FFakeStereoRenderingHook::game_viewport_client_draw_hook(sdk::UGameViewport
+ 
+     g_hook->m_in_viewport_client_draw = true;
+     g_hook->m_was_in_viewport_client_draw = false;
++    VR::get()->duoview_start_draw();
+     g_hook->get_render_target_manager()->set_viewport(viewport);
+     if (viewport != nullptr) {
+         shf_force_scene_viewport_separate_rt(*viewport, "UGameViewportClient::Draw");
+@@ -21712,6 +21715,7 @@ struct SceneViewExtensionAnalyzer {
+     static inline std::recursive_mutex vtable_mutex{};
+     static inline std::unordered_map<sdk::FRHICommandBase_New*, void**> original_vtables{};
+     static inline std::unordered_map<sdk::FRHICommandBase_New*, uint32_t> cmd_frame_counts{};
++    static inline std::unordered_map<sdk::FRHICommandBase_New*, FFakeStereoRenderingHook::DuoDelivery::Command> duo_command_sources{};
+ 
+     // Meant to be called after analysis has been completed
+     static void setup_view_extension_hook() {
+@@ -21803,6 +21807,10 @@ struct SceneViewExtensionAnalyzer {
+ 
+         const auto func = (decltype(hooked_command_fn<N>)*)original_func;
+         const auto frame_count = cmd_frame_counts[cmd];
++        const auto source_it = duo_command_sources.find(cmd);
++        const auto duo_command = source_it != duo_command_sources.end()
++            ? source_it->second : FFakeStereoRenderingHook::DuoDelivery::Command{};
++        const auto duo_source = duo_command.owner();
+ 
+         if (once) {
+             SPDLOG_INFO("[ISceneViewExtension] Command list frame count: {}", frame_count);
+@@ -21830,7 +21838,39 @@ struct SceneViewExtensionAnalyzer {
+             const auto result = func(cmd, cmd_list, debug_context, r9, stack_1, stack_2, stack_3, stack_4, stack_5, stack_6, stack_7, stack_8);
+ 
+             if (N == correct_execute_index) {
+-                runtime->enqueue_render_poses(frame_count);
++                // The intercepted tail was recorded BEFORE this view family.
++                // Publish AFTER it executes; do not authenticate work inside
++                // that older command as the upcoming camera. The subsequent
++                // RHI interval carries an immutable consumer packet ticket.
++                uevr::duoview::ngx::ProducerTicket ngx_ticket{};
++                if (vr->is_duoview_renderer_active()) {
++                    for (const auto& source : duo_command.sources) {
++                        if (!source) continue;
++                        if (!source.packet || !source.packet->duoview_frame ||
++                            source.generation!=vr->mono_generation()) {ngx_ticket={};break;}
++                        const auto& frame=*source.packet->duoview_frame;
++                        if (ngx_ticket && (ngx_ticket.packet!=source.packet->serial ||
++                            ngx_ticket.generation!=source.generation || ngx_ticket.render_frame!=source.frame)) {
++                            ngx_ticket={};break;
++                        }
++                        const auto& layout=frame.config.layout;
++                        ngx_ticket.packet=source.packet->serial;ngx_ticket.generation=source.generation;
++                        ngx_ticket.draw=frame.config.key.frame;ngx_ticket.render_frame=source.frame;
++                        ngx_ticket.roles|=1u<<static_cast<unsigned>(source.role);
++                        ngx_ticket.outputs={layout.fovea.width,layout.fovea.height,layout.periphery.width,layout.periphery.height};
++                    }
++                }
++                // CPU TLS alone cannot carry attribution to an independent
++                // NGX evaluation thread. Empty handoffs erase old ownership.
++                uevr::duoview::ngx::current_rhi_ticket=ngx_ticket;
++                uevr::duoview::ngx::producer_bridge().publish(ngx_ticket);
++                if (!duo_source || (vr->is_duoview_renderer_active() && duo_source.generation==vr->mono_generation()))
++                    runtime->enqueue_render_poses(frame_count);
++                if (duo_source && vr->is_duoview_renderer_active() && g_hook != nullptr) {
++                    for (const auto& source : duo_command.sources) {
++                        if (source) g_hook->duoview_delivery.executed(source, reinterpret_cast<uintptr_t>(cmd), GetCurrentThreadId());
++                    }
++                }
+                 if (g_hook != nullptr) { g_hook->note_nascar25_render_pose_handoff(frame_count); }
+                 if (g_hook != nullptr) { g_hook->note_stalker2_rhi_handoff(frame_count); }
+             }
+@@ -21846,10 +21886,12 @@ struct SceneViewExtensionAnalyzer {
+         *(void**)cmd = original_vtable;
+         original_vtables.erase(cmd);
+         cmd_frame_counts.erase(cmd);
++        duo_command_sources.erase(cmd);
+ 
+         RHIThreadWorker::get().execute();
+ 
+-        if (vr->get_synchronize_stage() == VR::SynchronizeStage::EARLY) {
++        if (vr->get_synchronize_stage() == VR::SynchronizeStage::EARLY &&
++            (!duo_source || (vr->is_duoview_renderer_active() && duo_source.generation==vr->mono_generation()))) {
+             if (runtime->is_openxr()) {
+                 if (g_framework->get_renderer_type() == Framework::RendererType::D3D11) {
+                     if (!runtime->got_first_sync || runtime->synchronize_frame(frame_count, VRRuntime::SyncFrameCallsite::VREarlyRHICommand) != VRRuntime::Error::SUCCESS) {
+@@ -21870,12 +21912,55 @@ struct SceneViewExtensionAnalyzer {
+         return call_orig();
+     }
+ 
+-    static void hook_new_rhi_command(sdk::FRHICommandBase_New* last_command, uint32_t frame_count) {
++    static void hook_new_rhi_command(sdk::FRHICommandBase_New* last_command, uint32_t frame_count,
++        const FFakeStereoRenderingHook::DuoDelivery::Source& duo_source = {}) {
+         std::scoped_lock __{vtable_mutex};
+ 
+         auto& vr = VR::get();
+         auto runtime = vr->get_runtime();
+-        const bool preserve_pending_identity = uevr::vr_compatibility::should_preserve_mafia_pending_rhi_identity(
++        if (duo_source && (!vr->is_duoview_renderer_active() || duo_source.generation!=vr->mono_generation())) return;
++        if (!duo_source && vr->is_duoview_renderer_active() && original_vtables.contains(last_command)) return;
++        if (duo_source) {
++            const char* root_rejection{};
++            if (!original_vtables.contains(last_command) && !is_probable_new_rhi_command(last_command, root_rejection)) {
++                g_hook->duoview_delivery.block(duo_source, reinterpret_cast<uintptr_t>(last_command), GetCurrentThreadId());
++                return;
++            }
++            uintptr_t readable_begin{}, readable_end{};
++            const auto tail = uevr::duoview::command_tail(reinterpret_cast<uintptr_t>(last_command),
++                [&](uintptr_t at) -> std::optional<uintptr_t> {
++                    if (at < readable_begin || at >= readable_end || readable_end-at < sizeof(sdk::FRHICommandBase_New)) {
++                        MEMORY_BASIC_INFORMATION region{};
++                        if (!is_readable_process_range(at, sizeof(sdk::FRHICommandBase_New)) ||
++                            !VirtualQuery(reinterpret_cast<void*>(at), &region, sizeof(region))) return {};
++                        readable_begin=reinterpret_cast<uintptr_t>(region.BaseAddress);
++                        readable_end=readable_begin+region.RegionSize;
++                    }
++                    return reinterpret_cast<uintptr_t>(reinterpret_cast<sdk::FRHICommandBase_New*>(at)->next);
++                });
++            if (!tail) {
++                g_hook->duoview_delivery.block(duo_source, reinterpret_cast<uintptr_t>(last_command), GetCurrentThreadId());
++                SPDLOG_WARNING_EVERY_N_SEC(2, "[DuoView][Delivery] Command tail unreadable/cyclic; source ownership not advanced");
++                return;
++            }
++            last_command = reinterpret_cast<sdk::FRHICommandBase_New*>(*tail);
++            if (original_vtables.contains(last_command)) {
++                const auto owner = duo_command_sources.find(last_command);
++                using Attachment=FFakeStereoRenderingHook::DuoDelivery::Attachment;
++                const auto attached=owner!=duo_command_sources.end()
++                    ? owner->second.attach(duo_source) : Attachment::conflict;
++                g_hook->duoview_delivery.note(attached==Attachment::added ? uevr::duoview::DeliveryEvent::hook :
++                    attached==Attachment::duplicate ? uevr::duoview::DeliveryEvent::duplicate :
++                    uevr::duoview::DeliveryEvent::conflict, duo_source, *tail, GetCurrentThreadId());
++                if (attached==Attachment::conflict) g_hook->duoview_delivery.block(duo_source, *tail, GetCurrentThreadId());
++                if (attached==Attachment::conflict) SPDLOG_WARNING_EVERY_N_SEC(2,
++                    "[DuoView][Delivery] Pending tail ownership conflict command={:x} owner={} incoming={} frame={}",
++                    *tail, owner != duo_command_sources.end() && owner->second.owner().packet ? owner->second.owner().packet->serial : 0,
++                    duo_source.packet ? duo_source.packet->serial : 0, duo_source.frame);
++                return;
++            }
++        }
++        const bool preserve_pending_identity = vr->is_duoview_renderer_active() || uevr::vr_compatibility::should_preserve_mafia_pending_rhi_identity(
+             sdk::mafia::uses_ue544_discovery(), vr->is_using_native_stereo(), vr->is_native_stereo_fix_enabled());
+         if (!preserve_pending_identity) {
+             runtime->on_pre_render_render_thread(frame_count);
+@@ -21883,6 +21968,8 @@ struct SceneViewExtensionAnalyzer {
+ 
+         const char* rejection_reason = nullptr;
+         if (!is_probable_new_rhi_command(last_command, rejection_reason)) {
++            if (duo_source) g_hook->duoview_delivery.block(duo_source,
++                reinterpret_cast<uintptr_t>(last_command), GetCurrentThreadId());
+             if (preserve_pending_identity) {
+                 runtime->on_pre_render_render_thread(frame_count);
+             }
+@@ -21959,6 +22046,13 @@ struct SceneViewExtensionAnalyzer {
+         }
+ 
+         original_vtables[last_command] = *(void***)last_command;
++        if (duo_source) {
++            FFakeStereoRenderingHook::DuoDelivery::Command command{};
++            command.attach(duo_source);
++            duo_command_sources.emplace(last_command, std::move(command));
++            g_hook->duoview_delivery.note(uevr::duoview::DeliveryEvent::hook, duo_source,
++                reinterpret_cast<uintptr_t>(last_command), GetCurrentThreadId());
++        }
+         *(void***)last_command = (void**)new_vtable.data();
+     }
+ 
+@@ -23186,6 +23280,28 @@ sdk::FSceneView* FFakeStereoRenderingHook::sceneview_constructor(sdk::FSceneView
+ 
+     native_projection_valid = native_projection_valid && native_projection_nonzero && native_projection_hash != 0;
+ 
++    if (vr->is_duoview_renderer_active() && g_hook->is_in_viewport_client_draw()) {
++        const auto family=init_options_view_family;
++        const auto rtm=g_hook->get_render_target_manager();
++        const auto views=family ? family->get_views() : nullptr;
++        const bool main=family && rtm && family->get_render_target()==rtm->get_view_family_render_target();
++        const bool source_pass=init_options_original_stereo_pass==EStereoscopicPass::eSSP_PRIMARY ||
++                               init_options_original_stereo_pass==EStereoscopicPass::eSSP_SECONDARY;
++        if (main && views && source_pass) {
++            const unsigned index=init_options_original_stereo_pass==EStereoscopicPass::eSSP_PRIMARY ? 0u : 1u;
++            const auto key=vr->duoview_producer_key();
++            const auto state=reinterpret_cast<uintptr_t>(init_options_scene_state);
++            bool applied=false;
++            if (index==1 && views->count==1 &&
++                is_readable_process_range(state,sizeof(uintptr_t)) &&
++                vr->duoview_state().can_independent_shading(key,state)) {
++                set_effective_stereo_pass(EStereoscopicPass::eSSP_PRIMARY);
++                restore_init_options_after_constructor=true;
++                applied=get_effective_stereo_pass()==EStereoscopicPass::eSSP_PRIMARY;
++            }
++            vr->duoview_state().scene(key,index,state,applied);
++        }
++    }
+     std::optional<uint32_t> views_original_count{};
+ 
+     if (vr->is_native_stereo_fix_enabled() && init_options_stereo_pass == EStereoscopicPass::eSSP_SECONDARY) {
+@@ -25186,6 +25302,20 @@ void FFakeStereoRenderingHook::begin_render_viewfamily_real(void* render_module,
+     }
+ 
+     if (native_stereo_fix_enabled) {
++        if (vr->is_duoview_renderer_active()) {
++            bool duo_main_target_present=false;
++            const auto expected=rtm->get_view_family_render_target();
++            for (const auto family:view_families) {
++                if (expected && family && family->get_render_target()==expected) {
++                    duo_main_target_present=true;
++                    break;
++                }
++            }
++            if (!duo_main_target_present) {
++                call_original();
++                return;
++            }
++        }
+         if (g_hook->m_native_stereo_localplayer_bootstrap_failed.load(std::memory_order_acquire)) {
+             g_hook->invalidate_native_stereo_frame_packet(
+                 NativeStereoFixState::FailedClosed,
+@@ -25619,6 +25749,23 @@ void FFakeStereoRenderingHook::begin_render_viewfamily_real(void* render_module,
+     auto& views = *views_ptr;
+     const auto prev_count = views.count;
+ 
++    // Observe Native Fix's original two-view main family before the fix
++    // splits it into one-view primary and secondary render callbacks.
++    const auto duo_target = view_family->get_render_target();
++    const auto duo_main_target = rtm ? rtm->get_view_family_render_target() : nullptr;
++    const bool duo_views_readable = vr->is_duoview_renderer_active() && prev_count == 2 &&
++        views.capacity >= 2 && views.data != nullptr &&
++        is_readable_process_range(reinterpret_cast<uintptr_t>(views.data), sizeof(void*) * 2);
++    const bool duo_original_main_pair = duo_views_readable &&
++        duo_target != nullptr && duo_target == duo_main_target &&
++        view_family->get_scene_interface() != nullptr && views.data[0] != nullptr &&
++        views.data[1] != nullptr && views.data[0] != views.data[1];
++    if (duo_original_main_pair && vr->duoview_note_main_family(0, true, prev_count)) {
++        const auto source_frame = vr->duoview_mono_source_frame();
++        if (source_frame && vr->get_openxr_runtime())
++            vr->get_openxr_runtime()->note_mono_main_family(*source_frame, true);
++    }
++
+     if (auto view_family_target = view_family->get_render_target(); view_family_target != nullptr) {
+         g_hook->try_adopt_scene_viewport_render_target(
+             reinterpret_cast<sdk::FViewport*>(view_family_target),
+@@ -25665,6 +25812,41 @@ void FFakeStereoRenderingHook::begin_render_viewfamily_real(void* render_module,
+             set_dibr_status(DIBR_SINGLE_VIEW_WARMING_UP, "new DIBR resource generation");
+         }
+ 
++        if (stalker2_is_current_game()) {
++            // View count was chosen by GetDesiredNumberOfViews, as in Joey
++            // Mono. Observe and report; do not mutate an instantiated family.
++            const auto main_family = view_family->get_render_target() == rtm->get_viewport() &&
++                rtm->get_viewport() != nullptr && view_family->get_scene_interface() != nullptr &&
++                (prev_count == 1 || prev_count == 2) &&
++                sdk::FSceneViewFamily::validate_views(view_family, views_ptr, prev_count);
++            if (main_family) {
++                const auto target = reinterpret_cast<uintptr_t>(view_family->get_render_target());
++                const auto scene = reinterpret_cast<uintptr_t>(view_family->get_scene_interface());
++                if (g_hook->m_dibr_single_view_target != target || g_hook->m_dibr_single_view_scene != scene) {
++                    g_hook->m_dibr_single_view_target = target;
++                    g_hook->m_dibr_single_view_scene = scene;
++                    g_hook->m_dibr_single_view_stable_frames = 1;
++                } else if (g_hook->m_dibr_single_view_stable_frames < DIBR_SINGLE_VIEW_FAMILY_STABLE_FRAMES) {
++                    ++g_hook->m_dibr_single_view_stable_frames;
++                }
++                g_hook->m_dibr_single_view_family = reinterpret_cast<uintptr_t>(view_family);
++            } else if (view_family->get_render_target() == rtm->get_viewport()) {
++                // A malformed current main family invalidates the prior proof.
++                // Unrelated scene captures never acquire or replace that proof.
++                g_hook->m_dibr_single_view_stable_frames = 0;
++                set_dibr_status(DIBR_SINGLE_VIEW_FALLBACK, "STALKER: current main family failed validation");
++            }
++            if (main_family && prev_count == 1 && readiness.preview_ready) {
++                g_hook->m_dibr_single_view_suppressed_frames.fetch_add(1, std::memory_order_relaxed);
++                set_dibr_status(DIBR_SINGLE_VIEW_ACTIVE, "STALKER: one source view constructed before renderer creation");
++            } else if (main_family && prev_count == 2) {
++                set_dibr_status(DIBR_SINGLE_VIEW_WARMING_UP, "STALKER: two-view depth/output warmup; no family truncation");
++                g_hook->m_dibr_single_view_fallback_frames.fetch_add(1, std::memory_order_relaxed);
++            }
++            g_hook->m_render_module_begin_render_viewfamily_hook.unsafe_call<void>(render_module, canvas, view_family_candidate);
++            return;
++        }
++
+         if (g_hook->m_dibr_single_view_latched_generation == readiness.generation) {
+             set_dibr_status(DIBR_SINGLE_VIEW_BLOCKED, "three DIBR output failures in this generation");
+             call_two_view_fallback();
+@@ -25949,7 +26131,14 @@ void FFakeStereoRenderingHook::begin_render_viewfamily_real(void* render_module,
+         std::memcpy(&frame, reinterpret_cast<const uint8_t*>(view_family) + offset, sizeof(frame));
+         return frame;
+     };
+-    const auto publish_native_packet = [&]() {
++    const auto duo_packet_frame = vr->is_duoview_renderer_active()
++        ? vr->duoview_state().snapshot(vr->duoview_producer_key())
++        : std::optional<uevr::duoview::ViewFrame>{};
++    const auto duo_packet_pose = duo_packet_frame && duo_packet_frame->mono_source_frame &&
++        uevr::duoview::native_frame_binding(*duo_packet_frame) && vr->get_openxr_runtime()
++        ? vr->get_openxr_runtime()->capture_duoview_pose(*duo_packet_frame->mono_source_frame)
++        : std::optional<runtimes::OpenXR::PipelineState>{};
++    const auto make_native_packet = [&]() -> std::shared_ptr<const NativeStereoFramePacket> {
+         auto packet = std::make_shared<NativeStereoFramePacket>();
+         packet->capture = native_capture_snapshot;
+         packet->family = view_family;
+@@ -25962,8 +26151,25 @@ void FFakeStereoRenderingHook::begin_render_viewfamily_real(void* render_module,
+         packet->serial = g_hook->m_native_stereo_packet_serial.fetch_add(1, std::memory_order_acq_rel) + 1;
+         packet->capture_generation = native_capture_snapshot->generation;
+         packet->d3d11_snapshot_transaction = daysgone_snapshot_transaction;
+-        packet->engine_frame = g_frame_count;
+-        packet->render_frame = vr->m_render_frame_count;
++        if (!duo_packet_frame) {
++            packet->engine_frame = g_frame_count;
++            packet->render_frame = vr->m_render_frame_count;
++        }
++        if (duo_packet_frame && duo_packet_pose) {
++            packet->duoview_frame=std::make_shared<const uevr::duoview::ViewFrame>(*duo_packet_frame);
++            packet->duoview_mono_source_frame=*duo_packet_frame->mono_source_frame;
++            packet->duoview_mono_source_valid=true;
++            std::copy_n(duo_packet_pose->stage_views.begin(),2,packet->duoview_views.begin());
++            packet->duoview_frame_state=duo_packet_pose->frame_state;
++            packet->duoview_view_location=duo_packet_pose->view_space_location;
++            packet->duoview_pose_valid=true;
++            packet->duoview_secondary_target=rtfrt;
++            if (const auto primary=rtm->get_render_target()) {
++                if (const auto native=static_cast<IUnknown*>(primary->get_native_resource())) {
++                    native->QueryInterface(IID_PPV_ARGS(&packet->duoview_primary_resource));
++                }
++            }
++        }
+         packet->player_index = native_left_metadata.player_index;
+         packet->left_pass = native_left_metadata.original_stereo_pass;
+         packet->right_pass = native_right_metadata.original_stereo_pass;
+@@ -25977,7 +26183,14 @@ void FFakeStereoRenderingHook::begin_render_viewfamily_real(void* render_module,
+         if (const auto token = g_hook->m_native_frame_diagnostics.control()) {
+             packet->diagnostic_clock = g_hook->m_native_frame_diagnostics.clock(token);
+         }
+-        g_hook->publish_native_stereo_frame_packet(std::move(packet));
++        return packet;
++    };
++    const auto duo_build_packet = duo_packet_frame && duo_packet_pose ? make_native_packet() : nullptr;
++    const auto previous_duo_build = duoview_build_packet;
++    duoview_build_packet = duo_build_packet;
++    utility::ScopeGuard restore_duo_build{[&] { duoview_build_packet = previous_duo_build; }};
++    const auto publish_native_packet = [&]() {
++        g_hook->publish_native_stereo_frame_packet(duo_build_packet ? duo_build_packet : make_native_packet());
+         if (daysgone_snapshot_transaction != 0) {
+             daysgone_snapshot_packet_published = true;
+         }
+@@ -26798,12 +27011,23 @@ void FFakeStereoRenderingHook::begin_render_viewfamily(ISceneViewExtension* exte
+     const auto frame_count =
+         *(uint32_t*)((uintptr_t)&view_family + SceneViewExtensionAnalyzer::frame_count_offset);
+     auto views_ptr = view_family.get_views();
++    if (const auto packet = duoview_build_packet; packet && packet->duoview_frame) {
++        const auto target = view_family.get_render_target();
++        const auto role = target == packet->main_target ? uevr::duoview::SourceRole::primary :
++            target == packet->duoview_secondary_target ? uevr::duoview::SourceRole::secondary :
++            uevr::duoview::SourceRole::auxiliary;
++        if (role != uevr::duoview::SourceRole::auxiliary && !g_hook->duoview_delivery.family(
++                {packet, packet->duoview_frame->config.key.generation, reinterpret_cast<uintptr_t>(target),
++                 reinterpret_cast<uintptr_t>(view_family.get_scene_interface()), frame_count, role}, GetCurrentThreadId())) {
++            SPDLOG_WARNING_EVERY_N_SEC(2, "[DuoView][Delivery] Family registration conflict serial={} frame={}", packet->serial, frame_count);
++        }
++    }
+ 
+     auto runtime = vr->get_runtime();
+     runtime->internal_frame_count = frame_count;
+     runtime->on_pre_render_game_thread(frame_count);
+ 
+-    if (vr->mono_frame_gate_required() && runtime->is_openxr()) {
++    if (!vr->is_duoview_renderer_active() && vr->mono_frame_gate_required() && runtime->is_openxr()) {
+         const bool main_family = view_family.get_render_target() != nullptr && view_family.get_render_target() ==
+             reinterpret_cast<sdk::FRenderTarget*>(g_hook->get_render_target_manager()->get_viewport());
+         vr->get_openxr_runtime()->note_mono_main_family(frame_count,
+@@ -27371,7 +27595,11 @@ FFakeStereoRenderingHook::get_native_stereo_frame_packet_for_submit(int32_t rend
+         return nullptr;
+     }
+ 
+-    const auto packet = m_native_stereo_frame_packet.load(std::memory_order_acquire);
++    const bool duo_transaction = vr->is_duoview_renderer_active();
++    const auto packet = duo_transaction
++        ? duoview_delivery.select(vr->mono_generation(), GetCurrentThreadId())
++        : m_native_stereo_frame_packet.load(std::memory_order_acquire);
++    if (duo_transaction && !packet) dump_duoview_delivery();
+     if (packet == nullptr || packet->capture == nullptr) {
+         record_outcome(frame_diag::Reason::no_packet);
+         return nullptr;
+@@ -27386,16 +27614,16 @@ FFakeStereoRenderingHook::get_native_stereo_frame_packet_for_submit(int32_t rend
+     }
+ 
+     const auto render_frame_delta =
+-        static_cast<int64_t>(render_frame) - static_cast<int64_t>(packet->render_frame);
++        duo_transaction ? 0 : static_cast<int64_t>(render_frame) - static_cast<int64_t>(packet->render_frame);
+     const auto engine_frame_delta =
+-        static_cast<uint32_t>(g_frame_count - packet->engine_frame);
++        duo_transaction ? 0u : static_cast<uint32_t>(g_frame_count - packet->engine_frame);
+     const bool exact_render_frame = render_frame_delta == 0;
+     const bool same_engine_frame_present_grace =
+-        packet->engine_frame == g_frame_count;
++        !duo_transaction && packet->engine_frame == g_frame_count;
+     const bool next_engine_frame_handoff =
+         render_frame_delta == 1 && engine_frame_delta == 1;
+     if (observation) {
+-        observation->window_observed = true;
++        observation->window_observed = !duo_transaction;
+         observation->render_delta = render_frame_delta;
+         observation->engine_delta = engine_frame_delta;
+         observation->legacy_same_engine = same_engine_frame_present_grace;
+@@ -27409,7 +27637,7 @@ FFakeStereoRenderingHook::get_native_stereo_frame_packet_for_submit(int32_t rend
+     // The present thread can also observe the next engine frame immediately
+     // after the render thread publishes a completed packet. Permit exactly
+     // that one-frame pipeline handoff; wider cross-frame reuse remains closed.
+-    if (!frame_diag::frame_window(render_frame_delta, engine_frame_delta, same_engine_frame_present_grace).accepted()) {
++    if (!duo_transaction && !frame_diag::frame_window(render_frame_delta, engine_frame_delta, same_engine_frame_present_grace).accepted()) {
+         record_outcome(frame_diag::Reason::stale_frames);
+         SPDLOG_WARNING_EVERY_N_SEC(
+             2,
+@@ -27426,7 +27654,7 @@ FFakeStereoRenderingHook::get_native_stereo_frame_packet_for_submit(int32_t rend
+         return nullptr;
+     }
+ 
+-    if (!exact_render_frame && (same_engine_frame_present_grace || next_engine_frame_handoff)) {
++    if (!duo_transaction && !exact_render_frame && (same_engine_frame_present_grace || next_engine_frame_handoff)) {
+         SPDLOG_INFO_ONCE(
+             "[NativeStereoFix] Accepting validated packet across asynchronous Present handoff "
+             "(packet_render_frame={} submit_render_frame={} delta={} packet_engine_frame={} "
+@@ -27445,6 +27673,11 @@ FFakeStereoRenderingHook::get_native_stereo_frame_packet_for_submit(int32_t rend
+     }
+ 
+     const auto rtm = const_cast<FFakeStereoRenderingHook*>(this)->get_render_target_manager();
++    if (vr->is_duoview_renderer_active() &&
++        (!rtm || packet->main_target!=rtm->get_view_family_render_target())) {
++        record_outcome(frame_diag::Reason::changed_resource);
++        return nullptr;
++    }
+     const auto current_capture = rtm != nullptr ? rtm->get_scene_capture_target_snapshot() : nullptr;
+     if (observation) {
+         observation->resource_checks_ran = true;
+@@ -27473,6 +27706,21 @@ FFakeStereoRenderingHook::get_native_stereo_frame_packet_for_submit(int32_t rend
+     return packet;
+ }
+ 
++void FFakeStereoRenderingHook::dump_duoview_delivery() const {
++    static std::atomic<uint64_t> next_dump{};
++    const auto now = GetTickCount64();
++    auto expected = next_dump.load(std::memory_order_relaxed);
++    if (now < expected || !next_dump.compare_exchange_strong(expected, now + 5000)) return;
++    const auto events = duoview_delivery.recent();
++    spdlog::warn("[DuoView][Delivery] No same-transaction RHI source pair on Present; recent bounded trace follows");
++    for (size_t i=events.size()-24; i<events.size(); ++i) {
++        const auto& e=events[i];
++        if (e.sequence) spdlog::warn("[DuoView][Trace] seq={} us={} event={} gen={} serial={} family={} role={} thread={} command={:x} target={:x} draw={} pose={} capture_gen={}",
++            e.sequence, e.time_us, static_cast<uint32_t>(e.event), e.generation, e.serial,
++            e.frame, static_cast<uint32_t>(e.role), e.thread, e.command, e.target, e.draw, e.pose, e.capture_generation);
++    }
++}
++
+ void FFakeStereoRenderingHook::sync_stalker2_native_experiment(bool enabled) {
+     if (m_stalker2_native_experiment.exchange(enabled, std::memory_order_acq_rel) != enabled) {
+         m_stalker2_native_packets.invalidate();
+@@ -27930,6 +28178,11 @@ void FFakeStereoRenderingHook::pre_render_viewfamily_renderthread(ISceneViewExte
+     } else {
+         last_native_key = {};
+     }
++    const auto duo_source = vr->is_duoview_renderer_active()
++        ? g_hook->duoview_delivery.render(vr->mono_generation(), frame_count,
++            reinterpret_cast<uintptr_t>(view_family.get_render_target()),
++            reinterpret_cast<uintptr_t>(view_family.get_scene_interface()), GetCurrentThreadId())
++        : DuoDelivery::Source{};
+ 
+     static bool is_ue5_rdg_builder = false;
+     static uint32_t ue5_command_offset = 0;
+@@ -27976,12 +28229,13 @@ void FFakeStereoRenderingHook::pre_render_viewfamily_renderthread(ISceneViewExte
+                     uevr::nascar::read_memory);
+                 if (!root || !*root) {
+                     SPDLOG_WARN_ONCE("[NASCAR25][UE5.5][RHICommandList] Exact command Root absent/unvalidated; using render-thread poses without scanning allocator memory");
++                    if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());
+                     vr->get_runtime()->enqueue_render_poses(frame_count + compensation);
+                     return;
+                 }
+                 SPDLOG_INFO_ONCE("[NASCAR25][UE5.5][RHICommandList] Using source/binary-validated Root at +0x28; legacy allocator scan bypassed");
+                 SceneViewExtensionAnalyzer::hook_new_rhi_command(
+-                    reinterpret_cast<sdk::FRHICommandBase_New*>(*root), frame_count + compensation);
++                    reinterpret_cast<sdk::FRHICommandBase_New*>(*root), frame_count + compensation, duo_source);
+                 return;
+             }
+ 
+@@ -27994,6 +28248,7 @@ void FFakeStereoRenderingHook::pre_render_viewfamily_renderthread(ISceneViewExte
+ 
+                 if (command_list == nullptr || IsBadReadPtr((void*)root_field, sizeof(void*))) {
+                     SPDLOG_WARN_ONCE("[UE5.8][RHICommandList] Command list/root field is unreadable; using direct pose enqueue");
++                    if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());
+                     vr->get_runtime()->enqueue_render_poses(frame_count + compensation);
+                     return;
+                 }
+@@ -28005,6 +28260,7 @@ void FFakeStereoRenderingHook::pre_render_viewfamily_renderthread(ISceneViewExte
+                     IsBadReadPtr(root, sizeof(void*) * 2))
+                 {
+                     SPDLOG_WARN_ONCE("[UE5.8][RHICommandList] Root is absent or unreadable; using direct pose enqueue");
++                    if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());
+                     vr->get_runtime()->enqueue_render_poses(frame_count + compensation);
+                     return;
+                 }
+@@ -28020,12 +28276,13 @@ void FFakeStereoRenderingHook::pre_render_viewfamily_renderthread(ISceneViewExte
+                     !utility::get_module_within(first_function))
+                 {
+                     SPDLOG_WARN_ONCE("[UE5.8][RHICommandList] Root vtable failed validation; using direct pose enqueue");
++                    if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());
+                     vr->get_runtime()->enqueue_render_poses(frame_count + compensation);
+                     return;
+                 }
+ 
+                 SPDLOG_INFO_ONCE("[UE5.8][RHICommandList] Using source/PDB-validated Root offset 0x28");
+-                SceneViewExtensionAnalyzer::hook_new_rhi_command(root, frame_count + compensation);
++                SceneViewExtensionAnalyzer::hook_new_rhi_command(root, frame_count + compensation, duo_source);
+                 return;
+             }
+ 
+@@ -28080,13 +28337,15 @@ void FFakeStereoRenderingHook::pre_render_viewfamily_renderthread(ISceneViewExte
+                 }
+ 
+                 if (!is_old_command_base) {
+-                    SceneViewExtensionAnalyzer::hook_new_rhi_command((sdk::FRHICommandBase_New*)l->root, frame_count + compensation);
++                    SceneViewExtensionAnalyzer::hook_new_rhi_command((sdk::FRHICommandBase_New*)l->root, frame_count + compensation, duo_source);
+                 } else {
++                    if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());
+                     SceneViewExtensionAnalyzer::hook_old_rhi_command((sdk::FRHICommandBase_Old*)l->root, frame_count + compensation);
+                 }
+             } else {
+                 // welp
+-                vr->get_runtime()->enqueue_render_poses(frame_count + compensation);
++                if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());
++                    vr->get_runtime()->enqueue_render_poses(frame_count + compensation);
+             }
+         });
+     };
+@@ -28104,7 +28363,8 @@ void FFakeStereoRenderingHook::pre_render_viewfamily_renderthread(ISceneViewExte
+         if (g_hook->has_slate_hook()) {
+             enqueue_poses_on_slate_thread();
+         } else {
+-            vr->get_runtime()->enqueue_render_poses(frame_count + compensation);
++            if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());
++                    vr->get_runtime()->enqueue_render_poses(frame_count + compensation);
+         }
+     };
+ 
+@@ -28227,9 +28487,10 @@ void FFakeStereoRenderingHook::pre_render_viewfamily_renderthread(ISceneViewExte
+             enqueue_poses_on_slate_thread();
+         } else try {
+             if (!is_old_command_base) {
+-                SceneViewExtensionAnalyzer::hook_new_rhi_command((sdk::FRHICommandBase_New*)cmd_list->root, frame_count + compensation);
++                SceneViewExtensionAnalyzer::hook_new_rhi_command((sdk::FRHICommandBase_New*)cmd_list->root, frame_count + compensation, duo_source);
+             } else {
+-                SceneViewExtensionAnalyzer::hook_old_rhi_command((sdk::FRHICommandBase_Old*)cmd_list->root, frame_count + compensation);
++                if (duo_source) g_hook->duoview_delivery.block(duo_source, 0, GetCurrentThreadId());
++                    SceneViewExtensionAnalyzer::hook_old_rhi_command((sdk::FRHICommandBase_Old*)cmd_list->root, frame_count + compensation);
+             }
+         } catch(...) {
+             SPDLOG_INFO_ONCE("Failed to hook command list, falling back to Slate thread hook");
+@@ -29930,6 +30191,27 @@ void FFakeStereoRenderingHook::adjust_view_rect(FFakeStereoRendering* stereo, in
+         SPDLOG_INFO_ONCE("[Medium][UE4.25Plus] Forcing one-based stereo eye passes (1=left, 2=right)");
+     }
+ 
++    if (VR::get()->is_duoview_renderer_active() && g_hook->m_has_double_precision &&
++        (index == 0 || index == 1)) {
++        const auto vr = VR::get();
++        if (const auto frame = vr->duoview_begin_frame()) {
++            const auto& rect = static_cast<uint32_t>(index) == frame->config.settings.fovea_view
++                ? frame->config.layout.fovea : frame->config.layout.periphery;
++            if (rect.width && rect.height &&
++                uint64_t(rect.x) + rect.width <= frame->config.layout.atlas_width &&
++                uint64_t(rect.y) + rect.height <= frame->config.layout.atlas_height) {
++                // Native Fix renders each source into a separate single-eye target.
++                // Atlas placement is applied only after both sources are validated.
++                *x = 0;
++                *y = 0;
++                *w = rect.width;
++                *h = rect.height;
++                vr->duoview_state().rectangle(frame->config.key, static_cast<unsigned>(index));
++                return;
++            }
++        }
++        // Pair cannot pass frame validation. Original Mono fallback is guarded at submission.
++    }
+     if (VR::get()->is_using_mono()) {
+         *x = 0;
+         *y = 0;
+@@ -29956,6 +30238,17 @@ __forceinline void FFakeStereoRenderingHook::calculate_stereo_view_offset(
+     }
+ 
+     auto vr = VR::get();
++    if (vr->is_duoview_renderer_active() && g_hook->m_has_double_precision && view_index == 1 && !vr->is_duoview_split_eye_enabled()) {
++        const auto key = vr->duoview_producer_key();
++        if (const auto pose = vr->duoview_state().camera(key, 1)) {
++            auto* rot = reinterpret_cast<Rotator<double>*>(view_rotation);
++            auto* pos = reinterpret_cast<Vector3d*>(view_location);
++            rot->pitch = pose->rotation[0]; rot->yaw = pose->rotation[1]; rot->roll = pose->rotation[2];
++            pos->x = pose->position[0]; pos->y = pose->position[1]; pos->z = pose->position[2];
++            if (vr->duoview_state().camera(key, 1, *pose)) return;
++        }
++        // A missing pose remains incomplete; the render submission gate will fall back.
++    }
+     //std::scoped_lock _{vr->get_vr_mutex()};
+ 
+     static bool index_starts_from_one = true;
+@@ -30019,7 +30312,13 @@ __forceinline void FFakeStereoRenderingHook::calculate_stereo_view_offset(
+     const auto has_double_precision = g_hook->m_has_double_precision;
+     const auto rot_d = (Rotator<double>*)view_rotation;
+ 
+-    const bool mono = vr->is_using_mono();
++    const bool mono = vr->is_using_mono() && !vr->is_duoview_split_eye_enabled();
++    // UE5 double-precision ID6 producer: force exact physical 0=LEFT, 1=RIGHT.
++    // Native Joey remains responsible for eye orientation/IPD and head offset.
++    if (vr->is_duoview_split_eye_enabled() && g_hook->m_has_double_precision &&
++        (view_index == 0 || view_index == 1)) {
++        true_index = view_index;
++    }
+     if (mono && !is_full_pass) { true_index = 0; }
+     if (vr->is_using_afr() && !is_full_pass) {
+         true_index = g_frame_count % 2;
+@@ -30259,7 +30558,13 @@ __forceinline void FFakeStereoRenderingHook::calculate_stereo_view_offset(
+         const auto standing_delta = vr->get_position(0) - vr->get_standing_origin();
+         const auto standing_delta_flat = glm::vec3{standing_delta.x, 0, standing_delta.z};
+ 
+-        const auto pos = glm::vec3{rotation_offset * standing_delta};
++        const auto xyz_gains = vr->get_xyz_head_movement_gains();
++        const glm::vec3 scaled_standing_delta{
++            standing_delta.x * xyz_gains.x,
++            standing_delta.y * xyz_gains.y,
++            standing_delta.z * xyz_gains.z
++        };
++        const auto pos = glm::vec3{rotation_offset * scaled_standing_delta};
+         const auto pos_flat = glm::vec3{rotation_offset * standing_delta_flat};
+ 
+         const auto head_offset = quat_converter * (vqi_norm * (pos * world_scale));
+@@ -30390,6 +30695,35 @@ __forceinline void FFakeStereoRenderingHook::calculate_stereo_view_offset(
+             }
+         }
+ 
++        if (vr->is_duoview_renderer_active() && g_hook->m_has_double_precision && view_index == 0) {
++            const auto key = vr->duoview_producer_key();
++            const auto* r = reinterpret_cast<const Rotator<double>*>(view_rotation);
++            const auto* p = reinterpret_cast<const Vector3d*>(view_location);
++            const uevr::duoview::CameraPose pose{{r->pitch,r->yaw,r->roll},{p->x,p->y,p->z}};
++            vr->duoview_begin_frame();
++            if (!vr->duoview_state().camera(key, 0, pose))
++                SPDLOG_WARNING_EVERY_N_SEC(2, "[DuoView] First scene pose not captured");
++        }
++        // Joey native CalculateStereoViewOffset already applied right-eye
++        // rotation, IPD and head pose above; capture that output unchanged.
++        if (vr->is_duoview_split_eye_enabled() && g_hook->m_has_double_precision && view_index == 1) {
++            const auto key = vr->duoview_producer_key();
++            const auto* r = reinterpret_cast<const Rotator<double>*>(view_rotation);
++            const auto* p = reinterpret_cast<const Vector3d*>(view_location);
++            const uevr::duoview::CameraPose pose{{r->pitch,r->yaw,r->roll},{p->x,p->y,p->z}};
++            if (!vr->duoview_state().camera(key, 1, pose))
++                SPDLOG_WARNING_EVERY_N_SEC(2, "[DuoView][Split165] Native right-eye camera not captured");
++            else if (const auto snap=vr->duoview_state().snapshot(key)) {
++                const auto& a=snap->eye_cameras[0].position;
++                const auto& b=snap->eye_cameras[1].position;
++                const double dx=a[0]-b[0], dy=a[1]-b[1], dz=a[2]-b[2];
++                const double sq=dx*dx+dy*dy+dz*dz;
++                SPDLOG_INFO_EVERY_N_SEC(3,
++                    "[DuoView][Split165] Native camera delta^2={:.8f} UE-units^2 (source 0 LEFT / source 1 RIGHT)",
++                    sq);
++            }
++        }
++
+         // Modify Player Control Rotation
+         const auto controller_camera_guard_active = vr->is_controller_camera_conflict_guard_active();
+         const auto direct_aim_compatibility_fallback =
+@@ -30451,7 +30785,7 @@ __forceinline Matrix4x4f* FFakeStereoRenderingHook::calculate_stereo_projection_
+     const bool ue425_426_needs_localplayer_bootstrap =
+         is_ue_4_25_runtime() || is_ue_4_26_runtime();
+     const bool native_needs_localplayer_bootstrap = vr->is_native_stereo_fix_enabled();
+-    const bool wants_localplayer_bootstrap = !vr->is_using_mono() && (
++    const bool wants_localplayer_bootstrap = (!vr->is_using_mono() || vr->is_duoview_renderer_active()) && (
+         wants_ghosting_bootstrap ||
+         ue425_426_needs_localplayer_bootstrap ||
+         native_needs_localplayer_bootstrap ||
+@@ -30656,7 +30990,16 @@ __forceinline Matrix4x4f* FFakeStereoRenderingHook::calculate_stereo_projection_
+         if (vr->is_using_afr()) {
+             true_index = g_frame_count % 2;
+         }
+-        if (vr->is_using_mono()) { true_index = 0; }
++        const bool duo_index=vr->is_duoview_renderer_active() && g_hook->m_has_double_precision &&
++            (view_index == 0 || view_index == 1);
++        const auto duo_frame=duo_index ? vr->duoview_begin_frame() :
++            std::optional<uevr::duoview::ViewFrame>{};
++        const bool duo_fovea=duo_frame && static_cast<uint32_t>(view_index) == duo_frame->config.settings.fovea_view;
++        const bool duo_full=duo_frame && !duo_fovea;
++        if (vr->is_duoview_split_eye_enabled() && g_hook->m_has_double_precision &&
++            (view_index == 0 || view_index == 1)) {
++            true_index = view_index;
++        } else if (vr->is_using_mono()) { true_index = 0; }
+ 
+         auto& double_matrix = *(Matrix4x4d*)out;
+ 
+@@ -30676,7 +31019,18 @@ __forceinline Matrix4x4f* FFakeStereoRenderingHook::calculate_stereo_projection_
+             const auto fmat = VR::get()->get_projection_matrix((VRRuntime::Eye)(true_index));
+             double_matrix = fmat;
+         }
+-        if (vr->mono_frame_gate_required() && vr->get_runtime()->is_openxr()) {
++        if (duo_fovea || duo_full) {
++            if (const auto frame = vr->duoview_begin_frame()) {
++                uevr::duoview::apply_frame_projection(double_matrix,*frame,static_cast<unsigned>(view_index));
++                vr->duoview_state().projection(frame->config.key, static_cast<unsigned>(view_index));
++            } else {
++                SPDLOG_WARNING_EVERY_N_SEC(2, "[DuoView] Missing projection snapshot");
++            }
++        }
++        if (duo_frame && duo_frame->mono_source_frame && vr->mono_frame_gate_required() &&
++            vr->get_runtime()->is_openxr()) {
++            vr->get_openxr_runtime()->note_mono_projection(*duo_frame->mono_source_frame);
++        } else if (!duo_frame && vr->mono_frame_gate_required() && vr->get_runtime()->is_openxr()) {
+             vr->get_openxr_runtime()->note_mono_projection();
+         }
+     } else {
+@@ -30871,6 +31225,29 @@ uint32_t FFakeStereoRenderingHook::get_desired_number_of_views_hook(FFakeStereoR
+ 
+     update_sifu_native_mesh_command_mode(is_stereo_enabled, vr->is_using_native_stereo());
+ 
++    if (vr->is_duoview_renderer_active()) { return 2; }
++    if (stalker2_is_current_game() && vr->is_dibr_single_view_requested() && vr->is_dibr_preview_active()) {
++        if (!is_stereo_enabled || !g_hook->is_in_viewport_client_draw()) return is_stereo_enabled ? 2u : 1u;
++        const auto engine = sdk::UEngine::get();
++        const auto world = engine != nullptr ? engine->get_world() : nullptr;
++        const auto world_identity = reinterpret_cast<uintptr_t>(world);
++        if (g_hook->m_dibr_single_view_world != world_identity) {
++            g_hook->m_dibr_single_view_world = world_identity;
++            g_hook->m_dibr_single_view_stable_frames = 0;
++            vr->d3d12().invalidate_dibr_single_view_readiness();
++        }
++        const auto ready = vr->d3d12().get_dibr_single_view_readiness();
++        const auto expected_viewport = g_hook->get_render_target_manager()->get_viewport();
++        const bool validated_main_family = world_identity != 0 && ready.generation != 0 &&
++            ready.generation == g_hook->m_dibr_single_view_generation &&
++            expected_viewport != nullptr &&
++            g_hook->m_dibr_single_view_target == reinterpret_cast<uintptr_t>(expected_viewport) &&
++            g_hook->m_dibr_single_view_scene != 0 &&
++            g_hook->m_dibr_single_view_stable_frames >= DIBR_SINGLE_VIEW_FAMILY_STABLE_FRAMES;
++        if (is_stereo_enabled && g_hook->is_in_viewport_client_draw() &&
++            validated_main_family && ready.preview_ready &&
++            ready.consecutive_ready_frames >= DIBR_SINGLE_VIEW_WARMUP_FRAMES) return 1;
++    }
+     if (vr->is_using_mono()) { return 1; }
+ 
+     if (!is_stereo_enabled || (vr->is_using_afr() && !vr->is_splitscreen_compatibility_enabled())) {
