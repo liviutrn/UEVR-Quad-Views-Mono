@@ -1,0 +1,40 @@
+name: CI75 lossless recorder verification
+on:
+  push:
+    branches: [experiment/ci75-lossless-diagnostic-recorder-20261030]
+    paths: [ci75/**, .github/workflows/ci75-recorder-tests.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actual-gpu-recorder:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install independent archive decoder
+        run: python -m pip install numpy pillow
+      - name: Compile production recorder and record real GPU copies
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Ici75 ci75/recorder_gpu_tests.cpp /Fe:recorder-gpu-tests.exe /link d3d12.lib dxgi.lib windowscodecs.lib ole32.lib uuid.lib
+          if ($LASTEXITCODE -ne 0) { throw 'Recorder compilation failed' }
+          ./recorder-gpu-tests.exe evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Recorder actual GPU test failed' }
+      - name: Verify all frames and native bit patterns through an independent ZIP PNG decoder
+        shell: pwsh
+        run: |
+          python ci75/verify_gpu_archive.py evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Lossless numerical roundtrip or split retention failed' }
+      - name: Portable archive and analyzer regressions
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Ici75 ci75/archive_tests.cpp /Fe:archive-tests.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Archive test compile failed' }
+          ./archive-tests.exe evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Archive budget test failed' }
+          python -m unittest discover -s ci75 -p test_analyzer.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Analyzer regression failed' }
