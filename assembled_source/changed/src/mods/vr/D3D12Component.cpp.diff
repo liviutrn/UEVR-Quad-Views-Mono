@@ -1,0 +1,1219 @@
+diff --git a/src/mods/vr/D3D12Component.cpp b/src/mods/vr/D3D12Component.cpp
+index d117973..5ad9f4a 100644
+--- a/src/mods/vr/D3D12Component.cpp
++++ b/src/mods/vr/D3D12Component.cpp
+@@ -32,8 +32,10 @@
+ #include "shaders/Compiled/alpha_luminance_sprite_ps_SpriteVertexShader.inc"
+ 
+ #include "d3d12/DirectXTK.hpp"
++#include "d3d12/DuoViewNgxObserver.hpp"
+ 
+ #include "D3D12Component.hpp"
++#include <iomanip>
+ #include "GalacticRacerRenderTargets.hpp"
+ #include "MonoD3D12.hpp"
+ 
+@@ -968,6 +970,46 @@ bool can_copy_to_openxr_ui_swapchain(DXGI_FORMAT format) {
+ 
+ }
+ 
++void D3D12Component::retire_dibr_ui_producers() {
++    for (auto& producer : m_dibr_ui_producers) {
++        const auto completed = producer.fence ? producer.fence->GetCompletedValue() : 0;
++        if (completed != UINT64_MAX && completed < producer.value) {
++            // A queued UI copy may outlive both synthesis and this component.
++            d3d12::dibr_transaction::retain_untracked_com_object(producer.resource.Get());
++            d3d12::dibr_transaction::retain_untracked_com_object(producer.fence.Get());
++            d3d12::dibr_transaction::retain_untracked_com_object(producer.queue.Get());
++        }
++    }
++    m_dibr_ui_producers.clear();
++    m_dibr_ui_frame_queue.Reset();
++}
++
++D3D12Component::~D3D12Component() {
++    retire_dibr_ui_producers();
++    // Drain raw observer callbacks before either capture member is destroyed.
++    // Retain pending stock recordings through late Execute/Reset retirement.
++    stock_dibr::DepthRetirementHub::arm(m_stock_dibr_depth);
++    if (g_framework != nullptr) {
++        if (auto& hook = g_framework->get_d3d12_hook(); hook != nullptr)
++            hook->set_depth_stencil_observer(nullptr);
++    }
++    m_stock_dibr_depth->reset();
++    stock_dibr::DepthRetirementHub::disarm(m_stock_dibr_depth);
++    const auto has_unretired_dibr_work = std::any_of(
++        m_dibr_slots.begin(),
++        m_dibr_slots.end(),
++        [](auto& slot) {
++            return !slot.commands.references_retired() && !slot.commands.wait(2000);
++        });
++    if (has_unretired_dibr_work) {
++        // DIBR's final presentation pass references the shared SpriteBatch
++        // pipeline and descriptors. Keep that owner alive if a slot cannot
++        // establish retirement before the component itself is destroyed.
++        d3d12::dibr_transaction::retain_untracked_unique(m_game_batch);
++        d3d12::dibr_transaction::retain_untracked_unique(m_graphics_memory);
++    }
++}
++
+ const char* D3D12Component::shf_scene_mode_name(ShfSceneMode mode) {
+     switch (mode) {
+     case ShfSceneMode::Stereo3D:
+@@ -1912,7 +1954,7 @@ bool D3D12Component::capture_dibr_ui_alpha_snapshot(
+         m_dibr_ui_alpha_snapshot.Get(),
+         D3D12_RESOURCE_STATE_RENDER_TARGET,
+         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+-    m_dibr_ui_alpha_captured_this_frame = true;
++    m_dibr_ui_alpha_recorded_this_frame = true;
+     return true;
+ }
+ 
+@@ -1941,11 +1983,68 @@ bool D3D12Component::run_dibr_preview(
+         const auto index = (m_dibr_slot_cursor + offset) % DIBR_FRAME_SLOT_COUNT;
+         auto& candidate = m_dibr_slots[index];
+ 
++        if (candidate.commands.device_removed_after_untracked_submission()) {
++            // Device removal ends queue execution. Abort the pending output
++            // transaction and release only after the context records that
++            // retirement outcome; this output must never be published.
++            candidate.preview.abort_recording();
++            candidate.preview.note_submission_retired();
++            candidate.preview_recording_pending = false;
++            candidate.in_flight_resources.clear();
++            candidate.commands.reset();
++            candidate.present_tex.reset();
++            candidate.preview.reset();
++            candidate.quarantined = false;
++        }
++
++        if (candidate.quarantined) {
++            const auto safe_to_reclaim = candidate.commands.has_untracked_submission()
++                ? candidate.commands.try_wait()
++                : candidate.commands.references_retired();
++            if (!safe_to_reclaim) {
++                continue;
++            }
++            candidate.preview.note_submission_retired();
++            candidate.commands.reset();
++            candidate.present_tex.reset();
++            candidate.preview.reset();
++            candidate.in_flight_resources.clear();
++            candidate.preview_recording_pending = false;
++            candidate.quarantined = false;
++        }
++
++        bool reclaimed_untracked{};
++        if (candidate.commands.has_untracked_submission()) {
++            // Retry a queue-fence retirement without blocking the frame. Until
++            // this succeeds, the slot and every resource it references stay
++            // owned by the ring and cannot be reused.
++            if (!candidate.commands.try_wait()) {
++                if (!candidate.commands.device_removed_after_untracked_submission()) {
++                    continue;
++                }
++
++                candidate.preview.abort_recording();
++                candidate.preview.note_submission_retired();
++                candidate.preview_recording_pending = false;
++                candidate.in_flight_resources.clear();
++                candidate.commands.reset();
++                candidate.present_tex.reset();
++                candidate.preview.reset();
++            }
++            reclaimed_untracked = !candidate.commands.device_removed_after_untracked_submission();
++        }
++
+         if (!candidate.commands.ready() && !candidate.commands.setup(L"DIBR Preview Commands")) {
+             continue;
+         }
+ 
+-        if (candidate.commands.try_wait()) {
++        if (reclaimed_untracked || candidate.commands.try_wait()) {
++            candidate.preview.note_submission_retired();
++            if (candidate.preview_recording_pending) {
++                candidate.preview.commit_recording();
++                candidate.preview_recording_pending = false;
++            }
++            candidate.in_flight_resources.clear();
+             slot = &candidate;
+             m_dibr_slot_cursor = (index + 1) % DIBR_FRAME_SLOT_COUNT;
+             break;
+@@ -1953,21 +2052,21 @@ bool D3D12Component::run_dibr_preview(
+     }
+ 
+     if (slot == nullptr) {
+-        // A ring miss is rare and means the GPU is genuinely more than three
+-        // DIBR frames behind. Preserve the known-good path rather than
+-        // resetting an in-flight allocator or presenting a stale texture.
+-        slot = &m_dibr_slots[m_dibr_slot_cursor];
+-        SPDLOG_WARNING_EVERY_N_SEC(2, "[DIBR] All in-flight slots are busy; waiting for slot {}", m_dibr_slot_cursor);
+-        slot->commands.wait(INFINITE);
+-        if (!slot->commands.ready()) {
+-            SPDLOG_WARN("[DIBR] Could not reclaim the fallback command context");
+-            return false;
+-        }
+-        m_dibr_slot_cursor = (m_dibr_slot_cursor + 1) % DIBR_FRAME_SLOT_COUNT;
++        // Do not reuse a busy/quarantined slot through a fallback path. Every
++        // reuse must pass the retirement and cleanup checks in the bounded
++        // three-slot scan above.
++        SPDLOG_WARNING_EVERY_N_SEC(2, "[DIBR] All three frame slots are busy; skipping DIBR for this frame");
++        return false;
+     }
+ 
+     SPDLOG_INFO_ONCE("[DIBR] Using a {}-slot nonblocking command and resource ring", DIBR_FRAME_SLOT_COUNT);
+ 
++    // A queue-local submission proof is required before the snapshot can be
++    // sampled. If the hook switched queues, disable this optional pass.
++    const auto hook = g_framework != nullptr ? g_framework->get_d3d12_hook().get() : nullptr;
++    if (!hook || hook->get_command_queue() != m_dibr_ui_frame_queue.Get()) {
++        m_dibr_ui_alpha_captured_this_frame = false;
++    }
+     auto parameters = d3d12::DIBRPreview::Parameters{
+         .disparity_pixels = vr->get_dibr_disparity_pixels(),
+         .reversed_depth = vr->is_dibr_reversed_depth_enabled(),
+@@ -1990,6 +2089,7 @@ bool D3D12Component::run_dibr_preview(
+             m_dibr_ui_alpha_captured_this_frame && m_dibr_ui_alpha_snapshot != nullptr,
+     };
+ 
++    if (m_stock_dibr_scope) parameters.depth_uv_scale_bias = m_stock_dibr_depth->sample_uv();
+     if (parameters.spatial_repair) {
+         SPDLOG_INFO_ONCE("[DIBR] Current-frame depth-aware spatial repair enabled; no temporal history is retained");
+         if (parameters.show_spatial_repair_mask) {
+@@ -2059,6 +2159,26 @@ bool D3D12Component::run_dibr_preview(
+         }
+     }
+ 
++    // Allocate the presentation target before DIBR records its first command.
++    // The output format and extent are fixed by DIBRPreview, so this descriptor
++    // is sufficient for transactional preparation even before output exists.
++    auto expected_output_desc = scene_color->GetDesc();
++    expected_output_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
++    if (!ensure_dibr_present_texture(slot->present_tex, device, expected_output_desc)) {
++        SPDLOG_INFO_EVERY_N_SEC(2, "[DIBR] Presentation target preparation failed before recording");
++        return false;
++    }
++    const auto present_desc = slot->present_tex.texture->GetDesc();
++    if (expected_output_desc.Width != present_desc.Width || expected_output_desc.Height != present_desc.Height) {
++        return false;
++    }
++
++    const auto needs_ui_alpha = d3d12::dibr_transaction::needs_ui_alpha(
++        parameters.ui_edge_guard,
++        parameters.ui_footprint_reprojection,
++        parameters.show_ui_footprint_reprojection_mask);
++    auto* frame_ui_alpha = needs_ui_alpha ? m_dibr_ui_alpha_snapshot.Get() : nullptr;
++
+     if (!slot->preview.synthesize(
+             device,
+             slot->commands.cmd_list.Get(),
+@@ -2066,61 +2186,71 @@ bool D3D12Component::run_dibr_preview(
+             scene_color_state,
+             scene_depth,
+             scene_depth_state,
+-            parameters.ui_edge_guard ? m_dibr_ui_alpha_snapshot.Get() : nullptr,
+-            parameters)) {
++            frame_ui_alpha,
++            parameters,
++            true)) {
++        slot->preview.abort_recording();
+         return false;
+     }
++    slot->preview_recording_pending = true;
+ 
+     const auto output = slot->preview.output().texture.Get();
+-    if (output == nullptr || !ensure_dibr_present_texture(slot->present_tex, device, output->GetDesc())) {
+-        SPDLOG_INFO_EVERY_N_SEC(2, "[DIBR] Synthesis completed but the packed presentation texture is unavailable");
++    if (output == nullptr) {
++        slot->commands.discard_recording();
++        slot->preview.abort_recording();
++        slot->preview_recording_pending = false;
++        SPDLOG_INFO_EVERY_N_SEC(2, "[DIBR] Output disappeared after preparation; discarded the unsubmitted recording");
+         return false;
+     }
+ 
+     const auto output_desc = output->GetDesc();
+-    const auto present_desc = slot->present_tex.texture->GetDesc();
+-    if (output_desc.Width != present_desc.Width || output_desc.Height != present_desc.Height ||
+-        output_desc.Format != present_desc.Format) {
+-        SPDLOG_WARN(
+-            "[DIBR] Packed output [{}x{} fmt={}] cannot be copied directly into presentation [{}x{} fmt={}]; normal scene path retained",
+-            output_desc.Width,
+-            output_desc.Height,
+-            static_cast<uint32_t>(output_desc.Format),
+-            present_desc.Width,
+-            present_desc.Height,
+-            static_cast<uint32_t>(present_desc.Format));
++    if (output_desc.Width != present_desc.Width || output_desc.Height != present_desc.Height) {
++        slot->commands.discard_recording();
++        slot->preview.abort_recording();
++        slot->preview_recording_pending = false;
+         return false;
+     }
++    // Alpha is explicitly opaque in the stock DIBR shader. SpriteBatch now
++    // performs only RGBA -> BGRA storage conversion, avoiding unsupported
++    // BGRA UAV writes and incompatible CopyResource between format families.
++    d3d12::render_srv_to_rtv(m_game_batch.get(), slot->commands.cmd_list.Get(),
++        slot->preview.output(), slot->present_tex,
++        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+ 
+-    // Do not route a synthesized B8 scene through SpriteBatch. Subnautica 2's
+-    // scene alpha is not presentation alpha, and that conversion can produce
+-    // an opaque white frame. The DIBR output and presentation texture share a
+-    // typed format, so an exact copy preserves the scene bits.
+-    D3D12_RESOURCE_BARRIER copy_barriers[2]{};
+-    for (auto& barrier : copy_barriers) {
+-        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    // DIBR records directly into this context rather than through one of its
++    // copy helpers, so mark it for submission explicitly.
++    slot->commands.has_commands = true;
++    const auto execution = slot->commands.execute_checked();
++    if (execution == d3d12::dibr_transaction::ExecuteResult::SubmittedTracked ||
++        execution == d3d12::dibr_transaction::ExecuteResult::SubmittedTrackedNeedsPolling) {
++        slot->preview.note_submission_started();
++        slot->preview.commit_recording();
++        slot->preview_recording_pending = false;
++    } else if (execution == d3d12::dibr_transaction::ExecuteResult::SubmittedUntracked) {
++        slot->preview.note_submission_started();
++        slot->preview_recording_pending = true;
++    } else {
++        slot->commands.discard_recording();
++        slot->preview.abort_recording();
++        slot->preview_recording_pending = false;
++        return false;
+     }
+-    copy_barriers[0].Transition.pResource = output;
+-    copy_barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+-    copy_barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+-    copy_barriers[1].Transition.pResource = slot->present_tex.texture.Get();
+-    copy_barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+-    copy_barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+-    slot->commands.cmd_list->ResourceBarrier(static_cast<UINT>(std::size(copy_barriers)), copy_barriers);
+ 
+-    slot->commands.cmd_list->CopyResource(slot->present_tex.texture.Get(), output);
++    auto retain_submitted_resource = [&](ID3D12Resource* resource) {
++        if (resource != nullptr) {
++            ComPtr<ID3D12Resource> retained{};
++            retained = resource;
++            slot->in_flight_resources.emplace_back(std::move(retained));
++        }
++    };
++    retain_submitted_resource(scene_color);
++    retain_submitted_resource(scene_depth);
++    retain_submitted_resource(frame_ui_alpha);
+ 
+-    copy_barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+-    copy_barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+-    copy_barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+-    copy_barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+-    slot->commands.cmd_list->ResourceBarrier(static_cast<UINT>(std::size(copy_barriers)), copy_barriers);
++    if (execution != d3d12::dibr_transaction::ExecuteResult::SubmittedTracked) {
++        return false;
++    }
+ 
+-    // DIBR records directly into this context rather than through one of its
+-    // copy helpers, so mark it for submission explicitly.
+-    slot->commands.has_commands = true;
+-    slot->commands.execute();
+     m_dibr_active_present_tex = &slot->present_tex;
+     return true;
+ }
+@@ -2148,6 +2278,7 @@ D3D12Component::DIBRSingleViewReadiness D3D12Component::get_dibr_single_view_rea
+ void D3D12Component::note_dibr_single_view_preview_result(bool success, const D3D12_RESOURCE_DESC* source_desc) {
+     if (!success || source_desc == nullptr || source_desc->Width == 0 || source_desc->Height == 0) {
+         m_dibr_single_view_preview_ready.store(false, std::memory_order_release);
++        if (m_stock_dibr_scope) m_dibr_single_view_ready_frames.store(0, std::memory_order_release);
+         return;
+     }
+ 
+@@ -2183,6 +2314,7 @@ void D3D12Component::note_dibr_single_view_preview_result(bool success, const D3
+ }
+ 
+ void D3D12Component::reset_dibr_preview() {
++    stock_dibr::DepthRetirementHub::arm(m_stock_dibr_depth);
+     if (auto& hook = g_framework->get_d3d12_hook(); hook != nullptr) {
+         hook->set_depth_stencil_observer(nullptr);
+     }
+@@ -2190,14 +2322,37 @@ void D3D12Component::reset_dibr_preview() {
+     // Keep each slot's producer resources alive until its last dispatch has
+     // completed before returning to an untouched rendering path.
+     for (auto& slot : m_dibr_slots) {
+-        slot.commands.wait(INFINITE);
++        const auto was_untracked = slot.commands.has_untracked_submission();
++        const auto retired = slot.commands.references_retired() ||
++            slot.commands.wait(was_untracked ? 2000 : INFINITE);
++        if (!retired) {
++            slot.commands.quarantine_untracked_objects();
++            slot.preview.quarantine_resources();
++            d3d12::dibr_transaction::retain_untracked_com_object(slot.present_tex.texture.Get());
++            d3d12::dibr_transaction::retain_untracked_unique(slot.present_tex.rtv_heap);
++            d3d12::dibr_transaction::retain_untracked_unique(slot.present_tex.srv_heap);
++            for (auto& resource : slot.in_flight_resources) {
++                d3d12::dibr_transaction::retain_untracked_com_object(resource.Get());
++            }
++            slot.quarantined = true;
++            continue;
++        }
++
++        slot.in_flight_resources.clear();
++        slot.preview_recording_pending = false;
++        slot.preview.note_submission_retired();
+         slot.commands.reset();
+         slot.present_tex.reset();
+         slot.preview.reset();
++        slot.quarantined = false;
+     }
+     m_dibr_depth_capture.reset();
++    m_stock_dibr_depth->reset();
++    stock_dibr::DepthRetirementHub::disarm(m_stock_dibr_depth);
++    m_stock_dibr_scope = false;
+     m_dibr_slot_cursor = 0;
+     m_dibr_active_present_tex = nullptr;
++    retire_dibr_ui_producers();
+     m_dibr_ui_alpha_snapshot.Reset();
+     m_dibr_retired_ui_alpha_snapshots.clear();
+     m_dibr_ui_alpha_snapshot_width = 0;
+@@ -2566,6 +2721,11 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+     // Never use a prior UI snapshot if this frame did not submit a fresh UI
+     // swapchain image. The optional edge guard simply skips that frame.
+     m_dibr_ui_alpha_captured_this_frame = false;
++    m_dibr_ui_alpha_recorded_this_frame = false;
++    m_dibr_ui_frame_queue.Reset();
++    std::erase_if(m_dibr_ui_producers, [](const auto& producer) {
++        return producer.fence && producer.fence->GetCompletedValue() >= producer.value;
++    });
+     apply_dune_descriptor_cache_guard(vr);
+     bool defer_stalker2_transition_openxr = false;
+ 
+@@ -2617,7 +2777,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+         m_last_afr_state = vr->is_using_afr();
+     }
+ 
+-    if (vr->mono_frame_gate_required()) {
++    if (vr->mono_frame_gate_required() && !vr->is_duoview_renderer_active()) {
+         if (!vr->m_openxr->has_mono_frame(static_cast<uint32_t>(vr->m_frame_count))) {
+             vr->set_mono_status("Waiting for a current main-view pose and validated common projection");
+             vr->m_openxr->end_mono_transition_frame();
+@@ -2630,7 +2790,35 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+     auto& hook = g_framework->get_d3d12_hook();
+     if (hook != nullptr) {
+         m_dibr_depth_capture.set_ue5_rdg_depth_capture_enabled(vr->is_dibr_ue5_rdg_depth_capture_enabled());
+-        hook->set_depth_stencil_observer(vr->is_dibr_depth_trace_requested() ? &m_dibr_depth_capture : nullptr);
++        const bool auto_ngx_stereo = vr->is_duoview_renderer_active() &&
++            m_duo_stereo_mode.load(std::memory_order_acquire)>=4u &&
++            stock_dibr::ngx::Observer::requested();
++        m_stock_dibr_scope = is_stalker2_current_game() &&
++            vr->is_duoview_renderer_active() && stock_dibr::ngx::Observer::requested();
++        (void)auto_ngx_stereo;
++        // Install only in STALKER 2 test mode. Recheck every frame because
++        // NVIDIA may late-load nvngx_dlss.dll long after UEVR initialization.
++        // NGX-first stereo needs the queue/retirement observer, not twelve
++        // unrelated DSV copies per frame. Only explicit legacy diagnostics
++        // enable that additional GPU work.
++        m_stock_dibr_depth->set_legacy_dsv_capture_enabled(false); // CI69 NGX-only, no DSV selections or capture
++        auto& ngx=stock_dibr::ngx::Observer::instance();
++        ngx.bind(m_stock_dibr_depth,m_stock_dibr_scope && ngx.requested());
++        if(m_stock_dibr_scope && ngx.requested()) {
++            ngx.install();
++            const auto bridge=uevr::duoview::ngx::producer_bridge().counters();
++            SPDLOG_INFO_EVERY_N_SEC(5,"[DuoView][NGX] evaluations={} eligibleGuides={} missingRhiTicket={} producerBridge[published/empty/resolved/stale/absent/shape]={}/{}/{}/{}/{}/{}",
++                ngx.observed_calls(),ngx.sr_calls(),ngx.missing_tickets(),
++                bridge.published,bridge.empty,bridge.resolved,bridge.stale,bridge.absent,bridge.shape_rejected);
++        }
++        // Extent will be updated from the actual scene texture below.
++        m_stock_dibr_depth->configure(hook->get_device(), hook->get_command_queue(),
++            0, 0, m_stock_dibr_scope);
++        if (m_stock_dibr_scope) stock_dibr::DepthRetirementHub::arm(m_stock_dibr_depth);
++        else stock_dibr::DepthRetirementHub::disarm(m_stock_dibr_depth);
++        hook->set_depth_stencil_observer(m_stock_dibr_scope ?
++            static_cast<D3D12DepthStencilObserver*>(m_stock_dibr_depth.get()) :
++            (vr->is_dibr_depth_trace_requested() ? &m_dibr_depth_capture : nullptr));
+     }
+ 
+     hook->set_next_present_interval(0); // disable vsync for vr
+@@ -3002,6 +3190,8 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+     // Mono copies this Present's producer, not the preceding Present counter
+     // used by the historical Native Fix/AFR capture contracts.
+     const auto frame_count = vr->is_using_mono() ? vr->m_frame_count : vr->m_render_frame_count;
++    const bool duo_native_active = vr->is_duoview_renderer_active();
++    const auto native_packet_frame_count = duo_native_active ? vr->m_render_frame_count : frame_count;
+     namespace frame_diag = uevr::native_frame;
+     frame_diag::Ticket native_frame_ticket{};
+     namespace stalker = uevr::stalker2_native;
+@@ -3040,16 +3230,16 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+         }
+     }
+     if (!stalker_exact && stalker_requested) { m_stalker2_pair_cache.invalidate(); m_stalker2_established_epoch = 0; }
+-    auto native_stereo_packet = ffsr != nullptr && !vr->is_using_mono()
+-        ? stalker_exact ? ffsr->get_stalker2_native_packet(stalker_frame, &native_frame_ticket)
+-            : ffsr->get_native_stereo_frame_packet_for_submit(frame_count, frame_diag::Backend::d3d12, &native_frame_ticket)
++    auto native_stereo_packet = ffsr != nullptr && (!vr->is_using_mono() || duo_native_active)
++        ? stalker_exact && !duo_native_active ? ffsr->get_stalker2_native_packet(stalker_frame, &native_frame_ticket)
++            : ffsr->get_native_stereo_frame_packet_for_submit(native_packet_frame_count, frame_diag::Backend::d3d12, &native_frame_ticket)
+         : nullptr;
+     if (stalker_exact && !native_stereo_packet && m_stalker2_established_epoch != ffsr->stalker2_native_epoch()) {
+         // Do not activate a new acceptance policy until one exact transaction
+         // has actually submitted. Unsupported/unproven cadence stays unchanged.
+         stalker_exact = false;
+         native_stereo_packet = ffsr->get_native_stereo_frame_packet_for_submit(
+-            frame_count, frame_diag::Backend::d3d12, &native_frame_ticket);
++            native_packet_frame_count, frame_diag::Backend::d3d12, &native_frame_ticket);
+     }
+     auto* const native_stereo_hook = ffsr.get();
+     const auto record_native_submit = [&](frame_diag::Runtime api, frame_diag::Stage stage,
+@@ -3669,7 +3859,8 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+         }
+     }
+ 
+-    if (native_stereo_packet != nullptr && !scene_capture_packet_ready && native_stereo_hook != nullptr) {
++    if (!vr->is_duoview_renderer_active() && native_stereo_packet != nullptr &&
++        !scene_capture_packet_ready && native_stereo_hook != nullptr) {
+         if (stalker_exact) {
+             native_stereo_hook->reject_stalker2_native_packet(native_stereo_packet,
+                 "Stalker exact transaction rejected by D3D12 descriptors");
+@@ -4783,6 +4974,26 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+                                 // the original UI swapchain content and state
+                                 // are restored before OpenXR receives it.
+                                 capture_dibr_ui_alpha_snapshot(device, commands, submitted_ui_texture);
++                            }, nullptr, nullptr,
++                            [this](d3d12::CommandContext& commands, d3d12::dibr_transaction::ExecuteResult result) {
++                                if (!m_dibr_ui_alpha_recorded_this_frame || !m_dibr_ui_alpha_snapshot) return;
++                                using Result = d3d12::dibr_transaction::ExecuteResult;
++                                if (result == Result::SubmittedUntracked) {
++                                    // Execute happened but no retirement proof exists.
++                                    d3d12::dibr_transaction::retain_untracked_com_object(m_dibr_ui_alpha_snapshot.Get());
++                                    m_dibr_ui_alpha_snapshot.Reset();
++                                    m_dibr_ui_alpha_snapshot_width = 0;
++                                    m_dibr_ui_alpha_snapshot_height = 0;
++                                    m_dibr_ui_alpha_snapshot_format = DXGI_FORMAT_UNKNOWN;
++                                    return;
++                                }
++                                if ((result == Result::SubmittedTracked || result == Result::SubmittedTrackedNeedsPolling) &&
++                                    commands.fence && commands.submission_queue) {
++                                    m_dibr_ui_producers.push_back({m_dibr_ui_alpha_snapshot, commands.fence,
++                                        commands.submission_queue, commands.fence_value});
++                                    m_dibr_ui_frame_queue = commands.submission_queue;
++                                    m_dibr_ui_alpha_captured_this_frame = true;
++                                }
+                             });
+                         ue58_converted_ui_copied = ue58_ui_uses_shader_conversion;
+                     } else {
+@@ -4919,8 +5130,9 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+     if (vr->is_dibr_depth_trace_requested() && backbuffer.Get() != nullptr) {
+         const auto source_desc = backbuffer->GetDesc();
+         m_dibr_depth_capture.set_depth_trace_expected_extent(
+-            static_cast<uint32_t>(source_desc.Width),
+-            source_desc.Height);
++            static_cast<uint32_t>(source_desc.Width), source_desc.Height);
++        if (m_stock_dibr_scope) m_stock_dibr_depth->configure(device, command_queue,
++            source_desc.Width, source_desc.Height, true);
+     }
+ 
+     // DIBR consumes SceneDepthZ internally even when compositor depth submit
+@@ -4930,7 +5142,9 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+     const auto needs_dibr_depth = vr->is_dibr_preview_active();
+     const auto dibr_uses_dsv_depth_capture = needs_dibr_depth && vr->is_dibr_ue5_rdg_depth_capture_enabled();
+     if (dibr_uses_dsv_depth_capture) {
+-        dibr_depth_tex = m_dibr_depth_capture.captured_depth_snapshot();
++        dibr_depth_tex = m_stock_dibr_scope ? m_stock_dibr_depth->acquire() :
++            m_dibr_depth_capture.captured_depth_snapshot();
++        if (m_stock_dibr_scope) SPDLOG_INFO_EVERY_N_SEC(2, "[StockDIBR] {}", m_stock_dibr_depth->summary());
+     }
+ 
+     const auto should_submit_depth = vr->is_depth_enabled() && runtime->is_depth_allowed();
+@@ -5004,6 +5218,8 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+         m_dibr_was_active = true;
+     }
+ 
++    if(m_stock_dibr_scope && !vr->is_duoview_renderer_active())
++        m_stock_dibr_depth->configure_duoview_sources(0,0,0,0);
+     const auto dibr_preview_succeeded = vr->is_dibr_preview_active() &&
+         run_dibr_preview(
+             vr,
+@@ -5018,6 +5234,33 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+         note_dibr_single_view_preview_result(dibr_preview_succeeded, dibr_preview_succeeded ? &source_desc : nullptr);
+     }
+ 
++    const bool duoview_depth_interval=vr->is_duoview_renderer_active();
++    if(m_stock_dibr_scope && !duoview_depth_interval) {
++        m_stock_dibr_depth->finish_frame();
++    }
++    const auto duoview_interval_owner=duoview_depth_interval && m_stock_dibr_scope
++        ? m_stock_dibr_depth : nullptr;
++
++    utility::ScopeGuard dibr_consumer_retirement{[&]() {
++        std::shared_ptr<uevr::duoview::capture75::Recorder> recorder_retirement;
++        {std::lock_guard lock(m_duo_sequence_mutex);recorder_retirement=m_duo_sequence;}
++        if(recorder_retirement)recorder_retirement->finish_if_ready();
++        if(duoview_interval_owner) {
++            duoview_interval_owner->set_sequence_motion_capture(recorder_retirement&&recorder_retirement->wants_guides());
++            duoview_interval_owner->finish_frame(m_duo_snapshot_pending.load(std::memory_order_acquire)!=0);
++        }
++        if (!dibr_preview_succeeded || m_dibr_active_present_tex == nullptr) return;
++        for (auto& slot : m_dibr_slots) {
++            if (&slot.present_tex != m_dibr_active_present_tex) continue;
++            if (!slot.commands.extend_submission_retirement()) {
++                // The submitted consumers remain owned by this slot until a
++                // later recovery fence proves retirement. Re-warm single view.
++                note_dibr_single_view_preview_result(false, nullptr);
++            }
++            break;
++        }
++    }};
++
+     if (dibr_preview_succeeded) {
+         // The DSV/RDG observer captures before the engine overwrites the next
+         // scene depth. Re-arm exactly once after consuming this snapshot rather
+@@ -5252,7 +5495,469 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
+                         vr->is_native_stereo_fix_texture_array_submit_enabled() &&
+                         vr->m_openxr->swapchains.contains(native_stereo_array_swapchain);
+ 
+-                    if (vr->is_using_mono()) {
++                    if (vr->is_duoview_renderer_active()) {
++                        // A prior successful copy must not describe a missing current pair.
++                        m_duo_stereo_output.store(3u,std::memory_order_release);
++                        const auto packet = native_stereo_packet;
++                        const auto packet_source = packet && packet->duoview_mono_source_valid
++                            ? std::optional<uint32_t>{packet->duoview_mono_source_frame}
++                            : std::optional<uint32_t>{};
++                        const auto packet_frame = packet ? packet->duoview_frame : nullptr;
++                        const auto packet_binding = packet_frame
++                            ? uevr::duoview::native_frame_binding(*packet_frame)
++                            : std::optional<uevr::duoview::NativeFrameBinding>{};
++                        const bool packet_pair_valid = packet && packet_frame && packet_source &&
++                            packet_frame->mono_source_frame &&
++                            *packet_frame->mono_source_frame == *packet_source && packet_binding &&
++                            packet_binding->key == packet_frame->config.key &&
++                            packet_frame->config.key.generation == vr->mono_generation() &&
++                            packet_binding->mono_source_frame == *packet_source &&
++                            scene_capture_packet_ready && m_game_tex.texture.Get() != nullptr &&
++                            m_scene_capture_tex.texture.Get() != nullptr &&
++                            packet->duoview_pose_valid && packet->duoview_primary_resource.Get()!=nullptr &&
++                            packet->duoview_primary_resource.Get()==m_game_tex.texture.Get();
++                        if (!packet_pair_valid) {
++                            SPDLOG_WARNING_EVERY_N_SEC(2,
++                                "[DuoView][Pair] Waiting serial={} pose_valid={} binding={} capture_ready={} source={}",
++                                packet ? packet->serial : 0,packet && packet->duoview_pose_valid,
++                                packet_binding.has_value(),scene_capture_packet_ready,packet_source.value_or(0));
++                            vr->set_mono_status("Waiting for a complete Native Stereo Fix DuoView source pair");
++                        } else {
++                            if (m_stock_dibr_scope) {
++                                const auto& depth_layout=packet_frame->config.layout;
++                                m_stock_dibr_depth->configure_duoview_sources(
++                                    depth_layout.fovea.width,depth_layout.fovea.height,
++                                    depth_layout.periphery.width,depth_layout.periphery.height);
++                                const auto duo_depth_extent = m_game_tex.texture->GetDesc();
++                                m_stock_dibr_depth->configure(device,
++                                    g_framework->get_d3d12_hook()->get_command_queue(),
++                                    duo_depth_extent.Width, duo_depth_extent.Height, true);
++                            }
++                            // Manual capture: allocate readback resources on the Present
++                            // preparation path, NEVER inside the OpenXR command callback.
++                            uint64_t capture_id=m_duo_snapshot_pending.load(std::memory_order_acquire);
++                            if(capture_id && GetTickCount64()-m_duo_snapshot_start.load(std::memory_order_acquire)>5000) {
++                                SPDLOG_WARN("[DuoView][NGXGallery] Capture #{} expired after 5s",capture_id);
++                                m_duo_snapshot_pending.store(0,std::memory_order_release);
++                                capture_id=0;
++                            }
++                            const uint32_t preview_mode=m_duo_preview_mode.load(std::memory_order_acquire);
++                            const uint32_t stereo_mode=m_duo_stereo_mode.load(std::memory_order_acquire);
++                            const float stereo_sign=m_duo_stereo_reverse.load(std::memory_order_acquire)?-1.0f:1.0f;
++                            stock_dibr::DepthCapture::PreviewPair depths{};
++                            bool sequence_needs_depth=false;
++                             {std::lock_guard lock(m_duo_sequence_mutex);
++                              sequence_needs_depth=m_duo_sequence&&m_duo_sequence->wants_guides();}
++                             if(m_stock_dibr_scope && (preview_mode || stereo_mode || sequence_needs_depth)) {
++                                depths=m_stock_dibr_depth->select_preview(
++                                    m_duo_left_choice.load(),m_duo_right_choice.load(),
++                                    packet_frame->config.layout.fovea.width,
++                                    packet_frame->config.layout.fovea.height,
++                                    packet_frame->config.layout.periphery.width,
++                                    packet_frame->config.layout.periphery.height,stereo_mode<4u,packet->serial,
++                                    packet_frame->config.key.generation,
++                                    stereo_mode==0u?(vr->duoview_depth_stabilization() && preview_mode?3u:preview_mode):0u);
++                            }
++                            const bool missing_for_preview=preview_mode==1u?!depths.left:
++                                preview_mode==2u?!depths.right:
++                                preview_mode==3u?(!depths.left||!depths.right):false;
++                            if(missing_for_preview || (stereo_mode && (!depths.left||!depths.right))) {
++                                static uint64_t last_missing_warn=0;
++                                const auto now=GetTickCount64();
++                                if(now-last_missing_warn>2000) {
++                                    last_missing_warn=now;
++                                    SPDLOG_WARN("[DuoView][StereoXR] Depth pair unavailable: {}. Check PIN status, fresh submissions and pass inventory; no old depth reused.",
++                                        m_stock_dibr_depth->selection_status());
++                                }
++                            }
++                            const bool unsafe_manual_stereo=m_duo_unverified_stereo_opt_in.load(std::memory_order_acquire);
++                            const uint32_t effective_stereo_mode=unsafe_manual_stereo &&
++                                depths.left && depths.right && packet_frame->split_eye &&
++                                packet_frame->config.settings.fovea_view==0 ? stereo_mode : 0u;
++                            if(stereo_mode && !unsafe_manual_stereo)
++                                SPDLOG_WARNING_EVERY_N_SEC(3,
++                                    "[DuoView][Safety] Synthetic stereo blocked: NGX camera/frame identity unverified. Opt in explicitly only for experimental testing.");
++                            std::shared_ptr<uevr::duoview::diag::Session> capture;
++                            if (capture_id && m_stock_dibr_scope) {
++                                std::ostringstream info;
++                                info << std::setprecision(17);
++                                info << "packet=" << packet->serial
++                                     << " monoSourceFrame=" << *packet_source
++                                     << " generation=" << packet_frame->config.key.generation
++                                     << " draw=" << packet_frame->config.key.frame
++                                     << " UE0=LEFT fovea UE1=RIGHT periphery; eye depth identity NOT proven";
++                                const auto& left=packet_frame->eye_cameras[0];
++                                const auto& right=packet_frame->eye_cameras[1];
++                                info << " LEFTcam=(" << left.position[0] << "," << left.position[1]
++                                     << "," << left.position[2] << ") RIGHTcam=("
++                                     << right.position[0] << "," << right.position[1]
++                                     << "," << right.position[2] << ")";
++                                info << " stereoMode=" << stereo_mode
++                                     << " effectiveStereoMode=" << effective_stereo_mode
++                                     << " stereoReversed=" << (stereo_sign<0)
++                                     << " stereoCopiesSubmitted=" << m_duo_stereo_frames.load()
++                                     << " stereoCommandsRecorded=" << m_duo_stereo_recorded_frames.load()
++                                     << " sourceRoleVerified=false sourceFrameVerified=false sourceStageVerified=false"
++                                     << " trueStereoRejected=" << m_duo_stereo_reject_frames.load();
++                                info << " previewMode=" << preview_mode
++                                     << " manualLeft=" << m_duo_left_choice.load()
++                                     << " manualRight=" << m_duo_right_choice.load()
++                                     << " candidateProof={" << depths.label << "}"
++                                     << " depthSelectionDecision=" << depths.decision;
++                                info << " LEFTrotation=("<<left.rotation[0]<<","<<left.rotation[1]<<","<<left.rotation[2]
++                                     <<") RIGHTrotation=("<<right.rotation[0]<<","<<right.rotation[1]<<","<<right.rotation[2]<<")";
++                                info << " frozenSourceProjection_NOT_depthPassVerified_L=[";
++                                for(size_t k=0;k<16;++k)info<<(k?",":"")<<packet_frame->projection[k];
++                                info << "] frozenSourceProjection_NOT_depthPassVerified_R=[";
++                                for(size_t k=0;k<16;++k)info<<(k?",":"")<<packet_frame->projection_right[k];
++                                const auto& active=packet_frame->config.layout;
++                                info << "] colorActiveRects=L:(0,0,"<<active.fovea.width<<","<<active.fovea.height
++                                     <<") R:(0,0,"<<active.periphery.width<<","<<active.periphery.height<<")";
++                                info << " crop=(" << packet_frame->config.layout.u0 << ","
++                                     << packet_frame->config.layout.v0 << ","
++                                     << packet_frame->config.layout.u1 << ","
++                                     << packet_frame->config.layout.v1 << ")";
++                                capture=std::make_shared<uevr::duoview::diag::Session>(
++                                    capture_id,info.str(),m_stock_dibr_depth->diagnostic_inventory());
++                                uevr::duoview::diag::SelectionRecord record{};
++                                record.color_packet=packet->serial;
++                                record.producer_frame=packet_frame->config.key.frame;
++                                record.layout_generation=packet_frame->config.key.generation;
++                                record.requested_mode=stereo_mode;
++                                record.effective_mode=effective_stereo_mode;
++                                record.split_eye=packet_frame->split_eye;
++                                record.depth_decision=depths.decision;
++                                record.left_backup_latched=depths.left_backup_latched;
++                                record.right_backup_latched=depths.right_backup_latched;
++                                record.left_serial=depths.left_serial;
++                                record.right_serial=depths.right_serial;
++                                record.left_epoch=depths.left_epoch;
++                                record.right_epoch=depths.right_epoch;
++                                record.left_pass=depths.left_pass;
++                                record.right_pass=depths.right_pass;
++                                record.left_dsv=depths.left_dsv;
++                                record.right_dsv=depths.right_dsv;
++                                record.left_position=left.position;
++                                record.right_position=right.position;
++                                record.left_rotation=left.rotation;
++                                record.right_rotation=right.rotation;
++                                record.left_projection=packet_frame->projection;
++                                record.right_projection=packet_frame->projection_right;
++                                record.crop_uv={active.u0,active.v0,active.u1,active.v1};
++                                record.color_active_sizes={active.fovea.width,active.fovea.height,
++                                    active.periphery.width,active.periphery.height};
++                                const auto to_viewport_record=[](const D3D12_VIEWPORT& v) {
++                                    return std::array<float,6>{v.TopLeftX,v.TopLeftY,v.Width,v.Height,
++                                        v.MinDepth,v.MaxDepth};
++                                };
++                                record.left_depth_viewport=to_viewport_record(depths.left_viewport);
++                                record.right_depth_viewport=to_viewport_record(depths.right_viewport);
++                                capture->set_selection(record);
++                                auto candidates=m_stock_dibr_depth->snapshot_candidates(depths.left_serial,depths.right_serial,true);
++                                // Selected GPU copies must be first in the diagnostic budget.
++                                // The inventory order is not an eye/frame/quality ranking.
++                                std::stable_sort(candidates.begin(),candidates.end(),
++                                    [&](const auto& a,const auto& b) {
++                                        const auto priority=[&](uint64_t serial) {
++                                            if(depths.left_serial && serial==depths.left_serial)return 0;
++                                            if(depths.right_serial && serial==depths.right_serial)return 1;
++                                            return 2;
++                                        };
++                                        return priority(a.serial)<priority(b.serial);
++                                    });
++                                if(candidates.empty() || !capture->prepare(device,m_game_tex.texture.Get(),
++                                    m_scene_capture_tex.texture.Get(),candidates,
++                                    false,false)) { // manual NGX gallery does not require a paired six-plane stereo set
++                                    SPDLOG_WARNING_EVERY_N_SEC(2,"[DuoView][Capture] Request #{} remains pending: eligibleDepths={}; required color/depth readback preparation incomplete (format/allocation/session budget)",capture_id,candidates.size());
++                                    capture.reset();
++                                }
++                            }
++                            std::shared_ptr<uevr::duoview::capture75::Recorder> sequence;
++                            {std::lock_guard lock(m_duo_sequence_mutex);sequence=m_duo_sequence;}
++                            std::shared_ptr<uevr::duoview::capture75::Frame> sequence_frame;
++                            if(sequence) {
++                                namespace cap=uevr::duoview::capture75;
++                                const auto& l=packet_frame->config.layout;
++                                const float gaze_u=(l.u0+l.u1)*.5f,gaze_v=(l.v0+l.v1)*.5f;
++                                std::vector<cap::Source> inputs;
++                                const auto add=[&](const char* name,ID3D12Resource* resource,
++                                        D3D12_RESOURCE_STATES state,cap::Rect active,float u,float v,
++                                        unsigned extent,bool required,bool full=false,unsigned height_extent=0) {
++                                    cap::Source s;s.name=name;s.resource=resource;s.state=state;s.active=active;
++                                    s.u=u;s.v=v;s.extent=extent;s.height_extent=height_extent;s.required=required;s.full=full;inputs.push_back(std::move(s));
++                                };
++                                add("xr_left",nullptr,D3D12_RESOURCE_STATE_RENDER_TARGET,{},gaze_u,gaze_v,512,true,false,192);
++                                add("xr_right",nullptr,D3D12_RESOURCE_STATE_RENDER_TARGET,{},gaze_u,gaze_v,512,true,false,192);
++                                add("source_left",m_game_tex.texture.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,{0,0,l.fovea.width,l.fovea.height},.5f,.5f,512,true,false,192);
++                                add("source_right",m_scene_capture_tex.texture.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,{0,0,l.periphery.width,l.periphery.height},gaze_u,gaze_v,256,true,false,128);
++                                const auto rect=[](const D3D12_VIEWPORT& v){return cap::Rect{UINT(v.TopLeftX),UINT(v.TopLeftY),UINT(v.Width),UINT(v.Height)};};
++                                add("depth_left",depths.left.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rect(depths.left_viewport),.5f,.5f,320,bool(depths.left),false,192);
++                                add("depth_right",depths.right.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rect(depths.right_viewport),gaze_u,gaze_v,192,bool(depths.right),false,128);
++                                if(vr->duoview_depth_stabilization()) {
++                                    constexpr auto stable_read=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
++                                    add("depth_stable_left",nullptr,stable_read,rect(depths.left_viewport),.5f,.5f,320,false,false,192);
++                                    add("depth_stable_right",nullptr,stable_read,rect(depths.right_viewport),gaze_u,gaze_v,192,false,false,128);
++                                }
++                                add("synthetic_right",nullptr,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,{},.5f,.5f,192,false);
++                                add("synthetic_left",nullptr,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,{},gaze_u,gaze_v,128,false);
++                                for(unsigned eye=0;eye<2;++eye) {
++                                    const auto& g=depths.ngx_guides[eye];
++                                    const cap::Rect active{0,0,g.motion_low_resolution?g.input_width:g.output_width,
++                                        g.motion_low_resolution?g.input_height:g.output_height};
++                                    add(eye?"motion_right":"motion_left",g.motion_extent_known?depths.selected_motion[eye].Get():nullptr,
++                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,active,eye?gaze_u:.5f,eye?gaze_v:.5f,96,false);
++                                }
++                                add("full_source_left",m_game_tex.texture.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,{0,0,l.fovea.width,l.fovea.height},.5f,.5f,192,false,true);
++                                add("full_source_right",m_scene_capture_tex.texture.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,{0,0,l.periphery.width,l.periphery.height},gaze_u,gaze_v,128,false,true);
++                                add("full_depth_left",depths.left.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rect(depths.left_viewport),.5f,.5f,192,false,true);
++                                add("full_depth_right",depths.right.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rect(depths.right_viewport),gaze_u,gaze_v,128,false,true);
++                                sequence_frame=sequence->stage(device,std::move(inputs),packet->serial);
++                            }
++                            bool sequence_recorded=false;
++                            bool depth_stabilized_recorded=false;
++                            const bool stabilize_depth=vr->duoview_depth_stabilization();
++                            const bool pixel_footprints=vr->duoview_pixel_footprints();
++                            const bool detail_transfer=vr->duoview_detail_transfer();
++                            const bool left_edge_fix=vr->duoview_left_edge_fix();
++                            const float depth_history_weight=vr->duoview_depth_temporal()?vr->duoview_depth_history_weight():0.f;
++                            const std::array<float,4> stereo_quality{
++                                vr->duoview_visibility_absolute_tolerance(),vr->duoview_visibility_relative_tolerance(),
++                                vr->duoview_foreground_edge_radius(),
++                                vr->duoview_conservative_stereo()?8.f:vr->duoview_research_backward_mode()?4.f:vr->duoview_left_anchored_mode()?2.f:
++                                    (vr->duoview_foreground_refinement_enabled()?1.f:0.f)};
++                            bool capture_recorded=false;
++                            bool stereo_recorded=false;
++                            auto capture_submission=d3d12::dibr_transaction::ExecuteResult::NoWork;
++                            bool recorded = false;
++                            bool callback_attempted = false;
++                            bool compositor_fault = false;
++                            bool output_direct = false;
++                            uint64_t source_extents = 0;
++                            ID3D12Resource* recorded_secondary=nullptr;
++                            ID3D12Resource* recorded_target=nullptr;
++                            const bool submitted = m_openxr.copy(
++                                (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE, nullptr,
++                                [this, packet, packet_frame, source=m_game_tex.texture,
++                                 secondary=m_scene_capture_tex.texture, device,
++                                 &recorded, &callback_attempted, &compositor_fault,
++                                 &output_direct, &source_extents, &recorded_secondary, &recorded_target,
++                                 capture,&capture_recorded,sequence,sequence_frame,&sequence_recorded,&depth_stabilized_recorded,
++                                 left_depth=depths.left,right_depth=depths.right,preview_mode,
++                                 stereo_mode,effective_stereo_mode,stereo_sign,&stereo_recorded,
++                                 left_viewport=depths.left_viewport,right_viewport=depths.right_viewport,
++                                 ngx_guides=depths.ngx_guides,stereo_quality,stabilize_depth,depth_history_weight,pixel_footprints,detail_transfer,left_edge_fix](
++                                    d3d12::CommandContext& commands, ID3D12Resource* destination) {
++                                    if (!commands.ready()) return;
++                                    callback_attempted = true;
++                                    const auto vr = VR::get();
++                                    if (packet_frame->config.key.generation != vr->mono_generation() ||
++                                        packet_frame->mono_source_frame !=
++                                            std::optional<uint32_t>{packet->duoview_mono_source_frame} ||
++                                        !uevr::duoview::native_frame_binding(*packet_frame)) {
++                                        compositor_fault = true;
++                                        return;
++                                    }
++                                    const auto found = m_openxr.duoview_compositors.find(&commands);
++                                    if (found == m_openxr.duoview_compositors.end() || !found->second) {
++                                        SPDLOG_WARNING_EVERY_N_SEC(2,
++                                            "[DuoView][Activation] Missing prewarmed compositor for XR command slot");
++                                        compositor_fault = true;
++                                        return;
++                                    }
++                                    auto& compositor = *found->second;
++                                    auto composition_frame=*packet_frame;
++                                     if(stereo_mode && !effective_stereo_mode)
++                                         composition_frame.config.settings.diagnostic_view=1; // current RIGHT full field
++                                     recorded = compositor.record_native(device, commands.cmd_list.Get(),
++                                        source.Get(), secondary.Get(), destination,
++                                        D3D12_RESOURCE_STATE_RENDER_TARGET,
++                                        D3D12_RESOURCE_STATE_RENDER_TARGET, composition_frame,
++                                        std::static_pointer_cast<const void>(packet),
++                                        packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0,
++                                        left_depth.Get(),right_depth.Get(),stereo_mode ? 0u : preview_mode,
++                                        effective_stereo_mode,stereo_sign,
++                                        {left_viewport.TopLeftX,left_viewport.TopLeftY,left_viewport.Width,left_viewport.Height,left_viewport.MinDepth,left_viewport.MaxDepth},
++                                        {right_viewport.TopLeftX,right_viewport.TopLeftY,right_viewport.Width,right_viewport.Height,right_viewport.MinDepth,right_viewport.MaxDepth},ngx_guides,stereo_quality,stabilize_depth,depth_history_weight,pixel_footprints,detail_transfer,left_edge_fix);
++                                    stereo_recorded=recorded && compositor.last_true_stereo();
++                                    depth_stabilized_recorded=recorded && compositor.last_depth_stabilized();
++                                    if(!recorded && stereo_mode && !compositor.recorded_commands()) {
++                                        SPDLOG_WARNING_EVERY_N_SEC(2,"[DuoView][StereoXR] Stereo rejected; rendering V3 mono without disabling two-view capture: {}",compositor.error());
++                                        composition_frame.config.settings.diagnostic_view=1;
++                                         recorded=compositor.record_native(device,commands.cmd_list.Get(),
++                                            source.Get(),secondary.Get(),destination,
++                                            D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
++                                            composition_frame,std::static_pointer_cast<const void>(packet),0);
++                                    }
++                                    if(stereo_mode) {
++                                        if(stereo_recorded)
++                                            m_duo_stereo_recorded_frames.fetch_add(1,std::memory_order_relaxed);
++                                    }
++                                    if (recorded) {
++                                        recorded_secondary=secondary.Get(); recorded_target=destination;
++                                        output_direct=compositor.last_native_direct_xr();
++                                        source_extents=compositor.last_native_source_extents();
++                                    }
++                                    if (recorded && capture) {
++                                        // XR destination exists only in the copy callback.
++                                        // Capture the FINAL separately composed two-eye image.
++                                        // Sources have been restored to their native RT states
++                                        // by record_native; append independent readback copies.
++                                        const bool final_capture=capture->attach_headset_output(device,destination);
++                                        if(final_capture && stereo_recorded && effective_stereo_mode>=4u)
++                                            capture->attach_surface_outputs(device,compositor.surface_color(0),
++                                                effective_stereo_mode>=5u?compositor.surface_color(1):nullptr);
++                                        if(final_capture && capture->record(commands.cmd_list.Get())) {
++                                            capture_recorded=true;
++                                            commands.has_commands=true;
++                                        }
++                                    }
++                                    if(recorded && sequence && sequence_frame) {
++                                        sequence_recorded=sequence->record(commands.cmd_list.Get(),sequence_frame,destination,
++                                            stereo_recorded&&effective_stereo_mode>=4u?compositor.surface_color(0):nullptr,
++                                            stereo_recorded&&effective_stereo_mode>=5u?compositor.surface_color(1):nullptr,
++                                            compositor.stable_depth(0),compositor.stable_depth(1));
++                                        if(sequence_recorded)commands.has_commands=true;
++                                    }
++                                    if (compositor.recorded_commands()) commands.has_commands = true;
++                                    if (packet_frame->config.settings.gpu_timing)
++                                        vr->note_duoview_gpu_ms(compositor.gpu_milliseconds());
++                                    if (!recorded) {
++                                        SPDLOG_WARNING_EVERY_N_SEC(2,
++                                            "[DuoView][Activation] Native compositing rejected: {}", compositor.error());
++                                        compositor_fault = true;
++                                    }
++                                }, std::nullopt, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
++                                std::nullopt, m_game_tex.texture.Get(),{},
++                                [&capture_submission](d3d12::CommandContext&,
++                                    d3d12::dibr_transaction::ExecuteResult result) {
++                                    capture_submission=result;
++                                });
++                            // One outcome per copy attempt. OpenXR::copy returns true
++                            // only after checked queue enqueue and successful image release.
++                            // This is NOT proof of xrEndFrame or physical display.
++                            if(stereo_mode) {
++                                if(submitted && stereo_recorded && callback_attempted)
++                                    m_duo_stereo_frames.fetch_add(1,std::memory_order_relaxed);
++                                else m_duo_stereo_reject_frames.fetch_add(1,std::memory_order_relaxed);
++                            }
++                            m_duo_stereo_output.store(!submitted || !recorded ? 3u :
++                                stereo_recorded ? 1u : stereo_mode ? 2u : 0u,std::memory_order_release);
++                            if (submitted && recorded && callback_attempted) {
++                                native_stereo_hook->duoview_delivery.result(uevr::duoview::DeliveryEvent::copy,
++                                    packet->serial, true, GetCurrentThreadId());
++                                runtimes::OpenXR::PipelineState pose{};
++                                pose.duoview_serial=packet->serial;
++                                pose.frame_count=*packet_source;
++                                pose.stage_views.assign(packet->duoview_views.begin(),packet->duoview_views.end());
++                                pose.frame_state=packet->duoview_frame_state;
++                                pose.view_space_location=packet->duoview_view_location;
++                                vr->m_openxr->note_duoview_copy(std::move(pose),packet_frame->config.key.generation);
++                            }
++                            if(sequence && sequence_frame) {
++                                namespace cap=uevr::duoview::capture75;
++                                std::ostringstream meta;meta<<std::setprecision(17);
++                                const auto arr=[&](const auto& a){meta<<"[";bool first=true;for(const auto& v:a){if(!first)meta<<",";first=false;if(std::isfinite(double(v)))meta<<v;else meta<<"null";}meta<<"]";};
++                                const auto& l=packet_frame->config.layout;
++                                meta<<"{\"ue_frame\":"<<packet_frame->config.key.frame<<",\"source_frame\":"<<*packet_source
++                                    <<",\"generation\":"<<packet_frame->config.key.generation
++                                    <<",\"mode\":"<<effective_stereo_mode<<",\"requested_mode\":"<<stereo_mode
++                                    <<",\"strategy\":"<<cap::quote(depth_stabilized_recorded && effective_stereo_mode>=4u?(detail_transfer?"CI79_LEFT_SHADING_SMOOTH_WEIGHTS":pixel_footprints?"CI77b_LEFT_PIXEL_FOOTPRINTS":"CI77_HIGH_RES_LEFT_GEOMETRY"):stereo_quality[3]>=7.5f?"CI73_CONSERVATIVE_CI74_JITTER_FIX":stereo_quality[3]>3.5f?"CI72_RIGHT_GATHER":stereo_quality[3]>1.5f?"CI71_LEFT_MESH":"LEGACY")
++                                    <<",\"composition\":"<<cap::quote(!recorded?"NO_VALID_OUTPUT":stereo_recorded&&effective_stereo_mode>=4u?"CI76_EXCLUSIVE_CURRENT_FRAME":stereo_mode&&!stereo_recorded?"CI76_CURRENT_RIGHT_MONO":"BASELINE_MONO_OR_LEGACY")
++                                    <<",\"depth_stabilized_recorded\":"<<(depth_stabilized_recorded?"true":"false")
++                                    <<",\"depth_stabilization_requested\":"<<(stabilize_depth?"true":"false")
++                                    <<",\"pixel_footprints_requested\":"<<(pixel_footprints?"true":"false")
++                                    <<",\"ci79_right_fovea_requested\":"<<(detail_transfer?"true":"false")
++                                    <<",\"ci79_left_edge_fix_requested\":"<<(left_edge_fix?"true":"false")
++                                    <<",\"depth_temporal_weight\":"<<cap::number(depth_history_weight)
++                                    <<",\"foreground_mpc_verified\":"<<(vr->duoview_foreground_mpc_verified()?"true":"false")
++                                    <<",\"foreground_mpc_values\":["<<cap::number(vr->duoview_foreground_mpc_values()[0])
++                                    <<","<<cap::number(vr->duoview_foreground_mpc_values()[1])<<"]"
++                                    <<",\"world_to_meters\":"<<cap::number(vr->get_world_to_meters())<<",\"world_scale\":"<<cap::number(vr->get_world_scale())
++                                    <<",\"jitter_units\":\"NGX_input_pixels_raw_sign\",\"depth_space\":\"device_Z\""
++                                    <<",\"stereo_sign\":"<<stereo_sign<<",\"fovea_view\":"<<packet_frame->config.settings.fovea_view
++                                    <<",\"stereo_recorded\":"<<(stereo_recorded?"true":"false")
++                                    <<",\"xr_copy_submitted\":"<<(submitted?"true":"false")
++                                    <<",\"depth_identity_authenticated\":false,\"crop\":["<<l.u0<<","<<l.v0<<","<<l.u1<<","<<l.v1<<"]"
++                                    <<",\"depth_serials\":["<<depths.left_serial<<","<<depths.right_serial<<"]"
++                                    <<",\"depth_epochs\":["<<depths.left_epoch<<","<<depths.right_epoch<<"]"
++                                    <<",\"depth_selection\":"<<cap::quote(depths.decision)<<",\"quality\":";arr(stereo_quality);
++                                meta<<",\"positions\":[";arr(packet_frame->eye_cameras[0].position);meta<<",";arr(packet_frame->eye_cameras[1].position);meta<<"]";
++                                meta<<",\"rotations\":[";arr(packet_frame->eye_cameras[0].rotation);meta<<",";arr(packet_frame->eye_cameras[1].rotation);meta<<"]";
++                                meta<<",\"projection_left\":";arr(packet_frame->projection);
++                                meta<<",\"projection_right\":";arr(packet_frame->projection_right);
++                                meta<<",\"matrix_layout\":\"column_major_unjittered_frozen_color_not_authenticated_depth_pass\""
++                                    <<",\"depth_viewports\":[";
++                                const auto viewport=[&](const D3D12_VIEWPORT& v){meta<<"["<<v.TopLeftX<<","<<v.TopLeftY<<","<<v.Width<<","<<v.Height<<","<<v.MinDepth<<","<<v.MaxDepth<<"]";};
++                                viewport(depths.left_viewport);meta<<",";viewport(depths.right_viewport);meta<<"],\"guides\":[";
++                                for(unsigned eye=0;eye<2;++eye) {
++                                    if(eye)meta<<",";const auto& g=depths.ngx_guides[eye];
++                                    meta<<"{\"feature\":"<<g.feature<<",\"feature_generation\":"<<g.feature_generation<<",\"evaluation\":"<<g.evaluation
++                                        <<",\"role\":"<<g.role<<",\"manual\":"<<(g.manual_source?"true":"false")
++                                        <<",\"input\":["<<g.input_width<<","<<g.input_height<<"],\"output\":["<<g.output_width<<","<<g.output_height<<"]"
++                                        <<",\"depth_base\":["<<g.depth_x<<","<<g.depth_y<<"],\"motion_base\":["<<g.motion_x<<","<<g.motion_y<<"]"
++                                        <<",\"jitter\":["<<cap::number(g.jitter_x)<<","<<cap::number(g.jitter_y)<<"],\"motion_scale\":["<<cap::number(g.motion_scale_x)<<","<<cap::number(g.motion_scale_y)<<"]"
++                                        <<",\"flags\":"<<g.flags<<",\"flags_known\":"<<(g.flags_known?"true":"false")
++                                        <<",\"reset\":"<<g.reset<<",\"motion_low_resolution\":"<<(g.motion_low_resolution?"true":"false")
++                                        <<",\"motion_extent_known\":"<<(g.motion_extent_known?"true":"false")<<"}";
++                                }
++                                meta<<"]}";
++                                sequence->submit(sequence_frame,g_framework->get_d3d12_hook()->get_command_queue(),
++                                    d3d12::dibr_transaction::commands_were_submitted(capture_submission),
++                                    submitted&&sequence_recorded,packet->serial,meta.str());
++                            }
++                            if (capture && capture_recorded &&
++                                d3d12::dibr_transaction::commands_were_submitted(capture_submission)) {
++                                capture->note_submission(submitted,static_cast<unsigned>(capture_submission),stereo_recorded);
++                                // OpenXR::copy already enqueued commands.execute() before
++                                // it returned. A separate queue marker lets the worker
++                                // save disk images with NO wait on the XR thread.
++                                auto* queue=g_framework->get_d3d12_hook()->get_command_queue();
++                                if(capture->launch(device,queue)) {
++                                    auto expected=capture_id;
++                                    m_duo_snapshot_pending.compare_exchange_strong(
++                                        expected,0,std::memory_order_acq_rel);
++                                    SPDLOG_INFO("[DuoView][Capture] GPU readbacks enqueued for capture #{}; output under Windows TEMP\\UEVR_DuoViewCaptures",
++                                        capture_id);
++                                } else {
++                                    SPDLOG_ERROR("[DuoView][Capture] Could not fence snapshot {}; retaining request for retry",capture_id);
++                                }
++                            }
++                            if (submitted && recorded && callback_attempted) {
++                                if (native_frame_ticket) {
++                                    native_stereo_hook->record_native_frame_stage(*native_stereo_packet, native_frame_ticket,
++                                        frame_diag::Backend::d3d12, frame_diag::Runtime::openxr, frame_diag::Stage::copy_recorded,
++                                        0, 2, 0, recorded_secondary, recorded_target);
++                                }
++                                native_stereo_hook->note_native_stereo_frame_packet_consumed(packet->serial);
++                                vr->note_duoview_output_path(output_direct);
++                                vr->note_duoview_source_extents(source_extents);
++                                vr->note_mono_frame_ready(m_mono_generation);
++                            }
++                            if (m_stock_dibr_scope) {
++                                // Existing tail guard owns the one DuoView epoch advance.
++                                SPDLOG_INFO_EVERY_N_SEC(2, "[DuoView][R5DepthBridge] mode=diagnostics-only {}", m_stock_dibr_depth->summary());
++                            }
++                            if (compositor_fault) {
++                                vr->duoview_abort("Validated Native Stereo Fix pair failed DuoView composition");
++                            } else if (!submitted || !recorded || !callback_attempted) {
++                                vr->set_mono_status("Waiting for a retired OpenXR command slot for DuoView composition");
++                            }
++                        }
++                    } else if (m_stock_dibr_scope && vr->is_dibr_single_view_projection_configured() && !dibr_preview_succeeded) {
++                        // A failed depth/output frame cannot retroactively
++                        // render its missing eye. Copy the current source to
++                        // both eyes while readiness requests two views again.
++                        bool recorded = false;
++                        m_openxr.copy((uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE, nullptr,
++                            [source = backbuffer, scene_source_state, device, &recorded](
++                                d3d12::CommandContext& commands, ID3D12Resource* destination) {
++                                if (!commands.ready()) return;
++                                recorded = uevr::mono::dx12::copy_scene(commands.cmd_list.Get(), device,
++                                    source.Get(), destination, scene_source_state, D3D12_RESOURCE_STATE_RENDER_TARGET);
++                                if (recorded) commands.has_commands = true;
++                            }, std::nullopt, scene_source_state, nullptr, std::nullopt, backbuffer.Get());
++                        SPDLOG_WARNING_EVERY_N_SEC(2, "[StockDIBR] Current-frame Mono safety fallback; stereo NOT active. copy={}", recorded);
++                    } else if (vr->is_using_mono()) {
+                         bool recorded = false;
+                         vr->m_openxr->note_mono_copy(static_cast<uint32_t>(frame_count), false);
+                         const bool submitted = m_openxr.copy(
+@@ -6440,6 +7145,7 @@ void D3D12Component::on_reset(VR* vr, bool mono_retired) {
+     // OpenXR copy contexts can still reference the borrowed Native Fix source.
+     // Drain them before releasing any source or descriptor wrappers below.
+     if (runtime->is_openxr() && runtime->loaded) {
++        vr->get_openxr_runtime()->invalidate_duoview_scene();
+         m_openxr.wait_for_all_copies();
+     }
+     if (m_stalker2_pair_was_enabled) {
+@@ -6501,6 +7207,12 @@ void D3D12Component::on_reset(VR* vr, bool mono_retired) {
+     m_skip_spectator_view_for_volatile_external_rt = false;
+     m_shf_scene_mode = ShfSceneMode::Unknown;
+     m_backbuffer_batch.reset();
++    if (std::any_of(m_dibr_slots.begin(), m_dibr_slots.end(), [](auto& slot) {
++        return !slot.commands.references_retired();
++    })) {
++        d3d12::dibr_transaction::retain_untracked_unique(m_game_batch);
++        d3d12::dibr_transaction::retain_untracked_unique(m_graphics_memory);
++    }
+     m_game_batch.reset();
+     m_sw_zero_company_scene_conversion_batch.reset();
+     m_ui_batch_alpha_invert.reset();
+@@ -6840,6 +7552,32 @@ bool D3D12Component::setup() {
+         );
+     }
+ 
++    // DuoView may be activated long after OpenXR swapchains were created.
++    // Build GPU objects for the EXISTING XR command slots on the mode transition.
++    if (vr->is_duoview_renderer_active() && vr->get_runtime()->is_openxr()) {
++        auto it = m_openxr.contexts.find(
++            (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE);
++        if (it == m_openxr.contexts.end() || it->second.texture_contexts.empty()) {
++            spdlog::warn("[DuoView][Activation] Double-wide OpenXR command contexts not ready");
++        } else {
++            UINT64 frequency{};
++            if (auto queue = g_framework->get_d3d12_hook()->get_command_queue(); queue)
++                queue->GetTimestampFrequency(&frequency);
++            const bool srgb = false; // Existing Joey BGRA8 UNORM render source.
++            uint32_t prepared = 0;
++            for (auto& tc : it->second.texture_contexts) {
++                if (!tc) continue;
++                auto& comp = m_openxr.duoview_compositors[&tc->commands];
++                if (!comp) comp = std::make_unique<uevr::duoview::dx12::Compositor>();
++                if (comp->prewarm(device, vr->get_hmd_width(), vr->get_hmd_height(), srgb, frequency))
++                    ++prepared;
++                else
++                    spdlog::warn("[DuoView][Activation] DX12 command-slot prewarm failed: {}", comp->error());
++            }
++            SPDLOG_INFO("[DuoView][Activation] Prepared {}/{} OpenXR command slots on ID6 entry",
++                prepared, it->second.texture_contexts.size());
++        }
++    }
+     spdlog::info("[VR] d3d12 textures have been setup");
+     m_force_reset = false;
+ 
+@@ -6877,6 +7615,8 @@ std::optional<std::string> D3D12Component::OpenXR::create_swapchains() {
+     spdlog::info("[VR] Creating OpenXR swapchains for D3D12");
+ 
+     this->destroy_swapchains();
++    if (!this->duoview_compositors.empty())
++        return "DuoView command-slot retirement pending; swapchains retained";
+     
+     auto& hook = g_framework->get_d3d12_hook();
+     auto device = hook->get_device();
+@@ -6907,6 +7647,7 @@ std::optional<std::string> D3D12Component::OpenXR::create_swapchains() {
+     auto backbuffer_desc = backbuffer->GetDesc();
+     auto& openxr = vr->m_openxr;
+ 
++    this->duoview_compositors.clear();
+     this->contexts.clear();
+ 
+     auto create_swapchain = [&](uint32_t i, const XrSwapchainCreateInfo& swapchain_create_info, const D3D12_RESOURCE_DESC& desc) -> std::optional<std::string> {
+@@ -7028,6 +7769,24 @@ std::optional<std::string> D3D12Component::OpenXR::create_swapchains() {
+             return err;
+         }
+ 
++        if (vr->is_duoview_renderer_active()) {
++            auto& duo_ctx = this->contexts[(uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE];
++            const bool duo_srgb = backbuffer_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
++                                  backbuffer_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
++            UINT64 duo_frequency{};
++            if (const auto queue=g_framework->get_d3d12_hook()->get_command_queue(); queue)
++                queue->GetTimestampFrequency(&duo_frequency);
++            for (auto& tc : duo_ctx.texture_contexts) {
++                if (!tc) continue;
++                auto& comp = this->duoview_compositors[&tc->commands];
++                if (!comp) comp = std::make_unique<uevr::duoview::dx12::Compositor>();
++                if (!comp->prewarm(device, vr->get_hmd_width(), vr->get_hmd_height(), duo_srgb, duo_frequency)) {
++                    SPDLOG_WARNING_EVERY_N_SEC(2,
++                        "[DuoView] DX12 prewarm failed; guarded compositing/fallback remains available");
++                }
++            }
++        }
++
+         if (vr->is_native_stereo_fix_texture_array_submit_enabled()) {
+             auto native_array_create_info = standard_swapchain_create_info;
+             auto native_array_desc = hmd_desc;
+@@ -7231,7 +7990,21 @@ void D3D12Component::OpenXR::destroy_swapchains() {
+ 
+     spdlog::info("[VR] Destroying swapchains.");
+ 
++    for (const auto& [commands, compositor] : this->duoview_compositors) {
++        if (compositor && (!commands || commands->poisoned)) {
++            spdlog::error("[DuoView] Retaining swapchains: command-slot retirement is unproven");
++            return;
++        }
++    }
+     this->wait_for_all_copies();
++    for (const auto& [commands, compositor] : this->duoview_compositors) {
++        if (compositor && !commands->references_retired()) {
++            spdlog::error("[DuoView] Retaining swapchains: GPU references have not retired");
++            return;
++        }
++    }
++    vr->get_openxr_runtime()->invalidate_duoview_scene();
++    this->duoview_compositors.clear();
+ 
+     for (auto& it : this->contexts) {
+         auto& ctx = it.second;
+@@ -7313,6 +8086,8 @@ bool D3D12Component::OpenXR::pre_acquire(uint32_t swapchain_idx) {
+     }
+ 
+     const auto& swapchain = vr->m_openxr->swapchains[swapchain_idx];
++    if (swapchain_idx==(uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE &&
++        vr->is_using_duoview_mono()) vr->get_openxr_runtime()->invalidate_duoview_scene();
+     XrSwapchainImageAcquireInfo acquire_info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+ 
+     uint32_t texture_index{};
+@@ -7696,7 +8471,8 @@ bool D3D12Component::OpenXR::copy(
+     D3D12_BOX* src_box,
+     std::optional<std::function<void(d3d12::CommandContext&, ID3D12Resource*)>> post_copy_commands,
+     ID3D12Resource* retained_mono_source,
+-    std::shared_ptr<uevr::stalker2_native::PairFrame> retained_stalker_pair)
++    std::shared_ptr<uevr::stalker2_native::PairFrame> retained_stalker_pair,
++    std::optional<std::function<void(d3d12::CommandContext&, d3d12::dibr_transaction::ExecuteResult)>> submission_result)
+ {
+     std::scoped_lock _{this->mtx};
+ 
+@@ -7768,6 +8544,8 @@ bool D3D12Component::OpenXR::copy(
+     }
+ 
+     uint32_t texture_index{};
++    if (swapchain_idx==(uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE &&
++        vr->is_using_duoview_mono()) vr->get_openxr_runtime()->invalidate_duoview_scene();
+     bool used_pre_acquired_image = false;
+ 
+     if (ctx.pre_acquired && ctx.num_textures_acquired > 0) {
+@@ -7885,9 +8663,24 @@ bool D3D12Component::OpenXR::copy(
+         (*post_copy_commands)(texture_ctx->commands, ctx.textures[texture_index].texture);
+     }
+ 
++    const bool duo_copy=vr->is_duoview_renderer_active() &&
++        swapchain_idx==(uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE;
++    const auto duo_fence_before=texture_ctx->commands.fence_value;
++    const bool duo_recorded=texture_ctx->commands.has_commands;
+     const auto stalker_fence_before = retained_stalker_pair ? texture_ctx->commands.fence_value : 0;
+     const bool stalker_recorded = retained_stalker_pair && texture_ctx->commands.has_commands;
+-    texture_ctx->commands.execute();
++    if (submission_result) {
++        const auto result = texture_ctx->commands.execute_checked();
++        (*submission_result)(texture_ctx->commands, result);
++    } else {
++        texture_ctx->commands.execute();
++    }
++    const bool duo_enqueued=!duo_copy || uevr::stalker2_native::SubmissionProof{
++        duo_fence_before, texture_ctx->commands.fence_value, duo_recorded,
++        !texture_ctx->commands.poisoned, texture_ctx->commands.waiting_for_fence,
++        texture_ctx->commands.fence!=nullptr,
++        binding.queue==g_framework->get_d3d12_hook()->get_command_queue(),
++        binding.device==g_framework->get_d3d12_hook()->get_device()}.confirmed();
+     bool stalker_enqueued = false;
+     if (retained_stalker_pair) {
+         const auto& commands = texture_ctx->commands;
+@@ -7956,7 +8749,7 @@ bool D3D12Component::OpenXR::copy(
+     ctx.last_acquired_texture = texture_index;
+     ctx.last_acquired_frame = vr->get_frame_count();
+     ctx.ever_acquired = true;
+-    return !texture_ctx->commands.poisoned && (!retained_stalker_pair || stalker_enqueued);
++    return duo_enqueued && !texture_ctx->commands.poisoned && (!retained_stalker_pair || stalker_enqueued);
+ }
+ void D3D12Component::OpenXR::process_ui_alpha(uint32_t swapchain_idx, uint32_t texture_index) {
+     const auto vr = VR::get();

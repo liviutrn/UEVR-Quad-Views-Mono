@@ -1,0 +1,353 @@
+diff --git a/src/mods/vr/d3d12/DIBRPreview.cpp b/src/mods/vr/d3d12/DIBRPreview.cpp
+index 59508b2..094dc7f 100644
+--- a/src/mods/vr/d3d12/DIBRPreview.cpp
++++ b/src/mods/vr/d3d12/DIBRPreview.cpp
+@@ -1,8 +1,10 @@
+ #include "DIBRPreview.hpp"
++#include "DepthPolicy.hpp"
+ 
+ #include <algorithm>
+ #include <array>
+ #include <cstdio>
++#include <cmath>
+ #include <cstring>
+ #include <sstream>
+ 
+@@ -40,6 +42,7 @@ cbuffer DIBRConstants : register(b0) {
+     uint EnableUiFootprintReprojection;
+     uint ShowUiFootprintReprojectionMask;
+     float UiFootprintReprojectionStrength;
++    float4 DepthUvScaleBias;
+ };
+ 
+ Texture2D<float4> SourceColor : register(t0);
+@@ -48,12 +51,25 @@ Texture2D<float4> UIAlpha : register(t2);
+ RWTexture2D<float4> Output : register(u0);
+ SamplerState LinearClamp : register(s0);
+ 
+-float2 ReprojectSourceUv(float2 source_uv, float raw_depth) {
++float ReadDepth(float2 uv) {
++    const float2 scale = DepthUvScaleBias.x > 0 && DepthUvScaleBias.y > 0 ?
++        DepthUvScaleBias.xy : float2(DepthIsDoubleWide != 0 ? 0.5f : 1.0f, 1.0f);
++    const float2 bias = DepthUvScaleBias.x > 0 ? DepthUvScaleBias.zw : float2(0,0);
++    const float2 half_texel = 0.5f / float2(DepthWidth, DepthHeight);
++    return SourceDepth.SampleLevel(LinearClamp, clamp(saturate(uv) * scale + bias,
++        bias + half_texel, bias + scale - half_texel), 0);
++}
++
++float2 ReprojectSourceUv(float2 source_uv, float raw_depth, float reprojection_strength) {
+     const float2 source_ndc = float2(source_uv.x * 2.0f - 1.0f, 1.0f - source_uv.y * 2.0f);
+     const float4 target_clip = mul(SourceToRight, float4(source_ndc, raw_depth, 1.0f));
+     const float target_w = abs(target_clip.w) > 1e-6f ? target_clip.w : 1e-6f;
+     const float2 target_ndc = target_clip.xy / target_w;
+-    return float2(target_ndc.x * 0.5f + 0.5f, 0.5f - target_ndc.y * 0.5f);
++    const float2 target_uv = float2(target_ndc.x * 0.5f + 0.5f, 0.5f - target_ndc.y * 0.5f);
++    // Strength changes the mapping being solved, rather than the solver gain.
++    // Multiplying each correction by strength made strength=2 undo the first
++    // iteration on a constant-depth plane and collapse stereo back to zero.
++    return lerp(source_uv, target_uv, reprojection_strength);
+ }
+ 
+ float LegacyDepthResponse(float raw_depth) {
+@@ -67,9 +83,11 @@ float DepthGradient(float2 uv, float raw_depth) {
+         return 0.0f;
+     }
+ 
+-    const float2 texel = 1.0f / float2((float)DepthWidth, (float)DepthHeight);
+-    const float x_neighbor = SourceDepth.SampleLevel(LinearClamp, saturate(uv + float2(texel.x, 0.0f)), 0);
+-    const float y_neighbor = SourceDepth.SampleLevel(LinearClamp, saturate(uv + float2(0.0f, texel.y)), 0);
++    const float2 scale = DepthUvScaleBias.x > 0 && DepthUvScaleBias.y > 0 ?
++        DepthUvScaleBias.xy : float2(DepthIsDoubleWide != 0 ? 0.5f : 1.0f, 1.0f);
++    const float2 texel = 1.0f / (float2(DepthWidth, DepthHeight) * scale);
++    const float x_neighbor = ReadDepth(saturate(uv + float2(texel.x, 0.0f)));
++    const float y_neighbor = ReadDepth(saturate(uv + float2(0.0f, texel.y)));
+     return max(abs(raw_depth - x_neighbor), abs(raw_depth - y_neighbor));
+ }
+ 
+@@ -82,10 +100,10 @@ float2 ResolveSyntheticRightSourceUv(float2 target_uv, float disparity_uv, float
+         // only as confidence information for the optional repair pass.
+         [unroll]
+         for (uint i = 0; i < 2; ++i) {
+-            const float source_depth = saturate(SourceDepth.SampleLevel(LinearClamp, source_uv, 0));
+-            const float2 projected_target = ReprojectSourceUv(source_uv, source_depth);
++            const float source_depth = saturate(ReadDepth(source_uv));
++            const float2 projected_target = ReprojectSourceUv(source_uv, source_depth, reprojection_strength);
+             const float2 correction = clamp(target_uv - projected_target, -0.125f, 0.125f);
+-            const float2 candidate = source_uv + correction * reprojection_strength;
++            const float2 candidate = source_uv + correction;
+             source_clamped |= (any(candidate < float2(0.0f, 0.0f) || candidate > float2(1.0f, 1.0f)) ? 1u : 0u);
+             source_uv = saturate(candidate);
+         }
+@@ -110,18 +128,19 @@ uint AnalyzeSpatialRepair(
+     float2 target_uv,
+     float raw_depth,
+     float2 synthesized_source_uv,
++    float reprojection_strength,
+     uint source_clamped,
+     out float2 repaired_source_uv)
+ {
+     repaired_source_uv = synthesized_source_uv;
+ 
+-    const float source_depth = saturate(SourceDepth.SampleLevel(LinearClamp, synthesized_source_uv, 0));
++    const float source_depth = saturate(ReadDepth(synthesized_source_uv));
+     const float local_gradient = DepthGradient(target_uv, raw_depth);
+     const float depth_tolerance = max(RepairDepthThreshold, local_gradient * 4.0f);
+     float residual_pixels = 0.0f;
+ 
+     if (UseTrueReprojection != 0) {
+-        const float2 projected_target = ReprojectSourceUv(synthesized_source_uv, source_depth);
++        const float2 projected_target = ReprojectSourceUv(synthesized_source_uv, source_depth, reprojection_strength);
+         residual_pixels = length((projected_target - target_uv) * float2((float)SourceEyeWidth, (float)OutputHeight));
+     }
+ 
+@@ -157,9 +176,9 @@ uint AnalyzeSpatialRepair(
+             break;
+         }
+ 
+-        const float candidate_depth = saturate(SourceDepth.SampleLevel(LinearClamp, candidate_uv, 0));
+-        const float next_depth = saturate(SourceDepth.SampleLevel(LinearClamp, next_uv, 0));
+-        const float after_next_depth = saturate(SourceDepth.SampleLevel(LinearClamp, after_next_uv, 0));
++        const float candidate_depth = saturate(ReadDepth(candidate_uv));
++        const float next_depth = saturate(ReadDepth(next_uv));
++        const float after_next_depth = saturate(ReadDepth(after_next_uv));
+         if (!IsFartherDepth(candidate_depth, near_depth, depth_tolerance) ||
+             !IsDepthRunCompatible(candidate_depth, next_depth, depth_tolerance) ||
+             !IsDepthRunCompatible(candidate_depth, after_next_depth, depth_tolerance)) {
+@@ -309,7 +328,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
+     const float target_u = (float)(dispatch_id.x - (target_right ? SourceEyeWidth : 0) + 0.5) / (float)SourceEyeWidth;
+     const float v = (float)(dispatch_id.y + 0.5) / (float)OutputHeight;
+     const float2 target_uv = float2(target_u, v);
+-    const float raw_depth = saturate(SourceDepth.SampleLevel(LinearClamp, target_uv, 0));
++    const float raw_depth = saturate(ReadDepth(target_uv));
+     const float edge = smoothstep(0.0, EdgeFeather, target_u) * (1.0 - smoothstep(1.0 - EdgeFeather, 1.0, target_u));
+     const float disparity_uv = (DisparityPixels * LegacyDepthResponse(raw_depth) * edge) / (float)SourceEyeWidth;
+     float ui_visible_edge_mask = 0.0f;
+@@ -335,7 +354,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
+         // A single left-eye image cannot reveal data behind a foreground edge.
+         // Pull only high-confidence discontinuities back toward the stable left
+         // sample instead of allowing foreground color to smear across a hole.
+-        const float source_depth = saturate(SourceDepth.SampleLevel(LinearClamp, source_uv, 0));
++        const float source_depth = saturate(ReadDepth(source_uv));
+         const float discontinuity = max(DepthGradient(target_uv, raw_depth), abs(raw_depth - source_depth));
+         const float threshold = max(DepthEdgeThreshold, 1e-5f);
+         const float stabilization = smoothstep(threshold, threshold * 4.0f, discontinuity) *
+@@ -352,6 +371,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
+             target_uv,
+             raw_depth,
+             synthesized_source_uv,
++            reprojection_strength,
+             source_clamped,
+             repaired_source_uv);
+     }
+@@ -389,6 +409,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
+         output_color = ApplyUIFootprintMask(output_color, ui_footprint_mask, ui_visible_edge_mask);
+     }
+ 
++    output_color.a = 1.0f;
+     Output[dispatch_id.xy] = output_color;
+ }
+ )DIBR";
+@@ -845,6 +866,8 @@ bool DIBRPreview::ensure_captured_depth_locked(
+     // depth-stencil flag lets the persistent copy expose an SRV later, while
+     // the game-owned source keeps its original DSV and state untouched.
+     auto destination_desc = source_desc;
++    if (destination_desc.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT)
++        destination_desc.Format = DXGI_FORMAT_R32G8X24_TYPELESS;
+     // The source may be a two-eye texture array. DIBR needs one selected eye
+     // as a normal Texture2D, so its persistent copy always owns one slice.
+     destination_desc.DepthOrArraySize = 1;
+@@ -1121,6 +1144,10 @@ void DIBRPreview::fail(std::string reason) {
+ }
+ 
+ void DIBRPreview::reset() {
++    if (m_gpu_submission_pending) {
++        quarantine_resources();
++    }
++
+     if (m_constants != nullptr && m_constants_cpu != nullptr) {
+         m_constants->Unmap(0, nullptr);
+     }
+@@ -1139,7 +1166,8 @@ void DIBRPreview::reset() {
+     m_output_height = 0;
+     m_output_format = DXGI_FORMAT_UNKNOWN;
+     m_descriptor_increment = 0;
+-    m_output_has_been_written = false;
++    m_output_write_state.replace_output();
++    m_gpu_submission_pending = false;
+     {
+         std::scoped_lock _{m_capture_mutex};
+         m_captured_depth.Reset();
+@@ -1168,8 +1196,25 @@ void DIBRPreview::reset() {
+     m_status.store(Status::Idle, std::memory_order_release);
+ }
+ 
++void DIBRPreview::quarantine_resources() {
++    using d3d12::dibr_transaction::retain_untracked_com_object;
++    using d3d12::dibr_transaction::retain_untracked_unique;
++
++    retain_untracked_com_object(m_output.texture.Get());
++    retain_untracked_unique(m_output.rtv_heap);
++    retain_untracked_unique(m_output.srv_heap);
++    retain_untracked_com_object(m_source_staging.Get());
++    retain_untracked_com_object(m_root_signature.Get());
++    retain_untracked_com_object(m_pipeline_state.Get());
++    retain_untracked_com_object(m_descriptor_heap.Get());
++    retain_untracked_com_object(m_constants.Get());
++    std::scoped_lock lock{m_capture_mutex};
++    retain_untracked_com_object(m_captured_depth.Get());
++}
++
+ DXGI_FORMAT DIBRPreview::color_srv_format(DXGI_FORMAT format) {
+     switch (format) {
++    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+     case DXGI_FORMAT_R8G8B8A8_UNORM:
+     case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+         return DXGI_FORMAT_R8G8B8A8_UNORM;
+@@ -1192,6 +1237,9 @@ DXGI_FORMAT DIBRPreview::color_srv_format(DXGI_FORMAT format) {
+ 
+ DXGI_FORMAT DIBRPreview::depth_srv_format(DXGI_FORMAT format) {
+     switch (format) {
++    case DXGI_FORMAT_R32G8X24_TYPELESS:
++    case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
++        return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+     case DXGI_FORMAT_D32_FLOAT:
+     case DXGI_FORMAT_R32_FLOAT:
+     case DXGI_FORMAT_R32_TYPELESS:
+@@ -1208,7 +1256,7 @@ DXGI_FORMAT DIBRPreview::depth_srv_format(DXGI_FORMAT format) {
+     }
+ }
+ 
+-bool DIBRPreview::validate_inputs(ID3D12Resource* color, ID3D12Resource* depth, std::string& reason) const {
++bool DIBRPreview::validate_inputs(ID3D12Resource* color, ID3D12Resource* depth, const Parameters& parameters, std::string& reason) const {
+     if (color == nullptr || depth == nullptr) {
+         reason = "scene color or SceneDepthZ is unavailable";
+         return false;
+@@ -1248,8 +1296,19 @@ bool DIBRPreview::validate_inputs(ID3D12Resource* color, ID3D12Resource* depth,
+         return false;
+     }
+ 
+-    if (depth_desc.Height != color_desc.Height ||
+-        (depth_desc.Width != color_desc.Width && depth_desc.Width != color_desc.Width / 2)) {
++    const auto& uv = parameters.depth_uv_scale_bias;
++    const bool has_rect = uv[0] != 0 || uv[1] != 0 || uv[2] != 0 || uv[3] != 0;
++    if (has_rect) {
++        for (const auto v : uv) if (!std::isfinite(v)) { reason = "nonfinite depth viewport"; return false; }
++        if (uv[0] <= 0 || uv[1] <= 0 || uv[2] < 0 || uv[3] < 0 ||
++            uv[0] + uv[2] > 1.00001f || uv[1] + uv[3] > 1.00001f ||
++            stock_dibr::layout(static_cast<uint64_t>(std::lround(depth_desc.Width * uv[0])),
++                static_cast<uint32_t>(std::lround(depth_desc.Height * uv[1])),
++                color_desc.Width, color_desc.Height) != stock_dibr::Layout::Eye) {
++            reason = "depth viewport does not match the scene eye"; return false;
++        }
++    }
++    if (!has_rect && stock_dibr::layout(depth_desc.Width, depth_desc.Height, color_desc.Width, color_desc.Height) == stock_dibr::Layout::Invalid) {
+         reason = "SceneDepthZ extent does not match the scene eye extent";
+         return false;
+     }
+@@ -1401,7 +1460,7 @@ bool DIBRPreview::ensure_output(ID3D12Device* device, uint32_t width, uint32_t h
+     m_output_width = 0;
+     m_output_height = 0;
+     m_output_format = DXGI_FORMAT_UNKNOWN;
+-    m_output_has_been_written = false;
++    m_output_write_state.replace_output();
+ 
+     D3D12_HEAP_PROPERTIES heap_props{};
+     heap_props.Type = D3D12_HEAP_TYPE_DEFAULT;
+@@ -1455,6 +1514,10 @@ bool DIBRPreview::ensure_source_staging(ID3D12Device* device, const D3D12_RESOUR
+     // CopyTextureRegion can then copy the engine eye without reinterpretation;
+     // the DIBR SRV selects the typed color format afterwards.
+     auto source_desc = color_desc;
++    // A linear SRV is illegal on a fully typed sRGB resource. Stage into
++    // compatible typeless storage before creating the linear sampling view.
++    if (source_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) source_desc.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
++    if (source_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) source_desc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
+     source_desc.Width = eye_width;
+     source_desc.DepthOrArraySize = 1;
+     source_desc.MipLevels = 1;
+@@ -1584,10 +1647,11 @@ bool DIBRPreview::synthesize(
+     ID3D12Resource* depth,
+     D3D12_RESOURCE_STATES depth_state,
+     ID3D12Resource* ui_alpha,
+-    Parameters parameters)
++    Parameters parameters,
++    bool presentation_prepared)
+ {
+     std::string validation_reason{};
+-    if (device == nullptr || command_list == nullptr || !validate_inputs(color, depth, validation_reason)) {
++    if (device == nullptr || command_list == nullptr || !validate_inputs(color, depth, parameters, validation_reason)) {
+         if (m_status.load(std::memory_order_acquire) != Status::Failed) {
+             bool reason_changed{};
+             {
+@@ -1612,7 +1676,7 @@ bool DIBRPreview::synthesize(
+     const auto depth_desc = depth->GetDesc();
+     const auto output_width = static_cast<uint32_t>(color_desc.Width);
+     const auto output_height = color_desc.Height;
+-    const auto output_format = color_srv_format(color_desc.Format);
++    const auto output_format = DXGI_FORMAT_R8G8B8A8_UNORM;
+     D3D12_FEATURE_DATA_FORMAT_SUPPORT output_support{};
+     output_support.Format = output_format;
+     if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &output_support, sizeof(output_support))) ||
+@@ -1627,10 +1691,10 @@ bool DIBRPreview::synthesize(
+ 
+     // Missing or incompatible UI input merely disables this optional quality
+     // pass for the frame. It must never block or alter normal DIBR synthesis.
+-    const auto needs_ui_alpha =
+-        parameters.ui_edge_guard ||
+-        parameters.ui_footprint_reprojection ||
+-        parameters.show_ui_footprint_reprojection_mask;
++    const auto needs_ui_alpha = d3d12::dibr_transaction::needs_ui_alpha(
++        parameters.ui_edge_guard,
++        parameters.ui_footprint_reprojection,
++        parameters.show_ui_footprint_reprojection_mask);
+ 
+     if (needs_ui_alpha) {
+         const auto ui_valid = ui_alpha != nullptr && [&]() {
+@@ -1651,13 +1715,18 @@ bool DIBRPreview::synthesize(
+         parameters.ui_footprint_reprojection ||
+         parameters.show_ui_footprint_reprojection_mask;
+ 
+-    stage_left_eye(command_list, color, color_state);
+-
+     if (!ensure_output(device, output_width, output_height, output_format) ||
+         !create_descriptors(device, depth, use_ui_alpha ? ui_alpha : nullptr)) {
+         return false;
+     }
+ 
++    // All resource creation and descriptor preparation has completed. From
++    // this point to return, this function only records commands.
++    if (!m_output_write_state.begin_after_preparation(true, presentation_prepared)) {
++        return false;
++    }
++    stage_left_eye(command_list, color, color_state);
++
+     Constants constants{};
+     constants.output_width = output_width;
+     constants.output_height = output_height;
+@@ -1665,7 +1734,9 @@ bool DIBRPreview::synthesize(
+     constants.source_height = output_height;
+     constants.depth_width = static_cast<uint32_t>(depth_desc.Width);
+     constants.depth_height = depth_desc.Height;
+-    constants.depth_is_double_wide = depth_desc.Width == color_desc.Width ? 1 : 0;
++    constants.depth_is_double_wide = stock_dibr::layout(depth_desc.Width, depth_desc.Height,
++        color_desc.Width, color_desc.Height) == stock_dibr::Layout::Packed ? 1 : 0;
++    std::memcpy(constants.depth_uv_scale_bias, parameters.depth_uv_scale_bias.data(), sizeof(constants.depth_uv_scale_bias));
+     constants.reversed_depth = parameters.reversed_depth ? 1 : 0;
+     constants.disparity_pixels = std::clamp(parameters.disparity_pixels, 0.0f, 64.0f);
+     constants.use_true_reprojection = parameters.use_true_reprojection ? 1 : 0;
+@@ -1703,7 +1774,7 @@ bool DIBRPreview::synthesize(
+     barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+ 
+     // Newly allocated output starts as UAV; avoid issuing an invalid first-frame barrier.
+-    const auto output_was_new = !m_output_has_been_written;
++    const auto output_was_new = !m_output_write_state.output_written();
+     const auto barrier_count = output_was_new ? 1u : 2u;
+     command_list->ResourceBarrier(barrier_count, barriers.data());
+ 
+@@ -1729,7 +1800,6 @@ bool DIBRPreview::synthesize(
+     barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+     barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+     command_list->ResourceBarrier(static_cast<UINT>(std::size(barriers)), barriers.data());
+-    m_output_has_been_written = true;
+     return true;
+ }
+ } // namespace d3d12

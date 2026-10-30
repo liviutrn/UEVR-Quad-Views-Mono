@@ -1,0 +1,336 @@
+diff --git a/src/mods/VR.hpp b/src/mods/VR.hpp
+index 6bb961a..dc22319 100644
+--- a/src/mods/VR.hpp
++++ b/src/mods/VR.hpp
+@@ -2,10 +2,12 @@
+ 
+ #define NOMINMAX
+ 
++#include <algorithm>
+ #include <memory>
+ #include <string>
+ #include <string_view>
+ #include <array>
++#include <cmath>
+ #include <atomic>
+ #include <chrono>
+ #include <condition_variable>
+@@ -34,6 +36,8 @@
+ 
+ #include "Mod.hpp"
+ #include "vr/RenderingMethodSetting.hpp"
++#include "vr/DuoViewState.hpp"
++#include "vr/DuoViewPSVR2Gaze.hpp"
+ #include "vr/SteamFrameInput.hpp"
+ #include "vr/GamepadRecovery.hpp"
+ #include "vr/ProSpiCameraProbe.hpp"
+@@ -57,6 +61,7 @@ public:
+         SYNTHETIC_DIBR = 3,
+         SYNTHETIC_DIBR_SINGLE_VIEW = 4,
+         MONO = uevr::mono::method_id,
++        DUOVIEW_MONO = uevr::mono::duoview_method_id,
+     };
+ 
+     enum SynchronizeStage {
+@@ -181,6 +186,7 @@ public:
+     void on_post_present() override;
+ 
+     void on_device_reset() override {
++        m_duoview.retire();
+         get_runtime()->on_device_reset();
+ 
+         if (m_fake_stereo_hook != nullptr) {
+@@ -458,6 +464,20 @@ public:
+         return m_world_scale->value();
+     }
+ 
++    // Tracking-space movement only; no origin/reference resets or eye changes.
++    glm::vec3 get_xyz_head_movement_gains() const {
++        if (!m_xyz_headscale_enabled->value() ||
++            m_xyz_headscale_hold_bypass.load(std::memory_order_relaxed)) {
++            return {1.0f, 1.0f, 1.0f};
++        }
++        const auto valid_gain = [](float v) {
++            return std::isfinite(v) && v >= 0.05f && v <= 5.0f ? v : 1.0f;
++        };
++        return {valid_gain(m_xyz_headscale_x->value()),
++                valid_gain(m_xyz_headscale_y->value()),
++                valid_gain(m_xyz_headscale_z->value())};
++    }
++
+     auto is_stereo_emulation_enabled() const {
+         return m_stereo_emulation_mode;
+     }
+@@ -487,14 +507,96 @@ public:
+         return m_openvr_mtx;
+     }
+ 
+-    bool is_using_mono() const { return m_rendering_method->value() == RenderingMethod::MONO; }
++    bool is_using_mono() const { return uevr::mono::is_mono_family(m_rendering_method->value()); }
++    bool is_using_duoview_mono() const { return m_rendering_method->value() == RenderingMethod::DUOVIEW_MONO; }
++    bool is_duoview_renderer_active() const;
++    bool is_duoview_split_eye_enabled() const {
++        return is_duoview_renderer_active() && m_duo_split_eye_frozen.load(std::memory_order_acquire);
++    }
++    uevr::duoview::State& duoview_state() { return m_duoview; }
++    void duoview_start_draw() {
++        // Freeze per-draw policy BEFORE either UE camera/projection callback.
++        m_duo_split_eye_frozen.store(m_duo_split_eye->value(), std::memory_order_release);
++        m_duoview_draw_serial.fetch_add(1, std::memory_order_acq_rel);
++        m_duoview_candidate_key.store(nullptr, std::memory_order_release);
++        m_duoview_frozen_key.store(nullptr, std::memory_order_release);
++    }
++    uevr::duoview::FrameKey duoview_key() const {
++        return {mono_generation(), m_duoview_draw_serial.load(std::memory_order_acquire)};
++    }
++    uevr::duoview::FrameKey duoview_producer_key() const {
++        if (m_fake_stereo_hook && m_fake_stereo_hook->is_in_viewport_client_draw()) {
++            const auto candidate = m_duoview_candidate_key.load(std::memory_order_acquire);
++            if (candidate && candidate->generation == mono_generation()) return *candidate;
++        }
++        const auto frozen = m_duoview_frozen_key.load(std::memory_order_acquire);
++        if (frozen && frozen->generation == mono_generation()) return *frozen;
++        const auto candidate = m_duoview_candidate_key.load(std::memory_order_acquire);
++        if (candidate && candidate->generation == mono_generation()) return *candidate;
++        return duoview_key();
++    }
++    bool duoview_note_main_family(uint32_t, bool main, uint32_t count) {
++        const auto candidate = m_duoview_candidate_key.load(std::memory_order_acquire);
++        if (!candidate || candidate->generation != mono_generation() ||
++            !m_duoview.family(*candidate, main, count)) return false;
++        const auto frame = m_duoview.snapshot(*candidate);
++        if (!frame || !frame->mono_source_frame || !get_openxr_runtime() ||
++            !get_openxr_runtime()->has_mono_pose(*frame->mono_source_frame)) return false;
++        m_duoview_frozen_key.store(candidate, std::memory_order_release);
++        return true;
++    }
++    std::optional<uint32_t> duoview_mono_source_frame() const {
++        const auto frame = m_duoview.snapshot(duoview_producer_key());
++        return frame ? frame->mono_source_frame : std::optional<uint32_t>{};
++    }
++    // Reject corrupt/nonfinite persisted values before they reach GPU constants.
++    float duoview_visibility_absolute_tolerance() const {
++        const float v=m_duo_visibility_absolute->value();
++        return std::isfinite(v) ? (std::clamp)(v,0.1f,5.f) : 1.f;
++    }
++    float duoview_visibility_relative_tolerance() const {
++        const float v=m_duo_visibility_relative_percent->value();
++        return std::isfinite(v) ? (std::clamp)(v,0.25f,5.f)*0.01f : .015f;
++    }
++    bool duoview_foreground_refinement_enabled() const { return m_duo_foreground_refinement->value(); }
++    bool duoview_left_anchored_mode() const { return m_duo_left_anchor->value(); }
++    bool duoview_research_backward_mode() const { return m_duo_research_backward->value(); }
++    bool duoview_conservative_stereo() const { return m_duo_conservative_stereo->value(); }
++    bool duoview_depth_stabilization() const { return m_duo_depth_stabilization->value(); }
++    bool duoview_depth_temporal() const { return m_duo_depth_temporal->value(); }
++    bool duoview_pixel_footprints() const { return m_duo_pixel_footprints->value(); }
++    bool duoview_detail_transfer() const { return m_duo_detail_transfer->value(); }
++    bool duoview_left_edge_fix() const { return m_duo_left_edge_fix->value(); }
++    float duoview_depth_history_weight() const {
++        const float w=m_duo_depth_history->value();
++        return std::isfinite(w)?(std::clamp)(w,0.f,90.f)*.01f:.75f;
++    }
++    std::array<float,2> duoview_foreground_mpc_values() const {
++        return {m_duo_mpc_enabled.load(),m_duo_mpc_depth.load()};
++    }
++    bool duoview_foreground_mpc_verified() const {return m_duo_mpc_verified.load();}
++    float duoview_foreground_edge_radius() const {
++        const float v=m_duo_foreground_edge_radius->value();
++        return std::isfinite(v) ? (std::clamp)(v,0.5f,2.f) : 1.f;
++    }
++    bool duoview_gaze_active() const { return m_duoview.settings().eye_tracked && m_duoview_gaze.active(); }
++    void configure_duoview();
++    void note_duoview_gpu_ms(float ms) { m_duo_gpu_ms.store(ms, std::memory_order_relaxed); }
++    void note_duoview_output_path(bool direct_xr) {
++        m_duoview_output_path.store(direct_xr ? 1 : 0, std::memory_order_relaxed);
++    }
++    void note_duoview_source_extents(uint64_t packed) {
++        m_duoview_source_extents.store(packed,std::memory_order_relaxed);
++    }
++    std::optional<uevr::duoview::ViewFrame> duoview_begin_frame();
++    void duoview_abort(const char* reason);
+     bool is_mono_transition_pending() const { return m_rendering_method->selection().pending(); }
+     bool is_mono_transition_waiting() const {
+         return m_mono_ready_generation.load(std::memory_order_acquire) != mono_generation();
+     }
+     bool is_mono_transition_quiescing() const {
+         return is_mono_transition_pending() &&
+-            (requested_rendering_method() != RenderingMethod::MONO || mono_unavailable_reason() == nullptr);
++            (!uevr::mono::is_mono_family(requested_rendering_method()) || mono_unavailable_reason() == nullptr);
+     }
+     uint64_t mono_generation() const { return m_rendering_method->selection().generation(); }
+     uint64_t mono_request_token() const { return m_rendering_method->selection().request_token(); }
+@@ -694,6 +796,7 @@ public:
+         if (should_ignore_native_stereo_fix_for_avowed_sync()) {
+             return false;
+         }
++        if (is_duoview_renderer_active()) { return true; }
+ 
+         return m_native_stereo_fix->value() &&
+             m_rendering_method->value() == RenderingMethod::NATIVE_STEREO &&
+@@ -701,6 +804,7 @@ public:
+     }
+ 
+     bool is_native_stereo_fix_same_pass_enabled() const {
++        if (is_duoview_renderer_active()) return m_duoview.settings().native_fix_same_pass;
+         if (should_force_native_stereo_fix_same_pass()) {
+             return true;
+         }
+@@ -709,6 +813,7 @@ public:
+     }
+ 
+     bool is_native_stereo_fix_preserve_secondary_pass_enabled() const {
++        if (is_duoview_renderer_active() && !m_duoview.settings().native_fix_same_pass) return true;
+         return m_native_stereo_fix_preserve_secondary_pass->value();
+     }
+ 
+@@ -1168,6 +1273,14 @@ private:
+         spdlog::info("Reinitializing OpenXR");
+         std::scoped_lock _{m_openvr_mtx};
+ 
++        // Build 49: OpenXR Reset Runtime constructs a NEW OpenXR object.
++        // Preserve the user's live binocular calibration across that
++        // replacement. Loading config.txt does NOT run on this reset path.
++        const bool saved_mono_eye_alignment_enabled =
++            m_openxr != nullptr && m_openxr->mono_eye_alignment_enabled->value();
++        const float saved_mono_eye_alignment_percent =
++            m_openxr != nullptr ? m_openxr->mono_eye_alignment_percent->value() : 0.0f;
++
+         if (m_is_d3d12) {
+             m_d3d12.openxr().destroy_swapchains();
+         } else {
+@@ -1177,12 +1290,29 @@ private:
+         m_openxr.reset();
+         m_runtime.reset();
+         m_runtime = std::make_shared<VRRuntime>();
+-        
++
+         m_controllers.clear();
+         m_controllers_set.clear();
+ 
+         auto e = initialize_openxr();
+ 
++        // Restore BOTH the value and toggle, including when switching modes
++        // before the reset. Never alter a Mono projection or any GPU resource.
++        // Validate range defensively: invalid values reset safely to zero.
++        if (m_openxr != nullptr) {
++            const bool valid_percent =
++                std::isfinite(saved_mono_eye_alignment_percent) &&
++                saved_mono_eye_alignment_percent >= -3.0f &&
++                saved_mono_eye_alignment_percent <= 3.0f;
++            m_openxr->mono_eye_alignment_percent->value() =
++                valid_percent ? saved_mono_eye_alignment_percent : 0.0f;
++            m_openxr->mono_eye_alignment_enabled->value() =
++                valid_percent && saved_mono_eye_alignment_enabled;
++            spdlog::info("[OpenXR] Restored Mono Eye Alignment after runtime reset: enabled={}, total_percent={:.4f}",
++                m_openxr->mono_eye_alignment_enabled->value(),
++                m_openxr->mono_eye_alignment_percent->value());
++        }
++
+         if (e) {
+             spdlog::error("Failed to reinitialize OpenXR: {}", *e);
+         }
+@@ -1598,6 +1728,64 @@ private:
+ 
+     const std::unique_ptr<RenderingMethodSetting> m_rendering_method{
+         std::make_unique<RenderingMethodSetting>(generate_name("RenderingMethod"), uevr::mono::choices)};
++    // Legacy-style persistent options; never sampled by the XR compositor.
++    std::atomic<uint32_t> m_duo_ui_rejected_mask{0};
++    const ModSlider::Ptr m_duo_width{ModSlider::create(generate_name("DuoViewCropWidth"), .10f, 1.f, .50f)};
++    const ModSlider::Ptr m_duo_height{ModSlider::create(generate_name("DuoViewCropHeight"), .10f, 1.f, .50f)};
++    const ModSlider::Ptr m_duo_periphery{ModSlider::create(generate_name("DuoViewPeripheralScale"), .05f, .499f, .20f)};
++    const ModSlider::Ptr m_duo_density{ModSlider::create(generate_name("DuoViewFovealDensity"), .25f, 4.0f, 1.f)};
++    const ModSlider::Ptr m_duo_feather{ModSlider::create(generate_name("DuoViewFeather"), 0.f, .45f, .08f)};
++    const ModSlider::Ptr m_duo_sharpen{ModSlider::create(generate_name("DuoViewGlamaryeFoveaStrength"), 0.f, 2.f, 1.f)};
++    const ModToggle::Ptr m_duo_foreground_refinement{ModToggle::create(generate_name("DuoViewForegroundRefinement"), true)};
++    const ModToggle::Ptr m_duo_left_anchor{ModToggle::create(generate_name("DuoViewLeftAnchoredReprojection"), true)};
++    const ModToggle::Ptr m_duo_depth_stabilization{ModToggle::create(generate_name("DuoViewDepthStabilizationCI77"),true)};
++    const ModToggle::Ptr m_duo_pixel_footprints{ModToggle::create(generate_name("DuoViewPixelFootprintsCI77b"),true)};
++    const ModToggle::Ptr m_duo_detail_transfer{ModToggle::create(generate_name("DuoViewRightFoveaCI79"),true)};
++    const ModToggle::Ptr m_duo_left_edge_fix{ModToggle::create(generate_name("DuoViewLeftEdgeFixCI79"),true)};
++    const ModToggle::Ptr m_duo_depth_temporal{ModToggle::create(generate_name("DuoViewDepthTemporalCI77"),true)};
++    const ModSlider::Ptr m_duo_depth_history{ModSlider::create(generate_name("DuoViewDepthHistoryPercentCI77"),0.f,90.f,75.f)};
++    const ModToggle::Ptr m_duo_research_backward{ModToggle::create(generate_name("DuoViewResearchTargetDepthGather"), false)};
++    std::atomic<uint64_t> m_duo_periphery_edit_ms{0};
++    std::atomic<float> m_duo_mpc_enabled{0.f},m_duo_mpc_depth{0.f};
++    std::atomic<bool> m_duo_mpc_verified{false};
++    const ModToggle::Ptr m_duo_conservative_stereo{ModToggle::create(generate_name("DuoViewConservativeStereoCI73"), false)};
++    const ModSlider::Ptr m_duo_visibility_absolute{ModSlider::create(generate_name("DuoViewVisibilityAbsoluteTolerance"), .1f, 5.f, 1.f)};
++    const ModSlider::Ptr m_duo_visibility_relative_percent{ModSlider::create(generate_name("DuoViewVisibilityRelativeTolerancePercent"), .25f, 5.f, 1.5f)};
++    const ModSlider::Ptr m_duo_foreground_edge_radius{ModSlider::create(generate_name("DuoViewForegroundEdgeRadius"), .5f, 2.f, 1.f)};
++    const ModToggle::Ptr m_duo_gaze{ModToggle::create(generate_name("DuoViewEyeTracking"), true)};
++    const ModToggle::Ptr m_duo_border{ModToggle::create(generate_name("DuoViewDebugBorder"), false)};
++    const ModInt32::Ptr m_duo_debug_source{ModSliderInt32::create(generate_name("DuoViewDebugSource"), 0, 2, 0)};
++    const ModInt32::Ptr m_duo_fovea_view{ModSliderInt32::create(generate_name("DuoViewFoveaSourceView"), 0, 1, 0)};
++    const ModToggle::Ptr m_duo_stabilize{ModToggle::create(generate_name("DuoViewCropStability"), true)};
++    const ModSlider::Ptr m_duo_guard{ModSlider::create(generate_name("DuoViewCropGuard"), 0.f, .05f, .05f)};
++    const ModToggle::Ptr m_duo_shading{ModToggle::create(generate_name("DuoViewIndependentShading"), false)};
++    const ModToggle::Ptr m_duo_native_fix{ModToggle::create(generate_name("DuoViewNativeFixSamePass"), true)};
++    // Enabled by default only in this isolated experimental Build165 branch.
++    // Disabling restores the original Build165 centered producer cameras.
++    const ModToggle::Ptr m_duo_split_eye{ModToggle::create(generate_name("DuoView165NativeSplitEye"), true)};
++    std::atomic<bool> m_duo_split_eye_frozen{false};
++    const ModInt32::Ptr m_duo_quant{ModSliderInt32::create(generate_name("DuoViewQuantizationPixels"), 0, 16, 2)};
++    const ModInt32::Ptr m_duo_hold{ModSliderInt32::create(generate_name("DuoViewGazeHoldMs"), 50, 2000, 350)};
++    const ModInt32::Ptr m_duo_reacquire{ModSliderInt32::create(generate_name("DuoViewGazeReacquireSamples"), 1, 4, 2)};
++    const ModSlider::Ptr m_duo_offset_x{ModSlider::create(generate_name("DuoViewGazeOffsetX"), -.25f, .25f, 0.f)};
++    const ModSlider::Ptr m_duo_offset_y{ModSlider::create(generate_name("DuoViewGazeOffsetY"), -.25f, .25f, 0.f)};
++    // Nonlinear response: stillness lock / instantaneous full-speed saccade.
++    const ModSlider::Ptr m_duo_micro_gain{ModSlider::create(generate_name("DuoViewGazeMicroGain"), 0.f, 1.f, 0.f)};
++    const ModSlider::Ptr m_duo_breakout{ModSlider::create(generate_name("DuoViewGazeBreakout"), .005f, .25f, .035f)};
++    const ModSlider::Ptr m_duo_stillness{ModSlider::create(generate_name("DuoViewGazeStillness"), 0.f, .05f, .008f)};
++    const ModInt32::Ptr m_duo_relock{ModSliderInt32::create(generate_name("DuoViewGazeRelockSamples"), 1, 10, 3)};
++    const ModToggle::Ptr m_duo_direct_xr{ModToggle::create(generate_name("DuoViewDirectXROutput"), false)};
++    const ModToggle::Ptr m_duo_timing{ModToggle::create(generate_name("DuoViewGpuTiming"), false)};
++    std::atomic<float> m_duo_gpu_ms{-1.f};
++    std::atomic<int32_t> m_duoview_output_path{-1};
++    std::atomic<uint64_t> m_duoview_source_extents{0};
++    uevr::duoview::State m_duoview;
++    std::atomic<uint64_t> m_duoview_draw_serial{};
++    std::atomic<std::shared_ptr<const uevr::duoview::FrameKey>> m_duoview_candidate_key{};
++    std::atomic<std::shared_ptr<const uevr::duoview::FrameKey>> m_duoview_frozen_key{};
++    uevr::duoview::psvr2::Reader m_duoview_gaze;
++    std::atomic<bool> m_duoview_quarantined{false};
++    std::once_flag m_duoview_settings_once;
+     std::atomic<const char*> m_mono_status{"Not selected"};
+     std::atomic<uint64_t> m_mono_ready_generation{};
+     std::atomic<uint64_t> m_mono_main_view_token{}, m_mono_attachment_token{};
+@@ -1898,6 +2086,14 @@ private:
+     const ModToggle::Ptr m_match_game_fov_prospi_field_map_flip_y{ ModToggle::create(generate_name("MatchGameFOVProSpiFieldMapFlipY"), false) };
+     const ModSlider::Ptr m_camera_fov_distance_multiplier{ ModSlider::create(generate_name("CameraFOVDistanceMultiplier"), 0.00f, 1000.0f, 0.0f) };
+     const ModSlider::Ptr m_world_scale{ ModSlider::create(generate_name("WorldScale"), 0.01f, 10.0f, 1.0f) };
++    // Opt-in XYZ translation scaling; never affects the stock World Scale or IPD.
++    const ModToggle::Ptr m_xyz_headscale_enabled{ ModToggle::create(generate_name("XYZHeadScalingEnabled"), false) };
++    const ModSlider::Ptr m_xyz_headscale_x{ ModSlider::create(generate_name("XYZHeadScaleX"), 0.05f, 5.0f, 1.0f) };
++    const ModSlider::Ptr m_xyz_headscale_y{ ModSlider::create(generate_name("XYZHeadScaleY"), 0.05f, 5.0f, 1.0f) };
++    const ModSlider::Ptr m_xyz_headscale_z{ ModSlider::create(generate_name("XYZHeadScaleZ"), 0.05f, 5.0f, 1.0f) };
++    const ModKey::Ptr m_xyz_headscale_toggle_key{ ModKey::create(generate_name("XYZHeadScaleToggleKey")) };
++    const ModKey::Ptr m_xyz_headscale_hold_bypass_key{ ModKey::create(generate_name("XYZHeadScaleHoldBypassKey")) };
++    std::atomic<bool> m_xyz_headscale_hold_bypass{ false };
+     const ModSlider::Ptr m_depth_scale{ ModSlider::create(generate_name("DepthScale"), 0.01f, 1.0f, 1.0f) };
+ 
+     const ModToggle::Ptr m_ghosting_fix{ ModToggle::create(generate_name("GhostingFix"), false) };
+@@ -2148,6 +2344,13 @@ private:
+ public:
+     VR() {
+         m_options = {
++            *m_duo_width, *m_duo_height, *m_duo_periphery, *m_duo_density,
++            *m_duo_depth_stabilization, *m_duo_pixel_footprints, *m_duo_detail_transfer, *m_duo_left_edge_fix, *m_duo_depth_temporal, *m_duo_depth_history, *m_duo_foreground_refinement, *m_duo_left_anchor, *m_duo_research_backward, *m_duo_conservative_stereo, *m_duo_visibility_absolute, *m_duo_visibility_relative_percent, *m_duo_foreground_edge_radius,
++            *m_duo_feather, *m_duo_sharpen, *m_duo_gaze, *m_duo_border, *m_duo_debug_source,
++            *m_duo_fovea_view, *m_duo_timing, *m_duo_direct_xr, *m_duo_stabilize, *m_duo_guard,
++            *m_duo_native_fix, *m_duo_split_eye, *m_duo_quant, *m_duo_hold, *m_duo_reacquire,
++            *m_duo_offset_x, *m_duo_offset_y,
++            *m_duo_micro_gain, *m_duo_breakout, *m_duo_stillness, *m_duo_relock,
+             *m_rendering_method,
+             *m_synced_afr_method,
+             *m_extreme_compat_mode,
+@@ -2381,6 +2584,9 @@ public:
+             *m_match_game_fov_prospi_field_map_flip_x,
+             *m_match_game_fov_prospi_field_map_flip_y,
+             *m_world_scale,
++            *m_xyz_headscale_enabled,
++            *m_xyz_headscale_x, *m_xyz_headscale_y, *m_xyz_headscale_z,
++            *m_xyz_headscale_toggle_key, *m_xyz_headscale_hold_bypass_key,
+             *m_depth_scale,
+             *m_custom_z_near,
+             *m_custom_z_near_enabled,

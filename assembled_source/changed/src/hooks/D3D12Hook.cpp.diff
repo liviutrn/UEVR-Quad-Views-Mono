@@ -1,0 +1,244 @@
+diff --git a/src/hooks/D3D12Hook.cpp b/src/hooks/D3D12Hook.cpp
+index 7ca5ee6..8ecc407 100644
+--- a/src/hooks/D3D12Hook.cpp
++++ b/src/hooks/D3D12Hook.cpp
+@@ -18,6 +18,7 @@
+ #include "render/ShaderOverrideRegistry.hpp"
+ 
+ #include "D3D12Hook.hpp"
++#include "utility/Logging.hpp"
+ 
+ static D3D12Hook* g_d3d12_hook = nullptr;
+ thread_local bool g_inside_depth_stencil_observer = false;
+@@ -519,6 +520,9 @@ bool D3D12Hook::hook() {
+         std::unordered_set<uintptr_t> depth_stencil_view_slots{};
+         std::unordered_set<uintptr_t> set_pipeline_state_slots{};
+         std::unordered_set<uintptr_t> resource_barrier_slots{};
++        std::unordered_set<uintptr_t> reset_slots{};
++        std::unordered_set<uintptr_t> render_targets_slots{};
++        std::unordered_set<uintptr_t> viewports_slots{};
+ 
+         add_unique_pointer_hook(
+             device,
+@@ -649,7 +653,8 @@ bool D3D12Hook::hook() {
+         command_list->QueryInterface(IID_PPV_ARGS(&command_list6));
+         command_list->QueryInterface(IID_PPV_ARGS(&command_list7));
+ 
+-        const std::array<IUnknown*, 7> command_list_interfaces{
++        const std::array<IUnknown*, 8> command_list_interfaces{
++            command_list,
+             command_list1.Get(),
+             command_list2.Get(),
+             command_list3.Get(),
+@@ -676,8 +681,27 @@ bool D3D12Hook::hook() {
+                 m_resource_barrier_hook_lookup,
+                 resource_barrier_slots
+             );
++            add_unique_pointer_hook(iface, 10,
++                reinterpret_cast<void*>(&D3D12Hook::reset_command_list),
++                m_stock_reset_hooks, m_stock_reset_hook_lookup, reset_slots);
++            add_unique_pointer_hook(iface, 46,
++                reinterpret_cast<void*>(&D3D12Hook::set_render_targets),
++                m_stock_render_targets_hooks, m_stock_render_targets_hook_lookup, render_targets_slots);
++            add_unique_pointer_hook(iface, 21,
++                reinterpret_cast<void*>(&D3D12Hook::set_viewports),
++                m_stock_viewports_hooks, m_stock_viewports_hook_lookup, viewports_slots);
+         }
+ 
++        // The exact queue used by UEVR presentation establishes the ordering
++        // proof. Unobserved/wrapper queues cannot publish a live depth slot.
++        if (!m_stock_queue_hooks.install(command_queue))
++            spdlog::warn("[StockDIBR] Failed to hook setup queue submission");
++        if (command_list4 != nullptr) {
++            auto& begin_slot = (*(void***)command_list4.Get())[68];
++            auto& end_slot = (*(void***)command_list4.Get())[69];
++            m_stock_begin_hook = std::make_unique<PointerHook>(&begin_slot, (void*)&D3D12Hook::begin_render_pass);
++            m_stock_end_hook = std::make_unique<PointerHook>(&end_slot, (void*)&D3D12Hook::end_render_pass);
++        }
+         m_hooked = true;
+     } catch (const std::exception& e) {
+         spdlog::error("Failed to initialize hooks: {}", e.what());
+@@ -710,7 +734,7 @@ bool D3D12Hook::hook() {
+ }
+ 
+ bool D3D12Hook::unhook() {
+-    m_depth_stencil_observer.store(nullptr, std::memory_order_release);
++    set_depth_stencil_observer(nullptr);
+ 
+     if (!m_hooked) {
+         return true;
+@@ -725,6 +749,10 @@ bool D3D12Hook::unhook() {
+     m_create_render_target_view_hooks.clear();
+     m_create_depth_stencil_view_hooks.clear();
+     m_set_pipeline_state_hooks.clear();
++    m_stock_queue_hooks.clear();
++    m_stock_begin_hook.reset(); m_stock_end_hook.reset();
++    m_stock_reset_hooks.clear(); m_stock_render_targets_hooks.clear(); m_stock_viewports_hooks.clear();
++    m_stock_reset_hook_lookup.clear(); m_stock_render_targets_hook_lookup.clear(); m_stock_viewports_hook_lookup.clear();
+     m_resource_barrier_hooks.clear();
+     m_create_graphics_pipeline_state_hook_lookup.clear();
+     m_create_pipeline_state_hook_lookup.clear();
+@@ -854,6 +882,17 @@ HRESULT D3D12Hook::present_internal(IDXGISwapChain3* swap_chain, UINT sync_inter
+             d3d12->m_command_queue = *(ID3D12CommandQueue**)((uintptr_t)swap_chain + d3d12->m_command_queue_offset);
+         }
+ 
++        // Queue implementations/wrappers discovered from the live swapchain
++        // need their own slot hook. The dummy queue is not sufficient.
++        if (d3d12->m_command_queue) {
++            const auto before = d3d12->m_stock_queue_hooks.size();
++            if (!d3d12->m_stock_queue_hooks.install(d3d12->m_command_queue)) {
++                SPDLOG_ERROR_EVERY_N_SEC(2, "[StockDIBR] Failed to hook live presentation queue");
++            } else if (before != d3d12->m_stock_queue_hooks.size()) {
++                spdlog::info("[StockDIBR] Hooked live presentation queue 0x{:X}; submission slots={}",
++                    reinterpret_cast<uintptr_t>(d3d12->m_command_queue), d3d12->m_stock_queue_hooks.size());
++            }
++        }
+         render::D3D12Diagnostics::get().begin_frame(
+             d3d12->m_device,
+             swap_chain,
+@@ -1081,6 +1120,17 @@ HRESULT WINAPI D3D12Hook::create_pipeline_state(
+     return result;
+ }
+ 
++void D3D12Hook::set_depth_stencil_observer(D3D12DepthStencilObserver* observer) {
++    std::scoped_lock activity{m_depth_stencil_activity};
++    m_stock_dsv_cache.attach(m_depth_stencil_observer, observer);
++}
++
++void D3D12Hook::cache_depth_stencil_view(ID3D12Resource* resource,
++    const D3D12_DEPTH_STENCIL_VIEW_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE descriptor) {
++    std::scoped_lock activity{m_depth_stencil_activity};
++    m_stock_dsv_cache.publish(m_depth_stencil_observer, resource, desc, descriptor);
++}
++
+ void WINAPI D3D12Hook::create_render_target_view(
+     ID3D12Device* device,
+     ID3D12Resource* resource,
+@@ -1105,7 +1155,6 @@ void WINAPI D3D12Hook::create_depth_stencil_view(
+     const D3D12_DEPTH_STENCIL_VIEW_DESC* desc,
+     D3D12_CPU_DESCRIPTOR_HANDLE descriptor
+ ) {
+-    (void)desc;
+     auto d3d12 = g_d3d12_hook;
+     const auto slot = device != nullptr ? &(*(void***)device)[CREATE_DEPTH_STENCIL_VIEW_VTABLE_INDEX] : nullptr;
+     auto* hook = d3d12 != nullptr ? d3d12->find_create_depth_stencil_view_hook(slot) : nullptr;
+@@ -1118,9 +1167,7 @@ void WINAPI D3D12Hook::create_depth_stencil_view(
+     render::D3D12Diagnostics::get().register_dsv_descriptor("D3D12Hook::CreateDepthStencilView", resource, descriptor);
+ 
+     if (d3d12 != nullptr) {
+-        if (const auto observer = d3d12->m_depth_stencil_observer.load(std::memory_order_acquire); observer != nullptr) {
+-            observer->on_depth_stencil_view_created(resource, desc, descriptor);
+-        }
++        d3d12->cache_depth_stencil_view(resource, desc, descriptor);
+     }
+ }
+ 
+@@ -1178,6 +1225,7 @@ void WINAPI D3D12Hook::resource_barrier(
+     // resource to DEPTH_WRITE. Nested ResourceBarrier calls made by that copy
+     // bypass observation and continue through the real vtable entry normally.
+     if (original != nullptr && !g_inside_depth_stencil_observer && d3d12 != nullptr) {
++        std::scoped_lock activity{d3d12->m_depth_stencil_activity};
+         if (const auto observer = d3d12->m_depth_stencil_observer.load(std::memory_order_acquire); observer != nullptr) {
+             g_inside_depth_stencil_observer = true;
+             observer->on_resource_barriers(command_list, count, barriers);
+@@ -1187,8 +1235,100 @@ void WINAPI D3D12Hook::resource_barrier(
+ 
+     if (original != nullptr) {
+         original(command_list, count, barriers);
++        if (!g_inside_depth_stencil_observer && d3d12 != nullptr) {
++            std::scoped_lock activity{d3d12->m_depth_stencil_activity};
++            if (auto* observer = d3d12->m_depth_stencil_observer.load(std::memory_order_acquire)) {
++                g_inside_depth_stencil_observer = true;
++                observer->on_post_resource_barriers(command_list, count, barriers);
++                g_inside_depth_stencil_observer = false;
++            }
++        }
++    }
++}
++
++void WINAPI D3D12Hook::execute_command_lists(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* lists) {
++    auto* self = g_d3d12_hook;
++    if (!self) return; // QueueSubmitHook has already called this slot's original.
++    std::scoped_lock activity{self->m_depth_stencil_activity};
++    auto* observer = self->m_depth_stencil_observer.load(std::memory_order_acquire);
++    if (observer) observer->on_command_lists_executed(queue, n, lists);
++    stock_dibr::DepthRetirementHub::submitted(observer, queue, n, lists);
++}
++HRESULT WINAPI D3D12Hook::reset_command_list(ID3D12GraphicsCommandList* list, ID3D12CommandAllocator* allocator, ID3D12PipelineState* pso) {
++    auto* self = g_d3d12_hook;
++    if (!self || list == nullptr) return E_FAIL;
++    const auto slot = &(*(void***)list)[10];
++    const auto found = self->m_stock_reset_hook_lookup.find(reinterpret_cast<uintptr_t>(slot));
++    auto* hook = found != self->m_stock_reset_hook_lookup.end() ? found->second : nullptr;
++    auto original = hook != nullptr ? hook->get_original<decltype(&D3D12Hook::reset_command_list)>() : nullptr;
++    if (original == nullptr) return E_FAIL;
++    const auto result = original(list, allocator, pso);
++    if (SUCCEEDED(result)) {
++        std::scoped_lock activity{self->m_depth_stencil_activity};
++        auto* observer = self->m_depth_stencil_observer.load(std::memory_order_acquire);
++        if (observer) observer->on_command_list_reset(list);
++        stock_dibr::DepthRetirementHub::reset_list(observer, list);
++    }
++    return result;
++}
++void WINAPI D3D12Hook::begin_render_pass(ID3D12GraphicsCommandList4* list, UINT n,
++    const D3D12_RENDER_PASS_RENDER_TARGET_DESC* targets, const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depth, D3D12_RENDER_PASS_FLAGS flags) {
++    auto* self = g_d3d12_hook;
++    if (!self || !self->m_stock_begin_hook) return;
++    {
++        std::scoped_lock activity{self->m_depth_stencil_activity};
++        if (auto* observer = self->m_depth_stencil_observer.load(std::memory_order_acquire))
++            observer->on_render_pass(list, true);
++    }
++    self->m_stock_begin_hook->get_original<decltype(&D3D12Hook::begin_render_pass)>()(list,n,targets,depth,flags);
++    {
++        std::scoped_lock activity{self->m_depth_stencil_activity};
++        if (auto* observer = self->m_depth_stencil_observer.load(std::memory_order_acquire)) {
++            D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
++            if (depth) dsv = depth->cpuDescriptor;
++            observer->on_render_targets(list, n, dsv);
++        }
+     }
+ }
++void WINAPI D3D12Hook::end_render_pass(ID3D12GraphicsCommandList4* list) {
++    auto* self = g_d3d12_hook;
++    if (!self || !self->m_stock_end_hook) return;
++    self->m_stock_end_hook->get_original<decltype(&D3D12Hook::end_render_pass)>()(list);
++    std::scoped_lock activity{self->m_depth_stencil_activity};
++    if (auto* observer = self->m_depth_stencil_observer.load(std::memory_order_acquire)) observer->on_render_pass(list, false);
++}
++
++void WINAPI D3D12Hook::set_render_targets(ID3D12GraphicsCommandList* list, UINT n,
++    const D3D12_CPU_DESCRIPTOR_HANDLE* rtvs, BOOL single_range, const D3D12_CPU_DESCRIPTOR_HANDLE* dsv) {
++    auto* self = g_d3d12_hook;
++    if (!self || list == nullptr) return;
++    const auto slot = &(*(void***)list)[46];
++    const auto found = self->m_stock_render_targets_hook_lookup.find(reinterpret_cast<uintptr_t>(slot));
++    auto* hook = found != self->m_stock_render_targets_hook_lookup.end() ? found->second : nullptr;
++    auto original = hook != nullptr ? hook->get_original<decltype(&D3D12Hook::set_render_targets)>() : nullptr;
++    if (original == nullptr) return;
++    original(list, n, rtvs, single_range, dsv);
++    std::scoped_lock activity{self->m_depth_stencil_activity};
++    if (auto* observer = self->m_depth_stencil_observer.load(std::memory_order_acquire)) {
++        D3D12_CPU_DESCRIPTOR_HANDLE bound_dsv{};
++        if (dsv) bound_dsv = *dsv;
++        observer->on_render_targets(list, n, bound_dsv);
++    }
++}
++
++void WINAPI D3D12Hook::set_viewports(ID3D12GraphicsCommandList* list, UINT n, const D3D12_VIEWPORT* viewports) {
++    auto* self = g_d3d12_hook;
++    if (!self || list == nullptr) return;
++    const auto slot = &(*(void***)list)[21];
++    const auto found = self->m_stock_viewports_hook_lookup.find(reinterpret_cast<uintptr_t>(slot));
++    auto* hook = found != self->m_stock_viewports_hook_lookup.end() ? found->second : nullptr;
++    auto original = hook != nullptr ? hook->get_original<decltype(&D3D12Hook::set_viewports)>() : nullptr;
++    if (original == nullptr) return;
++    original(list, n, viewports);
++    std::scoped_lock activity{self->m_depth_stencil_activity};
++    if (auto* observer = self->m_depth_stencil_observer.load(std::memory_order_acquire))
++        observer->on_viewports(list, n, viewports);
++}
+ 
+ thread_local int32_t g_resize_buffers_depth = 0;
+ 
