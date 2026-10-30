@@ -1,5 +1,5 @@
-name: DuoView CI73 three-method conservative/CI71/CI72 stereo A/B Windows build
-run-name: DuoView CI73 stability first + CI71/CI72 A/B - Windows build (#${{ github.run_number }})
+name: DuoView CI74 RIGHT-depth jitter alignment Windows build
+run-name: DuoView CI74 jitter-aligned owner masks - Windows build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -22,6 +22,7 @@ on:
       - experiment/ci71-left-anchor-edge-stability-20261029
       - experiment/ci72-research-inverse-gather-ab-20261030
       - experiment/ci73-conservative-stereo-quality-20261030
+      - fix/ci74-depth-jitter-alignment-20261030
     paths:
       - ci51/**
       - ci69/**
@@ -29,6 +30,7 @@ on:
       - ci71/**
       - ci72/**
       - ci73/**
+      - ci74/**
       - ci48/payload.b64
       - ci49/payload.b64
       - ci50/upgrade_p1.b64
@@ -474,6 +476,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI72 research target-depth alternative patch failed' }
           python workspace/ci73/apply.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI73 conservative stability source patch failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX workspace/ci74/mask_gpu_tests.cpp /Fe:ci74-mask-gpu.exe /link d3d11.lib d3dcompiler.lib dxgi.lib
+          if ($LASTEXITCODE -ne 0) { throw 'CI74 GPU mask fixture compile failed' }
+          ./ci74-mask-gpu.exe backend/src/mods/vr/DuoViewStereoCompositeRaster.hlsl --expect-regression *> evidence/ci74-mask-before.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci74-mask-before.log
+          if ($code -ne 0) { throw 'CI73 original mask regression not reproduced' }
+          python workspace/ci74/apply.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI74 jitter alignment exact source patch failed' }
+          ./ci74-mask-gpu.exe backend/src/mods/vr/DuoViewStereoCompositeRaster.hlsl *> evidence/ci74-mask-after.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci74-mask-after.log
+          if ($code -ne 0) { throw 'CI74 corrected production mask failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src workspace/ci74/coordinate_tests.cpp /Fe:ci74-coordinates.exe
+          if ($LASTEXITCODE -ne 0) { throw 'CI74 coordinate fixture compile failed' }
+          ./ci74-coordinates.exe *> evidence/ci74-coordinates.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci74-coordinates.log
+          if ($code -ne 0) { throw 'CI74 per-view jitter/crop coordinates failed' }
           python workspace/ci51/embed_shaders.py backend *> evidence/ci51-shader-build.log
           $code=$LASTEXITCODE; Get-Content evidence/ci51-shader-build.log
           if ($code -ne 0) { throw 'CI51 final production shader compile failed' }
@@ -636,8 +653,9 @@ jobs:
           '@ | Set-Content package/VIEW_DLSS_CAPTURE.cmd -Encoding ascii
 
           Copy-Item workspace/ci51/README_TEST_BUILD.md package/READ_FIRST.txt
+          Copy-Item workspace/ci74/README.md package/CI74_JITTER_REPAIR.md
           @'
-          DuoView CI73 — three-way A/B conservative/CI71/research; stability-first experimental
+          DuoView CI74 — targeted RIGHT-depth jitter alignment repair over CI73
           Manual LEFT/RIGHT feature pinning and independent NGX depth-gallery capture. DSV copying disabled for DuoView.
           Not headset-validated; the captured depth still requires matched eye identity.
           Check DLSS source list, capture gallery BMPs, pin two distinct NGX features, then use mode 4 first.
@@ -656,7 +674,8 @@ jobs:
             ngx_fallback='Mono, no DSV candidate substitution'; ngx_observer_default='enabled'; ngx_manual_gallery=$true; ngx_dsv_copy_disabled=$true;
             motion_vectors_captured='optional diagnostic if input compatible'; motion_vectors_used_for_temporal_reconstruction=$false;
             depth_eye_frame_stage_identity_verified=$false; depth_pass_jitter_authenticated=$false;
-            mode='experimental-ci69-ngx-manual-only'; stable_release=$false; ci69_manual_ngx=$true
+            mode='experimental-ci74-right-depth-jitter-alignment'; stable_release=$false; ci69_manual_ngx=$true;
+            ci74_right_owner_mask_jitter_compensated=$true; ci74_target_footprint_centered=$true
           } | ConvertTo-Json | Set-Content package/BUILD_STATUS.json
           # Stage234 manifest predates the final R5/stereo overlays. Hash the
           # actual generated public sources and embedded bytecode as built.
@@ -680,27 +699,27 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'TRUE STEREO XR V1') { throw 'Missing or stale actual stereo headset instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-CI73-Experimental-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-CI74-Experimental-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
           Copy-Item package/final-generated-source-sha256.json evidence/final-public-source/
           Copy-Item workspace/ci51/README_TEST_BUILD.md evidence/final-public-source/
-          $sourceZip="UEVR-DuoView-CI73-Public-Source-${{ github.run_number }}.zip"
+          $sourceZip="UEVR-DuoView-CI74-Public-Source-${{ github.run_number }}.zip"
           Compress-Archive -Path evidence/final-public-source/* -DestinationPath $sourceZip -Force
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI73-Experimental-${{ github.run_number }}
+          name: UEVR-DuoView-CI74-Experimental-${{ github.run_number }}
           path: |
-            UEVR-DuoView-CI73-Experimental-*.zip
-            UEVR-DuoView-CI73-Experimental-*.zip.sha256
+            UEVR-DuoView-CI74-Experimental-*.zip
+            UEVR-DuoView-CI74-Experimental-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI73-Public-Source-${{ github.run_number }}
-          path: UEVR-DuoView-CI73-Public-Source-*.zip
+          name: UEVR-DuoView-CI74-Public-Source-${{ github.run_number }}
+          path: UEVR-DuoView-CI74-Public-Source-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -718,4 +737,5 @@ jobs:
           name: UEVR-v186.1-MPC-HUD-EyeAlignment-Persist49-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
+
 

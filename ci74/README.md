@@ -58,3 +58,15 @@ is solved. Do not disable DLSS jitter or add another global sign toggle to
 hide unknowns. Verify the actual game depth-pass matrix/jitter correspondence
 using a captured frame. Legacy LEFT-depth helper jitter remains outside this
 Mode-5-focused patch. Other CI73 fallback/temporal limitations remain.
+
+## Recorded focused verification (30 October 2026)
+
+GitHub Actions run 41036935417 at commit
+`76b7c4c39b222340c43f7814105b7429c9c2451f` passed.
+The actual CI73 shader produced 72,160 mask mismatches / 663,552 checks
+(6,272 at zero jitter; 65,888 with nonzero jitter). The corrected shader
+produced zero mismatches across the same inputs. These are sample-footprint
+errors in the diagnostic mask test, not a whole-image quality percentage.
+MSVC also passed 38,400 coordinate checks; maximum world-coordinate residual
+was 2.0832e-08 cm under the declared convention. Wrong-sign, omitted-jitter
+and output-dimension controls produced nonzero input-pixel errors.
