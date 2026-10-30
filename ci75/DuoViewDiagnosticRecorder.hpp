@@ -108,14 +108,15 @@ inline bool encode_packed_png(IWICImagingFactory* factory,const Plane& p,std::ve
     result.assign(bytes,bytes+size_t(stat.cbSize.QuadPart));GlobalUnlock(global);return true;
 }
 class Recorder:public std::enable_shared_from_this<Recorder> {
-    const uint64_t id_,start_,arm_ms_,window_ms_;
+    const uint64_t id_,start_,utc_start_,arm_ms_,window_ms_;
     const unsigned max_frames_;
     mutable std::mutex mutex_;
     std::vector<std::shared_ptr<Frame>> frames_;
     std::atomic<unsigned> state_{0}; // 0 armed/capture,1 encode/retire,2 ready,3 failed
     uint64_t reserved_bytes_{},last_packet_{};
     bool window_complete_{},memory_limited_{};
-    unsigned issued_{},rejected_{},encoded_{};
+    unsigned issued_{},rejected_{},encoded_{},parts_{};
+    uint64_t output_bytes_{};
     std::string status_detail_,output_;
     inline static std::atomic<bool> retirement_unproven_{false};
     static void quarantine(const std::shared_ptr<Frame>& f) {
@@ -128,6 +129,8 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
     }
     static bool configure(ID3D12Device* dev,Plane& p) {
         if(!dev||!p.input.resource)return false;
+        ComPtr<ID3D12Device> owner;
+        if(FAILED(p.input.resource->GetDevice(IID_PPV_ARGS(&owner)))||owner.Get()!=dev)return false;
         const auto d=p.input.resource->GetDesc();
         if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||d.SampleDesc.Count!=1||d.MipLevels!=1||
            d.DepthOrArraySize!=1||d.Width>16384||!format_supported(d.Format)||
@@ -181,11 +184,22 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
         cmd->CopyTextureRegion(&dst,0,0,0,&src,&p.box);
         std::swap(b.Transition.StateBefore,b.Transition.StateAfter);cmd->ResourceBarrier(1,&b);
     }
-    std::string manifest(const std::vector<std::string>& frames,unsigned part,unsigned parts,unsigned total,unsigned dropped)const {
+    uint64_t captured_span_ms()const {
+        uint64_t first=UINT64_MAX,last=0;
+        for(const auto& f:frames_)if(f->accepted){first=std::min(first,f->time_ms);last=std::max(last,f->time_ms);}
+        return first!=UINT64_MAX&&last>=first?last-first:0;
+    }
+    bool complete_capture(unsigned total,unsigned dropped)const {
+        const bool planned=window_complete_||issued_>=max_frames_;
+        const bool duration=window_complete_?captured_span_ms()>=window_ms_*3/4:captured_span_ms()>=500;
+        return planned&&duration&&!memory_limited_&&!dropped&&!rejected_&&total>=MinFrames;
+    }
+    std::string manifest(const std::vector<std::string>& frames,unsigned part,unsigned parts,unsigned total,unsigned dropped,unsigned first_frame,unsigned last_frame)const {
         LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);
         std::ostringstream out;out<<"{\"schema\":\"duoview-diagnostic-sequence-2\",\"build_commit\":"<<quote(BuildCommit)
-            <<",\"capture_id\":"<<id_<<",\"session_start_ms\":"<<start_
-            <<",\"part_index\":"<<part<<",\"part_count\":"<<parts<<",\"total_encoded_frames\":"<<total<<",\"max_zip_bytes\":"<<MaxZipBytes
+            <<",\"capture_id\":"<<id_<<",\"session_start_ms\":"<<start_<<",\"capture_start_utc_ms\":"<<utc_start_
+            <<",\"part_index\":"<<part<<",\"part_count\":"<<parts
+            <<",\"first_frame_index\":"<<first_frame<<",\"last_frame_index\":"<<last_frame<<",\"total_encoded_frames\":"<<total<<",\"max_zip_bytes\":"<<MaxZipBytes
             <<",\"max_readback_bytes\":"<<ReadbackBudget<<",\"readback_bytes\":"<<reserved_bytes_
             <<",\"minimum_analyzable_frames\":"<<MinFrames<<",\"encoded_frames\":"<<frames.size()
             <<",\"frames_recorded\":"<<frames_.size()<<",\"rejected_frames\":"<<rejected_
@@ -193,9 +207,10 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
             <<",\"depth_provenance_authenticated\":false,\"native_pixel_crops\":true,\"lossless\":true"
             <<",\"qpc_frequency\":"<<frequency.QuadPart
             <<",\"diagnostic_scope\":\"local ROI temporal/geometry diagnosis; no full-stereo ground truth or SteamVR smoothing capture\""
-            <<",\"capture_complete\":"<<(window_complete_&&!memory_limited_&&!dropped&&!rejected_&&total>=MinFrames?"true":"false")
+            <<",\"capture_complete\":"<<(complete_capture(total,dropped)?"true":"false")
             <<",\"memory_limited\":"<<(memory_limited_?"true":"false")
-            <<",\"requested_window_ms\":"<<window_ms_
+            <<",\"termination\":"<<quote(memory_limited_?"memory_limit":window_complete_?"time_window":"frame_limit")
+            <<",\"requested_max_frames\":"<<max_frames_<<",\"capture_span_ms\":"<<captured_span_ms()<<",\"requested_window_ms\":"<<window_ms_
             <<",\"sufficient_sequence\":"<<(total>=MinFrames?"true":"false")<<",\"frames\":[";
         for(size_t k=0;k<frames.size();++k){if(k)out<<",";out<<frames[k];}
         return out.str()+"]}";
@@ -228,12 +243,12 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
         auto dir=std::filesystem::temp_directory_path()/"UEVR_DuoViewDiagnostics";
         std::filesystem::create_directories(dir);
         const std::string stem="diagnostic_"+std::to_string(GetCurrentProcessId())+"_"+std::to_string(start_)+"_"+std::to_string(id_);
-        struct Encoded {std::vector<Payload> payloads;std::string json;};
+        struct Encoded {std::vector<Payload> payloads;std::string json;unsigned index{};};
         std::vector<Encoded> encoded;
         unsigned dropped=0;
         for(const auto& f:frames_) {
             if(!f->accepted){++dropped;continue;}
-            Encoded data;std::ostringstream entry;
+            Encoded data;data.index=f->capture_index;std::ostringstream entry;
             entry<<"{\"index\":"<<f->capture_index<<",\"packet\":"<<f->packet<<",\"time_ms\":"<<f->time_ms
                 <<",\"qpc\":"<<f->qpc<<",\"metadata\":"<<f->metadata<<",\"planes\":[";
             bool first=true,good=true;
@@ -278,7 +293,7 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
             part_size+=frame_size;
         }
         if(begin<encoded.size())groups.emplace_back(begin,encoded.size());
-        std::vector<std::string> part_names;
+        std::vector<std::string> part_names;uint64_t output_bytes=0;
         for(size_t part=0;part<groups.size();++part) {
             std::ostringstream filename;filename<<stem<<"_part"<<std::setfill('0')<<std::setw(2)<<part+1
                 <<"of"<<std::setw(2)<<groups.size()<<".zip";
@@ -289,10 +304,10 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
                 for(const auto& p:encoded[i].payloads)if(!zip.add(p.name,p.bytes))throw std::runtime_error("ZIP plane write failed");
                 json_frames.push_back(encoded[i].json);
             }
-            const auto json=manifest(json_frames,unsigned(part+1),unsigned(groups.size()),unsigned(encoded.size()),dropped);
+            const auto json=manifest(json_frames,unsigned(part+1),unsigned(groups.size()),unsigned(encoded.size()),dropped,encoded[groups[part].first].index,encoded[groups[part].second-1].index);
             if(!zip.add("manifest.json",std::vector<uint8_t>(json.begin(),json.end()))||!zip.finish()||
                std::filesystem::file_size(partial)>MaxZipBytes)throw std::runtime_error("ZIP part finalization/size failed");
-            std::filesystem::rename(partial,path);part_names.push_back(filename.str());
+            std::filesystem::rename(partial,path);output_bytes+=std::filesystem::file_size(path);part_names.push_back(filename.str());
         }
         if(encoded.empty())throw std::runtime_error("No usable frames: verify live stereo and selected NGX depth pair");
         const auto index=dir/(stem+"_index.json");
@@ -300,22 +315,22 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
             <<",\"session_start_ms\":"<<start_<<",\"total_frames\":"<<encoded.size()<<",\"parts\":[";
         for(size_t i=0;i<part_names.size();++i){if(i)index_out<<",";index_out<<quote(part_names[i]);}
         index_out<<"]}";index_out.close();if(!index_out)throw std::runtime_error("Part index write failed");
-        std::lock_guard lock(mutex_);encoded_=unsigned(encoded.size());output_=index.string();
-        const bool sufficient=encoded_>=MinFrames&&window_complete_&&!memory_limited_&&!dropped&&!rejected_;
+        std::lock_guard lock(mutex_);encoded_=unsigned(encoded.size());parts_=unsigned(part_names.size());output_bytes_=output_bytes;output_=index.string();
+        const bool sufficient=complete_capture(encoded_,dropped);
         status_detail_=sufficient?"READY: upload ALL numbered ZIP parts + index; no size truncation":"INCOMPLETE: usable data saved, inspect dropped frames/duration in manifest";
         state_=sufficient?2u:3u;frames_.clear();reserved_bytes_=0;
 
     }
 public:
     explicit Recorder(uint64_t id,uint64_t arm_ms=3000,unsigned max_frames=MaxFrames,uint64_t window_ms=2000)
-        :id_(id),start_(GetTickCount64()),arm_ms_(arm_ms),window_ms_(window_ms),max_frames_(std::min(max_frames,MaxFrames)){}
+        :id_(id),start_(GetTickCount64()),utc_start_(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count())),arm_ms_(arm_ms),window_ms_(window_ms),max_frames_(std::min(max_frames,MaxFrames)){}
     bool wants_guides()const{return state_.load()==0&&GetTickCount64()-start_<arm_ms_+window_ms_;}
     bool active()const{return state_.load()<=1||retirement_unproven_.load();}
     std::shared_ptr<Frame> stage(ID3D12Device* dev,std::vector<Source> sources,uint64_t packet=0) {
         const auto elapsed=GetTickCount64()-start_;
         if(!dev||state_.load()!=0||retirement_unproven_||elapsed<arm_ms_||elapsed>=arm_ms_+window_ms_)return {};
         {std::lock_guard lock(mutex_);if(issued_>=max_frames_||(packet&&packet==last_packet_))return {};}
-        auto f=std::make_shared<Frame>();f->device=dev;
+        auto f=std::make_shared<Frame>();f->device=dev;uint64_t full_depth_bytes=0;
         for(auto& s:sources) {
             if(s.full&&issued_%16!=0)continue; // complete active depth keyframes
             Plane p;p.input=std::move(s);
@@ -329,11 +344,11 @@ public:
             }
             // Optional full-depth keyframes must not consume memory reserved
             // for the rest of the consecutive core sequence (<=2 MiB/frame).
-            if(p.readback&&p.input.full&&reserved_bytes_+f->readback_bytes+p.capacity+
-                    uint64_t(max_frames_-issued_)*2*1024*1024>ReadbackBudget) {
+            if(p.readback&&p.input.full&&(full_depth_bytes+p.capacity>8ull*1024*1024 || reserved_bytes_+f->readback_bytes+p.capacity+
+                    uint64_t(max_frames_-issued_)*2*1024*1024>ReadbackBudget)) {
                 p.readback.Reset();p.omitted="optional keyframe skipped to reserve complete core sequence";
             }
-            if(p.readback)f->readback_bytes+=p.capacity;
+            if(p.readback){f->readback_bytes+=p.capacity;if(p.input.full)full_depth_bytes+=p.capacity;}
             f->planes.push_back(std::move(p));
         }
         if(FAILED(dev->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&f->fence))))return {};
@@ -389,7 +404,8 @@ public:
     std::string status()const {
         std::lock_guard lock(mutex_);std::ostringstream out;
         out<<"CI75 "<<(state_==0?(GetTickCount64()-start_<arm_ms_?"3s COUNTDOWN":"RECORDING"):state_==1?"ENCODING":state_==2?"READY":"FAILED")
-           <<" frames="<<frames_.size()<<" saved="<<encoded_<<" rejected="<<rejected_;
+           <<" captured="<<issued_<<" saved="<<encoded_<<" rejected="<<rejected_;
+        if(parts_)out<<" ZIPs="<<parts_<<" totalMiB="<<std::fixed<<std::setprecision(1)<<double(output_bytes_)/1048576.;
         if(!status_detail_.empty())out<<" | "<<status_detail_;
         if(!output_.empty())out<<" | "<<output_;return out.str();
     }

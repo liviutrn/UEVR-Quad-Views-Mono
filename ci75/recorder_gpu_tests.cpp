@@ -75,7 +75,7 @@ int main(int argc,char** argv)try {
         s.state=name[0]=='d'?D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE:D3D12_RESOURCE_STATE_RENDER_TARGET;
         if(r)s.active={0,0,256,256};return s;
     };
-    auto recorder=std::make_shared<Recorder>(75001,0,24,2000);
+    auto recorder=std::make_shared<Recorder>(75001,0,24,4000);
     const auto began=GetTickCount64();
     for(unsigned frame=0;frame<24;++frame){
         std::vector<Source> inputs{source("xr_left",nullptr,true),source("xr_right",nullptr,true),
@@ -89,11 +89,11 @@ int main(int argc,char** argv)try {
         gpu.flush();
         recorder->submit(f,gpu.queue.Get(),true,true,frame+1,
             "{\"stereo_recorded\":true,\"fixture\":true,\"mode\":5,\"crop\":[0.25,0.25,0.75,0.75]}");
-        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        std::this_thread::sleep_for(std::chrono::milliseconds(140));
     }
     // Intentionally completed 24 native frames; wall-clock window completion
     // is independent of encoding/splitting and is part of the success gate.
-    while(GetTickCount64()-began<2050)std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    while(GetTickCount64()-began<4050)std::this_thread::sleep_for(std::chrono::milliseconds(20));
     recorder->finish_if_ready();
     const auto wait=GetTickCount64();
     while(recorder->active()&&GetTickCount64()-wait<60000)std::this_thread::sleep_for(std::chrono::milliseconds(50));

@@ -36,3 +36,8 @@ for file in files:
                 checks+=decoded.size
 assert sorted(frames)==list(range(24)),'frames were discarded during splitting'
 print(f'PASS independent ZIP reader: {len(files)} parts, ALL 24 frames retained, {checks} bytes bit-exact including NaN/Inf/subnormal/zero-alpha patterns')
+
+import subprocess
+subprocess.run([sys.executable,str(Path(__file__).with_name('analyze_capture.py')),
+                *map(str,files),'--out',str(root/'analysis')],check=True)
+print('PASS analyzer accepts actual recorder schema and regenerates viewable diagnostics')

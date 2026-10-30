@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 #include <limits>
+#include <cmath>
+#include <sstream>
+#include <iomanip>
 
 namespace uevr::duoview::capture75 {
 constexpr uint64_t MaxZipBytes=20ull*1024ull*1024ull;
@@ -58,6 +61,10 @@ public:
         stream_.flush();const bool good=bool(stream_)&&local_bytes_<=limit_;stream_.close();finished_=true;return good;
     }
 };
+inline std::string number(double value) {
+    if(!std::isfinite(value))return "null";
+    std::ostringstream out;out<<std::setprecision(17)<<value;return out.str();
+}
 inline std::string quote(const std::string& value) {
     std::string out="\"";
     const char* hex="0123456789abcdef";

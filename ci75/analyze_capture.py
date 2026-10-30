@@ -14,6 +14,7 @@ import statistics
 import struct
 import sys
 import zipfile
+import zlib
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -28,6 +29,7 @@ MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_MEMBER_BYTES = 128 * 1024 * 1024
 MAX_PREVIEW_BYTES = 128 * 1024 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+MAX_INDEX_BYTES = 256 * 1024
 MAX_ENTRIES = 4096
 MAX_FRAMES = 512
 MAX_DIMENSION = 16384
@@ -64,6 +66,19 @@ class CaptureError(ValueError):
 
 class UnsupportedFormat(Exception):
     pass
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise CaptureError(f"duplicate JSON object key {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise CaptureError(f"non-standard JSON constant {value!r} is not permitted")
 
 
 def _finite_tree(value: Any, where: str) -> None:
@@ -171,12 +186,15 @@ def _validate_archive(path: str | Path) -> tuple[zipfile.ZipFile, dict[str, Any]
                             raise CaptureError(f"ZIP member expands beyond its actual size budget: {info.filename}")
                         if actual_total > MAX_UNCOMPRESSED_BYTES:
                             raise CaptureError("ZIP expands beyond the uncompressed safety budget")
-            except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
+            except CaptureError:
+                raise
+            except (zipfile.BadZipFile, OSError, RuntimeError, zlib.error, EOFError, NotImplementedError) as exc:
                 raise CaptureError(f"ZIP CRC/decompression check failed for {info.filename!r}: {exc}") from exc
             if actual_member != info.file_size:
                 raise CaptureError(f"ZIP member size does not match its directory entry: {info.filename!r}")
         try:
-            manifest = json.loads(zf.read("manifest.json"))
+            manifest = json.loads(zf.read("manifest.json"), object_pairs_hook=_unique_object,
+                                  parse_constant=_reject_json_constant)
         except (UnicodeDecodeError, json.JSONDecodeError, OSError, RuntimeError) as exc:
             raise CaptureError(f"Could not decode manifest.json: {exc}") from exc
         _validate_manifest(manifest, names)
@@ -194,8 +212,13 @@ def _validate_manifest(manifest: Any, zip_names: set[str]) -> None:
     if (not isinstance(manifest.get("build_commit"), str) or not manifest["build_commit"] or
             len(manifest["build_commit"]) > 256):
         raise CaptureError("manifest.build_commit must be a non-empty string")
-    if "capture_id" in manifest and (not isinstance(manifest["capture_id"], str) or len(manifest["capture_id"]) > 256):
-        raise CaptureError("manifest.capture_id must be a string")
+    if "capture_id" in manifest:
+        capture_id = manifest["capture_id"]
+        if isinstance(capture_id, str):
+            if not capture_id or len(capture_id) > 256:
+                raise CaptureError("manifest.capture_id must be a non-empty short string")
+        elif isinstance(capture_id, bool) or not isinstance(capture_id, int) or abs(capture_id) > 2**63 - 1:
+            raise CaptureError("manifest.capture_id must be a string or signed 64-bit integer")
     if "part_index" in manifest and manifest["part_index"] is not None:
         _integer(manifest["part_index"], "manifest.part_index", 1, 100000)
     if "part_count" in manifest and manifest["part_count"] is not None:
@@ -206,12 +229,21 @@ def _validate_manifest(manifest: Any, zip_names: set[str]) -> None:
     if (manifest.get("total_encoded_frames") is not None and manifest.get("total_recorded_frames") is not None and
             manifest["total_encoded_frames"] != manifest["total_recorded_frames"]):
         raise CaptureError("manifest total frame count fields disagree")
+    for key in ("frames_recorded", "rejected_frames", "dropped_frames", "encoded_frames"):
+        if key in manifest and manifest[key] is not None:
+            _integer(manifest[key], f"manifest.{key}", 0, 2**31 - 1)
+    if "memory_limited" in manifest and not isinstance(manifest["memory_limited"], bool):
+        raise CaptureError("manifest.memory_limited must be boolean")
     for key in ("capture_complete", "complete_capture", "sufficient_sequence", "truncated_by_size"):
         if key in manifest and not isinstance(manifest[key], bool):
             raise CaptureError(f"manifest.{key} must be boolean")
     if ("capture_complete" in manifest and "complete_capture" in manifest and
             manifest["capture_complete"] != manifest["complete_capture"]):
         raise CaptureError("manifest capture-complete flags disagree")
+    if "termination" in manifest and manifest["termination"] not in ("time_window", "frame_limit", "memory_limit"):
+        raise CaptureError("manifest.termination must be time_window, frame_limit, or memory_limit")
+    if "requested_max_frames" in manifest:
+        _integer(manifest["requested_max_frames"], "manifest.requested_max_frames", 1, MAX_FRAMES)
     if "session_start_ms" in manifest:
         start = manifest["session_start_ms"]
         if isinstance(start, bool) or not isinstance(start, (int, float)):
@@ -222,6 +254,19 @@ def _validate_manifest(manifest: Any, zip_names: set[str]) -> None:
             raise CaptureError("manifest.session_start_ms is outside the supported range") from exc
         if not math.isfinite(start) or abs(start) > 1e15:
             raise CaptureError("manifest.session_start_ms is outside the supported range")
+    for key in ("capture_span_ms", "requested_window_ms"):
+        if key in manifest:
+            value = manifest[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise CaptureError(f"manifest.{key} must be finite")
+            try:
+                value = float(value)
+            except OverflowError as exc:
+                raise CaptureError(f"manifest.{key} is outside the supported range") from exc
+            if not math.isfinite(value) or value < 0 or value > 1e15:
+                raise CaptureError(f"manifest.{key} is outside the supported range")
+    if manifest.get("requested_window_ms") == 0:
+        raise CaptureError("manifest.requested_window_ms must be positive")
     frames = manifest.get("frames")
     if not isinstance(frames, list) or not frames:
         raise CaptureError("manifest.frames must contain at least one frame")
@@ -259,6 +304,13 @@ def _validate_manifest(manifest: Any, zip_names: set[str]) -> None:
             raise CaptureError(f"{where}.metadata must be an object")
         _finite_tree(metadata, f"{where}.metadata")
         _validate_typed_metadata(metadata, where)
+        if "omitted" in frame:
+            omitted = frame["omitted"]
+            if not isinstance(omitted, list):
+                raise CaptureError(f"{where}.omitted must be an array")
+            for oi, item in enumerate(omitted):
+                if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not isinstance(item.get("reason"), str):
+                    raise CaptureError(f"{where}.omitted[{oi}] must contain string name and reason")
         planes = frame.get("planes")
         if not isinstance(planes, list) or not planes:
             raise CaptureError(f"{where}.planes must be a non-empty array")
@@ -319,6 +371,8 @@ def _validate_manifest(manifest: Any, zip_names: set[str]) -> None:
         _integer(manifest["last_frame_index"], "manifest.last_frame_index", 0, 2**31 - 1)
         if manifest["last_frame_index"] != max(frame_indices_declared):
             raise CaptureError("manifest.last_frame_index does not match its frames")
+    if manifest.get("encoded_frames") is not None and manifest["encoded_frames"] != len(frames):
+        raise CaptureError("manifest.encoded_frames does not match its frame list")
     # Missing optional references are accepted and explicitly reported later.
 
 
@@ -345,7 +399,9 @@ def _validate_typed_metadata(metadata: dict[str, Any], where: str) -> None:
         if not isinstance(size, list) or len(size) != 2:
             raise CaptureError(f"{gw}.input must be [width,height]")
         for dim in size:
-            _integer(dim, f"{gw}.input", 1, MAX_DIMENSION)
+            _integer(dim, f"{gw}.input", 0, MAX_DIMENSION)
+        if (size[0] == 0) != (size[1] == 0):
+            raise CaptureError(f"{gw}.input must be two positive dimensions or [0,0] when unknown")
         if _numeric_vector(jitter) is None or len(_numeric_vector(jitter) or []) != 2:
             raise CaptureError(f"{gw}.jitter must contain two finite values")
 
@@ -609,7 +665,7 @@ def stationarity_gate(a: dict[str, Any], b: dict[str, Any], plane_a: dict[str, A
             for key in ("input", "motion_scale", "flags", "feature", "evaluation"):
                 if ga.get(key) != gb.get(key):
                     reasons.append(f"guide_{gi}_{key}_changed")
-            if ga.get("reset") is True or gb.get("reset") is True:
+            if _flag_value(ga.get("reset")) or _flag_value(gb.get("reset")):
                 reasons.append(f"guide_{gi}_temporal_reset")
     for key in ("width", "height", "box", "resource_size", "format", "footprint_format"):
         if plane_a.get(key) != plane_b.get(key):
@@ -679,12 +735,18 @@ def _metric_summary(values: list[float]) -> float | None:
     return float(statistics.median(values)) if values else None
 
 
+def _flag_value(value: Any) -> bool:
+    return value is True or (isinstance(value, int) and not isinstance(value, bool) and value != 0)
+
+
 def _guide_series(frames: list[dict[str, Any]]) -> dict[int, list[tuple[int, float, float, tuple[int, int], tuple[Any, ...]]]]:
     series: dict[int, list[tuple[int, float, float, tuple[int, int], tuple[Any, ...]]]] = {}
     for pos, frame in enumerate(frames):
         guides = frame["metadata"].get("guides", [])
         for gi, guide in enumerate(guides):
-            if isinstance(guide, dict) and _numeric_vector(guide.get("jitter")) is not None:
+            if (isinstance(guide, dict) and _numeric_vector(guide.get("jitter")) is not None and
+                    isinstance(guide.get("input"), list) and len(guide["input"]) == 2 and
+                    all(isinstance(v, int) and v > 0 for v in guide["input"])):
                 jx, jy = _numeric_vector(guide["jitter"])
                 settings = tuple(guide.get(k) for k in ("input", "motion_scale", "flags", "feature", "evaluation", "reset"))
                 size = tuple(guide["input"])
@@ -769,19 +831,39 @@ def _save_xr_sequence_gif(zfs: list[zipfile.ZipFile], frames: list[dict[str, Any
     fallback = float(statistics.median(positive)) if positive else 100.0
     source_durations = [(d if d > 0 else fallback) for d in diffs] + [fallback]
     gif_durations = [max(10, min(655350, int(round(d / 10.0) * 10))) for d in source_durations]
-    palette = rgb_frames[0].convert("P", palette=Image.Palette.ADAPTIVE, colors=256)
-    paletted = [palette]
-    paletted.extend(im.quantize(palette=palette, dither=Image.Dither.NONE) for im in rgb_frames[1:])
+    palette_samples = []
+    for im in rgb_frames:
+        flat = np.asarray(im).reshape(-1, 3)
+        stride = max(1, flat.shape[0] // 256)
+        palette_samples.append(flat[::stride][:256])
+    unique_samples = np.unique(np.concatenate(palette_samples, axis=0), axis=0)
+    if unique_samples.shape[0] > 256:
+        selected = np.linspace(0, unique_samples.shape[0] - 1, 256, dtype=np.int64)
+        unique_samples = unique_samples[selected]
+    palette_image = Image.new("P", (1, 1))
+    palette_values = unique_samples.reshape(-1).tolist()
+    palette_image.putpalette(palette_values + [0] * (768 - len(palette_values)))
+    paletted = [im.quantize(palette=palette_image, dither=Image.Dither.NONE) for im in rgb_frames]
     paletted[0].save(out, format="GIF", save_all=True, append_images=paletted[1:],
                      duration=gif_durations, loop=0, disposal=2, optimize=False)
+    encoded_gif = Image.open(out)
+    encoded_durations = []
+    for frame_index in range(encoded_gif.n_frames):
+        encoded_gif.seek(frame_index)
+        encoded_durations.append(int(encoded_gif.info.get("duration", 0)))
+    encoded_gif.close()
     return {
         "file": out.name,
-        "frame_count": len(frames),
+        "source_frame_count": len(frames),
+        "encoded_gif_frame_count": len(encoded_durations),
         "native_side_by_side_size": list(native_size),
+        "layout": ["xr_left", "xr_right"],
         "resized_or_interpolated": False,
+        "identical_quantized_frames_may_be_coalesced": True,
         "palette_quantization": "GIF 256-color preview; inspect raw packed PNG planes for exact values",
         "source_frame_duration_ms": source_durations,
-        "encoded_gif_duration_ms": gif_durations,
+        "requested_gif_duration_ms_per_source_frame": gif_durations,
+        "encoded_gif_durations_ms": encoded_durations,
     }
 
 
@@ -799,7 +881,7 @@ def _capture_completeness(parts: list[dict[str, Any]], frames: list[dict[str, An
     ids = {p.get("capture_id") for p in parts if p.get("capture_id") is not None}
     if len(ids) > 1:
         raise CaptureError("ZIP parts have different capture_id values")
-    part_ids_complete = len(parts) == 1 or (len(ids) == 1 and all(p.get("capture_id") is not None for p in parts))
+    part_ids_complete = len(ids) == 1 and all(p.get("capture_id") is not None for p in parts)
     session_starts = [float(p["session_start_ms"]) for p in parts if p.get("session_start_ms") is not None]
     if session_starts and max(session_starts) - min(session_starts) > 1e-3:
         raise CaptureError("ZIP parts disagree about session_start_ms")
@@ -840,29 +922,63 @@ def _capture_completeness(parts: list[dict[str, Any]], frames: list[dict[str, An
             if len(gaps) < 256:
                 gaps.extend(range(left + 1, min(right, left + 1 + (256 - len(gaps)))))
     declared_total = total_counts[0] if total_counts else None
+    spans = [float(p["capture_span_ms"]) for p in parts if p.get("capture_span_ms") is not None]
+    windows = [float(p["requested_window_ms"]) for p in parts if p.get("requested_window_ms") is not None]
+    terminations = [p["termination"] for p in parts if p.get("termination") is not None]
+    max_frame_limits = [p["requested_max_frames"] for p in parts if p.get("requested_max_frames") is not None]
+    if spans and max(spans) - min(spans) > 1.0:
+        raise CaptureError("ZIP parts disagree about capture_span_ms")
+    if windows and max(windows) - min(windows) > 1e-3:
+        raise CaptureError("ZIP parts disagree about requested_window_ms")
+    if len(set(terminations)) > 1 or len(set(max_frame_limits)) > 1:
+        raise CaptureError("ZIP parts disagree about sequence termination metadata")
+    frame_times = [float(f["time_ms"]) for f in frames]
+    actual_span = max(frame_times, default=0.0) - min(frame_times, default=0.0)
+    declared_span = spans[0] if spans else None
+    requested_window = windows[0] if windows else None
+    termination = terminations[0] if terminations else None
+    requested_max_frames = max_frame_limits[0] if max_frame_limits else None
     terminal_complete = any(p.get("capture_complete", p.get("complete_capture")) is True and
                             (expected_parts is None or p.get("part_index") == expected_parts)
                             for p in parts)
     explicit_partial = any(p.get("capture_complete", p.get("complete_capture")) is False for p in parts)
     truncated = any(p.get("truncated_by_size") is True for p in parts)
+    memory_limited = any(p.get("memory_limited") is True for p in parts)
+    dropped_values = [p["dropped_frames"] for p in parts if "dropped_frames" in p]
+    rejected_values = [p["rejected_frames"] for p in parts if "rejected_frames" in p]
+    if len(set(dropped_values)) > 1 or len(set(rejected_values)) > 1:
+        raise CaptureError("ZIP parts disagree about dropped/rejected frame counters")
+    dropped_count = dropped_values[0] if dropped_values else 0
+    rejected_count = rejected_values[0] if rejected_values else 0
     suff_flags = [p["sufficient_sequence"] for p in parts if "sufficient_sequence" in p]
     sufficient = (all(suff_flags) if suff_flags else (declared_total >= 16 if declared_total is not None else None))
     if declared_total is not None and declared_total < 16:
         sufficient = False
+    completeness_fields_present = (
+        part_ids_complete and all(p.get("capture_id") is not None for p in parts) and len(session_starts) == len(parts) and
+        all(p.get("part_index") is not None for p in parts) and expected_parts is not None and
+        len(total_counts) == len(parts) and len(suff_flags) == len(parts) and
+        len(spans) == len(parts) and len(windows) == len(parts) and
+        len(terminations) == len(parts) and len(max_frame_limits) == len(parts) and
+        all("truncated_by_size" in p for p in parts) and
+        all("rejected_frames" in p and "dropped_frames" in p and "memory_limited" in p for p in parts) and
+        all(p.get("capture_complete", p.get("complete_capture")) is not None for p in parts) and
+        all(p.get("first_frame_index") is not None and p.get("last_frame_index") is not None for p in parts)
+    )
     packet_keys = [(type(f["packet"]).__name__, str(f["packet"])) for f in frames]
     packet_counts: dict[tuple[str, str], int] = {}
     for key in packet_keys:
         packet_counts[key] = packet_counts.get(key, 0) + 1
     duplicate_packets = sorted(key for key, count in packet_counts.items() if count > 1)
-    if not part_ids_complete:
-        status = "unverified"
-        reason = "capture_id_missing_from_one_or_more_parts"
-    elif expected_parts is not None and missing:
+    if expected_parts is not None and missing:
         status = "partial"
         reason = "one_or_more_declared_parts_not_supplied"
     elif truncated:
         status = "partial"
         reason = "manifest_reports_size_truncation"
+    elif memory_limited or dropped_count or rejected_count:
+        status = "partial"
+        reason = "manifest_reports_memory_limit_or_dropped_rejected_frames"
     elif duplicate_packets:
         status = "partial"
         reason = "duplicate_packet_serials"
@@ -872,6 +988,14 @@ def _capture_completeness(parts: list[dict[str, Any]], frames: list[dict[str, An
     elif sufficient is False:
         status = "partial"
         reason = "sequence_below_or_failed_the_16_frame_sufficiency_gate"
+    elif ((termination == "time_window" and requested_window is not None and actual_span < requested_window * 0.75) or
+          (termination == "frame_limit" and actual_span < 500.0) or
+          (termination is None and requested_window is not None and actual_span < requested_window * 0.75)):
+        status = "partial"
+        reason = "captured_frame_span_below_termination_minimum"
+    elif termination == "memory_limit":
+        status = "partial"
+        reason = "capture_terminated_by_memory_limit"
     elif expected_parts is not None and declared_total is not None and len(frames) != declared_total:
         status = "partial"
         reason = "supplied_frame_count_differs_from_declared_total"
@@ -881,7 +1005,8 @@ def _capture_completeness(parts: list[dict[str, Any]], frames: list[dict[str, An
     elif gap_count:
         status = "partial"
         reason = "global_frame_index_gaps"
-    elif expected_parts is not None and declared_total is not None and len(frames) == declared_total and terminal_complete and sufficient is True:
+    elif (expected_parts is not None and declared_total is not None and len(frames) == declared_total and
+          terminal_complete and sufficient is True and completeness_fields_present):
         status = "complete"
         reason = "all_declared_parts_and_frames_present; terminal_manifest_marks_complete"
     elif expected_parts is None and len(parts) == 1 and (parts[0].get("part_index") is None):
@@ -890,6 +1015,9 @@ def _capture_completeness(parts: list[dict[str, Any]], frames: list[dict[str, An
     elif expected_parts is None and terminal_complete and len(parts) == 1:
         status = "completion_flag_set_part_count_unknown"
         reason = "manifest_marks_complete_but_expected_part_count_is_unknown"
+    elif not completeness_fields_present:
+        status = "unverified"
+        reason = "part_completeness_metadata_is_incomplete"
     else:
         status = "unverified"
         reason = "part_or_total_frame_metadata_is_incomplete"
@@ -903,9 +1031,18 @@ def _capture_completeness(parts: list[dict[str, Any]], frames: list[dict[str, An
         "expected_part_count": expected_parts,
         "missing_part_indices": missing,
         "declared_total_encoded_frames": declared_total,
+        "actual_frame_span_ms": actual_span,
+        "declared_capture_span_ms": declared_span,
+        "requested_window_ms": requested_window,
+        "termination": termination,
+        "requested_max_frames": requested_max_frames,
+        "capture_span_metadata_matches_frames": None if declared_span is None else abs(declared_span - actual_span) <= 1.0,
         "sufficient_sequence": sufficient,
         "minimum_sufficient_frames": 16,
         "truncated_by_size": truncated,
+        "memory_limited": memory_limited,
+        "dropped_frames": dropped_count,
+        "rejected_frames": rejected_count,
         "duplicate_packet_serials": [value for _, value in duplicate_packets],
         "supplied_unique_frames": len(frames),
         "global_frame_indices": frame_indices,
@@ -914,7 +1051,78 @@ def _capture_completeness(parts: list[dict[str, Any]], frames: list[dict[str, An
         "frame_index_gaps_truncated": gap_count > 256,
         "terminal_complete_flag_seen": terminal_complete,
         "capture_complete_declared": any(p.get("capture_complete", p.get("complete_capture")) is True for p in parts),
+        "completeness_metadata_verified": completeness_fields_present,
     }
+
+
+def _expand_archive_inputs(inputs: list[str | Path]) -> tuple[list[Path], list[dict[str, Any]], list[str]]:
+    """Resolve safe duoview-sequence-parts-1 indexes to their adjacent ZIPs."""
+    archives: list[Path] = []
+    indices: list[dict[str, Any]] = []
+    input_names = [Path(x).name for x in inputs]
+    for item in inputs:
+        path = Path(item)
+        if path.suffix.lower() != ".json":
+            archives.append(path)
+            continue
+        if not path.is_file() or path.stat().st_size > MAX_INDEX_BYTES:
+            raise CaptureError(f"Index JSON is missing or exceeds {MAX_INDEX_BYTES}-byte limit: {path}")
+        try:
+            index = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object,
+                               parse_constant=_reject_json_constant)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CaptureError(f"Could not read part index {path}: {exc}") from exc
+        if not isinstance(index, dict) or index.get("schema") != "duoview-sequence-parts-1":
+            raise CaptureError(f"Unsupported part index schema in {path}")
+        capture_id = index.get("capture_id")
+        if (isinstance(capture_id, bool) or not isinstance(capture_id, (str, int)) or
+                (isinstance(capture_id, str) and not capture_id) or
+                (isinstance(capture_id, int) and abs(capture_id) > 2**63 - 1)):
+            raise CaptureError("index.capture_id must be a non-empty string or integer")
+        session_start = index.get("session_start_ms")
+        if isinstance(session_start, bool) or not isinstance(session_start, (int, float)):
+            raise CaptureError("index.session_start_ms must be finite")
+        try:
+            session_start = float(session_start)
+        except OverflowError as exc:
+            raise CaptureError("index.session_start_ms is outside the supported range") from exc
+        if not math.isfinite(session_start) or abs(session_start) > 1e15:
+            raise CaptureError("index.session_start_ms is outside the supported range")
+        total = _integer(index.get("total_frames"), "index.total_frames", 0, 2**31 - 1)
+        part_names = index.get("parts")
+        if not isinstance(part_names, list) or not part_names or len(part_names) > 128:
+            raise CaptureError("index.parts must contain between 1 and 128 ZIP paths")
+        base = path.parent.resolve()
+        missing: list[int] = []
+        resolved_parts: list[Path] = []
+        path_map: list[dict[str, Any]] = []
+        for part_index, name in enumerate(part_names, 1):
+            name = _safe_member_name(name, "index.parts entry")
+            if Path(name).suffix.lower() != ".zip":
+                raise CaptureError("index.parts entries must name ZIP files")
+            candidate = path.parent / name
+            if candidate.is_symlink():
+                raise CaptureError("index.parts must not refer to symlinks")
+            resolved = candidate.resolve()
+            try:
+                resolved.relative_to(base)
+            except ValueError as exc:
+                raise CaptureError("index.parts entry resolves outside the index directory") from exc
+            if not resolved.is_file():
+                missing.append(part_index)
+            else:
+                resolved_parts.append(resolved)
+                path_map.append({"path": resolved, "part_index": part_index})
+                archives.append(resolved)
+        indices.append({"capture_id": capture_id, "session_start_ms": session_start,
+                        "total_frames": total, "part_count": len(part_names),
+                        "parts": path_map, "missing_part_indices": missing, "index_path": path.resolve()})
+    normalized = [x.resolve() for x in archives]
+    if len(set(normalized)) != len(normalized):
+        raise CaptureError("The same ZIP part was supplied more than once")
+    if not normalized or len(normalized) > 128:
+        raise CaptureError("Supply between 1 and 128 available ZIP archives")
+    return normalized, indices, input_names
 
 
 def analyze_capture(archives: str | Path | list[str | Path] | tuple[str | Path, ...], out_dir: str | Path) -> dict[str, Any]:
@@ -923,9 +1131,7 @@ def analyze_capture(archives: str | Path | list[str | Path] | tuple[str | Path, 
     out.mkdir(parents=True, exist_ok=True)
     if isinstance(archives, (str, Path)):
         archives = [archives]
-    archives = list(archives)
-    if not archives or len(archives) > 128:
-        raise CaptureError("Supply between 1 and 128 ZIP archives")
+    archives, index_docs, input_names = _expand_archive_inputs(list(archives))
     zfs: list[zipfile.ZipFile] = []
     manifests: list[dict[str, Any]] = []
     aggregate_size = 0
@@ -941,6 +1147,22 @@ def analyze_capture(archives: str | Path | list[str | Path] | tuple[str | Path, 
             aggregate_size += sum(info.file_size for info in zf.infolist())
             if aggregate_size > MAX_UNCOMPRESSED_BYTES:
                 raise CaptureError("Combined ZIP parts exceed the uncompressed safety budget")
+        manifest_by_path = {Path(path).resolve(): manifest for path, manifest in zip(archives, manifests)}
+        for index_doc in index_docs:
+            for ref in index_doc["parts"]:
+                part_manifest = manifest_by_path.get(ref["path"])
+                if part_manifest is None:
+                    continue
+                if part_manifest.get("capture_id") != index_doc["capture_id"]:
+                    raise CaptureError("Part index capture_id does not match its ZIP manifest")
+                if part_manifest.get("part_index") is not None and part_manifest["part_index"] != ref["part_index"]:
+                    raise CaptureError("Part index order does not match a ZIP manifest part_index")
+                if part_manifest.get("part_count") is not None and part_manifest["part_count"] != index_doc["part_count"]:
+                    raise CaptureError("Part index count does not match a ZIP manifest part_count")
+                if part_manifest.get("total_encoded_frames") is not None and part_manifest["total_encoded_frames"] != index_doc["total_frames"]:
+                    raise CaptureError("Part index total_frames does not match a ZIP manifest")
+                if part_manifest.get("session_start_ms") is not None and abs(float(part_manifest["session_start_ms"]) - index_doc["session_start_ms"]) > 1e-3:
+                    raise CaptureError("Part index session_start_ms does not match a ZIP manifest")
         build_commits = {m["build_commit"] for m in manifests}
         if len(build_commits) != 1:
             raise CaptureError("ZIP parts have different build_commit values")
@@ -956,20 +1178,33 @@ def analyze_capture(archives: str | Path | list[str | Path] | tuple[str | Path, 
             raise CaptureError("Duplicate global frame index across ZIP parts")
         frames = sorted(frames, key=lambda f: f["index"])
         completeness = _capture_completeness(manifests, frames)
+        index_missing = sorted({i for doc in index_docs for i in doc["missing_part_indices"]})
+        if index_missing:
+            completeness["index_missing_part_indices"] = index_missing
+            completeness["missing_part_indices"] = sorted(set((completeness.get("missing_part_indices") or []) + index_missing))
+            completeness["expected_part_count"] = max(completeness.get("expected_part_count") or 0,
+                                                       max((doc["part_count"] for doc in index_docs), default=0)) or None
+            completeness["status"] = "partial"
+            completeness["reason"] = "part_index_references_missing_archives"
         manifest = manifests[0]
         plane_names = sorted({p["name"] for f in frames for p in f["planes"]})
         times = [float(f["time_ms"]) for f in frames]
         intervals = [b - a for a, b in zip(times, times[1:])]
         report: dict[str, Any] = {
             "schema": ANALYSIS_SCHEMA,
-            "input": [Path(x).name for x in archives],
+            "input": input_names,
+            "resolved_parts": [Path(x).name for x in archives],
+            "part_indices": [{"index_file": Path(doc["index_path"]).name,
+                              "capture_id": doc["capture_id"], "total_frames": doc["total_frames"],
+                              "listed_part_count": doc["part_count"],
+                              "missing_part_indices": doc["missing_part_indices"]} for doc in index_docs],
             "capture_schema": manifest["schema"],
             "build_commit": manifest["build_commit"],
             "encoded_frames": len(frames),
             "frame_indices": [f["index"] for f in frames],
             "capture_completeness": completeness,
             "frame_telemetry": [{"index": f["index"], "packet": f["packet"], "time_ms": f["time_ms"],
-                                 "metadata": f["metadata"]} for f in frames],
+                                 "metadata": f["metadata"], "omitted_planes": f.get("omitted", [])} for f in frames],
             "stationarity_gate_policy": {
                 "requires": ["stable positions", "stable rotations", "stable left/right projection matrices",
                              "stable crop/gaze/mode when present", "stable per-plane box/resource ROI",
@@ -989,6 +1224,7 @@ def analyze_capture(archives: str | Path | list[str | Path] | tuple[str | Path, 
             "limits": [
                 "Camera telemetry does not prove the scene was static; moving objects can change temporal metrics.",
                 "Temporal jitter correlations are exploratory and do not establish causation or physical accuracy.",
+                "Temporal heatmaps are normalized within each plane and must not be compared as quality scores.",
                 "Source-depth bytes are decoded as stored; depth provenance and eye/frame binding are not independently authenticated here.",
                 "Color comparisons use unregistered code values and do not model display transfer functions or headset reprojection.",
             ],
@@ -1131,6 +1367,7 @@ def analyze_capture(archives: str | Path | list[str | Path] | tuple[str | Path, 
                         "interpretation": "exploratory association only; not causal or a quality metric"})
         report["jitter_exploration"] = {
             "guide_count_max": max(guide_series.keys(), default=-1) + 1,
+            "jitter_units": "per-guide input pixel units as recorded in metadata",
             "guide_correlations": guide_correlations,
         }
         report["artifacts"]["xr_stereo_gif"] = _save_xr_sequence_gif(zfs, frames, out / "xr_stereo_sequence.gif")
@@ -1138,6 +1375,8 @@ def analyze_capture(archives: str | Path | list[str | Path] | tuple[str | Path, 
                             "part_index": m.get("part_index"), "part_count": m.get("part_count"),
                             "total_encoded_frames": m.get("total_encoded_frames", m.get("total_recorded_frames")),
                             "first_frame_index": m.get("first_frame_index"), "last_frame_index": m.get("last_frame_index"),
+                            "capture_span_ms": m.get("capture_span_ms"), "requested_window_ms": m.get("requested_window_ms"),
+                            "termination": m.get("termination"), "requested_max_frames": m.get("requested_max_frames"),
                             "capture_complete": m.get("capture_complete", m.get("complete_capture")),
                             "sufficient_sequence": m.get("sufficient_sequence"),
                             "truncated_by_size": m.get("truncated_by_size")} for m in manifests]

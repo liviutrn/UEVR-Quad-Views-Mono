@@ -1,5 +1,5 @@
-name: DuoView CI74 RIGHT-depth jitter alignment Windows build
-run-name: DuoView CI74 jitter-aligned owner masks - Windows build (#${{ github.run_number }})
+name: DuoView CI75 lossless stereo diagnostic recorder Windows build
+run-name: DuoView CI75 lossless recorder + CI74 jitter fix - Windows build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -23,6 +23,7 @@ on:
       - experiment/ci72-research-inverse-gather-ab-20261030
       - experiment/ci73-conservative-stereo-quality-20261030
       - fix/ci74-depth-jitter-alignment-20261030
+      - experiment/ci75-lossless-diagnostic-recorder-20261030
     paths:
       - ci51/**
       - ci69/**
@@ -31,6 +32,7 @@ on:
       - ci72/**
       - ci73/**
       - ci74/**
+      - ci75/**
       - ci48/payload.b64
       - ci49/payload.b64
       - ci50/upgrade_p1.b64
@@ -491,6 +493,21 @@ jobs:
           ./ci74-coordinates.exe *> evidence/ci74-coordinates.log
           $code=$LASTEXITCODE; Get-Content evidence/ci74-coordinates.log
           if ($code -ne 0) { throw 'CI74 per-view jitter/crop coordinates failed' }
+          python workspace/ci75/apply.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'CI75 recorder exact production integration failed' }
+          python -m pip install numpy pillow
+          if ($LASTEXITCODE -ne 0) { throw 'CI75 independent decoder dependencies failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX /Iworkspace/ci75 workspace/ci75/recorder_gpu_tests.cpp /Fe:ci75-recorder-gpu.exe /link d3d12.lib dxgi.lib windowscodecs.lib ole32.lib uuid.lib
+          if ($LASTEXITCODE -ne 0) { throw 'CI75 recorder fixture compile failed' }
+          ./ci75-recorder-gpu.exe ci75_test_data *> evidence/ci75-recorder-gpu.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci75-recorder-gpu.log
+          if ($code -ne 0) { throw 'CI75 actual GPU recorder failed' }
+          python workspace/ci75/verify_gpu_archive.py ci75_test_data *> evidence/ci75-independent-decoder.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci75-independent-decoder.log
+          if ($code -ne 0) { throw 'CI75 numerical bit preservation or frame retention failed' }
+          python -m unittest discover -s workspace/ci75 -p test_analyzer.py -v *> evidence/ci75-analyzer-tests.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci75-analyzer-tests.log
+          if ($code -ne 0) { throw 'CI75 decoder/analyzer tests failed' }
           python workspace/ci51/embed_shaders.py backend *> evidence/ci51-shader-build.log
           $code=$LASTEXITCODE; Get-Content evidence/ci51-shader-build.log
           if ($code -ne 0) { throw 'CI51 final production shader compile failed' }
@@ -654,8 +671,10 @@ jobs:
 
           Copy-Item workspace/ci51/README_TEST_BUILD.md package/READ_FIRST.txt
           Copy-Item workspace/ci74/README.md package/CI74_JITTER_REPAIR.md
+          Copy-Item workspace/ci75/README.md package/CI75_RECORDER_README.md
+          Copy-Item workspace/ci75/analyze_capture.py package/ANALYZE_CI75_CAPTURE.py
           @'
-          DuoView CI74 — targeted RIGHT-depth jitter alignment repair over CI73
+          DuoView CI75 — lossless stereo/depth recorder with CI74 jitter-aligned owner masks
           Manual LEFT/RIGHT feature pinning and independent NGX depth-gallery capture. DSV copying disabled for DuoView.
           Not headset-validated; the captured depth still requires matched eye identity.
           Check DLSS source list, capture gallery BMPs, pin two distinct NGX features, then use mode 4 first.
@@ -674,12 +693,15 @@ jobs:
             ngx_fallback='Mono, no DSV candidate substitution'; ngx_observer_default='enabled'; ngx_manual_gallery=$true; ngx_dsv_copy_disabled=$true;
             motion_vectors_captured='optional diagnostic if input compatible'; motion_vectors_used_for_temporal_reconstruction=$false;
             depth_eye_frame_stage_identity_verified=$false; depth_pass_jitter_authenticated=$false;
-            mode='experimental-ci74-right-depth-jitter-alignment'; stable_release=$false; ci69_manual_ngx=$true;
-            ci74_right_owner_mask_jitter_compensated=$true; ci74_target_footprint_centered=$true
+            mode='experimental-ci75-lossless-diagnostic-recorder'; stable_release=$false; ci69_manual_ngx=$true;
+            ci74_right_owner_mask_jitter_compensated=$true; ci74_target_footprint_centered=$true;
+            ci75_lossless_sequence_recorder=$true; ci75_sequence_schema='duoview-diagnostic-sequence-2';
+            ci75_upload_part_limit_bytes=20971520; ci75_size_truncation=$false
           } | ConvertTo-Json | Set-Content package/BUILD_STATUS.json
           # Stage234 manifest predates the final R5/stereo overlays. Hash the
           # actual generated public sources and embedded bytecode as built.
           $finalPaths=@('src/mods/VR.cpp','src/mods/VR.hpp','src/mods/vr/D3D12Component.cpp','src/mods/vr/D3D12Component.hpp','src/mods/vr/DuoViewD3D12.hpp','src/mods/vr/DuoViewGeometry.hpp','src/mods/vr/DuoViewState.hpp','src/mods/vr/DuoViewShaderSource.hpp','src/mods/vr/DuoViewStereoCompositeRaster.hlsl','src/mods/vr/d3d12/StockDibrDepth.hpp','src/mods/vr/d3d12/DuoViewDiagnosticDump.hpp','src/mods/vr/d3d12/DIBRTransaction.hpp','src/hooks/D3D12Hook.cpp')
+          $finalPaths+=@('src/mods/vr/d3d12/DuoViewDiagnosticRecorder.hpp','src/mods/vr/d3d12/DuoViewCaptureArchive.hpp')
           $finalPaths+=@('src/mods/vr/SurfaceGeometry.hpp','src/mods/vr/DuoViewSurfaceD3D12.hpp','src/mods/vr/DuoViewSurfaceReproject.hlsl','src/mods/vr/d3d12/CaptureSlotPolicy.hpp')
           $contract=Get-Content workspace/ci51/source_contract.json -Raw | ConvertFrom-Json
           $finalPaths+=@($contract.PSObject.Properties.Name)
@@ -699,27 +721,27 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'TRUE STEREO XR V1') { throw 'Missing or stale actual stereo headset instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-CI74-Experimental-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-CI75-Experimental-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
           Copy-Item package/final-generated-source-sha256.json evidence/final-public-source/
           Copy-Item workspace/ci51/README_TEST_BUILD.md evidence/final-public-source/
-          $sourceZip="UEVR-DuoView-CI74-Public-Source-${{ github.run_number }}.zip"
+          $sourceZip="UEVR-DuoView-CI75-Public-Source-${{ github.run_number }}.zip"
           Compress-Archive -Path evidence/final-public-source/* -DestinationPath $sourceZip -Force
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI74-Experimental-${{ github.run_number }}
+          name: UEVR-DuoView-CI75-Experimental-${{ github.run_number }}
           path: |
-            UEVR-DuoView-CI74-Experimental-*.zip
-            UEVR-DuoView-CI74-Experimental-*.zip.sha256
+            UEVR-DuoView-CI75-Experimental-*.zip
+            UEVR-DuoView-CI75-Experimental-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI74-Public-Source-${{ github.run_number }}
-          path: UEVR-DuoView-CI74-Public-Source-*.zip
+          name: UEVR-DuoView-CI75-Public-Source-${{ github.run_number }}
+          path: UEVR-DuoView-CI75-Public-Source-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance

@@ -48,14 +48,18 @@ def apply(backend):
     }''')
     replace(ui,r'''                    ImGui::Text("Pending capture request: %llu",static_cast<unsigned long long>(m_d3d12.duoview_diagnostic_capture_pending()));''',r'''                    ImGui::Text("Pending capture request: %llu",static_cast<unsigned long long>(m_d3d12.duoview_diagnostic_capture_pending()));
                     ImGui::Separator();
-                    if(ImGui::Button("RECORD 2s lossless stereo + depth (CI75)")) {
+                    if(ImGui::Button("RECORD lossless stereo + depth (2s / 96 frames)")) {
                         const auto id=m_d3d12.request_duoview_sequence_capture();
                         if(id)SPDLOG_INFO("[DuoView][CI75] Armed diagnostic sequence {}",id);
                         else SPDLOG_WARN("[DuoView][CI75] Capture busy or ID6 unavailable");
                     }
                     const auto sequence_status=m_d3d12.duoview_sequence_status();
                     ImGui::TextWrapped("%s",sequence_status.c_str());
-                    ImGui::TextWrapped("3s countdown: close menu and fix gaze on an unstable edge. Records up to 2s of consecutive genuine frames: native eye/source crops, exact selected depths, synthetic coverage and available NGX motion. Lossless PNG data; all frames retained across numbered ZIPs <=20 MiB each. Upload ALL parts + index from TEMP\\UEVR_DuoViewDiagnostics. Capturing adds overhead; input eye/frame identity remains explicitly unverified.");''')
+                    if(ImGui::SmallButton("Copy diagnostic folder")) {
+                        try {const auto folder=(std::filesystem::temp_directory_path()/"UEVR_DuoViewDiagnostics").string();ImGui::SetClipboardText(folder.c_str());}
+                        catch(...){SPDLOG_WARN("[DuoView][CI75] Could not resolve diagnostics folder");}
+                    }
+                    ImGui::TextWrapped("3s countdown: close menu and fix gaze on an unstable edge. Records up to 2s or 96 consecutive genuine frames: native eye/source crops, exact selected depths, synthetic coverage and available NGX motion. Lossless PNG data; all frames retained across numbered ZIPs <=20 MiB each. Upload ALL parts + index from TEMP\\UEVR_DuoViewDiagnostics. Capturing adds overhead; input eye/frame identity remains explicitly unverified.");''')
     # Keep diagnostic NGX color/MV copies alive only for the short session.
     replace(cpp,r'''        if(duoview_interval_owner)
             duoview_interval_owner->finish_frame(m_duo_snapshot_pending.load(std::memory_order_acquire)!=0);''',r'''        std::shared_ptr<uevr::duoview::capture75::Recorder> recorder_retirement;
@@ -145,6 +149,8 @@ def apply(backend):
                                     <<",\"generation\":"<<packet_frame->config.key.generation
                                     <<",\"mode\":"<<effective_stereo_mode<<",\"requested_mode\":"<<stereo_mode
                                     <<",\"strategy\":"<<cap::quote(stereo_quality[3]>=7.5f?"CI73_CONSERVATIVE_CI74_JITTER_FIX":stereo_quality[3]>3.5f?"CI72_RIGHT_GATHER":stereo_quality[3]>1.5f?"CI71_LEFT_MESH":"LEGACY")
+                                    <<",\"world_to_meters\":"<<cap::number(vr->get_world_to_meters())<<",\"world_scale\":"<<cap::number(vr->get_world_scale())
+                                    <<",\"jitter_units\":\"NGX_input_pixels_raw_sign\",\"depth_space\":\"device_Z\""
                                     <<",\"stereo_sign\":"<<stereo_sign<<",\"fovea_view\":"<<packet_frame->config.settings.fovea_view
                                     <<",\"stereo_recorded\":"<<(stereo_recorded?"true":"false")
                                     <<",\"xr_copy_submitted\":"<<(submitted?"true":"false")
@@ -166,7 +172,7 @@ def apply(backend):
                                         <<",\"role\":"<<g.role<<",\"manual\":"<<(g.manual_source?"true":"false")
                                         <<",\"input\":["<<g.input_width<<","<<g.input_height<<"],\"output\":["<<g.output_width<<","<<g.output_height<<"]"
                                         <<",\"depth_base\":["<<g.depth_x<<","<<g.depth_y<<"],\"motion_base\":["<<g.motion_x<<","<<g.motion_y<<"]"
-                                        <<",\"jitter\":["<<g.jitter_x<<","<<g.jitter_y<<"],\"motion_scale\":["<<g.motion_scale_x<<","<<g.motion_scale_y<<"]"
+                                        <<",\"jitter\":["<<cap::number(g.jitter_x)<<","<<cap::number(g.jitter_y)<<"],\"motion_scale\":["<<cap::number(g.motion_scale_x)<<","<<cap::number(g.motion_scale_y)<<"]"
                                         <<",\"flags\":"<<g.flags<<",\"flags_known\":"<<(g.flags_known?"true":"false")
                                         <<",\"reset\":"<<g.reset<<",\"motion_low_resolution\":"<<(g.motion_low_resolution?"true":"false")
                                         <<",\"motion_extent_known\":"<<(g.motion_extent_known?"true":"false")<<"}";

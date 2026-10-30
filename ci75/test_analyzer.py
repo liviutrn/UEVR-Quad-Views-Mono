@@ -189,21 +189,49 @@ class AnalyzerTests(unittest.TestCase):
             paths = {p["file"] for frame in frames_slice for p in frame["planes"]}
             payloads = {name: all_payloads[name] for name in paths}
             path = self.root / f"part-{part_index}.zip"
-            write_archive(path, frames_slice, payloads, capture_id="capture-a", part_index=part_index + 1,
+            write_archive(path, frames_slice, payloads, capture_id=77, part_index=part_index + 1,
                           part_count=2, total_encoded_frames=16, sufficient_sequence=True,
                           session_start_ms=100.0,
+                          capture_span_ms=166.5, requested_window_ms=200.0,
+                          termination="time_window", requested_max_frames=96,
+                          frames_recorded=16, rejected_frames=0, dropped_frames=0, memory_limited=False,
                           first_frame_index=frames_slice[0]["index"], last_frame_index=frames_slice[-1]["index"],
                           capture_complete=(part_index == 1), truncated_by_size=False)
             archives.append(path)
-        report = analyzer.analyze_capture(archives, self.root / "multipart")
+        index_path = self.root / "capture_index.json"
+        index_path.write_text(json.dumps({"schema": "duoview-sequence-parts-1", "capture_id": 77,
+                                          "session_start_ms": 100.0, "total_frames": 16,
+                                          "parts": [p.name for p in archives]}), encoding="utf-8")
+        report = analyzer.analyze_capture(index_path, self.root / "multipart")
         self.assertEqual(report["encoded_frames"], 16)
         self.assertEqual(report["capture_completeness"]["status"], "complete")
         self.assertEqual(report["capture_completeness"]["part_indices"], [1, 2])
         self.assertEqual(report["capture_completeness"]["sufficient_sequence"], True)
-        gif = Image.open(self.root / "multipart" / "xr_stereo_sequence.gif")
-        self.assertEqual(gif.n_frames, 16)
+        with Image.open(self.root / "multipart" / "xr_stereo_sequence.gif") as gif:
+            self.assertEqual(report["artifacts"]["xr_stereo_gif"]["source_frame_count"], 16)
+            self.assertEqual(report["artifacts"]["xr_stereo_gif"]["encoded_gif_frame_count"], gif.n_frames)
+        self.assertEqual(sum(report["artifacts"]["xr_stereo_gif"]["encoded_gif_durations_ms"]),
+                         sum(report["artifacts"]["xr_stereo_gif"]["requested_gif_duration_ms_per_source_frame"]))
         self.assertEqual(report["artifacts"]["xr_stereo_gif"]["resized_or_interpolated"], False)
         self.assertEqual(report["artifacts"]["xr_stereo_gif"]["native_side_by_side_size"], [8, 3])
+
+    def test_frame_limit_capture_can_be_complete_with_shorter_span(self):
+        frames, payloads = build_frames(96)
+        for i, frame in enumerate(frames):
+            frame["time_ms"] = float(i * 8)
+        archive = self.root / "frame-limit.zip"
+        write_archive(archive, frames, payloads, capture_id=101, session_start_ms=500.0,
+                      part_index=1, part_count=1, total_encoded_frames=96,
+                      first_frame_index=0, last_frame_index=95,
+                      capture_span_ms=760.0, requested_window_ms=2000.0,
+                      termination="frame_limit", requested_max_frames=96,
+                      sufficient_sequence=True, capture_complete=True,
+                      truncated_by_size=False, frames_recorded=96,
+                      rejected_frames=0, dropped_frames=0, memory_limited=False)
+        report = analyzer.analyze_capture(archive, self.root / "frame-limit-out")
+        self.assertEqual(report["capture_completeness"]["status"], "complete")
+        self.assertEqual(report["capture_completeness"]["termination"], "frame_limit")
+        self.assertEqual(report["capture_completeness"]["actual_frame_span_ms"], 760.0)
 
     def test_single_split_part_is_marked_partial(self):
         frames, payloads = build_frames(2, start_index=0)
@@ -220,6 +248,7 @@ class AnalyzerTests(unittest.TestCase):
         changed = json.loads(json.dumps(frames[1]))
         changed["metadata"]["positions"][0][0] = 0.02
         changed["metadata"]["crop"]["gaze_rect"] = [1, 0, 5, 3]
+        changed["metadata"]["guides"][0]["reset"] = 1
         plane_a = frames[0]["planes"][0]
         plane_b = json.loads(json.dumps(plane_a))
         plane_b["box"] = [1, 0, 5, 3]
@@ -227,7 +256,19 @@ class AnalyzerTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("camera_position_changed", reasons)
         self.assertIn("crop_changed", reasons)
+        self.assertIn("guide_0_temporal_reset", reasons)
         self.assertIn("plane_box_changed", reasons)
+
+    def test_unknown_guides_are_preserved_without_fake_jitter_analysis(self):
+        frames, payloads = build_frames(2)
+        for frame in frames:
+            frame["metadata"]["guides"][0]["input"] = [0, 0]
+        archive = self.root / "unknown-guide.zip"
+        write_archive(archive, frames, payloads)
+        report = analyzer.analyze_capture(archive, self.root / "unknown-guide-out")
+        self.assertEqual(report["jitter_exploration"]["guide_count_max"], 0)
+        self.assertEqual(report["jitter_exploration"]["guide_correlations"], [])
+        self.assertEqual(report["frame_telemetry"][0]["metadata"]["guides"][0]["input"], [0, 0])
 
     def test_bad_schema_empty_frames_missing_payload_and_zip_budget(self):
         path = self.root / "bad.zip"
