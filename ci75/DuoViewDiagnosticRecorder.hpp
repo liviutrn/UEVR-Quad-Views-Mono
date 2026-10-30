@@ -351,8 +351,11 @@ public:
             if(p.readback){f->readback_bytes+=p.capacity;if(p.input.full)full_depth_bytes+=p.capacity;}
             f->planes.push_back(std::move(p));
         }
-        if(FAILED(dev->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&f->fence))))return {};
+        if(FAILED(dev->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&f->fence)))) {
+            std::lock_guard lock(mutex_);++rejected_;status_detail_="Fence creation failed: capture incomplete";return {};
+        }
         std::lock_guard lock(mutex_);
+        if(state_.load()!=0||issued_>=max_frames_||(packet&&packet==last_packet_))return {};
         if(reserved_bytes_+f->readback_bytes>ReadbackBudget){status_detail_="Readback budget reached: capture incomplete";memory_limited_=true;issued_=max_frames_;return {};}
         f->capture_index=issued_++;f->packet=packet;last_packet_=packet;reserved_bytes_+=f->readback_bytes;return f;
     }
