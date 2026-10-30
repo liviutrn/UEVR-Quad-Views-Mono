@@ -16,4 +16,24 @@ if __name__=="__main__":
  for cmd in (["git","apply","--check","--unsafe-paths","-"],["git","apply","--unsafe-paths","-"]):
   done=subprocess.run(cmd,cwd=root,input=patch,capture_output=True)
   if done.returncode:raise RuntimeError("CI73 patch failed "+done.stderr.decode(errors="replace"))
+ # CI73 exact fixture calibration: protect hands within 80 Unreal cm,
+ # not the 100-cm synthetic plane. Keep true native eye color in the
+ # cropped fovea where target-depth foreground is unambiguously present.
+ # Note: root patch hash is unchanged; the following upgrades are exact.
+ p=root/"src/mods/vr/DuoViewStereoCompositeRaster.hlsl"
+ text=p.read_text()
+ a='if(z>0.f && z<180.f)return true;'
+ b='if(z>0.f && z<80.f)return true;'
+ if text.count(a)!=1:raise RuntimeError("CI73 hand depth calibration anchor drift")
+ text=text.replace(a,b)
+ a='if(chooseFovea)return float4(leftFovea.rgb,1.f);'
+ b='if(chooseFovea)return right?float4(realRight.rgb,1.f):float4(leftFovea.rgb,1.f);'
+ if text.count(a)!=1:raise RuntimeError("CI73 native-eye foreground anchor drift")
+ p.write_text(text.replace(a,b))
+ p=root/"src/mods/vr/DuoViewSurfaceReproject.hlsl"
+ text=p.read_text()
+ a='if(MeshConfig.z==0u && MeshQuality.w>=7.5f && targetZ<180.f)discard;'
+ b='if(MeshConfig.z==0u && MeshQuality.w>=7.5f && targetZ<80.f)discard;'
+ if text.count(a)!=1:raise RuntimeError("CI73 forward model near veto anchor drift")
+ p.write_text(text.replace(a,b))
  print("CI73 applied: optional conservative pixel-owner, mono near-field, no displaced-eye RGB blend; preserved CI71/CI72")
