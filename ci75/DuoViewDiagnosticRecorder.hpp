@@ -140,8 +140,8 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
         if(!active.width||!active.height)active={0,0,UINT(d.Width),d.Height};
         if(uint64_t(active.x)+active.width>d.Width||uint64_t(active.y)+active.height>d.Height||
            !std::isfinite(p.input.u)||!std::isfinite(p.input.v))return false;
-        p.width=p.input.full?active.width:std::min(p.input.extent,active.width);
-        p.height=p.input.full?active.height:std::min(p.input.height_extent?p.input.height_extent:p.input.extent,active.height);
+        p.width=p.input.full?active.width:(std::min)(p.input.extent,active.width);
+        p.height=p.input.full?active.height:(std::min)(p.input.height_extent?p.input.height_extent:p.input.extent,active.height);
         if(!p.width||!p.height)return false;
         const auto origin=[](UINT base,UINT size,UINT extent,float uv) {
             const int64_t center=int64_t(std::floor(std::clamp(uv,0.f,1.f)*float(size)));
@@ -186,7 +186,7 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
     }
     uint64_t captured_span_ms()const {
         uint64_t first=UINT64_MAX,last=0;
-        for(const auto& f:frames_)if(f->accepted){first=std::min(first,f->time_ms);last=std::max(last,f->time_ms);}
+        for(const auto& f:frames_)if(f->accepted){first=(std::min)(first,f->time_ms);last=(std::max)(last,f->time_ms);}
         return first!=UINT64_MAX&&last>=first?last-first:0;
     }
     bool complete_capture(unsigned total,unsigned dropped)const {
@@ -323,7 +323,7 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
     }
 public:
     explicit Recorder(uint64_t id,uint64_t arm_ms=3000,unsigned max_frames=MaxFrames,uint64_t window_ms=2000)
-        :id_(id),start_(GetTickCount64()),utc_start_(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count())),arm_ms_(arm_ms),window_ms_(window_ms),max_frames_(std::min(max_frames,MaxFrames)){}
+        :id_(id),start_(GetTickCount64()),utc_start_(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count())),arm_ms_(arm_ms),window_ms_(window_ms),max_frames_((std::min)(max_frames,MaxFrames)){}
     bool wants_guides()const{return state_.load()==0&&GetTickCount64()-start_<arm_ms_+window_ms_;}
     bool active()const{return state_.load()<=1||retirement_unproven_.load();}
     std::shared_ptr<Frame> stage(ID3D12Device* dev,std::vector<Source> sources,uint64_t packet=0) {
