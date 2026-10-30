@@ -25,7 +25,7 @@ static ComPtr<ID3DBlob> compile(const std::string& text,const char* name,const c
     ComPtr<ID3DBlob> code,errors;
     const auto result=D3DCompile(text.data(),text.size(),name,nullptr,
         D3D_COMPILE_STANDARD_FILE_INCLUDE,entry,target,
-        D3DCOMPILE_ENABLE_STRICTNESS|D3DCOMPILE_WARNINGS_ARE_ERRORS,0,&code,&errors);
+        D3DCOMPILE_ENABLE_STRICTNESS|D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&code,&errors);
     if(FAILED(result)&&errors)std::cerr<<static_cast<const char*>(errors->GetBufferPointer());
     hr(result,"production shader compilation");return code;
 }
