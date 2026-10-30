@@ -488,8 +488,11 @@ void test_target_foreground_veto(SurfaceFixture& fixture) {
     config.mesh_config = {Width + 1u, Height + 1u, 1u, 96u}; // surfel topology, target veto disabled
     const UINT footprint_vertices = Width * Height * 6u;
     const Image unprotected = fixture.render(config, source, target, footprint_vertices);
-    need(color_at(unprotected, 16u, 8u)[2] > 0.98f,
-         "target-depth control did not render the source background");
+    // Native color still contains the independent red stripe. Visibility is
+    // controlled by geometry depth, so assert coverage and the actual D32 Z.
+    need(color_at(unprotected, 16u, 8u)[3] > 0.98f &&
+         std::abs(depth_at(unprotected, 16u, 8u) - 0.001f) < 1.e-6f,
+         "target-depth control did not render the source background geometry");
 
     config.mesh_config[3] = 97u; // enable TargetCertainlyOccludes (bit 1)
     const Image protected_image = fixture.render(config, source, target, footprint_vertices);
