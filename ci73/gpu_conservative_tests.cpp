@@ -154,6 +154,7 @@ void shader_test(ID3D12Device* device){
   auto rb=readback(c,out.Get(),4,D3D12_RESOURCE_STATE_RENDER_TARGET);c.flush();const auto p=packed(rb);
   unsigned red=0,blue=0;
   for(UINT y=9;y<16;++y)for(UINT x=44;x<52;++x){const auto at=(size_t(y)*64+x)*4;red+=p[at+2]>220 && p[at]<30;blue+=p[at]>220 && p[at+2]<30;}
+  std::cout<<"CI73 coverage diagnostics scene="<<scene<<" red="<<red<<" blue="<<blue<<"\\n";
   if(scene==0)need(red>40 && blue==0,"matched dual-depth plane did not reuse LEFT foveal shading");
   else {
    const size_t center=(size_t(12)*64+48)*4;
