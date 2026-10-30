@@ -27,10 +27,8 @@
 //                   shows it in green); any alpha > 0 means "valid colour".
 
 static const float3 kDTLuma = float3(0.2126f, 0.7152f, 0.0722f);
-static const float2 kDTGrid[9] = {
-    float2(-1.f, -1.f), float2(0.f, -1.f), float2(1.f, -1.f),
-    float2(-1.f,  0.f), float2(0.f,  0.f), float2(1.f,  0.f),
-    float2(-1.f,  1.f), float2(0.f,  1.f), float2(1.f,  1.f) };
+// 3x3 neighbourhood offsets, k = 0..8 (no arrays: simpler code for FXC/WARP).
+float2 DTGrid(int k) { return float2(float(k % 3) - 1.f, float(k / 3) - 1.f); }
 
 struct DTCandidate {
     float weight;
@@ -118,22 +116,22 @@ bool DTProject(float2 targetUV, float raw, float2 tR, out float2 local, out floa
 
 // Score one proposal: does the LEFT neighbourhood there, blurred to RIGHT
 // resolution, look like the colour-matched RIGHT neighbourhood (3x3 texels)?
-DTCandidate DTEvaluate(float2 targetUV, float raw, float2 tR, float3 rp[9], float3 rMean, float sigma) {
+DTCandidate DTEvaluate(float2 targetUV, float raw, float2 tR, float3 gain, float3 rMean, float sigma) {
     DTCandidate c;
     c.weight = 0.f; c.color = float3(0.f, 0.f, 0.f); c.local = float2(0.f, 0.f);
     float2 local; float edgeFade;
     if (!DTProject(targetUV, raw, tR, local, edgeFade)) return c;
     const float2 full = CropUv.xy + local * DTCropSize();
-    float3 lp[9];
     float3 lMean = float3(0.f, 0.f, 0.f);
-    [unroll] for (int k = 0; k < 9; ++k) {
-        lp[k] = DTPerceptual(DTLeftLow(full + kDTGrid[k] * tR));
-        lMean += lp[k];
-    }
+    [unroll] for (int k = 0; k < 9; ++k)
+        lMean += DTPerceptual(DTLeftLow(full + DTGrid(k) * tR));
     lMean *= (1.f / 9.f);
     float err = 0.f;
-    [unroll] for (int n = 0; n < 9; ++n)
-        err += dot(abs((lp[n] - lMean) - (rp[n] - rMean)), kDTLuma);
+    [unroll] for (int n = 0; n < 9; ++n) {
+        const float3 l = DTPerceptual(DTLeftLow(full + DTGrid(n) * tR));
+        const float3 r = DTPerceptual(DTRight(targetUV + DTGrid(n) * tR) * gain);
+        err += dot(abs((l - lMean) - (r - rMean)), kDTLuma);
+    }
     // Structure first; the absolute term (after colour matching) rejects a
     // flat surface of a different colour that happens to have no structure.
     err = err * (1.f / 9.f) + .5f * dot(abs(lMean - rMean), kDTLuma);
@@ -203,7 +201,7 @@ BackwardSurfaceOutput PSDetailTransferSurface(VertexOut i) {
         const float2 midFull = CropUv.xy + midLocal * DTCropSize();
         float3 sumL = float3(0.f, 0.f, 0.f), sumR = float3(0.f, 0.f, 0.f);
         [unroll] for (int k = 0; k < 9; ++k) {
-            const float2 o3 = 3.f * kDTGrid[k] * tR;
+            const float2 o3 = 3.f * DTGrid(k) * tR;
             sumL += DTLeftLow(clamp(midFull + o3, CropUv.xy + tR, CropUv.zw - tR));
             sumR += DTRight(targetUV + o3);
         }
@@ -212,26 +210,24 @@ BackwardSurfaceOutput PSDetailTransferSurface(VertexOut i) {
     const float3 base = rightColour * gain;
 
     // Colour-matched RIGHT image around the pixel, 3x3 RIGHT texels.
-    float3 rp[9];
     float3 rMean = float3(0.f, 0.f, 0.f);
-    [unroll] for (int k2 = 0; k2 < 9; ++k2) {
-        rp[k2] = DTPerceptual(DTRight(targetUV + kDTGrid[k2] * tR) * gain);
-        rMean += rp[k2];
-    }
+    [unroll] for (int k2 = 0; k2 < 9; ++k2)
+        rMean += DTPerceptual(DTRight(targetUV + DTGrid(k2) * tR) * gain);
     rMean *= (1.f / 9.f);
     float activity = 0.f;
-    [unroll] for (int k3 = 0; k3 < 9; ++k3) activity += dot(abs(rp[k3] - rMean), kDTLuma);
+    [unroll] for (int k3 = 0; k3 < 9; ++k3)
+        activity += dot(abs(DTPerceptual(DTRight(targetUV + DTGrid(k3) * tR) * gain) - rMean), kDTLuma);
     activity *= (1.f / 9.f);
     const float sigma = .035f + .3f * activity;
 
-    DTCandidate c0 = DTEvaluate(targetUV, rawMid, tR, rp, rMean, sigma);
+    DTCandidate c0 = DTEvaluate(targetUV, rawMid, tR, gain, rMean, sigma);
     DTCandidate c1 = c0; c1.weight = 0.f;
     DTCandidate c2 = c0; c2.weight = 0.f;
     [branch] if (zFar > 0.f && zFar - zNear > DTTolerance(zNear)) {
         if (abs(zMid - zNear) > DTTolerance(zNear))
-            c1 = DTEvaluate(targetUV, rawNear, tR, rp, rMean, sigma);
+            c1 = DTEvaluate(targetUV, rawNear, tR, gain, rMean, sigma);
         if (abs(zFar - zMid) > DTTolerance(zMid))
-            c2 = DTEvaluate(targetUV, rawFar, tR, rp, rMean, sigma);
+            c2 = DTEvaluate(targetUV, rawFar, tR, gain, rMean, sigma);
     }
 
     const float sum = c0.weight + c1.weight + c2.weight;

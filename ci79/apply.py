@@ -42,7 +42,7 @@ float4 RightForLeftFallback(float2 uvL) {
     const float sStep=(1.f/30.f)/11.f;
     float bestS=0.f, farNdc=(ndcL-b)/a, farS=1.e30f;
     bool consistent=false;
-    [unroll] for(int k=0;k<12;++k) {
+    [loop] for(int k=0;k<12;++k) {
         const float s=sStep*float(k);
         const float ndcR=(ndcL-b-c*s)/a;
         if(abs(ndcR)<=1.f) {
@@ -56,7 +56,7 @@ float4 RightForLeftFallback(float2 uvL) {
     if(consistent) {
         // Refine on the chosen surface; stop if a step would jump to another one.
         float s=bestS;
-        [unroll] for(int r=0;r<3;++r) {
+        [loop] for(int r=0;r<3;++r) {
             const float ndcR=(ndcL-b-c*s)/a;
             const float z=RightEyeForwardZ(DeviceRightDepth(float2(saturate(ndcR*.5f+.5f),uvL.y)));
             const float sNew=z>0.f?1.f/z:0.f;
