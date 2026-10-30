@@ -8,8 +8,8 @@ import numpy as np
 from PIL import Image
 
 root=Path(sys.argv[1])
-colors=np.frombuffer((root/'input_color.bin').read_bytes(),dtype=np.uint8).reshape(256,512,4)
-depth=np.frombuffer((root/'input_depth.bin').read_bytes(),dtype=np.uint8).reshape(256,256,4)
+colors=np.frombuffer((root/'input_color.bin').read_bytes(),dtype=np.uint8).reshape(256,1024,4)
+depth=np.frombuffer((root/'input_depth.bin').read_bytes(),dtype=np.uint8).reshape(256,512,4)
 files=sorted(root.glob('diagnostic_*75001_part*.zip'))
 assert len(files)>=2,'actual multi-part recorder path not exercised'
 frames={};checks=0

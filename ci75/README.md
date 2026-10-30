@@ -25,8 +25,9 @@ successive messages if needed; the analysis must report missing parts.
 
 Total size depends on the actual pixels/depth, PNG compressibility and FPS.
 Expect tens of MiB rather than an uncompressed full-resolution multi-GB dump;
-the actual ZIP totals must be measured in game. Native 192-pixel ROIs keep the
-default scope focused on the edge you look at without resizing its pixels.
+the actual ZIP totals must be measured in game. Native 512x192 eye strips cover a wider horizontal disparity range around
+the edge you look at without resizing pixels. Periodic full-source context
+helps diagnose correspondences outside the small per-frame source crops.
 
 ## What is retained
 
@@ -40,12 +41,12 @@ Per frame, when produced by the active path:
 
 | Data | Stored region | Purpose |
 |---|---|---|
-| Final XR LEFT and RIGHT | 192x192 native pixels near gaze-crop centre | Observe edge motion and binocular output |
-| Real LEFT fovea / RIGHT periphery color | 192 / 128 native pixels | Separate source-image changes from reconstruction changes |
-| Selected LEFT / RIGHT raw device depth | 192 / 128 input texels, padded relative to output ROI | Reconstruct rays and inspect depth/edge phase changes |
+| Final XR LEFT and RIGHT | 512x192 native pixels near gaze-crop centre | Observe edge motion and binocular output |
+| Real LEFT fovea / RIGHT periphery color | 512x192 / 256x128 native pixels | Separate source-image changes from reconstruction changes |
+| Selected LEFT / RIGHT raw device depth | 320x192 / 192x128 input texels, padded relative to output ROI | Reconstruct rays and inspect depth/edge phase changes |
 | Synthetic RIGHT fovea / LEFT periphery | 192 / 128 native samples, including alpha | See generated coverage and invalid/synthetic transitions |
 | Selected-evaluation motion vectors | 96x96 raw samples, optional | Diagnose temporal input where layout is known |
-| Full active depth keyframes | Every 16th frame, optional bounded context | Check crop/rect conventions beyond the central ROI |
+| Full active depth keyframes + alternating full source color | Every 16th frame, optional bounded context | Inspect near-edge correspondences beyond the per-frame crops |
 
 All planes preserve their underlying GPU bytes in a **lossless PNG byte
 container**. This preserves 32-bit depth, half floats, packed depth formats,

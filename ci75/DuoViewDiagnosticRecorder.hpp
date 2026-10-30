@@ -39,7 +39,7 @@ struct Source {
     D3D12_RESOURCE_STATES state{D3D12_RESOURCE_STATE_RENDER_TARGET};
     Rect active{};
     float u{.5f},v{.5f};
-    unsigned extent{NativeCrop};
+    unsigned extent{NativeCrop},height_extent{};
     bool required{},full{};
 };
 struct Plane {
@@ -141,7 +141,7 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
         if(uint64_t(active.x)+active.width>d.Width||uint64_t(active.y)+active.height>d.Height||
            !std::isfinite(p.input.u)||!std::isfinite(p.input.v))return false;
         p.width=p.input.full?active.width:std::min(p.input.extent,active.width);
-        p.height=p.input.full?active.height:std::min(p.input.extent,active.height);
+        p.height=p.input.full?active.height:std::min(p.input.height_extent?p.input.height_extent:p.input.extent,active.height);
         if(!p.width||!p.height)return false;
         const auto origin=[](UINT base,UINT size,UINT extent,float uv) {
             const int64_t center=int64_t(std::floor(std::clamp(uv,0.f,1.f)*float(size)));
@@ -162,8 +162,8 @@ class Recorder:public std::enable_shared_from_this<Recorder> {
             if(!configure(dev,p))return false;
             p.capacity=p.footprint.Offset+uint64_t(p.footprint.Footprint.RowPitch)*p.height;
         } else {
-            const uint64_t pitch=(uint64_t(p.input.extent)*8+255)&~uint64_t(255);
-            p.capacity=pitch*p.input.extent;
+            const uint64_t pitch=(uint64_t(p.input.extent)*4+255)&~uint64_t(255);
+            p.capacity=pitch*(p.input.height_extent?p.input.height_extent:p.input.extent);
         }
         if(!p.capacity||p.capacity>16ull*1024*1024)return false;
         D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_READBACK;
@@ -332,7 +332,9 @@ public:
         {std::lock_guard lock(mutex_);if(issued_>=max_frames_||(packet&&packet==last_packet_))return {};}
         auto f=std::make_shared<Frame>();f->device=dev;uint64_t full_depth_bytes=0;
         for(auto& s:sources) {
-            if(s.full&&issued_%16!=0)continue; // complete active depth keyframes
+            if(s.full&&issued_%16!=0)continue; // periodic full-view context
+            if(s.name=="full_source_left"&&issued_%32!=0)continue;
+            if(s.name=="full_source_right"&&issued_%32!=16)continue;
             Plane p;p.input=std::move(s);
             if(!p.input.resource&&p.input.name!="xr_left"&&p.input.name!="xr_right"&&
                p.input.name!="synthetic_right"&&p.input.name!="synthetic_left") {
@@ -343,9 +345,9 @@ public:
                 if(p.input.required){std::lock_guard lock(mutex_);++rejected_;return {};}
             }
             // Optional full-depth keyframes must not consume memory reserved
-            // for the rest of the consecutive core sequence (<=2 MiB/frame).
-            if(p.readback&&p.input.full&&(full_depth_bytes+p.capacity>8ull*1024*1024 || reserved_bytes_+f->readback_bytes+p.capacity+
-                    uint64_t(max_frames_-issued_)*2*1024*1024>ReadbackBudget)) {
+            // for the rest of the consecutive core sequence (<=2.25 MiB/frame).
+            if(p.readback&&p.input.full&&(full_depth_bytes+p.capacity>17ull*1024*1024 || reserved_bytes_+f->readback_bytes+p.capacity+
+                    uint64_t(max_frames_-issued_)*2304*1024>ReadbackBudget)) {
                 p.readback.Reset();p.omitted="optional keyframe skipped to reserve complete core sequence";
             }
             if(p.readback){f->readback_bytes+=p.capacity;if(p.input.full)full_depth_bytes+=p.capacity;}

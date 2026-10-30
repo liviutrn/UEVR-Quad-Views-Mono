@@ -103,17 +103,17 @@ def apply(backend):
                                 std::vector<cap::Source> inputs;
                                 const auto add=[&](const char* name,ID3D12Resource* resource,
                                         D3D12_RESOURCE_STATES state,cap::Rect active,float u,float v,
-                                        unsigned extent,bool required,bool full=false) {
+                                        unsigned extent,bool required,bool full=false,unsigned height_extent=0) {
                                     cap::Source s;s.name=name;s.resource=resource;s.state=state;s.active=active;
-                                    s.u=u;s.v=v;s.extent=extent;s.required=required;s.full=full;inputs.push_back(std::move(s));
+                                    s.u=u;s.v=v;s.extent=extent;s.height_extent=height_extent;s.required=required;s.full=full;inputs.push_back(std::move(s));
                                 };
-                                add("xr_left",nullptr,D3D12_RESOURCE_STATE_RENDER_TARGET,{},gaze_u,gaze_v,192,true);
-                                add("xr_right",nullptr,D3D12_RESOURCE_STATE_RENDER_TARGET,{},gaze_u,gaze_v,192,true);
-                                add("source_left",m_game_tex.texture.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,{0,0,l.fovea.width,l.fovea.height},.5f,.5f,192,true);
-                                add("source_right",m_scene_capture_tex.texture.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,{0,0,l.periphery.width,l.periphery.height},gaze_u,gaze_v,128,true);
+                                add("xr_left",nullptr,D3D12_RESOURCE_STATE_RENDER_TARGET,{},gaze_u,gaze_v,512,true,false,192);
+                                add("xr_right",nullptr,D3D12_RESOURCE_STATE_RENDER_TARGET,{},gaze_u,gaze_v,512,true,false,192);
+                                add("source_left",m_game_tex.texture.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,{0,0,l.fovea.width,l.fovea.height},.5f,.5f,512,true,false,192);
+                                add("source_right",m_scene_capture_tex.texture.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,{0,0,l.periphery.width,l.periphery.height},gaze_u,gaze_v,256,true,false,128);
                                 const auto rect=[](const D3D12_VIEWPORT& v){return cap::Rect{UINT(v.TopLeftX),UINT(v.TopLeftY),UINT(v.Width),UINT(v.Height)};};
-                                add("depth_left",depths.left.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rect(depths.left_viewport),.5f,.5f,192,true);
-                                add("depth_right",depths.right.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rect(depths.right_viewport),gaze_u,gaze_v,128,true);
+                                add("depth_left",depths.left.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rect(depths.left_viewport),.5f,.5f,320,true,false,192);
+                                add("depth_right",depths.right.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rect(depths.right_viewport),gaze_u,gaze_v,192,true,false,128);
                                 add("synthetic_right",nullptr,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,{},.5f,.5f,192,false);
                                 add("synthetic_left",nullptr,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,{},gaze_u,gaze_v,128,false);
                                 for(unsigned eye=0;eye<2;++eye) {
@@ -123,6 +123,8 @@ def apply(backend):
                                     add(eye?"motion_right":"motion_left",g.motion_extent_known?depths.selected_motion[eye].Get():nullptr,
                                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,active,eye?gaze_u:.5f,eye?gaze_v:.5f,96,false);
                                 }
+                                add("full_source_left",m_game_tex.texture.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,{0,0,l.fovea.width,l.fovea.height},.5f,.5f,192,false,true);
+                                add("full_source_right",m_scene_capture_tex.texture.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,{0,0,l.periphery.width,l.periphery.height},gaze_u,gaze_v,128,false,true);
                                 add("full_depth_left",depths.left.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rect(depths.left_viewport),.5f,.5f,192,false,true);
                                 add("full_depth_right",depths.right.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rect(depths.right_viewport),gaze_u,gaze_v,128,false,true);
                                 sequence_frame=sequence->stage(device,std::move(inputs),packet->serial);

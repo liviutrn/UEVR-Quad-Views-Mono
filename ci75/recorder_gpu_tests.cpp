@@ -61,26 +61,27 @@ int main(int argc,char** argv)try {
     if(argc!=2)throw std::runtime_error("usage: recorder_gpu_tests OUTPUT_DIRECTORY");
     const auto evidence=std::filesystem::absolute(argv[1]);std::filesystem::create_directories(evidence);
     GPU gpu;
-    std::mt19937 random(73);std::vector<uint8_t> color(512*256*4);
+    std::mt19937 random(73);std::vector<uint8_t> color(1024*256*4);
     for(auto& b:color)b=uint8_t(random());
-    auto xr=gpu.texture(512,256,DXGI_FORMAT_B8G8R8A8_UNORM,D3D12_RESOURCE_STATE_RENDER_TARGET,color,4);
-    std::vector<uint8_t> depth_bytes(256*256*4);
+    auto xr=gpu.texture(1024,256,DXGI_FORMAT_B8G8R8A8_UNORM,D3D12_RESOURCE_STATE_RENDER_TARGET,color,4);
+    std::vector<uint8_t> depth_bytes(512*256*4);
     const uint32_t special[]{0u,0x3f800000u,0x3dcccccdu,0x7fc12345u,0x7f800000u,0xff800000u,0x80000000u,0xffffffffu,0x000000ffu,0x0000ff00u,0x00000001u};
     for(size_t i=0;i<depth_bytes.size()/4;++i){const auto bits=special[i%std::size(special)];std::memcpy(depth_bytes.data()+i*4,&bits,4);}
     {std::ofstream file(evidence/"input_color.bin",std::ios::binary);file.write(reinterpret_cast<const char*>(color.data()),std::streamsize(color.size()));}
     {std::ofstream file(evidence/"input_depth.bin",std::ios::binary);file.write(reinterpret_cast<const char*>(depth_bytes.data()),std::streamsize(depth_bytes.size()));}
-    auto depth=gpu.texture(256,256,DXGI_FORMAT_R32_FLOAT,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,depth_bytes,4);
+    auto depth=gpu.texture(512,256,DXGI_FORMAT_R32_FLOAT,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,depth_bytes,4);
     const auto source=[&](const char* name,ID3D12Resource* r,bool required,unsigned extent=192){
         Source s;s.name=name;s.resource=r;s.required=required;s.extent=extent;
         s.state=name[0]=='d'?D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE:D3D12_RESOURCE_STATE_RENDER_TARGET;
-        if(r)s.active={0,0,256,256};return s;
+        if(r)s.active={0,0,512,256};return s;
     };
     auto recorder=std::make_shared<Recorder>(75001,0,24,4000);
     const auto began=GetTickCount64();
     for(unsigned frame=0;frame<24;++frame){
-        std::vector<Source> inputs{source("xr_left",nullptr,true),source("xr_right",nullptr,true),
-            source("source_left",xr.Get(),true),source("source_right",xr.Get(),true),
-            source("depth_left",depth.Get(),true),source("depth_right",depth.Get(),true)};
+        std::vector<Source> inputs{source("xr_left",nullptr,true,512),source("xr_right",nullptr,true,512),
+            source("source_left",xr.Get(),true,512),source("source_right",xr.Get(),true,256),
+            source("depth_left",depth.Get(),true,320),source("depth_right",depth.Get(),true,192)};
+        for(auto& s:inputs)s.height_extent=s.name=="source_right"||s.name=="depth_right"?128u:192u;
         // Additional same-format fixture planes force multiple upload parts.
         for(unsigned k=0;k<6;++k)inputs.push_back(source(("fixture_color_"+std::to_string(k)).c_str(),xr.Get(),false));
         auto f=recorder->stage(gpu.device.Get(),std::move(inputs),frame+1);
