@@ -47,5 +47,20 @@ hide failures or call an unfinished build a success.
    `stock_dibr/` for the depth-capture code. `duoview/WORK_LOG.md` and the
    handoff files there are history.
 
+## Usage care (save waste, never quality)
+Liviu's Claude usage is limited. Spend it on thinking: root causes, design,
+reviewing a change before it is built, architecture. Never cut those to save usage.
+Do not waste it on:
+- builds "to see what happens": one build per real hypothesis, after reading the
+  change carefully; no builds for notes or docs;
+- repeated GitHub status checks or long waiting loops: start the build, say so,
+  check once when the result is due;
+- re-reading big files: use the brief, `research/` summaries and targeted searches;
+- asking Liviu to test in VR without a specific question the test will answer.
+Models: Sonnet is the default. Haiku only for mechanical chores (start a build,
+report the error lines). Opus (switched on by Liviu) for big architecture decisions
+and for reviewing risky changes before they reach the headset.
+Start a fresh chat for each new task; hand over with the Project brief.
+
 ## Commit style
 End commits with the attribution lines Claude Code gives for the session.
