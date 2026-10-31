@@ -128,6 +128,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Keybind patch changed proven #205 logic or unrelated rendering code' }
           python workspace/duoview/joey_stage1/apply_v207_auto_fov_after_load.py backend
           if ($LASTEXITCODE -ne 0) { throw 'v207 automatic FOV recovery patch failed its exact anchors' }
+          python workspace/duoview/joey_stage1/apply_e1_shared_render.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'E1 shared-render experiment failed its exact anchors' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling patch contains whitespace errors' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
@@ -263,7 +265,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-${{ github.run_number }}
+          name: UEVR-E1-SharedRender-v207-${{ github.run_number }}
           path: |
             UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-*.zip
             UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-*.zip.sha256
