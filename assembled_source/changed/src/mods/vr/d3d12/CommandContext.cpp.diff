@@ -1,0 +1,477 @@
+diff --git a/src/mods/vr/d3d12/CommandContext.cpp b/src/mods/vr/d3d12/CommandContext.cpp
+index e922186..54420c5 100644
+--- a/src/mods/vr/d3d12/CommandContext.cpp
++++ b/src/mods/vr/d3d12/CommandContext.cpp
+@@ -15,6 +15,18 @@ namespace {
+ constexpr auto FENCE_PROFILER_LOG_INTERVAL = std::chrono::seconds(5);
+ std::atomic_bool g_fence_profiler_enabled{false};
+ 
++bool checked_submission_device_removed(ID3D12Fence* fence) {
++    if (fence == nullptr || fence->GetCompletedValue() == UINT64_MAX) {
++        return fence != nullptr;
++    }
++
++    Microsoft::WRL::ComPtr<ID3D12Device> device{};
++    if (FAILED(fence->GetDevice(IID_PPV_ARGS(&device))) || device == nullptr) {
++        return false;
++    }
++    return FAILED(device->GetDeviceRemovedReason());
++}
++
+ struct FenceTimingStats {
+     uint64_t count{};
+     double total_ms{};
+@@ -208,6 +220,11 @@ bool is_fence_profiler_enabled() {
+ bool CommandContext::setup(const wchar_t* name) {
+     std::scoped_lock _{this->mtx};
+ 
++    if (this->untracked_submission && !this->wait(2000)) {
++        spdlog::error("[VR] Refusing to rebuild command context {} while DIBR work is untracked", utility::narrow(name));
++        return false;
++    }
++
+     if (this->waiting_for_fence && !this->wait(2000)) {
+         spdlog::error("[VR] Refusing to rebuild command context {} while GPU work is still pending", utility::narrow(name));
+         return false;
+@@ -221,6 +238,7 @@ bool CommandContext::setup(const wchar_t* name) {
+     this->cmd_allocator.Reset();
+     this->cmd_list.Reset();
+     this->fence.Reset();
++    this->submission_queue.Reset();
+     if (this->fence_event != nullptr) {
+         CloseHandle(this->fence_event);
+         this->fence_event = nullptr;
+@@ -229,6 +247,9 @@ bool CommandContext::setup(const wchar_t* name) {
+     this->waiting_for_fence = false;
+     this->has_commands = false;
+     this->poisoned = false;
++    this->untracked_submission = false;
++    this->fence_event_armed = false;
++    this->device_removed_after_untracked = false;
+     this->close_failure_count = 0;
+ 
+     if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&this->cmd_allocator)))) {
+@@ -267,12 +288,20 @@ bool CommandContext::setup(const wchar_t* name) {
+ 
+ void CommandContext::reset() {
+     std::scoped_lock _{this->mtx};
+-    this->wait(2000);
++    if ((this->untracked_submission || this->waiting_for_fence) && !this->wait(2000)) {
++        this->quarantine_untracked_objects();
++        return;
++    }
++    if (!this->wait(2000) && (this->untracked_submission || this->waiting_for_fence)) {
++        this->quarantine_untracked_objects();
++        return;
++    }
+     //this->on_post_present(VR::get().get());
+ 
+     this->cmd_allocator.Reset();
+     this->cmd_list.Reset();
+     this->fence.Reset();
++    this->submission_queue.Reset();
+     this->fence_value = 0;
+     if (this->fence_event != nullptr) {
+         CloseHandle(this->fence_event);
+@@ -281,12 +310,41 @@ void CommandContext::reset() {
+     this->waiting_for_fence = false;
+     this->has_commands = false;
+     this->poisoned = false;
++    this->untracked_submission = false;
++    this->fence_event_armed = false;
++    this->device_removed_after_untracked = false;
+     this->close_failure_count = 0;
+ }
+ 
+ bool CommandContext::wait(uint32_t ms) {
+     std::scoped_lock _{this->mtx};
+ 
++    if (this->untracked_submission) {
++        const auto start = GetTickCount64();
++        for (;;) {
++            if (this->try_wait()) {
++                break;
++            }
++            if (!this->untracked_submission) {
++                if (this->device_removed_after_untracked) {
++                    // Device removal ends execution and makes all DIBR references safe to release.
++                    return true;
++                }
++                // A retry signal established a tracked fence. Continue through
++                // the ordinary wait path below until that fence retires.
++                break;
++            }
++            if (ms == 0 || (ms != INFINITE && GetTickCount64() - start >= ms)) {
++                return false;
++            }
++            Sleep(1);
++        }
++    }
++
++    if (this->device_removed_after_untracked) {
++        return true;
++    }
++
+     if (this->poisoned && !this->waiting_for_fence) {
+         const auto name = this->internal_name;
+         return this->setup(name.c_str());
+@@ -296,15 +354,26 @@ bool CommandContext::wait(uint32_t ms) {
+         return this->ready();
+     }
+ 
+-    if (this->fence_event == nullptr || this->fence == nullptr || this->cmd_allocator == nullptr || this->cmd_list == nullptr) {
++    if (this->fence == nullptr || this->cmd_allocator == nullptr || this->cmd_list == nullptr) {
+         this->poisoned = true;
+         return false;
+     }
++    if (this->fence_event == nullptr) {
++        this->fence_event_armed = false;
++    }
+ 
+     DWORD wait_result = WAIT_OBJECT_0;
+     const auto completed_before = this->fence->GetCompletedValue();
+     if (completed_before < this->fence_value) {
+-        if (is_fence_profiler_enabled()) {
++        if (!this->fence_event_armed) {
++            const auto start = GetTickCount64();
++            while (this->fence->GetCompletedValue() < this->fence_value) {
++                if (ms == 0 || (ms != INFINITE && GetTickCount64() - start >= ms)) {
++                    return false;
++                }
++                Sleep(1);
++            }
++        } else if (is_fence_profiler_enabled()) {
+             const auto wait_start = std::chrono::steady_clock::now();
+             wait_result = WaitForSingleObject(this->fence_event, ms);
+             const auto wait_duration = std::chrono::steady_clock::now() - wait_start;
+@@ -326,8 +395,12 @@ bool CommandContext::wait(uint32_t ms) {
+         return false;
+     }
+ 
+-    ResetEvent(this->fence_event);
++    if (this->fence_event != nullptr) {
++        ResetEvent(this->fence_event);
++    }
+     this->waiting_for_fence = false;
++    this->fence_event_armed = false;
++    this->submission_queue.Reset();
+     if (FAILED(this->cmd_allocator->Reset())) {
+         spdlog::error("[VR] Failed to reset command allocator for {}", utility::narrow(this->internal_name));
+         this->poisoned = true;
+@@ -348,6 +421,49 @@ bool CommandContext::wait(uint32_t ms) {
+ bool CommandContext::try_wait() {
+     std::scoped_lock _{this->mtx};
+ 
++    if (this->untracked_submission) {
++        if (checked_submission_device_removed(this->fence.Get())) {
++            this->untracked_submission = false;
++            this->device_removed_after_untracked = true;
++            this->waiting_for_fence = false;
++            this->has_commands = false;
++            this->poisoned = true;
++            return false;
++        }
++
++        if (this->fence == nullptr || this->cmd_allocator == nullptr || this->cmd_list == nullptr) {
++            return false;
++        }
++
++        auto* command_queue = this->submission_queue.Get();
++        if (command_queue == nullptr) {
++            return false;
++        }
++
++        const auto next_fence_value = this->fence_value + 1;
++        const auto retirement_result = dibr_transaction::extend_queue_retirement(
++            [&] { return this->fence_event != nullptr && ResetEvent(this->fence_event) != FALSE; },
++            [&] { return command_queue->Signal(this->fence.Get(), next_fence_value); });
++        if (retirement_result == dibr_transaction::RetirementExtendResult::SubmittedUntracked) {
++            if (checked_submission_device_removed(this->fence.Get())) {
++                this->untracked_submission = false;
++                this->device_removed_after_untracked = true;
++                this->waiting_for_fence = false;
++                this->has_commands = false;
++                this->poisoned = true;
++            }
++            return false;
++        }
++
++        this->fence_value = next_fence_value;
++        this->waiting_for_fence = true;
++        this->has_commands = false;
++        this->poisoned = false;
++        this->untracked_submission = false;
++        this->device_removed_after_untracked = false;
++        this->fence_event_armed = false;
++    }
++
+     if (this->poisoned && !this->waiting_for_fence) {
+         const auto name = this->internal_name;
+         return this->setup(name.c_str());
+@@ -367,6 +483,8 @@ bool CommandContext::try_wait() {
+     }
+ 
+     this->waiting_for_fence = false;
++    this->fence_event_armed = false;
++    this->submission_queue.Reset();
+ 
+     if (FAILED(this->cmd_allocator->Reset())) {
+         spdlog::error("[VR] Failed to reset completed command allocator for {}", utility::narrow(this->internal_name));
+@@ -384,6 +502,47 @@ bool CommandContext::try_wait() {
+     this->poisoned = false;
+     return true;
+ }
++
++bool CommandContext::extend_submission_retirement() {
++    std::scoped_lock _{this->mtx};
++
++    if (this->fence == nullptr || this->submission_queue == nullptr ||
++        (!this->waiting_for_fence && !this->untracked_submission)) {
++        return false;
++    }
++
++    const auto next_fence_value = this->fence_value + 1;
++    HRESULT signal_result{E_FAIL};
++    const auto retirement_result = dibr_transaction::extend_queue_retirement(
++        [&] { return this->fence_event != nullptr && ResetEvent(this->fence_event) != FALSE; },
++        [&] {
++            signal_result = this->submission_queue->Signal(this->fence.Get(), next_fence_value);
++            return signal_result;
++        });
++
++    this->has_commands = false;
++    if (retirement_result == dibr_transaction::RetirementExtendResult::SubmittedUntracked) {
++        this->waiting_for_fence = false;
++        this->fence_event_armed = false;
++        this->untracked_submission = true;
++        this->device_removed_after_untracked = false;
++        this->poisoned = true;
++        spdlog::error(
++            "[VR] DIBR tail retirement signal failed; retaining resources until a later queue fence succeeds. ({}, hr=0x{:08x})",
++            utility::narrow(this->internal_name),
++            static_cast<uint32_t>(signal_result));
++        return false;
++    }
++
++    this->fence_value = next_fence_value;
++    this->waiting_for_fence = true;
++    this->fence_event_armed = false;
++    this->untracked_submission = false;
++    this->device_removed_after_untracked = false;
++    this->poisoned = false;
++    return true;
++}
++
+ void CommandContext::copy(ID3D12Resource* src, ID3D12Resource* dst, D3D12_RESOURCE_STATES src_state, D3D12_RESOURCE_STATES dst_state) {
+     std::scoped_lock _{this->mtx};
+ 
+@@ -656,6 +815,18 @@ void CommandContext::clear_rtv(d3d12::TextureContext& tex, const float* color, D
+ 
+ bool CommandContext::references_retired() {
+     std::scoped_lock _{this->mtx};
++    if (this->device_removed_after_untracked) {
++        return true;
++    }
++    if (this->untracked_submission) {
++        return checked_submission_device_removed(this->fence.Get());
++    }
++    // An idle or merely recorded command list has never been handed to a
++    // queue. In particular, an uninitialized context is safe to destroy even
++    // though wait() returns false for it because it is not ready.
++    if (!this->waiting_for_fence) {
++        return true;
++    }
+     return utility::gpu::references_retired(this->has_commands, this->waiting_for_fence,
+         this->poisoned, this->fence != nullptr, this->fence_value,
+         [&] { return this->fence->GetCompletedValue(); });
+@@ -689,6 +860,7 @@ void CommandContext::execute() {
+         auto command_queue = g_framework->get_d3d12_hook()->get_command_queue();
+         if (command_queue == nullptr) {
+             this->poisoned = true;
++            this->has_commands = false;
+             spdlog::error("[VR] Cannot execute command list without a command queue. ({})", utility::narrow(this->internal_name));
+             return;
+         }
+@@ -699,10 +871,15 @@ void CommandContext::execute() {
+             ? std::chrono::steady_clock::now()
+             : std::chrono::steady_clock::time_point{};
+         command_queue->ExecuteCommandLists(1, cmd_lists);
++        this->submission_queue = command_queue;
+         const auto next_fence_value = this->fence_value + 1;
+         const auto signal_result = command_queue->Signal(this->fence.Get(), next_fence_value);
+         if (FAILED(signal_result)) {
+             this->poisoned = true;
++            this->has_commands = false;
++            this->untracked_submission = true;
++            this->waiting_for_fence = false;
++            this->fence_event_armed = false;
+             spdlog::error(
+                 "[VR] Failed to signal command fence. ({} hr=0x{:08x})",
+                 utility::narrow(this->internal_name),
+@@ -713,7 +890,13 @@ void CommandContext::execute() {
+         this->fence_value = next_fence_value;
+         const auto event_result = this->fence->SetEventOnCompletion(this->fence_value, this->fence_event);
+         if (FAILED(event_result)) {
+-            this->poisoned = true;
++            // The signal itself succeeded, so this is tracked work. Keep the
++            // original queue and poll the fence instead of treating the
++            // submitted list as idle or untracked.
++            this->waiting_for_fence = true;
++            this->fence_event_armed = false;
++            this->has_commands = false;
++            this->poisoned = false;
+             spdlog::error(
+                 "[VR] Failed to arm command fence event. ({} hr=0x{:08x})",
+                 utility::narrow(this->internal_name),
+@@ -729,7 +912,151 @@ void CommandContext::execute() {
+             );
+         }
+         this->waiting_for_fence = true;
++        this->fence_event_armed = true;
++        this->has_commands = false;
++    }
++}
++
++bool CommandContext::discard_recording() {
++    std::scoped_lock _{this->mtx};
++    if (this->waiting_for_fence || this->untracked_submission || this->poisoned ||
++        this->cmd_allocator == nullptr || this->cmd_list == nullptr) {
++        return false;
++    }
++
++    const auto context_name = this->internal_name;
++    const auto discarded = dibr_transaction::discard_open_recording(
++        [&] { return this->cmd_list->Close(); },
++        [&] { return this->cmd_allocator->Reset(); },
++        [&] { return this->cmd_list->Reset(this->cmd_allocator.Get(), nullptr); },
++        [&] {
++            this->has_commands = false;
++            this->poisoned = true;
++            return this->setup(context_name.c_str());
++        });
++    if (!discarded) {
+         this->has_commands = false;
++        this->poisoned = true;
++        return false;
++    }
++    this->has_commands = false;
++    this->fence_event_armed = false;
++    return true;
++}
++
++dibr_transaction::ExecuteResult CommandContext::execute_checked() {
++    std::scoped_lock _{this->mtx};
++
++    if (this->poisoned || !this->ready()) {
++        return dibr_transaction::ExecuteResult::NotSubmitted;
++    }
++    if (!this->has_commands) {
++        return dibr_transaction::ExecuteResult::NoWork;
+     }
++
++    auto* hook = g_framework != nullptr ? g_framework->get_d3d12_hook().get() : nullptr;
++    auto command_queue = hook != nullptr ? hook->get_command_queue() : nullptr;
++    if (command_queue == nullptr) {
++        this->has_commands = false;
++        this->poisoned = true;
++        spdlog::error("[VR] Cannot execute checked DIBR list without a command queue. ({})", utility::narrow(this->internal_name));
++        const auto context_name = this->internal_name;
++        if (!this->setup(context_name.c_str())) {
++            this->poisoned = true;
++        }
++        return dibr_transaction::ExecuteResult::NotSubmitted;
++    }
++
++    const auto next_fence_value = this->fence_value + 1;
++    HRESULT close_result{E_FAIL};
++    HRESULT signal_result{E_FAIL};
++    HRESULT event_result{E_FAIL};
++    ID3D12CommandList* const cmd_lists[] = {this->cmd_list.Get()};
++    const auto profile_fence = is_fence_profiler_enabled();
++    const auto execute_start = profile_fence
++        ? std::chrono::steady_clock::now()
++        : std::chrono::steady_clock::time_point{};
++
++    const auto result = dibr_transaction::submit_recorded_commands(
++        [&] {
++            close_result = this->cmd_list->Close();
++            return close_result;
++        },
++        [&] { command_queue->ExecuteCommandLists(1, cmd_lists); },
++        [&] {
++            signal_result = command_queue->Signal(this->fence.Get(), next_fence_value);
++            return signal_result;
++        },
++        [&] {
++            event_result = this->fence->SetEventOnCompletion(next_fence_value, this->fence_event);
++            return event_result;
++        });
++
++    if (result == dibr_transaction::ExecuteResult::NotSubmitted) {
++        this->has_commands = false;
++        this->poisoned = true;
++        const auto failure_count = ++this->close_failure_count;
++        if (failure_count == 1 || failure_count % 120 == 0) {
++            spdlog::error(
++                "[VR] Failed to close checked DIBR command list. ({} hr=0x{:08x}, consecutive={})",
++                utility::narrow(this->internal_name),
++                static_cast<uint32_t>(close_result),
++                failure_count);
++        }
++        // Close failed before ExecuteCommandLists. Nothing reached the queue,
++        // so rebuilding the idle context drops the incomplete list and every
++        // resource reference held by that partial recording.
++        const auto context_name = this->internal_name;
++        if (!this->setup(context_name.c_str())) {
++            this->poisoned = true;
++        }
++        return result;
++    }
++
++    this->close_failure_count = 0;
++    this->has_commands = false;
++    this->submission_queue = command_queue;
++    if (result == dibr_transaction::ExecuteResult::SubmittedUntracked) {
++        this->waiting_for_fence = false;
++        this->fence_event_armed = false;
++        this->untracked_submission = true;
++        this->device_removed_after_untracked = false;
++        this->poisoned = true;
++        spdlog::error(
++            "[VR] Checked DIBR submission is in flight without a retirement fence. ({}, hr=0x{:08x}); retaining its resources",
++            utility::narrow(this->internal_name),
++            static_cast<uint32_t>(signal_result));
++        return result;
++    }
++
++    this->fence_value = next_fence_value;
++    this->waiting_for_fence = true;
++    this->poisoned = false;
++    this->fence_event_armed = result == dibr_transaction::ExecuteResult::SubmittedTracked;
++    if (result == dibr_transaction::ExecuteResult::SubmittedTrackedNeedsPolling) {
++        spdlog::error(
++            "[VR] Checked DIBR fence event could not be armed; polling its signaled fence for retirement. ({}, hr=0x{:08x})",
++            utility::narrow(this->internal_name),
++            static_cast<uint32_t>(event_result));
++    }
++    if (profile_fence) {
++        record_fence_execute_signal(
++            std::chrono::steady_clock::now() - execute_start,
++            this->fence_value,
++            this->fence->GetCompletedValue(),
++            this->internal_name);
++    }
++    return result;
++}
++
++void CommandContext::quarantine_untracked_objects() {
++    if (!this->untracked_submission && !this->waiting_for_fence) {
++        return;
++    }
++
++    dibr_transaction::retain_untracked_com_object(this->cmd_allocator.Get());
++    dibr_transaction::retain_untracked_com_object(this->cmd_list.Get());
++    dibr_transaction::retain_untracked_com_object(this->fence.Get());
++    dibr_transaction::retain_untracked_com_object(this->submission_queue.Get());
+ }
+ }

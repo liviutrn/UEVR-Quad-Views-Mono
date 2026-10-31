@@ -1,0 +1,66 @@
+diff --git a/src/mods/vr/d3d12/DIBRPreview.hpp b/src/mods/vr/d3d12/DIBRPreview.hpp
+index db05ce4..c0d4478 100644
+--- a/src/mods/vr/d3d12/DIBRPreview.hpp
++++ b/src/mods/vr/d3d12/DIBRPreview.hpp
+@@ -12,6 +12,7 @@
+ 
+ #include "TextureContext.hpp"
+ #include <hooks/D3D12Hook.hpp>
++#include "DIBRTransaction.hpp"
+ 
+ namespace d3d12 {
+ // A deliberately small, fail-closed DIBR path. It is kept separate from the
+@@ -21,6 +22,7 @@ public:
+     DIBRPreview() = default;
+ 
+     struct Parameters {
++        std::array<float, 4> depth_uv_scale_bias{};
+         float disparity_pixels{18.0f};
+         bool reversed_depth{true};
+         // When the runtime projections and eye baseline are valid, this maps
+@@ -67,9 +69,15 @@ public:
+         ID3D12Resource* depth,
+         D3D12_RESOURCE_STATES depth_state,
+         ID3D12Resource* ui_alpha,
+-        Parameters parameters);
++        Parameters parameters,
++        bool presentation_prepared);
+ 
+     void reset();
++    void commit_recording() { m_output_write_state.commit(); }
++    void abort_recording() { m_output_write_state.abort(); }
++    void note_submission_started() { m_gpu_submission_pending = true; }
++    void note_submission_retired() { m_gpu_submission_pending = false; }
++    void quarantine_resources();
+ 
+     bool ready() const { return m_status.load(std::memory_order_acquire) == Status::Ready; }
+     bool failed() const { return m_status.load(std::memory_order_acquire) == Status::Failed; }
+@@ -136,7 +144,9 @@ private:
+         uint32_t enable_ui_footprint_reprojection{};
+         uint32_t show_ui_footprint_reprojection_mask{};
+         float ui_footprint_reprojection_strength{0.25f};
+-        float padding[21]{};
++        float depth_rect_alignment{};
++        float depth_uv_scale_bias[4]{};
++        float padding[16]{};
+     };
+     static_assert(sizeof(Constants) == 256, "DIBR constants must remain one CBV-aligned block");
+ 
+@@ -147,7 +157,7 @@ private:
+         ID3D12GraphicsCommandList* command_list,
+         ID3D12Resource* color,
+         D3D12_RESOURCE_STATES color_state);
+-    bool validate_inputs(ID3D12Resource* color, ID3D12Resource* depth, std::string& reason) const;
++    bool validate_inputs(ID3D12Resource* color, ID3D12Resource* depth, const Parameters& parameters, std::string& reason) const;
+     bool create_descriptors(ID3D12Device* device, ID3D12Resource* depth, ID3D12Resource* ui_alpha);
+     bool capture_depth_before_restore_locked(
+         ID3D12GraphicsCommandList* command_list,
+@@ -217,6 +227,7 @@ private:
+     uint32_t m_output_height{};
+     DXGI_FORMAT m_output_format{DXGI_FORMAT_UNKNOWN};
+     uint32_t m_descriptor_increment{};
+-    bool m_output_has_been_written{};
++    d3d12::dibr_transaction::OutputWriteState m_output_write_state{};
++    bool m_gpu_submission_pending{};
+ };
+ } // namespace d3d12

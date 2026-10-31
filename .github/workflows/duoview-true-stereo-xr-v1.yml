@@ -1,5 +1,5 @@
-name: DuoView CI80 temporal history and classic DIBR Windows build
-run-name: DuoView CI80 submitted-frame history + classic DIBR - Windows build (#${{ github.run_number }})
+name: DuoView CI81 CI80 base with CI79 RIGHT eye fix Windows build
+run-name: DuoView CI81 (CI80 + CI79 RIGHT eye) - Windows build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -27,6 +27,7 @@ on:
       - experiment/ci76-capture-guided-stability-20261030
       - experiment/ci77-stabilized-depth-left-geometry-20261030
       - experiment/ci80-temporal-history-classic-dibr-20261031
+      - claude/**
     paths:
       - ci51/**
       - ci69/**
@@ -38,6 +39,7 @@ on:
       - ci75/**
       - ci76/**
       - ci77/**
+      - ci79/**
       - ci48/payload.b64
       - ci49/payload.b64
       - ci50/upgrade_p1.b64
@@ -485,6 +487,8 @@ jobs:
       - name: Apply CI51 final public source and validate actual NGX snapshot and shader paths
         shell: pwsh
         run: |
+          function Show-Tail($f){ if (Test-Path $f) { $t=(Get-Content $f -Tail 30) -join '%0A'; Write-Host "::error::LOG TAIL [$f]%0A$t" } }
+          trap { Write-Host "::error::BUILD-STEP-FAILED: $($_.Exception.Message)"; $l=Get-ChildItem evidence -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($l) { Show-Tail $l.FullName }; exit 1 }
           python workspace/ci51/test_source_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'CI51 line-ending and tamper contract regression' }
           python workspace/ci51/apply.py backend
@@ -556,7 +560,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI76 GPU fixture recovery adaptation failed' }
           python workspace/ci77/apply.py backend
           if ($LASTEXITCODE -ne 0) { throw 'CI77 stabilized-depth production integration failed' }
-          python workspace/ci77/embed_shaders.py backend *> evidence/ci51-shader-build.log
+          python workspace/ci79/apply.py backend *> evidence/ci79-apply.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci79-apply.log
+          if ($code -ne 0) { throw 'CI79 RIGHT fovea / LEFT outer view integration failed' }
+          python workspace/ci79/embed_shaders.py backend *> evidence/ci51-shader-build.log
           $code=$LASTEXITCODE; Get-Content evidence/ci51-shader-build.log
           if ($code -ne 0) { throw 'CI51 final production shader compile failed' }
           cl /nologo /std:c++20 /EHsc /W4 /WX /Ibackend/src/mods/vr workspace/ci77/depth_gpu_tests.cpp /Fe:ci77-depth-gpu.exe /link d3d11.lib d3dcompiler.lib dxgi.lib
@@ -754,9 +761,10 @@ jobs:
           Copy-Item workspace/ci76/README.md package/CI76_STABILITY_CHANGES.md
           Copy-Item workspace/ci77/README.md package/CI77_DEPTH_STABILIZATION.md
           Copy-Item workspace/ci77/ASTRA_REVIEW.md package/CI77b_ASTRA_REVIEW.md
+          Copy-Item workspace/ci79/README.md package/CI79_README.md
           Copy-Item workspace/ci77/analyze_capture.py package/ANALYZE_CI75_CAPTURE.py
           @'
-          DuoView CI77 — stabilized depth before reconstruction; high-resolution LEFT geometry
+          DuoView CI79 on CI77b — RIGHT eye centre from the LEFT camera with smooth weights; LEFT outer view at the correct position
           Manual LEFT/RIGHT feature pinning and independent NGX depth-gallery capture. DSV copying disabled for DuoView.
           Not headset-validated; the captured depth still requires matched eye identity.
           Check DLSS source list, capture gallery BMPs, pin two distinct NGX features, then use mode 4 first.
@@ -775,7 +783,7 @@ jobs:
             ngx_fallback='Mono, no DSV candidate substitution'; ngx_observer_default='enabled'; ngx_manual_gallery=$true; ngx_dsv_copy_disabled=$true;
             motion_vectors_captured='optional diagnostic if input compatible'; motion_vectors_used_for_temporal_reconstruction=$false;
             depth_eye_frame_stage_identity_verified=$false; depth_pass_jitter_authenticated=$false;
-            mode='experimental-ci80-submitted-frame-history-classic-dibr'; ci80_submitted_history=$true; ci80_measured_history_counters=$true; ci80_classic_dibr=$true; ci77_depth_phase_correction=$true; ci77_camera_reprojected_depth_history=$true; ci77_left_geometry_primary=$true; ci77b_pixel_footprints_configurable=$true; ci77_processed_depth_preview=$true; ci76_exclusive_owners=$true; ci76_same_feature_resize=$true; ci76_pair_recovery=8; ci76_mpc_readback=$true; stable_release=$false; ci69_manual_ngx=$true;
+            mode='experimental-ci81-ci80-plus-ci79-right-eye-fix'; ci79_right_fovea_default=$true; ci79_left_edge_fix_default=$false; ci80_submitted_history=$true; ci80_measured_history_counters=$true; ci80_classic_dibr=$true; ci77_depth_phase_correction=$true; ci77_camera_reprojected_depth_history=$true; ci77_left_geometry_primary=$true; ci77b_pixel_footprints_configurable=$true; ci77_processed_depth_preview=$true; ci76_exclusive_owners=$true; ci76_same_feature_resize=$true; ci76_pair_recovery=8; ci76_mpc_readback=$true; stable_release=$false; ci69_manual_ngx=$true;
             ci74_right_owner_mask_jitter_compensated=$true; ci74_target_footprint_centered=$true;
             ci75_lossless_sequence_recorder=$true; ci75_sequence_schema='duoview-diagnostic-sequence-2';
             ci75_upload_part_limit_bytes=20971520; ci75_size_truncation=$false
@@ -787,7 +795,7 @@ jobs:
           $finalPaths+=@('src/mods/vr/SurfaceGeometry.hpp','src/mods/vr/DuoViewSurfaceD3D12.hpp','src/mods/vr/DuoViewSurfaceReproject.hlsl','src/mods/vr/d3d12/CaptureSlotPolicy.hpp')
           $contract=Get-Content workspace/ci51/source_contract.json -Raw | ConvertFrom-Json
           $finalPaths+=@($contract.PSObject.Properties.Name)
-          $finalPaths=@($finalPaths + 'src/mods/vr/d3d12/NgxPairRecovery.hpp' + 'src/mods/vr/DuoViewDepthStabilization.hpp' + 'src/mods/vr/DuoViewDepthStabilization.hlsl' | Select-Object -Unique)
+          $finalPaths=@($finalPaths + 'src/mods/vr/d3d12/NgxPairRecovery.hpp' + 'src/mods/vr/DuoViewDepthStabilization.hpp' + 'src/mods/vr/DuoViewDepthStabilization.hlsl' + 'src/mods/vr/DuoViewDetailTransfer.hlsl' | Select-Object -Unique)
           $publicSource='evidence/final-public-source'
           foreach($relative in $finalPaths) {
             $target=Join-Path $publicSource $relative
@@ -803,27 +811,27 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'TRUE STEREO XR V1') { throw 'Missing or stale actual stereo headset instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-CI80-Experimental-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-CI81-Experimental-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
           Copy-Item package/final-generated-source-sha256.json evidence/final-public-source/
           Copy-Item workspace/ci51/README_TEST_BUILD.md evidence/final-public-source/
-          $sourceZip="UEVR-DuoView-CI80-Public-Source-${{ github.run_number }}.zip"
+          $sourceZip="UEVR-DuoView-CI81-Public-Source-${{ github.run_number }}.zip"
           Compress-Archive -Path evidence/final-public-source/* -DestinationPath $sourceZip -Force
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI80-Experimental-${{ github.run_number }}
+          name: UEVR-DuoView-CI81-Experimental-${{ github.run_number }}
           path: |
-            UEVR-DuoView-CI80-Experimental-*.zip
-            UEVR-DuoView-CI80-Experimental-*.zip.sha256
+            UEVR-DuoView-CI81-Experimental-*.zip
+            UEVR-DuoView-CI81-Experimental-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI80-Public-Source-${{ github.run_number }}
-          path: UEVR-DuoView-CI80-Public-Source-*.zip
+          name: UEVR-DuoView-CI81-Public-Source-${{ github.run_number }}
+          path: UEVR-DuoView-CI81-Public-Source-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
