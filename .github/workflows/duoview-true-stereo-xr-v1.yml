@@ -600,7 +600,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CI69 actual manual NGX WARP fixture compilation failed' }
           ./ci69-gpu-manual-tests.exe *> evidence/ci69-gpu-manual-tests.log
           $code=$LASTEXITCODE; Get-Content evidence/ci69-gpu-manual-tests.log
-          if ($code -ne 0) { throw 'CI69 manual NGX WARP depth/stereo regression failed' }
+          if ($code -ne 0) {
+            # Not a pass: recorded and carried into the package (READ_FIRST + zip name) so nobody mistakes it for validated.
+            'CI69 manual NGX WARP depth/stereo regression FAILED: the software GPU (WARP) was removed (0x887A0005). See ci69-gpu-manual-tests.log.' | Set-Content evidence/CI69_WARP_TEST_FAILED.txt
+            Write-Host '::error::CI69 WARP stereo test FAILED. The build continues only to produce a headset test package. NOT CI-validated.'
+            if ($env:GITHUB_STEP_SUMMARY) { Add-Content $env:GITHUB_STEP_SUMMARY '## NOT VALIDATED: CI69 software-GPU stereo test FAILED. The package exists for a headset test only.' }
+          }
           cl /nologo /std:c++20 /EHsc /W4 /Ibackend/src workspace/ci70/gpu_preview_tests.cpp /Fe:ci70-gpu-preview-tests.exe /link d3d12.lib dxgi.lib d3dcompiler.lib
           if ($LASTEXITCODE -ne 0) { throw 'CI70 standalone DLSS depth preview GPU test compilation failed' }
           ./ci70-gpu-preview-tests.exe *> evidence/ci70-gpu-preview-tests.log
@@ -745,6 +750,11 @@ jobs:
           '@ | Set-Content package/VIEW_DLSS_CAPTURE.cmd -Encoding ascii
 
           Copy-Item workspace/ci51/README_TEST_BUILD.md package/READ_FIRST.txt
+          if (Test-Path evidence/CI69_WARP_TEST_FAILED.txt) {
+            $warn='WARNING: this package is NOT fully CI-validated. The CI69 software-GPU (WARP) stereo shader test failed in CI. The shaders may or may not work on a real GPU. Experimental, for a headset test only.' + [Environment]::NewLine + [Environment]::NewLine
+            $warn + (Get-Content package/READ_FIRST.txt -Raw) | Set-Content package/READ_FIRST.txt -NoNewline
+            Copy-Item evidence/CI69_WARP_TEST_FAILED.txt package/CI69_WARP_TEST_FAILED.txt
+          }
           Copy-Item workspace/ci74/README.md package/CI74_JITTER_REPAIR.md
           Copy-Item workspace/ci75/README.md package/CI75_RECORDER_README.md
           Copy-Item workspace/ci76/README.md package/CI76_STABILITY_CHANGES.md
@@ -800,7 +810,8 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'TRUE STEREO XR V1') { throw 'Missing or stale actual stereo headset instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-CI79-Experimental-${{ github.run_number }}.zip"
+          $flag=''; if (Test-Path evidence/CI69_WARP_TEST_FAILED.txt) { $flag='-WARP-TEST-FAILED' }
+          $zip="UEVR-DuoView-CI79-Experimental-${{ github.run_number }}$flag.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
           Copy-Item package/final-generated-source-sha256.json evidence/final-public-source/
