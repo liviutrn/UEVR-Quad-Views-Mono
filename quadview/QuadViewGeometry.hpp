@@ -33,7 +33,57 @@ struct Layout {
     // the immutable draw layout; one shared center is not stereo gaze.
     std::array<Crop, 2> focus_crops{};
     float context_scale{};
+    // Tri-view: view 0 is ONE centre context shared by both eyes (union FOV of
+    // both eye frusta); view 1 is still constructed but never rendered.
+    bool shared_context{};
+    // Projection entries written into view 0: m[0][0], m[2][0], m[1][1], m[2][1].
+    std::array<double, 4> context_projection{};
+    // Per eye: context uv = eye uv * (x, y) + (z, w). Identity for four views.
+    std::array<std::array<float, 4>, 2> context_uv{{{1.f, 1.f, 0.f, 0.f}, {1.f, 1.f, 0.f, 0.f}}};
 };
+
+// Turns a four-view layout into tri-view. Inputs are the two eye projections
+// (column-major, +Z forward, clip w = m[2][3] * z). Per axis each eye maps
+// view tangent t to NDC as a*t + b; the shared context covers the union of
+// both tangent ranges, and each eye samples it with an affine uv transform
+// (exact at infinity because both views share the eye's orientation).
+inline bool apply_shared_context(Layout& layout, const std::array<float, 16>& left,
+                                 const std::array<float, 16>& right) {
+    const std::array<const std::array<float, 16>*, 2> eyes{&left, &right};
+    double a[2][2]{}, b[2][2]{}; // [eye][axis]
+    double lo[2]{1.e30, 1.e30}, hi[2]{-1.e30, -1.e30};
+    for (size_t e = 0; e != 2; ++e) {
+        const auto& p = *eyes[e];
+        const double w = p[11];
+        if (!std::isfinite(w) || std::abs(w) < 1.e-6) return false;
+        const double raw_a[2]{p[0], p[5]}, raw_b[2]{p[8], p[9]};
+        for (size_t axis = 0; axis != 2; ++axis) {
+            a[e][axis] = raw_a[axis] / w;
+            b[e][axis] = raw_b[axis] / w;
+            if (!std::isfinite(a[e][axis]) || !std::isfinite(b[e][axis]) || std::abs(a[e][axis]) < 1.e-6) return false;
+            const double t0 = (-1. - b[e][axis]) / a[e][axis], t1 = (1. - b[e][axis]) / a[e][axis];
+            lo[axis] = (std::min)(lo[axis], (std::min)(t0, t1));
+            hi[axis] = (std::max)(hi[axis], (std::max)(t0, t1));
+        }
+    }
+    double ca[2]{}, cb[2]{};
+    for (size_t axis = 0; axis != 2; ++axis) {
+        if (!(hi[axis] - lo[axis] > 1.e-6)) return false;
+        ca[axis] = (a[0][axis] > 0. ? 2. : -2.) / (hi[axis] - lo[axis]);
+        cb[axis] = -1. - ca[axis] * (ca[axis] > 0. ? lo[axis] : hi[axis]);
+    }
+    for (size_t e = 0; e != 2; ++e) {
+        const double sx = ca[0] / a[e][0], kx = cb[0] - sx * b[e][0];
+        const double sy = ca[1] / a[e][1], ky = cb[1] - sy * b[e][1];
+        // u: ndc = 2u - 1 (right).  v: ndc = 1 - 2v (texture rows go down).
+        layout.context_uv[e] = {static_cast<float>(sx), static_cast<float>(sy),
+                                static_cast<float>((1. - sx + kx) * .5), static_cast<float>((1. - sy - ky) * .5)};
+    }
+    const double w = left[11];
+    layout.context_projection = {ca[0] * w, cb[0] * w, ca[1] * w, cb[1] * w};
+    layout.shared_context = true;
+    return true;
+}
 
 class LayoutLatch {
 public:

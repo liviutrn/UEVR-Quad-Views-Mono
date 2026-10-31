@@ -14,6 +14,9 @@ cbuffer QuadViewConstants : register(b0) {
     float4 CropUvRight;
     float4 Options;
     float4 Sharpen; // strength, flags, maximum filter-space change, FXAA bias
+    float4 ContextUvLeft;  // tri-view: context uv = eye uv * xy + zw (identity for four views)
+    float4 ContextUvRight;
+    uint4 ContextSource;   // x left eye, y right eye (tri-view: both 0)
 };
 
 struct VertexOut {
@@ -34,6 +37,11 @@ float2 AtlasUv(uint4 rectangle, float2 uv) {
     const float2 texel = clamp(origin + saturate(uv) * extent,
                               origin + 0.5, origin + extent - 0.5);
     return texel / atlasSize;
+}
+
+float2 ContextUv(uint eye, float2 eyeUv) {
+    const float4 xform = eye == 0 ? ContextUvLeft : ContextUvRight;
+    return eyeUv * xform.xy + xform.zw;
 }
 
 // Explicit SM5 resource selection keeps each source independent, including sharpening taps.
@@ -125,6 +133,8 @@ float4 CompositePixel(VertexOut input) {
     const float2 eyeUv = float2(input.position.x - eye * EyeAndAtlas.x,
                                input.position.y) / float2(EyeAndAtlas.xy);
     const uint4 contextRect = eye == 0 ? ContextLeft : ContextRight;
+    const uint contextSource = eye == 0 ? ContextSource.x : ContextSource.y;
+    const float2 contextUv = ContextUv(eye, eyeUv);
     const uint4 focusRect = eye == 0 ? FocusLeft : FocusRight;
     const float4 crop = eye == 0 ? CropUvLeft : CropUvRight;
     const uint debugMode = (uint)Options.y;
@@ -140,10 +150,10 @@ float4 CompositePixel(VertexOut input) {
     // 50% crop this skips a texture fetch for most focused pixels, including
     // pixels using the fused Glamarye filter. Keep diagnostics exact.
     if (debugMode == 1)
-        return ReadSource(eye, AtlasUv(contextRect, eyeUv));
+        return ReadSource(contextSource, AtlasUv(contextRect, contextUv));
     if (weight <= 0.0) {
         if (debugMode == 2) return float4(0.04, 0.04, 0.04, 1.0);
-        return ReadSource(eye, AtlasUv(contextRect, eyeUv));
+        return ReadSource(contextSource, AtlasUv(contextRect, contextUv));
     }
 
     const float2 focusUv = (eyeUv - crop.xy) / (crop.zw - crop.xy);
@@ -152,7 +162,7 @@ float4 CompositePixel(VertexOut input) {
         focus.rgb = GlamSharpenFocus(2u + eye, focusRect, crop, eyeUv, focus.rgb);
     float4 output = focus;
     [branch] if (debugMode != 2 && weight < 1.0) {
-        const float4 context = ReadSource(eye, AtlasUv(contextRect, eyeUv));
+        const float4 context = ReadSource(contextSource, AtlasUv(contextRect, contextUv));
         output = lerp(context, focus, weight);
     }
     if (Options.w > 0.5) {

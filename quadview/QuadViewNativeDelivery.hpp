@@ -240,12 +240,15 @@ public:
     }
 
     bool bind(Source source, EngineTicket engine, uint64_t target_set,
-              std::array<uintptr_t,4> targets, bool explicit_role_frames = false) {
+              std::array<uintptr_t,4> targets, bool explicit_role_frames = false,
+              uint8_t required_roles = 0x0f) {
         if (!source || !engine || !target_set || source.generation != engine.generation ||
             source.serial != engine.serial || source.engine_frame != engine.engine_frame ||
             source.family != engine.family || source.target != engine.target ||
             source.scene != engine.scene) return false;
         source.engine_frame_bound = true;
+        // Tri-view renders roles 0,2,3 (0x0d); role 0 always carries the batch.
+        if ((required_roles & 0x01) == 0 || (required_roles & ~0x0f) != 0) return false;
         for (size_t i = 0; i < 4; ++i) {
             if (!targets[i]) return false;
             for (size_t j = 0; j < i; ++j) if (targets[i] == targets[j]) return false;
@@ -261,6 +264,7 @@ public:
             slot.target_set = target_set;
             slot.targets = targets;
             slot.explicit_role_frames = explicit_role_frames;
+            slot.required = required_roles;
             if (!explicit_role_frames) {
                 slot.role_frames.fill(engine.engine_frame);
                 slot.roles_bound = 0xf;
@@ -543,7 +547,7 @@ public:
                 slots_[index].owner_id != tail->attachments[i].owner_id) continue;
             seen[index] = true;
             auto& slot = slots_[index];
-            if (slot.source && slot.executed == 0x0f && finish_quartet(slot, thread))
+            if (slot.source && slot.executed == slot.required && finish_quartet(slot, thread))
                 ++result.completed_quartets;
         }
         *tail = {};
@@ -591,6 +595,7 @@ private:
         uintptr_t completion_token{};
         uint32_t thread{};
         uint8_t rendered{}, hooked{}, executed{}, written{};
+        uint8_t required{0x0f};
         bool overwritten{}, publish{true}, completion_latched{};
     };
     struct Participant { uint8_t slot{}; uint8_t view_mask{}; uint64_t owner_id{}; };
@@ -680,7 +685,7 @@ private:
     }
     void latch_completion(Slot& slot) {
         if (slot.completion_latched) return;
-        if (slot.hooked != 0x0f) return;
+        if (slot.hooked != slot.required) return;
         slot.completion_latched = true;
         auto token = ++next_completion_token_;
         if (!token) token = ++next_completion_token_;
@@ -736,8 +741,9 @@ private:
         return false;
     }
     bool content_matches(const Slot& slot) const {
-        for (const auto target : slot.targets) {
-            const auto* stamp = find_content(target);
+        for (size_t i = 0; i < slot.targets.size(); ++i) {
+            if ((slot.required & (1u << i)) == 0) continue;
+            const auto* stamp = find_content(slot.targets[i]);
             if (!stamp || !stamp_matches(*stamp, slot)) return false;
         }
         return true;

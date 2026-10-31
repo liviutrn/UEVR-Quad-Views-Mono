@@ -22,8 +22,10 @@ struct alignas(16) ShaderConstants {
     float crops[2][4]{};
     float options[4]{};
     float sharpen[4]{};
+    float context_uv[2][4]{{1.f, 1.f, 0.f, 0.f}, {1.f, 1.f, 0.f, 0.f}};
+    uint32_t context_source[4]{0, 1, 0, 0};
 };
-static_assert(sizeof(ShaderConstants) == 144);
+static_assert(sizeof(ShaderConstants) == 192);
 
 // Each instance belongs to one fence-retired OpenXR command slot. Descriptor
 // and upload storage cannot be reused until the owning slot's fence retires.
@@ -213,7 +215,8 @@ public:
         constants.eye_and_atlas[0] = layout.eye_width; constants.eye_and_atlas[1] = layout.eye_height;
         constants.eye_and_atlas[2] = layout.atlas_width; constants.eye_and_atlas[3] = layout.atlas_height;
         for (unsigned view = 0; view < 4; ++view) {
-            const auto& rect = layout.views[view];
+            // Tri-view: both eyes read the one shared centre context (view 0).
+            const auto& rect = layout.views[view == 1 && layout.shared_context ? 0 : view];
             constants.rectangles[view][0] = rect.x; constants.rectangles[view][1] = rect.y;
             constants.rectangles[view][2] = rect.width; constants.rectangles[view][3] = rect.height;
         }
@@ -222,6 +225,9 @@ public:
             constants.crops[eye][0] = crop.u0; constants.crops[eye][1] = crop.v0;
             constants.crops[eye][2] = crop.u1; constants.crops[eye][3] = crop.v1;
         }
+        for (unsigned eye = 0; eye != 2; ++eye)
+            for (unsigned i = 0; i != 4; ++i) constants.context_uv[eye][i] = layout.context_uv[eye][i];
+        constants.context_source[1] = layout.shared_context ? 0u : 1u;
         constants.options[0] = settings.feather_fraction;
         constants.options[1] = static_cast<float>(settings.diagnostic_view);
         const bool output_srgb = output_format_ == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
