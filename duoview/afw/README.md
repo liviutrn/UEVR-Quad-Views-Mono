@@ -1,8 +1,23 @@
-# AFW binary interface preflight (NOT Stage 1 stereo)
-This is a non-invasive Windows x64 diagnostic. It does **not** render, submit, warp, or call PureDark's functions.
+# DuoView AFW beta-6 compatibility probe — NOT stereo
 
-In PowerShell run: \`.\AFWAbiProbe.exe "C:\full\path\PDAFWPlugin.dll"\`.
+This Windows x64 diagnostic is separate from the game. It never alters or bundles `PDAFWPlugin.dll`.
 
-PASS confirms only that the external DLL can be loaded and its three named exports exist. It is **not** proof of runtime ABI layout, graphics interface vtable, GPU resource ownership, frame warping, or headset stereo. This does not authorize installing the stage as a VR mode.
+Run in PowerShell using your own stock PureDark beta-6 DLL:
 
-Based on the independent MIT ABI bridge design by tig3rmast3r / Witcher3VR, and cross-checked against PureDark's public-facing AFW API. PureDark owns PDAFWPlugin.dll. No proprietary DLL or header is included or modified.
+```powershell
+.\AFWAbiProbe.exe "C:\full\path\PDAFWPlugin.dll"
+```
+
+This checks that the DLL loads and exports `InitDevice`, `InitFrameWarp`, and `EvaluateFrameWarp`.
+
+**Optional, stronger check** after that passes:
+
+```powershell
+.\AFWAbiProbe.exe --device-smoke "C:\full\path\PDAFWPlugin.dll"
+```
+
+The second command creates a Direct3D 12 device/queue, then calls PureDark's `InitDevice` once **in this standalone process, not in STALKER 2**. An incompatible DLL could crash this diagnostic. Do not use it in the game if the test crashes.
+
+Passing does **not** establish the `EvaluateFrameWarp` binary layout, plugin vtable methods, motion/depth correctness, GPU warp, or stereo. The diagnostic **never** calls `EvaluateFrameWarp` or changes the UEVR backend. The exact beta-6 DLL still needs an identified SHA256 hash (`Get-FileHash "C:\full\path\PDAFWPlugin.dll" -Algorithm SHA256`).
+
+Credits: PureDark (closed AFW plugin); tig3rmast3r/Witcher3VR (MIT independent bridge design). No proprietary DLL or PureDark header is included or modified.
