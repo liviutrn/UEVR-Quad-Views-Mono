@@ -18,6 +18,8 @@ Current status (ChatGPT experiment branch, 1 Nov 2026): Step 1 decision [source 
 
 Current status (ChatGPT experiment branch, 1 Nov 2026): [AFW beta-6 ABI preflight](https://github.com/liviutrn/UEVR-Quad-Views-Mono/blob/experiment/duoview-afw-stage1-preflight-20261101/research/2026-11-01-duoview-afw-abi-preflight.md) source added; **not Stage 1 warp**, not headset-verified. Separate diagnostic utility will be compiled alongside unchanged v207. Actual DLL export/layout/gpu warp still untested; no v207 or claude/ branch edited.
 
+Current status (ChatGPT experiment branch, 1 Nov 2026): optional standalone DX12 [AFW InitDevice smoke](https://github.com/liviutrn/UEVR-Quad-Views-Mono/blob/experiment/duoview-afw-device-smoke-20261101/duoview/afw/README.md) source prepared on `experiment/duoview-afw-device-smoke-20261101`; baseline v207 source remains unchanged, actual full-eye AFW warp NOT built and not headset-verified. Compiling this probe does not prove stereo.
+
 ## Current goal: DuoView AFW (decided by Liviu, 1 Nov 2026)
 Exactly what stable DuoView Mono v207 does today (no more, no less), plus STEREO through
 PureDark's AFW warp. Must look cleaner than our synthetic stereo (CI127) and run faster than
