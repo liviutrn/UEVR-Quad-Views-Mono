@@ -392,7 +392,7 @@ public:
                     surface_constants[0].mesh_config[3]|=2u|128u;
                     constants.reserved+=1.f;
                 }
-                if(leftEdgeFix)constants.reserved+=4.f; // corrected LEFT outer fallback
+                (void)leftEdgeFix; // CI79b: LEFT outer-view fix (flag +4) is disabled in this build
             }
             if(!surfaces_.prepare(device,srgb_,layout.fovea.width,layout.fovea.height,
                     layout.periphery.width,layout.periphery.height,surface_constants)) {

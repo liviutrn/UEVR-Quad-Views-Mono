@@ -1,5 +1,5 @@
 diff --git a/src/mods/VR.cpp b/src/mods/VR.cpp
-index a4ff6a9..dc5550e 100644
+index a4ff6a9..567bd3b 100644
 --- a/src/mods/VR.cpp
 +++ b/src/mods/VR.cpp
 @@ -1,6 +1,7 @@
@@ -350,7 +350,7 @@ index a4ff6a9..dc5550e 100644
 +                    m_duo_depth_stabilization->draw("CI77: Stabilize depth before reconstruction / preview");
 +                    if(m_duo_depth_stabilization->value()) {
 +                        m_duo_detail_transfer->draw("CI79: RIGHT eye centre from LEFT camera, smooth (OFF = CI77b)");
-+                        m_duo_left_edge_fix->draw("CI79: LEFT eye outer view at correct position (OFF = CI77b)");
++                        m_duo_left_edge_fix->draw("CI79: LEFT eye outer view fix (DISABLED in this build, no effect)");
 +                        m_duo_pixel_footprints->draw("CI77b: Preserve thin geometry (pixel footprints)");
 +                        ImGui::TextWrapped("ON preserves isolated depth pixels and thin stems without connecting foreground to background. OFF compares the original triangle geometry.");
 +                        m_duo_depth_temporal->draw("Temporal depth stabilization (camera reprojection)");

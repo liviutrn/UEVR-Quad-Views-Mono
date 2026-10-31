@@ -35,36 +35,9 @@ bool DuoLeftEdgeFix() { const uint f=DuoFlags(); return f>=2u && (f&4u)!=0u; }
 // the farthest surface found nearby is shown, so a near object is never
 // painted twice.
 float4 RightForLeftFallback(float2 uvL) {
-    const float a=StereoEyeX.x, b=StereoEyeX.y, c=StereoEyeX.z;
-    if(StereoEyeX.w<.5f || abs(a)<1.e-6f) return RightNative(uvL);
-    const float ndcL=uvL.x*2.f-1.f;
-    // Search disparity s = 1/z from infinity (0) to 30 cm in 12 steps.
-    const float sStep=(1.f/30.f)/11.f;
-    float bestS=0.f, farNdc=(ndcL-b)/a, farS=1.e30f;
-    bool consistent=false;
-    [loop] for(int k=0;k<12;++k) {
-        const float s=sStep*float(k);
-        const float ndcR=(ndcL-b-c*s)/a;
-        if(abs(ndcR)<=1.f) {
-            const float z=RightEyeForwardZ(DeviceRightDepth(float2(ndcR*.5f+.5f,uvL.y)));
-            const float sz=z>0.f?1.f/z:0.f; // sky or invalid = infinitely far
-            if(abs(sz-s)<=.5f*sStep && (!consistent || s>bestS)) {bestS=s;consistent=true;}
-            if(sz<farS) {farS=sz;farNdc=ndcR;}
-        }
-    }
-    float ndcOut=farNdc;
-    if(consistent) {
-        // Refine on the chosen surface; stop if a step would jump to another one.
-        float s=bestS;
-        [loop] for(int r=0;r<3;++r) {
-            const float ndcR=(ndcL-b-c*s)/a;
-            const float z=RightEyeForwardZ(DeviceRightDepth(float2(saturate(ndcR*.5f+.5f),uvL.y)));
-            const float sNew=z>0.f?1.f/z:0.f;
-            if(abs(sNew-s)<=sStep)s=sNew;
-        }
-        ndcOut=(ndcL-b-c*s)/a;
-    }
-    return RightNative(float2(saturate(ndcOut*.5f+.5f),uvL.y));
+    // CI79b: the row-search version is disabled in this build (the WARP test GPU
+    // failed with it). Same picture as CI77b. It returns as its own shader pass.
+    return RightNative(uvL);
 }
 float4 SurfaceComposite(float2 uv,bool right) {'''
 
@@ -221,7 +194,7 @@ CHANGES = [
                     surface_constants[0].mesh_config[3]|=2u|128u;
                     constants.reserved+=1.f;
                 }
-                if(leftEdgeFix)constants.reserved+=4.f; // corrected LEFT outer fallback
+                (void)leftEdgeFix; // CI79b: LEFT outer-view fix (flag +4) is disabled in this build
             }"""),
 
     # 5. Pass the switches from the menu to the compositor and the recorder.
@@ -262,7 +235,7 @@ CHANGES = [
     ("src/mods/VR.cpp",
      '                        m_duo_pixel_footprints->draw("CI77b: Preserve thin geometry (pixel footprints)");',
      '''                        m_duo_detail_transfer->draw("CI79: RIGHT eye centre from LEFT camera, smooth (OFF = CI77b)");
-                        m_duo_left_edge_fix->draw("CI79: LEFT eye outer view at correct position (OFF = CI77b)");
+                        m_duo_left_edge_fix->draw("CI79: LEFT eye outer view fix (DISABLED in this build, no effect)");
                         m_duo_pixel_footprints->draw("CI77b: Preserve thin geometry (pixel footprints)");'''),
 ]
 

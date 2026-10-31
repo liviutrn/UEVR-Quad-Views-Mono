@@ -1,5 +1,13 @@
 # CI79 — RIGHT eye centre from the LEFT camera (smooth), LEFT outer view at the right place
 
+**CI79b status (31 Oct): Change 2 (LEFT outer view) is DISABLED in this build.** Builds #117-#121
+failed the CI69/CI70 software-GPU (WARP) tests with device removal (0x887A0005) in the final
+composite shader; moving the CI79 shaders into their own entries and creating their pipelines
+lazily did not help. The remaining suspect is the loop-heavy row search added to the composite
+shader, so it is stubbed (same picture as CI77b) and its menu switch does nothing. Change 1
+(RIGHT eye centre) is unchanged. If the tests pass, change 2 returns as its own shader pass.
+The text below still describes the intended design of both changes.
+
 Built on ChatGPT's CI77b (experiment/ci77-stabilized-depth-left-geometry-20261030,
 commit d6a9e9c). Experimental. Every claim here is source-read, plus
 CI-verified once the Actions run for this exact commit is green. Nothing is
