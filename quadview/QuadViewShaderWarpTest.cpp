@@ -76,10 +76,11 @@ struct alignas(16) Constants {
     float crops[2][4];
     float options[4];
     float sharpen[4];
-    float context_uv[2][4]{{1.f, 1.f, 0.f, 0.f}, {1.f, 1.f, 0.f, 0.f}};
+    float context_h[2][12]{{1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f},
+                           {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f}};
     uint32_t context_source[4]{0, 1, 0, 0};
 };
-static_assert(sizeof(Constants) == 192);
+static_assert(sizeof(Constants) == 256);
 
 using Color = std::array<uint8_t, 4>;
 static Color source_color(unsigned view, unsigned x, unsigned y) {

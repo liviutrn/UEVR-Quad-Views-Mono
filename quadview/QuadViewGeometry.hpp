@@ -38,17 +38,51 @@ struct Layout {
     bool shared_context{};
     // Projection entries written into view 0: m[0][0], m[2][0], m[1][1], m[2][1].
     std::array<double, 4> context_projection{};
-    // Per eye: context uv = eye uv * (x, y) + (z, w). Identity for four views.
-    std::array<std::array<float, 4>, 2> context_uv{{{1.f, 1.f, 0.f, 0.f}, {1.f, 1.f, 0.f, 0.f}}};
+    // Per eye: 3x3 homography (rows padded to 4) from eye uv to context uv:
+    // h = H * (u, v, 1), context uv = h.xy / h.z. Identity for four views.
+    std::array<std::array<float, 12>, 2> context_h{{{1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f},
+                                                    {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f}}};
 };
 
-// Turns a four-view layout into tri-view. Inputs are the two eye projections
-// (column-major, +Z forward, clip w = m[2][3] * z). Per axis each eye maps
-// view tangent t to NDC as a*t + b; the shared context covers the union of
-// both tangent ranges, and each eye samples it with an affine uv transform
-// (exact at infinity because both views share the eye's orientation).
+// Turns a four-view layout into tri-view. Projections are column-major, +Z
+// forward, clip w = m[2][3] * z; per axis an eye maps view tangent t to NDC as
+// a*t + b. The shared context has the LEFT eye's orientation (the centre camera
+// keeps the left optical rotation). Eye orientations are OpenXR stage
+// quaternions (x, y, z, w); when given, the right eye's frustum is rotated into
+// the left-eye frame before the union, and each eye samples the context
+// through an exact-at-infinity homography (no equal-orientation assumption).
 inline bool apply_shared_context(Layout& layout, const std::array<float, 16>& left,
-                                 const std::array<float, 16>& right) {
+                                 const std::array<float, 16>& right,
+                                 const std::array<float, 4>* left_orientation = nullptr,
+                                 const std::array<float, 4>* right_orientation = nullptr) {
+    using M3 = std::array<std::array<double, 3>, 3>;
+    const auto mul = [](const M3& x, const M3& y) {
+        M3 r{};
+        for (int i = 0; i != 3; ++i) for (int j = 0; j != 3; ++j)
+            for (int k = 0; k != 3; ++k) r[i][j] += x[i][k] * y[k][j];
+        return r;
+    };
+    const auto from_quaternion = [](const std::array<float, 4>& q) {
+        const double x = q[0], y = q[1], z = q[2], w = q[3];
+        return M3{{{1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)},
+                   {2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)},
+                   {2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)}}};
+    };
+    M3 rotation[2]{{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}}, {{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}}};
+    if (left_orientation && right_orientation) {
+        for (const auto* q : {left_orientation, right_orientation}) {
+            const double n = double((*q)[0]) * (*q)[0] + double((*q)[1]) * (*q)[1] +
+                             double((*q)[2]) * (*q)[2] + double((*q)[3]) * (*q)[3];
+            if (!std::isfinite(n) || std::abs(n - 1.) > 1.e-2) return false;
+        }
+        const auto l = from_quaternion(*left_orientation), r = from_quaternion(*right_orientation);
+        M3 lt{};
+        for (int i = 0; i != 3; ++i) for (int j = 0; j != 3; ++j) lt[i][j] = l[j][i];
+        auto rel = mul(lt, r); // right-eye local -> left-eye local (OpenXR, -Z forward)
+        for (int i = 0; i != 3; ++i) for (int j = 0; j != 3; ++j)
+            if ((i == 2) != (j == 2)) rel[i][j] = -rel[i][j]; // to +Z forward: S*rel*S
+        rotation[1] = rel;
+    }
     const std::array<const std::array<float, 16>*, 2> eyes{&left, &right};
     double a[2][2]{}, b[2][2]{}; // [eye][axis]
     double lo[2]{1.e30, 1.e30}, hi[2]{-1.e30, -1.e30};
@@ -57,13 +91,24 @@ inline bool apply_shared_context(Layout& layout, const std::array<float, 16>& le
         const double w = p[11];
         if (!std::isfinite(w) || std::abs(w) < 1.e-6) return false;
         const double raw_a[2]{p[0], p[5]}, raw_b[2]{p[8], p[9]};
+        double t[2][2]{};
         for (size_t axis = 0; axis != 2; ++axis) {
             a[e][axis] = raw_a[axis] / w;
             b[e][axis] = raw_b[axis] / w;
             if (!std::isfinite(a[e][axis]) || !std::isfinite(b[e][axis]) || std::abs(a[e][axis]) < 1.e-6) return false;
-            const double t0 = (-1. - b[e][axis]) / a[e][axis], t1 = (1. - b[e][axis]) / a[e][axis];
-            lo[axis] = (std::min)(lo[axis], (std::min)(t0, t1));
-            hi[axis] = (std::max)(hi[axis], (std::max)(t0, t1));
+            t[axis][0] = (-1. - b[e][axis]) / a[e][axis];
+            t[axis][1] = (1. - b[e][axis]) / a[e][axis];
+        }
+        // A projective map keeps the frustum convex: its tangent bounds lie at the corners.
+        for (int cx = 0; cx != 2; ++cx) for (int cy = 0; cy != 2; ++cy) {
+            const double d[3]{t[0][cx], t[1][cy], 1.};
+            double c[3]{};
+            for (int i = 0; i != 3; ++i) for (int k = 0; k != 3; ++k) c[i] += rotation[e][i][k] * d[k];
+            if (!(c[2] > 1.e-3)) return false;
+            for (size_t axis = 0; axis != 2; ++axis) {
+                lo[axis] = (std::min)(lo[axis], c[axis] / c[2]);
+                hi[axis] = (std::max)(hi[axis], c[axis] / c[2]);
+            }
         }
     }
     double ca[2]{}, cb[2]{};
@@ -72,13 +117,19 @@ inline bool apply_shared_context(Layout& layout, const std::array<float, 16>& le
         ca[axis] = (a[0][axis] > 0. ? 2. : -2.) / (hi[axis] - lo[axis]);
         cb[axis] = -1. - ca[axis] * (ca[axis] > 0. ? lo[axis] : hi[axis]);
     }
+    // u: ndc = 2u - 1 (right).  v: ndc = 1 - 2v (texture rows go down).
+    const M3 context{{{ca[0] * .5, 0., (cb[0] + 1.) * .5}, {0., -ca[1] * .5, (1. - cb[1]) * .5}, {0., 0., 1.}}};
+    auto homographies = layout.context_h; // commit only after both eyes validate
     for (size_t e = 0; e != 2; ++e) {
-        const double sx = ca[0] / a[e][0], kx = cb[0] - sx * b[e][0];
-        const double sy = ca[1] / a[e][1], ky = cb[1] - sy * b[e][1];
-        // u: ndc = 2u - 1 (right).  v: ndc = 1 - 2v (texture rows go down).
-        layout.context_uv[e] = {static_cast<float>(sx), static_cast<float>(sy),
-                                static_cast<float>((1. - sx + kx) * .5), static_cast<float>((1. - sy - ky) * .5)};
+        const M3 eye_to_tangent{{{2. / a[e][0], 0., (-1. - b[e][0]) / a[e][0]},
+                                 {0., -2. / a[e][1], (1. - b[e][1]) / a[e][1]}, {0., 0., 1.}}};
+        const auto h = mul(context, mul(rotation[e], eye_to_tangent));
+        for (int i = 0; i != 3; ++i) for (int j = 0; j != 3; ++j) {
+            if (!std::isfinite(h[i][j])) return false;
+            homographies[e][i * 4 + j] = static_cast<float>(h[i][j]);
+        }
     }
+    layout.context_h = homographies;
     const double w = left[11];
     layout.context_projection = {ca[0] * w, cb[0] * w, ca[1] * w, cb[1] * w};
     layout.shared_context = true;

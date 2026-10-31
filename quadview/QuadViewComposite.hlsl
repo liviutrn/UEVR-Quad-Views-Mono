@@ -14,9 +14,9 @@ cbuffer QuadViewConstants : register(b0) {
     float4 CropUvRight;
     float4 Options;
     float4 Sharpen; // strength, flags, maximum filter-space change, FXAA bias
-    float4 ContextUvLeft;  // tri-view: context uv = eye uv * xy + zw (identity for four views)
-    float4 ContextUvRight;
-    uint4 ContextSource;   // x left eye, y right eye (tri-view: both 0)
+    float4 ContextHLeft[3];  // tri-view: h = H * (uv, 1), context uv = h.xy / h.z (identity for four views)
+    float4 ContextHRight[3];
+    uint4 ContextSource;     // x left eye, y right eye (tri-view: both 0)
 };
 
 struct VertexOut {
@@ -40,8 +40,11 @@ float2 AtlasUv(uint4 rectangle, float2 uv) {
 }
 
 float2 ContextUv(uint eye, float2 eyeUv) {
-    const float4 xform = eye == 0 ? ContextUvLeft : ContextUvRight;
-    return eyeUv * xform.xy + xform.zw;
+    const float3 p = float3(eyeUv, 1.0);
+    float3 h;
+    [flatten] if (eye == 0) h = float3(dot(ContextHLeft[0].xyz, p), dot(ContextHLeft[1].xyz, p), dot(ContextHLeft[2].xyz, p));
+    else h = float3(dot(ContextHRight[0].xyz, p), dot(ContextHRight[1].xyz, p), dot(ContextHRight[2].xyz, p));
+    return h.xy / max(h.z, 1.0e-4);
 }
 
 // Explicit SM5 resource selection keeps each source independent, including sharpening taps.

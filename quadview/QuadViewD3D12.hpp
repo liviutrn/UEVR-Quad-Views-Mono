@@ -22,10 +22,11 @@ struct alignas(16) ShaderConstants {
     float crops[2][4]{};
     float options[4]{};
     float sharpen[4]{};
-    float context_uv[2][4]{{1.f, 1.f, 0.f, 0.f}, {1.f, 1.f, 0.f, 0.f}};
+    float context_h[2][12]{{1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f},
+                           {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f}};
     uint32_t context_source[4]{0, 1, 0, 0};
 };
-static_assert(sizeof(ShaderConstants) == 192);
+static_assert(sizeof(ShaderConstants) == 256); // fills the 256-byte constant buffer
 
 // Each instance belongs to one fence-retired OpenXR command slot. Descriptor
 // and upload storage cannot be reused until the owning slot's fence retires.
@@ -226,7 +227,7 @@ public:
             constants.crops[eye][2] = crop.u1; constants.crops[eye][3] = crop.v1;
         }
         for (unsigned eye = 0; eye != 2; ++eye)
-            for (unsigned i = 0; i != 4; ++i) constants.context_uv[eye][i] = layout.context_uv[eye][i];
+            for (unsigned i = 0; i != 12; ++i) constants.context_h[eye][i] = layout.context_h[eye][i];
         constants.context_source[1] = layout.shared_context ? 0u : 1u;
         constants.options[0] = settings.feather_fraction;
         constants.options[1] = static_cast<float>(settings.diagnostic_view);

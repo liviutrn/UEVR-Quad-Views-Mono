@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Tri-view build 1: three renders instead of four (apply LAST, after target_lifetime).
 
-View 0 becomes ONE centre context shared by both eyes: camera at the eye midpoint
-(left-eye orientation, like DuoView Mono) with the union FOV of both eye frusta.
+View 0 becomes ONE centre context shared by both eyes: camera at the head-space eye
+midpoint (left-eye orientation, like DuoView Mono) with the union FOV of both eye
+frusta, the right frustum rotated into the left-eye frame (canted optics are exact).
 View 1 is still constructed (so every four-view GT contract keeps its proofs) but
 is never rendered: the dispatcher skips it and native delivery requires roles
 0,2,3 only (0x0d). The compositor samples view 0 for both eyes through a per-eye
-affine uv transform (exact at infinity). Focus views keep their true per-eye
+homography (exact at infinity). Tri-view needs the frame's OpenXR eye poses. Focus views keep their true per-eye
 cameras: view 2 still copies the frozen LEFT-eye pose, captured before the centre
 shift. Toggle "Tri-view" (default ON) in the Quad Views UI; OFF = Build 51 quad.
 """
@@ -39,7 +40,16 @@ def main():
         '            layout=m_quadview_layout_latch.freeze(key.generation,key.draw_serial,*candidate);\n',
         '            if (m_quadview_tri_view->value() && !is_stereo_emulation_enabled() &&\n'
         '                !(draw_config.base_projection_valid &&\n'
-        '                  uevr::quadview::apply_shared_context(*candidate,draw_config.projections[0],draw_config.projections[1])))\n'
+        '                  [&]() {\n'
+        '                      if (!pose || pose->stage_views.size()!=2) return false;\n'
+        '                      std::array<std::array<float,4>,2> q{};\n'
+        '                      for (size_t eye=0; eye!=2; ++eye) {\n'
+        '                          const auto& o=pose->stage_views[eye].pose.orientation;\n'
+        '                          q[eye]={static_cast<float>(o.x),static_cast<float>(o.y),static_cast<float>(o.z),static_cast<float>(o.w)};\n'
+        '                      }\n'
+        '                      return uevr::quadview::apply_shared_context(*candidate,draw_config.projections[0],\n'
+        '                          draw_config.projections[1],&q[0],&q[1]);\n'
+        '                  }()))\n'
         '                set_quadview_status("Tri-view could not derive the shared context frustum; using four views");\n'
         '            layout=m_quadview_layout_latch.freeze(key.generation,key.draw_serial,*candidate);\n')
 
@@ -60,7 +70,8 @@ def main():
         '        if (qv_center_context) {\n'
         '            const auto center_offset = (glm::vec3{vr->get_eye_offset(VRRuntime::Eye::LEFT)} +\n'
         '                glm::vec3{vr->get_eye_offset(VRRuntime::Eye::RIGHT)}) * 0.5f;\n'
-        '            const auto center_separation = quat_converter * (eye_translation_rotation * (center_offset * world_scale));\n'
+        '            // The midpoint is defined in head space (as UEVR Mono does), not along the left optical axis.\n'
+        '            const auto center_separation = quat_converter * (glm::normalize(vqi_norm * current_hmd_rotation) * (center_offset * world_scale));\n'
         '            qv_center_shift = glm::vec3{eye_separation - center_separation};\n'
         '        }\n')
     edit(root, hook,
