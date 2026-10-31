@@ -39,6 +39,10 @@ struct Settings {
     float gaze_breakout_radius{.035f}; // when farther from locked crop, go 1:1
     float gaze_still_radius{.008f};    // per-sample motion treated as stationary
     uint32_t gaze_relock_samples{3};  // quiet samples before leaving fast tracking
+    // v207: Catmull-Rom (bicubic) upscaling of the low-resolution periphery.
+    // OFF keeps the original bilinear sampling bit-for-bit. Keep this LAST:
+    // designated initializers in VR::configure_duoview follow field order.
+    bool sharp_periphery{true};
 };
 // Resolve persisted UI controls field by field. Unlike the strict ConfigLatch,
 // one bad slider must not veto eye tracking, shading, position, or other sliders.
@@ -105,6 +109,7 @@ inline UiReconciled reconcile_ui_settings(const Settings& requested,
     out.stabilize_crop=requested.stabilize_crop;
     out.independent_shading=requested.independent_shading;
     out.native_fix_same_pass=requested.native_fix_same_pass;
+    out.sharp_periphery=requested.sharp_periphery;
     const auto scalar=[&](float value,float lo,float hi,uint32_t mask,
                           float Settings::* field) {
         if (valid(value,lo,hi)) out.*field=value;

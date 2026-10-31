@@ -188,8 +188,10 @@ def main():
                "Missing prewarmed compositor for XR command slot",
                "Native compositing rejected: {}"):
   if token not in d3d: raise RuntimeError("Late-activation / failure diagnostic regression: "+token)
- if "Missing prewarmed Native gather atlas" not in compositor:
-  raise RuntimeError("Missing Native prewarm failure cannot be diagnosed")
+ # v207: the gather atlas is allocated on first fallback use, with an explicit
+ # diagnosable failure instead of a prewarm-only reject.
+ if "create_gather_atlas(device)" not in compositor or "Native gather atlas unavailable" not in compositor:
+  raise RuntimeError("Lazy Native gather atlas failure cannot be diagnosed")
  for token in ("m_duo_direct_xr->draw(", ".direct_xr_output=m_duo_direct_xr->value()",
                "current.direct_xr_output==candidate.direct_xr_output", "Last submitted XR output path"):
   if token not in vr_cpp: raise RuntimeError("Output A/B control/diagnostics missing "+token)

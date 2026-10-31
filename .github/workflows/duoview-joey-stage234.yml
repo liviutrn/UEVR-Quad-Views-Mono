@@ -11,6 +11,7 @@ on:
       - feature/v1861-xyz-headscale-keybinds-20261024
       - fix/v165-manual-fov-authoritative-mpc-20261027
       - feature/v205-duoview-fov-and-runtime-hotkeys-20261027
+      - claude/**
   pull_request:
     branches:
       - build-182
@@ -125,6 +126,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Two-keybind patch failed its exact #205 source anchors' }
           python workspace/duoview/joey_stage1/test_v205_recovery_hotkeys.py --verify backend evidence/v205-keybind-baseline.json
           if ($LASTEXITCODE -ne 0) { throw 'Keybind patch changed proven #205 logic or unrelated rendering code' }
+          python workspace/duoview/joey_stage1/apply_v207_auto_fov_after_load.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'v207 automatic FOV recovery patch failed its exact anchors' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling patch contains whitespace errors' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence

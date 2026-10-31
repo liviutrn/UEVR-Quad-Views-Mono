@@ -147,6 +147,7 @@ def main():
     const ModInt32::Ptr m_duo_relock{ModSliderInt32::create(generate_name("DuoViewGazeRelockSamples"), 1, 10, 3)};
     const ModToggle::Ptr m_duo_direct_xr{ModToggle::create(generate_name("DuoViewDirectXROutput"), false)};
     const ModToggle::Ptr m_duo_timing{ModToggle::create(generate_name("DuoViewGpuTiming"), false)};
+    const ModToggle::Ptr m_duo_sharp_periphery{ModToggle::create(generate_name("DuoViewSharpPeriphery"), true)};
     std::atomic<float> m_duo_gpu_ms{-1.f};
     std::atomic<int32_t> m_duoview_output_path{-1};
     std::atomic<uint64_t> m_duoview_source_extents{0};
@@ -167,7 +168,8 @@ def main():
             *m_duo_fovea_view, *m_duo_timing, *m_duo_direct_xr, *m_duo_stabilize, *m_duo_guard,
             *m_duo_native_fix, *m_duo_quant, *m_duo_hold, *m_duo_reacquire,
             *m_duo_offset_x, *m_duo_offset_y,
-            *m_duo_micro_gain, *m_duo_breakout, *m_duo_stillness, *m_duo_relock,''')
+            *m_duo_micro_gain, *m_duo_breakout, *m_duo_stillness, *m_duo_relock,
+            *m_duo_sharp_periphery,''')
     cpp="src/mods/VR.cpp"
     edit(cpp,'''bool VR::should_force_native_stereo_fix_same_pass() const {
     if (is_using_mono()) { return false; }
@@ -208,12 +210,14 @@ def main():
                     m_duo_offset_x->value()=0.f; m_duo_offset_y->value()=0.f;
                     m_duo_micro_gain->value()=0.f; m_duo_breakout->value()=.035f;
                     m_duo_stillness->value()=.008f; m_duo_relock->value()=3;
+                    m_duo_sharp_periphery->value()=true;
                 }
                 m_duo_width->draw("Fovea width / full FOV");
                 m_duo_height->draw("Fovea height / full FOV");
                 m_duo_periphery->draw("Peripheral resolution scale");
                 m_duo_density->draw("Foveal pixel density");
                 m_duo_feather->draw("Blend feather width");
+                m_duo_sharp_periphery->draw("Sharper periphery upscaling (Catmull-Rom; OFF = original bilinear)");
                 m_duo_sharpen->draw("Glamarye fovea strength (default 1.0; 0 = off)");
                 ImGui::TextWrapped("Glamarye v0.1 Bigger radius and jagged-edge protection. Runs after DLSS at final Mono-pixel spacing within the gaze-tracked fovea. Turn OFF the separate Glamarye OpenXR layer to prevent duplicate sharpening. With sharpening enabled, Direct XR double-wide mode is automatically bypassed to avoid duplicated GPU work.");
                 m_duo_gaze->draw("Eye tracking");
@@ -361,7 +365,8 @@ void VR::configure_duoview() {
         .gaze_micro_gain=m_duo_micro_gain->value(),
         .gaze_breakout_radius=m_duo_breakout->value(),
         .gaze_still_radius=m_duo_stillness->value(),
-        .gaze_relock_samples=static_cast<uint32_t>(m_duo_relock->value())};
+        .gaze_relock_samples=static_cast<uint32_t>(m_duo_relock->value()),
+        .sharp_periphery=m_duo_sharp_periphery->value()};
     const auto checked=uevr::duoview::reconcile_ui_settings(candidate,current);
     candidate=checked.settings;
     m_duo_ui_rejected_mask.store(checked.rejected,std::memory_order_release);
@@ -390,7 +395,8 @@ void VR::configure_duoview() {
         current.gaze_micro_gain==candidate.gaze_micro_gain &&
         current.gaze_breakout_radius==candidate.gaze_breakout_radius &&
         current.gaze_still_radius==candidate.gaze_still_radius &&
-        current.gaze_relock_samples==candidate.gaze_relock_samples) return;
+        current.gaze_relock_samples==candidate.gaze_relock_samples &&
+        current.sharp_periphery==candidate.sharp_periphery) return;
     if (!m_duoview.configure(candidate))
         SPDLOG_WARNING_EVERY_N_SEC(2, "[DuoView][Controls] Internal validated settings rejected; retaining prior frame and reporting for diagnosis");
 }

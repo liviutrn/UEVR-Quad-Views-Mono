@@ -101,7 +101,13 @@ public:
                               const std::array<float,9>& optical_rotation) {
         std::scoped_lock lock{mutex_};
         const uint64_t now=GetTickCount64();
-        if(!read_ && now>=next_attempt_) { initialize(); next_attempt_=now+1000; }
+        // v207: back off 1 s, 2 s, 4 s ... 30 s while the Toolkit is missing,
+        // so DLL/registry/file probing does not hitch the render thread every second.
+        if(!read_ && now>=next_attempt_) {
+            initialize();
+            retry_ms_=(std::min)(retry_ms_*2,uint64_t{30000});
+            next_attempt_=now+retry_ms_;
+        }
         if(!read_) {
             unavailable_.fetch_add(1,std::memory_order_relaxed);
             active_.store(false,std::memory_order_release); return {};
@@ -166,6 +172,7 @@ private:
     HMODULE module_{};
     ReadFn read_{};
     uint64_t next_attempt_{};
+    uint64_t retry_ms_{500};
     RayRecovery recovery_{};
 };
 } // namespace uevr::duoview::psvr2
