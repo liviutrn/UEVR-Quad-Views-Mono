@@ -1,9 +1,9 @@
-name: DuoView AFW Beta6 ABI preflight (unchanged v207 baseline)
-run-name: AFW beta6 preflight source/probe (${{ github.run_number }})
+name: DuoView AFW D3D12 device smoke (unchanged v207 baseline)
+run-name: AFW device-smoke preflight (${{ github.run_number }})
 on:
   push:
     branches:
-      - experiment/duoview-afw-stage1-preflight-20261101
+      - experiment/duoview-afw-device-smoke-20261101
   workflow_dispatch:
 permissions:
   contents: read
@@ -204,10 +204,10 @@ jobs:
           @'
           DUOVIEW AFW BETA6 PREFLIGHT ONLY — NOT A WARP OR STEREO IMPLEMENTATION.
           UEVRBackend.dll is unchanged v207 DuoView Mono with the pinned source/build chain.
-          AFWAbiProbe.exe inspects user's separately supplied PDAFWPlugin.dll.
-          No PureDark functions are invoked, no GPU warp occurs, and no headset stereo is produced.
-          Run AFWAbiProbe.exe "C:\absolute\path\PDAFWPlugin.dll" to check exports.
-          Beta6 binary ABI, vtable, GPU sync, actual stereo remain UNVERIFIED.
+          AFWAbiProbe.exe checks DLL exports; optional --device-smoke calls InitDevice in a separate test process.
+          CI does NOT invoke the proprietary DLL. Optional local InitDevice is NOT a warp; no headset stereo is produced.
+          Run AFWAbiProbe.exe "C:\absolute\path\PDAFWPlugin.dll" to check exports; optionally add --device-smoke before the path.
+          Full beta6 warp ABI, vtable, GPU sync and actual stereo remain UNVERIFIED.
           No PureDark DLL bundled or modified. Credits: PureDark and tig3rmast3r/Witcher3VR (MIT bridge design).
           '@ | Set-Content package/AFW_STAGE_STATUS.txt
           Copy-Item backend/build/bin/vr-plugin-nullifier/UEVRPluginNullifier.dll package/
@@ -269,16 +269,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-AFW-ABI-Preflight-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-AFW-Device-Smoke-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-AFW-ABI-Preflight-${{ github.run_number }}
+          name: UEVR-DuoView-AFW-Device-Smoke-${{ github.run_number }}
           path: |
-            UEVR-DuoView-AFW-ABI-Preflight-*.zip
-            UEVR-DuoView-AFW-ABI-Preflight-*.zip.sha256
+            UEVR-DuoView-AFW-Device-Smoke-*.zip
+            UEVR-DuoView-AFW-Device-Smoke-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -293,7 +293,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-DuoView-AFW-Preflight-Evidence-${{ github.run_number }}
+          name: UEVR-DuoView-AFW-Device-Smoke-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
