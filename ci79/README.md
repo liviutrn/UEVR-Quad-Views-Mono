@@ -23,6 +23,8 @@ Also: CI80 encodes its mono hand guard as reserved = 3 (stabilized = 2) and read
 (+.25 = RIGHT fovea) so those thresholds never see them. The hand guard defaults OFF under a new
 saved name (DuoViewMonoForegroundGuardCI81), so an old saved ON cannot override.
 Cost of the new check: 27 extra LEFT depth loads per fovea pixel; performance is not measured.
+TODO before re-enabling the LEFT outer-view fix (flag +.5): +.25 and +.5 together make 2.75, which
+passes CI80's `_reserved>2.5f` hand-guard test. Use `floor(_reserved)` in those thresholds first.
 
 Built on ChatGPT's CI77b (experiment/ci77-stabilized-depth-left-geometry-20261030,
 commit d6a9e9c). Experimental. Every claim here is source-read, plus
