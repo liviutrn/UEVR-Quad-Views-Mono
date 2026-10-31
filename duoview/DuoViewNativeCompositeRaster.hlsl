@@ -53,10 +53,12 @@ float4 PSNativeMain(VertexOut i) : SV_TARGET0 {
     const float2 fullUv = outputPixel / float2(OutputSize);
     const float2 peripherySample = NativeSampleUV(
         fullUv, PeripheralRect.zw, NativePeripheryDimensions);
-    const float4 periphery = (SharpenFlags & 8u) != 0u
+    const float weight = BlendWeight(fullUv);
+    // Catmull-Rom only where the periphery is visible (weight < 1); fully
+    // foveal pixels keep the single bilinear tap, whose result lerp discards.
+    const float4 periphery = (SharpenFlags & 8u) != 0u && weight < 1.0
         ? SamplePeripheryCatmullRom(fullUv, PeripheralRect.zw, NativePeripheryDimensions)
         : PeripheralNativeSource.SampleLevel(LinearClamp, peripherySample, 0.0);
-    const float weight = BlendWeight(fullUv);
     float4 result = DebugViewMode == 2 ? float4(.04,.04,.04,1) : periphery;
     if (weight > 0.0 && DebugViewMode != 1) {
         const float2 localFovea = (fullUv - CropUv.xy) / (CropUv.zw - CropUv.xy);

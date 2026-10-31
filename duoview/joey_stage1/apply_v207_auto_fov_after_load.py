@@ -22,6 +22,7 @@ BLOCK = r'''    // v207 automatic load recovery: issue the proven manual FOV req
     // per new world, after it has been stable for 1.5 s. Retries on failure.
     {
         static uintptr_t auto_fov_world{};
+        static std::optional<sdk::object_liveness::Identity> auto_fov_identity{};
         static int64_t auto_fov_due_ms{};
         static int auto_fov_attempts{};
         const auto auto_now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -29,10 +30,16 @@ BLOCK = r'''    // v207 automatic load recovery: issue the proven manual FOV req
         auto* auto_world = engine != nullptr ? engine->get_world() : nullptr;
         if (!is_duoview_renderer_active() || auto_world == nullptr) {
             auto_fov_world = 0;
+            auto_fov_identity.reset();
             auto_fov_due_ms = 0;
             auto_fov_attempts = 0;
-        } else if (reinterpret_cast<uintptr_t>(auto_world) != auto_fov_world) {
+        } else if (reinterpret_cast<uintptr_t>(auto_world) != auto_fov_world ||
+                   !auto_fov_identity || !sdk::is_current_object(*auto_fov_identity)) {
+            // Identity, not only the address: a new UWorld can reuse a freed one.
+            const auto observed = sdk::observe_uobject(static_cast<sdk::UObjectBase*>(auto_world));
             auto_fov_world = reinterpret_cast<uintptr_t>(auto_world);
+            if (observed) auto_fov_identity = observed->identity;
+            else auto_fov_identity.reset();
             auto_fov_due_ms = auto_now_ms + 1500;
             auto_fov_attempts = 0;
         } else if (auto_fov_due_ms != 0 && auto_now_ms >= auto_fov_due_ms &&
