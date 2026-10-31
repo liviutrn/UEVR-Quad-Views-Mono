@@ -111,7 +111,7 @@ int wmain(int argc, wchar_t** argv) {
     for (const char* name : {"InitDevice", "InitFrameWarp", "EvaluateFrameWarp"}) {
         const bool found = GetProcAddress(dll, name) != nullptr;
         std::cout << name << ": " << (found ? "PRESENT" : "MISSING") << "\n";
-        all_present &= found;
+        all_present = all_present && found;
     }
     FreeLibrary(dll);
     if (!all_present) {
