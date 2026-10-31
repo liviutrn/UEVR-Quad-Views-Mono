@@ -46,3 +46,9 @@ No v207 source patch scripts, original Joey backend, protected source, or PureDa
 - **ESTIMATED:** running the exported interface can be made compatible with beta 6; no verification yet.
 
 Credit: PureDark (closed AFW DLL); tig3rmast3r / Witcher3VR (MIT independent bridge design). Non-commercial usage only as authorized; no DLL distributed or changed.
+
+## 2026-11-01 continuation: optional DX12 device initialization (SOURCE-PREPARED)
+
+On the independent experiment branch `experiment/duoview-afw-device-smoke-20261101`, `AFWAbiProbe.exe --device-smoke <absolute-PDAFWPlugin.dll-path>` optionally creates a real D3D12 device and queue, then calls `InitDevice` in a **separate diagnostic process**. Source-read PureDark's own `VR.cpp` passes the D3D12 device and direct queue into `InitDevice`. It deliberately does **not** call `InitFrameWarp`, `EvaluateFrameWarp`, or alter the in-game UEVR backend. Windows CI may compile and run only `--self-test`, because the proprietary DLL is not available or redistributed to CI. Any DLL smoke pass requires Liviu to execute it with his own local plugin.
+
+Status: local offline C++ syntax/layout mock-header check passed, NOT equivalent to Windows SDK or backend compilation. No independent model review available in this tool environment. The true Stage 1 AFW eye warp remains **NOT IMPLEMENTED** and no headset test has occurred.
