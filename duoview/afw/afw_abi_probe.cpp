@@ -77,6 +77,45 @@ static_assert(offsetof(FrameWarpEvaluateParams, reserved) == 136);
 static_assert(std::is_trivially_copyable_v<FrameWarpEvaluateParams>);
 }
 
+// Optional device initialization call executes only in this standalone process.
+// It never reaches STALKER 2. This is NOT a full ABI/warp test.
+struct SmokeHandles {
+    ID3D12Device* device{};
+    ID3D12CommandQueue* queue{};
+};
+int device_smoke(HMODULE module, SmokeHandles& handles) {
+    const HRESULT device_result = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0,
+                                                   IID_PPV_ARGS(&handles.device));
+    if (FAILED(device_result) || handles.device == nullptr) {
+        std::wcerr << L"ERROR: no usable D3D12 device; HRESULT "
+                   << static_cast<unsigned long>(device_result) << L".\n";
+        return 7;
+    }
+    D3D12_COMMAND_QUEUE_DESC desc{};
+    desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    const HRESULT queue_result = handles.device->CreateCommandQueue(
+        &desc, IID_PPV_ARGS(&handles.queue));
+    if (FAILED(queue_result) || handles.queue == nullptr) {
+        std::wcerr << L"ERROR: failed to create D3D12 direct queue.\n";
+        return 8;
+    }
+    using InitDeviceFn = void* (WINAPI*)(abi::DeviceParams);
+    auto* init_device = reinterpret_cast<InitDeviceFn>(GetProcAddress(module, "InitDevice"));
+    if (init_device == nullptr) return 9;
+    abi::DeviceParams params{};
+    params.d3d12 = handles.device;
+    params.queue = handles.queue;
+    // A mismatched plugin can crash this diagnostic process, not the running game.
+    void* renderer = init_device(params);
+    if (renderer == nullptr) {
+        std::wcerr << L"FAIL: InitDevice returned no D3D12 interface.\n";
+        return 10;
+    }
+    std::wcout << L"PASS: InitDevice returned a D3D12 renderer interface.\n"
+                  L"NOT VERIFIED: frame init, vtable, EvaluateFrameWarp, GPU warp or headset output.\n";
+    return 0;
+}
+
 int wmain(int argc, wchar_t** argv) {
     std::wcout << L"DuoView AFW interface preflight; NOT a stereo build.\n";
     std::wcout << L"x64 expected params size " << sizeof(abi::FrameWarpEvaluateParams)
@@ -86,11 +125,12 @@ int wmain(int argc, wchar_t** argv) {
         std::wcout << L"PASS: compile-time x64 layout checks.\n";
         return 0;
     }
-    if (argc != 2) {
-        std::wcerr << L"Usage: AFWAbiProbe.exe C:\\full\\path\\PDAFWPlugin.dll\n";
+    const bool smoke = argc == 3 && std::wstring(argv[1]) == L"--device-smoke";
+    if (argc != 2 && !smoke) {
+        std::wcerr << L"Usage: AFWAbiProbe.exe [--device-smoke] C:\\full\\path\\PDAFWPlugin.dll\n";
         return 2;
     }
-    const std::wstring path(argv[1]);
+    const std::wstring path(smoke ? argv[2] : argv[1]);
     if (path.empty() || GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
         std::wcerr << L"ERROR: provide existing PDAFWPlugin.dll path.\n";
         return 3;
@@ -113,11 +153,17 @@ int wmain(int argc, wchar_t** argv) {
         std::cout << name << ": " << (found ? "PRESENT" : "MISSING") << "\n";
         all_present = all_present && found;
     }
+    SmokeHandles handles{};
+    const int smoke_result = all_present && smoke ? device_smoke(dll, handles) : 0;
+    // Unload the plugin before releasing device/queue borrowed by its renderer.
     FreeLibrary(dll);
+    if (handles.queue != nullptr) handles.queue->Release();
+    if (handles.device != nullptr) handles.device->Release();
     if (!all_present) {
         std::wcerr << L"FAIL: one or more named exports missing.\n";
         return 6;
     }
+    if (smoke) return smoke_result;
     std::wcout << L"PASS: load and exports; NOT verified: binary ABI, vtable or actual warp.\n";
     return 0;
 }
