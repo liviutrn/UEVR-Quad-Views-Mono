@@ -1,5 +1,5 @@
 name: DuoView CI81 persistent whole-map depth Windows build
-run-name: DuoView CI81 whole-map persistence + edge hold - Windows build (#${{ github.run_number }})
+run-name: DuoView CI82 single-source stereo + same-camera hole fill - Windows build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -28,6 +28,7 @@ on:
       - experiment/ci77-stabilized-depth-left-geometry-20261030
       - experiment/ci80-temporal-history-classic-dibr-20261031
       - experiment/ci81-persistent-depth-20261031
+      - claude/**
     paths:
       - ci51/**
       - ci69/**

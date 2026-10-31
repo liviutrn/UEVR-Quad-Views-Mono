@@ -367,7 +367,8 @@ public:
     }
 
     Image render(Constants constants, const std::vector<float>& left,
-                 const std::vector<float>& right, UINT vertex_count) {
+                 const std::vector<float>& right, UINT vertex_count,
+                 const Constants* fill = nullptr, UINT fill_vertices = 0) {
         need(left.size() == PixelCount && right.size() == PixelCount,
              "incorrect source depth extent");
         set_constants(constants);
@@ -398,6 +399,11 @@ public:
         ID3D11SamplerState* samplers[]{sampler_.Get()};
         context_->PSSetSamplers(0, 1, samplers);
         context_->Draw(vertex_count, 0);
+        if (fill) {
+            // CI82: second draw into the same color/depth, as production does.
+            set_constants(*fill);
+            context_->Draw(fill_vertices, 0);
+        }
 
         context_->OMSetRenderTargets(0, nullptr, nullptr);
         ID3D11ShaderResourceView* empty_srvs[6]{};
@@ -502,6 +508,50 @@ void test_target_foreground_veto(SurfaceFixture& fixture) {
     need(std::abs(depth_at(protected_image, 16u, 8u)) < 1.e-7f,
          "vetoed geometry unexpectedly wrote hardware depth");
 }
+void test_same_source_disocclusion_fill(SurfaceFixture& fixture) {
+    // CI82. Foreground block x=12..16 at 100 cm (its right edge x=16 is the
+    // red column); background at 1000 cm is blue. A 32 cm eye translation
+    // moves the block 5.12 px and the background 0.512 px left, uncovering
+    // target x=12..15. Target depth is the correct shifted scene.
+    std::vector<float> source(PixelCount, 0.001f);
+    std::vector<float> target(PixelCount, 0.001f);
+    for (UINT y = 0; y < Height; ++y) {
+        for (UINT x = 12; x <= 16; ++x) source[size_t(y) * Width + x] = 0.01f;
+        for (UINT x = 7; x <= 11; ++x) target[size_t(y) * Width + x] = 0.01f;
+    }
+    Constants measured{};
+    measured.mesh_config = {Width + 1u, Height + 1u, 1u, 101u}; // 1|4|32|64
+    measured.target_clip_from_source_eye = target_projection(-32.f);
+    measured.target_full_clip_from_source_eye = target_projection(-32.f);
+    const UINT measured_vertices = Width * Height * 6u;
+    const Image holes = fixture.render(measured, source, target, measured_vertices);
+    for (UINT x = 12; x <= 15; ++x)
+        need(color_at(holes, x, 8u)[3] < 0.01f,
+             "fixture did not produce the expected disocclusion strip");
+
+    Constants fill = measured;
+    fill.mesh_config = {Width / 2u + 1u, Height / 2u + 1u, 1u, 293u}; // 1|4|32|256
+    const UINT fill_vertices = (Width / 2u) * (Height / 2u) * 6u;
+    const Image filled = fixture.render(measured, source, target, measured_vertices,
+                                        &fill, fill_vertices);
+    for (UINT x = 12; x <= 15; ++x) {
+        const auto& c = color_at(filled, x, 8u);
+        need(c[3] > 0.99f && c[3] < 0.999f,
+             "disocclusion strip was not filled by the same-source fill pass");
+        need(c[2] > 0.98f * c[3] && c[0] < 0.02f,
+             "fill smeared foreground colour instead of stretching background");
+    }
+    const auto& edge = color_at(filled, 11u, 8u);
+    // Footprint colour is sampled bilinearly at the quad position (~12% of
+    // the blue neighbour texel here); the edge must stay predominantly red.
+    need(edge[0] > 0.8f && edge[0] > edge[2] && edge[3] > 0.999f &&
+         std::abs(depth_at(filled, 11u, 8u) - 0.01f) < 1.e-5f,
+         "fill overwrote the reprojected foreground edge");
+    const auto& background = color_at(filled, 20u, 8u);
+    need(background[2] > 0.98f && background[3] > 0.999f &&
+         std::abs(depth_at(filled, 20u, 8u) - 0.001f) < 1.e-5f,
+         "fill overwrote measured background");
+}
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -509,7 +559,8 @@ int main(int argc, char** argv) try {
     SurfaceFixture fixture(argv[1], argv[2]);
     test_measured_stripe_survives_and_reprojects(fixture);
     test_target_foreground_veto(fixture);
-    std::cout << "PASS: actual VSSurface/PSSurface WARP footprint topology, measured depth, stereo disparity, target occlusion\n";
+    test_same_source_disocclusion_fill(fixture);
+    std::cout << "PASS: actual VSSurface/PSSurface WARP footprint topology, measured depth, stereo disparity, target occlusion, CI82 same-source fill\n";
     return 0;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
