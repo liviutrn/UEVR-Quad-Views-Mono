@@ -32,8 +32,9 @@ struct alignas(16) DepthStabilizeConstants {
     float edge_tolerances[4]{};
     float previous_rect[4]{};
     float diagnostic_config[4]{};
+    float persistence_config[4]{};
 };
-static_assert(sizeof(DepthStabilizeConstants)==448);
+static_assert(sizeof(DepthStabilizeConstants)==464);
 
 // Per-eye jitter removal and conservative temporal history. GPU resources
 // remain slot-owned; submitted previous-frame depth is shared on one queue.
@@ -72,6 +73,7 @@ struct DepthHistoryDiagnostics {
 // separately retains the resource until its own slot fence has retired.
 struct DepthHistoryTimeline {
     Microsoft::WRL::ComPtr<ID3D12Resource> depth[2];
+    Microsoft::WRL::ComPtr<ID3D12Resource> state[2];
     Microsoft::WRL::ComPtr<ID3D12Device> device;
     uint64_t generation{},frame{},sequence{};
     uint64_t feature_generation[2]{};
@@ -84,7 +86,7 @@ struct DepthHistoryTimeline {
     bool temporal{},valid{};
     std::chrono::steady_clock::time_point record_time{};
     void clear() {
-        depth[0].Reset();depth[1].Reset();device.Reset();
+        depth[0].Reset();depth[1].Reset();state[0].Reset();state[1].Reset();device.Reset();
         valid=false;generation=frame=0;
     }
 };
@@ -95,21 +97,26 @@ class DepthStabilizer {
     DepthHistoryTimeline pending_history_;
     bool pending_history_ready_{};
     Ptr<ID3D12Resource> previous_resource_[2];
+    Ptr<ID3D12Resource> previous_state_[2];
     void import_history() {
         if(!timeline_) {
             for(UINT eye=0;eye<2;++eye)
                 previous_resource_[eye]=history_index_[eye]<0?nullptr:history_[eye][history_index_[eye]].Get();
+            for(UINT eye=0;eye<2;++eye)
+                previous_state_[eye]=history_index_[eye]<0?nullptr:state_[eye][history_index_[eye]].Get();
             return;
         }
         have_previous_frame_=timeline_->valid&&timeline_->device.Get()==device_.Get();
         if(!have_previous_frame_) {
             previous_resource_[0].Reset();previous_resource_[1].Reset();
+            previous_state_[0].Reset();previous_state_[1].Reset();
             previous_temporal_[0]=previous_temporal_[1]=false;return;
         }
         previous_generation_=timeline_->generation;previous_frame_=timeline_->frame;
         previous_crop_=timeline_->crop;previous_record_time_=timeline_->record_time;
         for(UINT eye=0;eye<2;++eye) {
             previous_resource_[eye]=timeline_->depth[eye];
+            previous_state_[eye]=timeline_->state[eye];
             previous_camera_[eye]=timeline_->camera[eye];previous_projection_[eye]=timeline_->projection[eye];
             previous_viewport_[eye]=timeline_->viewport[eye];
             previous_feature_[eye]=timeline_->feature[eye];
@@ -144,6 +151,7 @@ class DepthStabilizer {
     }
     Ptr<ID3D12Resource> raw_[2];
     Ptr<ID3D12Resource> history_[2][2];
+    Ptr<ID3D12Resource> state_[2][2];
     UINT width_[2]{},height_[2]{};
     DXGI_FORMAT raw_format_[2]{DXGI_FORMAT_UNKNOWN,DXGI_FORMAT_UNKNOWN};
     UINT srv_stride_{},rtv_stride_{};
@@ -204,14 +212,14 @@ class DepthStabilizer {
     bool create_objects(ID3D12Device* device) {
         device_=device;
         D3D12_DESCRIPTOR_RANGE range{};range.RangeType=D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors=2;range.BaseShaderRegister=0;range.RegisterSpace=0;
+        range.NumDescriptors=3;range.BaseShaderRegister=0;range.RegisterSpace=0;
         range.OffsetInDescriptorsFromTableStart=D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
         D3D12_ROOT_PARAMETER params[3]{};
         params[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[0].DescriptorTable={1,&range};params[0].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
         params[1].ParameterType=D3D12_ROOT_PARAMETER_TYPE_CBV;params[1].Descriptor={0,0};
         params[1].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
-        params[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_UAV;params[2].Descriptor={1,0};
+        params[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_UAV;params[2].Descriptor={2,0};
         params[2].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
         const D3D12_ROOT_SIGNATURE_DESC root_desc{3,params,0,nullptr,D3D12_ROOT_SIGNATURE_FLAG_NONE};
         Ptr<ID3DBlob> serialized,errors;
@@ -222,11 +230,18 @@ class DepthStabilizer {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC p{};p.pRootSignature=root_.Get();
         p.VS={vertex_shader_bytecode,sizeof(vertex_shader_bytecode)};
         p.PS={depth_stabilize_pixel_shader_bytecode,sizeof(depth_stabilize_pixel_shader_bytecode)};
+        p.BlendState.IndependentBlendEnable=TRUE;
         auto& blend=p.BlendState.RenderTarget[0];blend.SrcBlend=blend.SrcBlendAlpha=D3D12_BLEND_ONE;
         blend.DestBlend=blend.DestBlendAlpha=D3D12_BLEND_ZERO;
         blend.BlendOp=blend.BlendOpAlpha=D3D12_BLEND_OP_ADD;blend.LogicOp=D3D12_LOGIC_OP_NOOP;
         blend.RenderTargetWriteMask=D3D12_COLOR_WRITE_ENABLE_ALL;
-        p.SampleMask=UINT_MAX;p.NumRenderTargets=1;p.RTVFormats[0]=DXGI_FORMAT_R32_FLOAT;
+        auto& state_blend=p.BlendState.RenderTarget[1];
+        state_blend.SrcBlend=state_blend.SrcBlendAlpha=D3D12_BLEND_ONE;
+        state_blend.DestBlend=state_blend.DestBlendAlpha=D3D12_BLEND_ZERO;
+        state_blend.BlendOp=state_blend.BlendOpAlpha=D3D12_BLEND_OP_ADD;state_blend.LogicOp=D3D12_LOGIC_OP_NOOP;
+        state_blend.RenderTargetWriteMask=D3D12_COLOR_WRITE_ENABLE_ALL;
+        p.SampleMask=UINT_MAX;p.NumRenderTargets=2;p.RTVFormats[0]=DXGI_FORMAT_R32_FLOAT;
+        p.RTVFormats[1]=DXGI_FORMAT_R32G32B32A32_FLOAT;
         p.SampleDesc.Count=1;p.PrimitiveTopologyType=D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         p.RasterizerState.FillMode=D3D12_FILL_MODE_SOLID;p.RasterizerState.CullMode=D3D12_CULL_MODE_NONE;
         p.RasterizerState.DepthClipEnable=TRUE;
@@ -234,16 +249,17 @@ class DepthStabilizer {
         p.DepthStencilState.DepthFunc=D3D12_COMPARISON_FUNC_ALWAYS;
         if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&pipeline_)),"Depth stabilizer PSO"))return false;
         D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors=4;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        hd.NumDescriptors=6;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if(!check(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&srv_heap_)),"Depth stabilizer SRV heap"))return false;
         hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        hd.NumDescriptors=8;
         if(!check(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&rtv_heap_)),"Depth stabilizer RTV heap"))return false;
         srv_stride_=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         rtv_stride_=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_UPLOAD;
         heap.CreationNodeMask=heap.VisibleNodeMask=1;
         D3D12_RESOURCE_DESC buffer{};buffer.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
-        buffer.Width=1024;buffer.Height=1;buffer.DepthOrArraySize=1;buffer.MipLevels=1;
+        buffer.Width=1280;buffer.Height=1;buffer.DepthOrArraySize=1;buffer.MipLevels=1;
         buffer.SampleDesc.Count=1;buffer.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         if(!check(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&buffer,
                 D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&constants_)),
@@ -261,6 +277,7 @@ class DepthStabilizer {
     }
     bool create_history(UINT eye,UINT width,UINT height) {
         history_[eye][0].Reset();history_[eye][1].Reset();
+        state_[eye][0].Reset();state_[eye][1].Reset();
         D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
         heap.CreationNodeMask=heap.VisibleNodeMask=1;
         D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -275,6 +292,13 @@ class DepthStabilizer {
             D3D12_RENDER_TARGET_VIEW_DESC view{};view.Format=DXGI_FORMAT_R32_FLOAT;
             view.ViewDimension=D3D12_RTV_DIMENSION_TEXTURE2D;
             device_->CreateRenderTargetView(history_[eye][ping].Get(),&view,rtv_cpu(eye*2+ping));
+            desc.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;
+            if(!check(device_->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,initial,
+                    nullptr,IID_PPV_ARGS(&state_[eye][ping])),"Depth stabilizer persistence state"))return false;
+            view.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;
+            device_->CreateRenderTargetView(state_[eye][ping].Get(),&view,rtv_cpu(4+eye*2+ping));
+            desc.Format=DXGI_FORMAT_R32_FLOAT;
+            view.Format=DXGI_FORMAT_R32_FLOAT;
         }
         width_[eye]=width;height_[eye]=height;history_index_[eye]=-1;write_index_[eye]=-1;
         previous_temporal_[eye]=false;return true;
@@ -320,7 +344,7 @@ public:
     void commit_history(bool submitted) {
         if(!submitted) {
             // An unsubmitted list must not erase another slot's valid history.
-            pending_history_ready_=false;return;
+            pending_history_ready_=false;counters_pending_=false;return;
         }
         if(!pending_history_ready_)return;
         if(timeline_ && (!timeline_->valid || pending_history_.generation!=timeline_->generation ||
@@ -334,11 +358,13 @@ public:
     const std::string& error() const {return error_;}
     ID3D12Resource* left() const {return write_index_[0]>=0?history_[0][write_index_[0]].Get():nullptr;}
     ID3D12Resource* right() const {return write_index_[1]>=0?history_[1][write_index_[1]].Get():nullptr;}
+    ID3D12Resource* state(UINT eye) const {return eye<2 && write_index_[eye]>=0?state_[eye][write_index_[eye]].Get():nullptr;}
     bool ready() const {return write_index_[0]>=0&&write_index_[1]>=0;}
     void reset() {
         history_index_[0]=history_index_[1]=-1;
         write_index_[0]=write_index_[1]=-1;
         previous_resource_[0].Reset();previous_resource_[1].Reset();
+        previous_state_[0].Reset();previous_state_[1].Reset();
         pending_history_ready_=false;
         previous_temporal_[0]=previous_temporal_[1]=false;
         have_previous_frame_=false;previous_generation_=previous_frame_=0;
@@ -350,7 +376,8 @@ public:
 
     bool prepare(ID3D12Device* device,const ViewFrame& frame,const std::array<ngx::Guide,2>& guides,
             ID3D12Resource* raw_left,ID3D12Resource* raw_right,
-            const DepthViewport& left_view,const DepthViewport& right_view,float history_weight) {
+            const DepthViewport& left_view,const DepthViewport& right_view,float history_weight,
+            const std::array<float,4>& persistence={0.f,8.f,.2f,2.f}) {
         // Caller owns a retired command slot; its previous readback is now safe.
         consume_counters();pending_history_ready_=false;
         error_.clear();write_index_[0]=write_index_[1]=-1;
@@ -361,7 +388,11 @@ public:
            !frame.cameras[0]||!frame.cameras[1]) {
             error_="Depth stabilization requires frozen per-eye camera and projection metadata";return false;
         }
-        history_weight=std::isfinite(history_weight)?std::clamp(history_weight,0.f,.9f):0.f;
+        const float persistence_enabled=std::isfinite(persistence[0])&&persistence[0]!=0.f?1.f:0.f;
+        const float hold_frames=std::isfinite(persistence[1])?std::clamp(persistence[1],0.f,30.f):8.f;
+        const float switch_threshold=std::isfinite(persistence[2])?std::clamp(persistence[2],.05f,.9f):.2f;
+        const float max_reproject=std::isfinite(persistence[3])?std::clamp(persistence[3],.5f,8.f):2.f;
+        history_weight=std::isfinite(history_weight)?std::clamp(history_weight,0.f,persistence_enabled?.99f:.9f):0.f;
         ID3D12Resource* raw[]{raw_left,raw_right};
         const DepthViewport views[]{left_view,right_view};
         const std::array<float,16>* projections[]{&frame.projection,&frame.projection_right};
@@ -463,11 +494,13 @@ public:
             c.previous_range_weight[2]=history_valid_[eye]?history_weight:0.f;
             c.previous_range_weight[3]=history_valid_[eye]?1.f:0.f;
             c.edge_tolerances[0]=2.f;c.edge_tolerances[1]=.015f;
-            c.edge_tolerances[2]=1.5f;c.edge_tolerances[3]=80.f;
+            c.edge_tolerances[2]=1.5f;c.edge_tolerances[3]=persistence_enabled?0.f:80.f;
             const auto old_view=history_valid_[eye]?previous_viewport_[eye]:views[eye];
             c.previous_rect[0]=old_view.x;c.previous_rect[1]=old_view.y;
             c.previous_rect[2]=old_view.width;c.previous_rect[3]=old_view.height;
             c.diagnostic_config[0]=1.f;c.diagnostic_config[1]=float(eye*32);c.diagnostic_config[2]=16.f;
+            c.persistence_config[0]=persistence_enabled;c.persistence_config[1]=hold_frames;
+            c.persistence_config[2]=switch_threshold;c.persistence_config[3]=max_reproject;
             pending_camera_[eye]=*current_camera[eye];
             pending_projection_[eye]=*projections[eye];
             pending_viewport_[eye]=views[eye];
@@ -478,19 +511,26 @@ public:
             D3D12_SHADER_RESOURCE_VIEW_DESC view{};view.Format=depth_srv_format(raw_format_[eye]);
             view.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;view.Texture2D.MipLevels=1;
-            const UINT base=eye*2;
+            const UINT base=eye*3;
             device->CreateShaderResourceView(raw[eye],&view,srv_cpu(base));
             view.Format=DXGI_FORMAT_R32_FLOAT;
             ID3D12Resource* old=history_valid_[eye]?previous_resource_[eye].Get():
                 history_[eye][write_index_[eye]^1].Get();
             device->CreateShaderResourceView(old,&view,srv_cpu(base+1));
+            D3D12_SHADER_RESOURCE_VIEW_DESC state_view{};
+            state_view.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;
+            state_view.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            state_view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;state_view.Texture2D.MipLevels=1;
+            ID3D12Resource* old_state=previous_state_[eye]?previous_state_[eye].Get():
+                state_[eye][write_index_[eye]^1].Get();
+            device->CreateShaderResourceView(old_state,&state_view,srv_cpu(base+2));
         }
         void* mapped{};D3D12_RANGE read{0,0};
         if(!check(constants_->Map(0,&read,&mapped),"Depth stabilizer constant map"))return false;
-        std::memset(mapped,0,1024); // bytes448..511 provide immutable counter clear data
+        std::memset(mapped,0,1280); // bytes1024..1087 provide immutable counter clear data
         for(UINT eye=0;eye<2;++eye)
             std::memcpy(static_cast<uint8_t*>(mapped)+eye*512,&constants[eye],sizeof(DepthStabilizeConstants));
-        D3D12_RANGE written{0,1024};constants_->Unmap(0,&written);
+        D3D12_RANGE written{0,1280};constants_->Unmap(0,&written);
         return true;
     }
 
@@ -500,7 +540,7 @@ public:
         if(!cmd||!ready()||cmd->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT) {
             error_="Depth stabilizer record called without a prepared direct command list";return false;
         }
-        cmd->CopyBufferRegion(counters_.Get(),0,constants_.Get(),448,64);
+        cmd->CopyBufferRegion(counters_.Get(),0,constants_.Get(),1024,64);
         transition(cmd,counters_.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ID3D12DescriptorHeap* heaps[]{srv_heap_.Get()};cmd->SetDescriptorHeaps(1,heaps);
         cmd->SetGraphicsRootSignature(root_.Get());cmd->SetPipelineState(pipeline_.Get());
@@ -510,17 +550,23 @@ public:
                                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         for(UINT eye=0;eye<2;++eye) {
             auto* output=history_[eye][write_index_[eye]].Get();
+            auto* state_output=state_[eye][write_index_[eye]].Get();
             transition(cmd,output,readable,D3D12_RESOURCE_STATE_RENDER_TARGET);
+            transition(cmd,state_output,readable,D3D12_RESOURCE_STATE_RENDER_TARGET);
             const auto target=rtv_cpu(eye*2+write_index_[eye]);
+            const auto state_target=rtv_cpu(4+eye*2+write_index_[eye]);
             const float clear[4]{};cmd->ClearRenderTargetView(target,clear,0,nullptr);
+            cmd->ClearRenderTargetView(state_target,clear,0,nullptr);
             const D3D12_VIEWPORT viewport{0,0,float(width_[eye]),float(height_[eye]),0,1};
             const D3D12_RECT rect{0,0,LONG(width_[eye]),LONG(height_[eye])};
             cmd->RSSetViewports(1,&viewport);cmd->RSSetScissorRects(1,&rect);
-            cmd->OMSetRenderTargets(1,&target,FALSE,nullptr);
-            cmd->SetGraphicsRootDescriptorTable(0,srv_gpu(eye*2));
+            D3D12_CPU_DESCRIPTOR_HANDLE targets[]{target,state_target};
+            cmd->OMSetRenderTargets(2,targets,FALSE,nullptr);
+            cmd->SetGraphicsRootDescriptorTable(0,srv_gpu(eye*3));
             cmd->SetGraphicsRootConstantBufferView(1,constants_->GetGPUVirtualAddress()+UINT64(eye)*512);
             cmd->DrawInstanced(3,1,0,0);
             transition(cmd,output,D3D12_RESOURCE_STATE_RENDER_TARGET,readable);
+            transition(cmd,state_output,D3D12_RESOURCE_STATE_RENDER_TARGET,readable);
         }
         transition(cmd,counters_.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
         cmd->CopyBufferRegion(counter_readback_.Get(),0,counters_.Get(),0,64);
@@ -546,6 +592,7 @@ public:
         pending_history_.valid=have_previous_frame_;
         for(UINT eye=0;eye<2;++eye) {
             pending_history_.depth[eye]=history_[eye][write_index_[eye]];
+            pending_history_.state[eye]=state_[eye][write_index_[eye]];
             pending_history_.camera[eye]=previous_camera_[eye];
             pending_history_.projection[eye]=previous_projection_[eye];
             pending_history_.viewport[eye]=previous_viewport_[eye];

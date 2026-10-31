@@ -1,5 +1,5 @@
-name: DuoView CI80 temporal history and classic DIBR Windows build
-run-name: DuoView CI80 submitted-frame history + classic DIBR - Windows build (#${{ github.run_number }})
+name: DuoView CI81 persistent whole-map depth Windows build
+run-name: DuoView CI81 whole-map persistence + edge hold - Windows build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -27,6 +27,7 @@ on:
       - experiment/ci76-capture-guided-stability-20261030
       - experiment/ci77-stabilized-depth-left-geometry-20261030
       - experiment/ci80-temporal-history-classic-dibr-20261031
+      - experiment/ci81-persistent-depth-20261031
     paths:
       - ci51/**
       - ci69/**
@@ -775,7 +776,7 @@ jobs:
             ngx_fallback='Mono, no DSV candidate substitution'; ngx_observer_default='enabled'; ngx_manual_gallery=$true; ngx_dsv_copy_disabled=$true;
             motion_vectors_captured='optional diagnostic if input compatible'; motion_vectors_used_for_temporal_reconstruction=$false;
             depth_eye_frame_stage_identity_verified=$false; depth_pass_jitter_authenticated=$false;
-            mode='experimental-ci80-submitted-frame-history-classic-dibr'; ci80_submitted_history=$true; ci80_measured_history_counters=$true; ci80_classic_dibr=$true; ci77_depth_phase_correction=$true; ci77_camera_reprojected_depth_history=$true; ci77_left_geometry_primary=$true; ci77b_pixel_footprints_configurable=$true; ci77_processed_depth_preview=$true; ci76_exclusive_owners=$true; ci76_same_feature_resize=$true; ci76_pair_recovery=8; ci76_mpc_readback=$true; stable_release=$false; ci69_manual_ngx=$true;
+            mode='experimental-ci81-persistent-whole-map-depth'; ci81_two_layer_depth_history=$true; ci81_edge_hold_frames_default=8; ci81_strength_default=95; ci81_retained_mask_preview=$true; ci80_submitted_history=$true; ci80_measured_history_counters=$true; ci80_classic_dibr=$true; ci77_depth_phase_correction=$true; ci77_camera_reprojected_depth_history=$true; ci77_left_geometry_primary=$true; ci77b_pixel_footprints_configurable=$true; ci77_processed_depth_preview=$true; ci76_exclusive_owners=$true; ci76_same_feature_resize=$true; ci76_pair_recovery=8; ci76_mpc_readback=$true; stable_release=$false; ci69_manual_ngx=$true;
             ci74_right_owner_mask_jitter_compensated=$true; ci74_target_footprint_centered=$true;
             ci75_lossless_sequence_recorder=$true; ci75_sequence_schema='duoview-diagnostic-sequence-2';
             ci75_upload_part_limit_bytes=20971520; ci75_size_truncation=$false
@@ -803,27 +804,27 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'TRUE STEREO XR V1') { throw 'Missing or stale actual stereo headset instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-CI80-Experimental-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-CI81-Experimental-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
           Copy-Item package/final-generated-source-sha256.json evidence/final-public-source/
           Copy-Item workspace/ci51/README_TEST_BUILD.md evidence/final-public-source/
-          $sourceZip="UEVR-DuoView-CI80-Public-Source-${{ github.run_number }}.zip"
+          $sourceZip="UEVR-DuoView-CI81-Public-Source-${{ github.run_number }}.zip"
           Compress-Archive -Path evidence/final-public-source/* -DestinationPath $sourceZip -Force
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI80-Experimental-${{ github.run_number }}
+          name: UEVR-DuoView-CI81-Experimental-${{ github.run_number }}
           path: |
-            UEVR-DuoView-CI80-Experimental-*.zip
-            UEVR-DuoView-CI80-Experimental-*.zip.sha256
+            UEVR-DuoView-CI81-Experimental-*.zip
+            UEVR-DuoView-CI81-Experimental-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI80-Public-Source-${{ github.run_number }}
-          path: UEVR-DuoView-CI80-Public-Source-*.zip
+          name: UEVR-DuoView-CI81-Public-Source-${{ github.run_number }}
+          path: UEVR-DuoView-CI81-Public-Source-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance

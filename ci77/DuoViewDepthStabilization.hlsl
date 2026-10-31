@@ -3,7 +3,8 @@
 // The input and output keep device-depth encoding and the source allocation.
 Texture2D<float> CurrentDepth : register(t0);
 Texture2D<float> PreviousDepth : register(t1);
-RWByteAddressBuffer HistoryCounters : register(u1);
+Texture2D<float4> PreviousState : register(t2);
+RWByteAddressBuffer HistoryCounters : register(u2);
 
 cbuffer StabilizeDepthConfig : register(b0) {
     row_major float4x4 CurrentEyeFromClip;
@@ -19,6 +20,7 @@ cbuffer StabilizeDepthConfig : register(b0) {
     float4 EdgeTolerances;         // absZ, relZ, maxReprojectionErrorPx, reserved
     float4 PreviousRect;           // previous active depth viewport, same allocation
     float4 DiagnosticConfig;       // enabled, eye counter byte offset, sampling stride, reserved
+    float4 PersistenceConfig;      // enabled, unsupported hold frames, switch support, roundtrip pixels
 };
 
 struct VertexOut {
@@ -224,15 +226,161 @@ float TemporalBlend(int2 pixel, float currentRaw, float currentZ, int2 size,
     return RawFromForwardZ(blendedZ,CurrentRangeJitter.xy,CurrentProjection);
 }
 
-float PSStabilizeDepth(VertexOut i) : SV_TARGET0 {
+
+// CI81 keeps two surface hypotheses in addition to the selected guide. Their
+// device-depth endpoints stay separate; no foreground/background depth average.
+// State: foregroundRaw, backgroundRaw, foregroundConfidence, unsupportedAge.
+void CurrentLayers(int2 pixel,int2 size,out float fgRaw,out float fgZ,
+                   out float bgRaw,out float bgZ,out float support) {
+    fgRaw=bgRaw=-1.f;fgZ=bgZ=-1.f;support=0.f;
+    const int2 lo=ActiveMin(size,ActiveRect),hi=ActiveMax(size,ActiveRect);
+    const float2 q=float2(pixel)+CurrentRangeJitter.zw;
+    const int2 first=int2(floor(q));const float2 f=frac(q);
+    const int2 offsets[4]={int2(0,0),int2(1,0),int2(0,1),int2(1,1)};
+    const float weights[4]={(1-f.x)*(1-f.y),f.x*(1-f.y),(1-f.x)*f.y,f.x*f.y};
+    float raw[4],z[4];
+    [unroll] for(int k=0;k<4;++k) {
+        raw[k]=CurrentDepth.Load(int3(clamp(first+offsets[k],lo,hi),0));
+        z[k]=ForwardZ(raw[k],CurrentRangeJitter.xy,CurrentProjection);
+        if(weights[k]>.0001f && z[k]>0.f) {
+            if(fgZ<=0.f||z[k]<fgZ){fgZ=z[k];fgRaw=raw[k];}
+            if(bgZ<=0.f||z[k]>bgZ){bgZ=z[k];bgRaw=raw[k];}
+        }
+    }
+    if(fgZ<=0.f)return;
+    float fgSum=0.f,bgSum=0.f,fgDepthSum=0.f,bgDepthSum=0.f;
+    const float tolerance=EdgeTolerances.x+EdgeTolerances.y*fgZ;
+    [unroll] for(int k=0;k<4;++k) {
+        if(z[k]>0.f && abs(z[k]-fgZ)<=tolerance) {
+            fgSum+=weights[k];fgDepthSum+=weights[k]*z[k];
+        } else if(z[k]>0.f) {bgSum+=weights[k];bgDepthSum+=weights[k]*z[k];}
+    }
+    support=fgSum;fgZ=fgDepthSum/max(fgSum,1.e-7f);
+    fgRaw=RawFromForwardZ(fgZ,CurrentRangeJitter.xy,CurrentProjection);
+    if(bgSum>1.e-7f) {
+        bgZ=bgDepthSum/bgSum;bgRaw=RawFromForwardZ(bgZ,CurrentRangeJitter.xy,CurrentProjection);
+    } else {bgZ=-1.f;bgRaw=-1.f;} // no distinct measured background
+}
+bool ReprojectEndpoint(int2 priorPixel,float raw,int2 pixel,out float currentZ,out float error) {
+    currentZ=-1.f;error=1.e30f;
+    if(ForwardZ(raw,PreviousRangeWeight.xy,PreviousProjection)<=0.f)return false;
+    const float previousD=(raw-PreviousRangeWeight.x)/(PreviousRangeWeight.y-PreviousRangeWeight.x);
+    const float2 oldUV=PixelToUV(float2(priorPixel)+.5f,PreviousRect);
+    const float4 oldH=mul(PreviousEyeFromClip,float4(ClipXY(oldUV),previousD,1.f));
+    if(!all(isfinite(oldH))||abs(oldH.w)<1.e-8f)return false;
+    const float4 currentH=mul(CurrentEyeFromPreviousEye,float4(oldH.xyz/oldH.w,1.f));
+    if(!all(isfinite(currentH))||abs(currentH.w)<1.e-8f)return false;
+    const float3 currentEye=currentH.xyz/currentH.w;
+    const float4 clip=mul(CurrentClipFromCurrentEye,float4(currentEye,1.f));
+    if(!all(isfinite(clip))||clip.w<=1.e-7f||currentEye.z<=0.f)return false;
+    const float2 uv=float2(.5f+.5f*clip.x/clip.w,.5f-.5f*clip.y/clip.w);
+    error=length(ActiveRect.xy+uv*ActiveRect.zw-.5f-float2(pixel));
+    currentZ=currentEye.z;
+    return error<=PersistenceConfig.w;
+}
+float PersistentDepth(int2 pixel,int2 size,float currentRaw,float currentZ,
+                      out float4 nextState,out float appliedWeight,out bool retainedEdge) {
+    appliedWeight=0.f;retainedEdge=false;
+    float fgRaw,fgZ,bgRaw,bgZ,currentSupport;
+    CurrentLayers(pixel,size,fgRaw,fgZ,bgRaw,bgZ,currentSupport);
+    const float threshold=clamp(PersistenceConfig.z,.05f,.9f);
+    nextState=float4(fgRaw,bgRaw,currentSupport>=threshold?1.f:0.f,0.f);
+    const float weight=clamp(PreviousRangeWeight.z,0.f,.99f);
+    if(PreviousRangeWeight.w<.5f||weight<=0.f)return currentRaw;
+
+    // Use the nearest current measured hypothesis as the reprojection anchor.
+    // Sky uses a far ray. Camera motion is compensated; moving objects may
+    // leave the explicitly accepted bounded trail.
+    const float anchorZ=fgZ>0.f?fgZ:(currentZ>0.f?currentZ:1.e6f);
+    const float anchorRaw=RawFromForwardZ(anchorZ,CurrentRangeJitter.xy,CurrentProjection);
+    const float anchorD=(anchorRaw-CurrentRangeJitter.x)/(CurrentRangeJitter.y-CurrentRangeJitter.x);
+    const float2 uv=PixelToUV(float2(pixel)+.5f,ActiveRect);
+    const float4 eyeH=mul(CurrentEyeFromClip,float4(ClipXY(uv),anchorD,1.f));
+    if(!all(isfinite(eyeH))||abs(eyeH.w)<1.e-8f)return currentRaw;
+    const float4 previousClip=mul(PreviousClipFromCurrentEye,float4(eyeH.xyz/eyeH.w,1.f));
+    if(!all(isfinite(previousClip))||previousClip.w<=1.e-7f)return currentRaw;
+    const float2 oldUV=float2(.5f+.5f*previousClip.x/previousClip.w,.5f-.5f*previousClip.y/previousClip.w);
+    if(any(oldUV<0.f)||any(oldUV>1.f))return currentRaw;
+    const float2 coord=PreviousRect.xy+oldUV*PreviousRect.zw-.5f;
+    const int2 first=int2(floor(coord));
+    const int2 lo=ActiveMin(size,PreviousRect),hi=ActiveMax(size,PreviousRect);
+    const int2 offsets[4]={int2(0,0),int2(1,0),int2(0,1),int2(1,1)};
+    float oldZ=-1.f,oldBackgroundZ=-1.f,confidence=0.f,age=0.f,bestScore=-1.e30f;
+    [unroll] for(int k=0;k<4;++k) {
+        const int2 tap=first+offsets[k];if(any(tap<lo)||any(tap>hi))continue;
+        float4 state=PreviousState.Load(int3(tap,0));
+        // Bootstrap from a selected guide when enabling the stronger mode;
+        // never let uninitialized state create a foreground endpoint.
+        if(state.z<=0.f || ForwardZ(state.x,PreviousRangeWeight.xy,PreviousProjection)<=0.f) {
+            state=float4(PreviousDepth.Load(int3(tap,0)),-1.f,1.f,0.f);
+        }
+        float z,error;if(!ReprojectEndpoint(tap,state.x,pixel,z,error))continue;
+        const float sameTolerance=EdgeTolerances.x+EdgeTolerances.y*max(z,fgZ);
+        const bool same=fgZ>0.f&&abs(z-fgZ)<=sameTolerance;
+        // Nearest reprojected owner wins over a farther matching background.
+        // Otherwise a one-pixel stem is replaced by its neighbour on dropout.
+        const float score=saturate(state.z)-4.f*error+(same?.05f:0.f);
+        if(score>bestScore) {
+            bestScore=score;oldZ=z;confidence=saturate(state.z);age=max(0.f,state.w);
+            float bgError;
+            if(!ReprojectEndpoint(tap,state.y,pixel,oldBackgroundZ,bgError))oldBackgroundZ=-1.f;
+        }
+    }
+    if(oldZ<=0.f)return currentRaw;
+    const float tolerance=EdgeTolerances.x+EdgeTolerances.y*oldZ;
+    // A new closer occluder wins immediately. Old background must not paint
+    // through a newly arrived hand/character even at maximum persistence.
+    if(fgZ>0.f && fgZ+tolerance<oldZ && currentSupport>=threshold) {
+        nextState=float4(fgRaw,bgRaw,1.f,0.f);return fgRaw;
+    }
+    if(fgZ>0.f && abs(fgZ-oldZ)<=tolerance && currentSupport>.001f) {
+        const float stableZ=lerp(fgZ,oldZ,weight);
+        const float stableRaw=RawFromForwardZ(stableZ,CurrentRangeJitter.xy,CurrentProjection);
+        if(bgZ>0.f && oldBackgroundZ>0.f &&
+           abs(bgZ-oldBackgroundZ)<=EdgeTolerances.x+EdgeTolerances.y*bgZ)
+            bgRaw=RawFromForwardZ(lerp(bgZ,oldBackgroundZ,weight),CurrentRangeJitter.xy,CurrentProjection);
+        else if(bgZ<=0.f && oldBackgroundZ>0.f)
+            bgRaw=RawFromForwardZ(oldBackgroundZ,CurrentRangeJitter.xy,CurrentProjection);
+        const float nextConfidence=min(1.f,confidence+.25f*currentSupport);
+        nextState=float4(stableRaw,bgRaw,nextConfidence,0.f);
+        if(currentSupport>=threshold || confidence>=threshold ||
+           (currentZ>0.f&&abs(currentZ-fgZ)<=tolerance)) {
+            appliedWeight=weight;return stableRaw;
+        }
+        return currentRaw;
+    }
+    const float nextAge=age+1.f;
+    const float hold=clamp(round(PersistenceConfig.y),0.f,30.f);
+    // Unlike CI80, missing current support is allowed for a bounded number of
+    // frames. Foreground ownership survives a brief aliasing/depth dropout.
+    if(hold>0.f && nextAge<=hold && confidence>=threshold &&
+       (fgZ<=0.f || oldZ+tolerance<fgZ)) {
+        const float oldRaw=RawFromForwardZ(oldZ,CurrentRangeJitter.xy,CurrentProjection);
+        const float newBackground=fgZ>0.f?fgRaw:bgRaw;
+        nextState=float4(oldRaw,newBackground,confidence*(hold/(hold+1.f)),nextAge);
+        appliedWeight=weight;retainedEdge=true;return oldRaw;
+    }
+    // Release once evidence has remained absent for the configured window.
+    // Do not average the released foreground into the visible background.
+    if(fgZ>0.f&&currentSupport>=threshold)return fgRaw;
+    return currentRaw;
+}
+struct StabilizedOutput {
+    float depth : SV_TARGET0;
+    float4 state : SV_TARGET1;
+};
+
+StabilizedOutput PSStabilizeDepth(VertexOut i) {
     uint width,height;CurrentDepth.GetDimensions(width,height);
     const int2 size=int2(width,height);
     const int2 pixel=int2(i.pos.xy);
     float currentZ;
     const float currentRaw=StabilizeSpatial(pixel,size,currentZ);
     float appliedWeight=0.f;bool edgeReused=false;
-    float result=currentRaw;
-    if(currentZ>0.f) {
+    float result=currentRaw;float4 state=0.f;
+    if(PersistenceConfig.x>.5f && all(pixel>=ActiveMin(size,ActiveRect)) && all(pixel<=ActiveMax(size,ActiveRect))) {
+        result=PersistentDepth(pixel,size,currentRaw,currentZ,state,appliedWeight,edgeReused);
+    } else if(currentZ>0.f) {
         result=TemporalBlend(pixel,currentRaw,currentZ,size,appliedWeight,edgeReused);
     } else if(PreviousRangeWeight.w>.5f && PreviousRangeWeight.z>0.f &&
               all(pixel>=ActiveMin(size,ActiveRect)) && all(pixel<=ActiveMax(size,ActiveRect))) {
@@ -262,5 +410,5 @@ float PSStabilizeDepth(VertexOut i) : SV_TARGET0 {
         }
         if(edgeReused)HistoryCounters.InterlockedAdd(base+16u,1u,ignored);
     }
-    return result;
+    StabilizedOutput output;output.depth=result;output.state=state;return output;
 }

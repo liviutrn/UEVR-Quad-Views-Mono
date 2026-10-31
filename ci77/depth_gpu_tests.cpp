@@ -74,6 +74,9 @@ struct Parameters {
     std::array<float, 4> current_projection{0.f, 1.f, 1.f, 0.f};
     std::array<float, 4> previous_projection{0.f, 1.f, 1.f, 0.f};
     std::array<float, 4> diagnostic_config{1.f, 0.f, 16.f, 0.f};
+    // Appended production persistence controls: enabled, unsupported-frame hold,
+    // confidence switch threshold, and maximum history reprojection in pixels.
+    std::array<float, 4> persistence_config{0.f, 8.f, .2f, 1.5f};
 };
 
 struct CounterStats {
@@ -86,16 +89,17 @@ class StabilizeFixture final {
     ComPtr<ID3D11PixelShader> pixel_shader_;
     ComPtr<ID3D11VertexShader> vertex_shader_;
     ComPtr<ID3D11Buffer> constants_;
-    ComPtr<ID3D11Texture2D> current_, previous_, output_, readback_;
+    ComPtr<ID3D11Texture2D> current_, previous_, previous_state_, output_, output_state_, readback_, state_readback_;
     ComPtr<ID3D11Buffer> counters_, counter_readback_;
-    ComPtr<ID3D11ShaderResourceView> current_srv_, previous_srv_;
-    ComPtr<ID3D11RenderTargetView> output_rtv_;
+    ComPtr<ID3D11ShaderResourceView> current_srv_, previous_srv_, previous_state_srv_, output_state_srv_;
+    ComPtr<ID3D11RenderTargetView> output_rtv_, output_state_rtv_;
     ComPtr<ID3D11UnorderedAccessView> counters_uav_;
     ComPtr<ID3D11RasterizerState> rasterizer_;
     ComPtr<ID3D11ShaderReflection> reflection_;
     ID3D11ShaderReflectionConstantBuffer* config_{};
     std::array<unsigned char, ConstantBytes> constant_data_{};
     std::array<uint32_t, 16> last_counters_{};
+    std::vector<std::array<float, 4>> last_state_ = std::vector<std::array<float, 4>>(PixelCount);
 
     void set_bytes(const char* variable, const void* data, size_t bytes) {
         D3D11_SHADER_VARIABLE_DESC desc{};
@@ -128,6 +132,7 @@ class StabilizeFixture final {
         set_vec4("EdgeTolerances", p.edge_tolerances);
         set_vec4("PreviousRect", p.previous_rect);
         set_vec4("DiagnosticConfig", p.diagnostic_config);
+        set_vec4("PersistenceConfig", p.persistence_config);
         context_->UpdateSubresource(constants_.Get(), 0, nullptr,
                                     constant_data_.data(), 0, 0);
     }
@@ -165,12 +170,12 @@ public:
         D3D11_SHADER_INPUT_BIND_DESC counter_binding{};
         hr(reflection_->GetResourceBindingDescByName("HistoryCounters", &counter_binding),
            "reflect diagnostic UAV binding");
-        need(counter_binding.Type == D3D_SIT_UAV_RWBYTEADDRESS && counter_binding.BindPoint == 1,
-             "diagnostic byte-address UAV must bind at u1 beside RTV0");
+        need(counter_binding.Type == D3D_SIT_UAV_RWBYTEADDRESS && counter_binding.BindPoint == 2,
+             "diagnostic byte-address UAV must bind at u2 beside two MRTs");
         config_ = reflection_->GetConstantBufferByName("StabilizeDepthConfig");
         D3D11_SHADER_BUFFER_DESC config_desc{};
         hr(config_->GetDesc(&config_desc), "reflect stabilization constants");
-        need(config_desc.Size == 448, "stabilization b0 ABI is not 448 bytes");
+        need(config_desc.Size == 464, "stabilization b0 ABI is not 464 bytes");
 
         D3D11_BUFFER_DESC buffer_desc{};
         buffer_desc.ByteWidth = UINT(ConstantBytes);
@@ -192,13 +197,26 @@ public:
         hr(device_->CreateShaderResourceView(current_.Get(), nullptr, &current_srv_), "create current SRV");
         hr(device_->CreateShaderResourceView(previous_.Get(), nullptr, &previous_srv_), "create history SRV");
 
+        texture_desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        hr(device_->CreateTexture2D(&texture_desc, nullptr, &previous_state_), "create history state");
+        hr(device_->CreateShaderResourceView(previous_state_.Get(), nullptr, &previous_state_srv_), "create history state SRV");
+        texture_desc.Format = DXGI_FORMAT_R32_FLOAT;
+
         texture_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
         hr(device_->CreateTexture2D(&texture_desc, nullptr, &output_), "create output depth");
         hr(device_->CreateRenderTargetView(output_.Get(), nullptr, &output_rtv_), "create output RTV");
+        texture_desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        texture_desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+        hr(device_->CreateTexture2D(&texture_desc, nullptr, &output_state_), "create output state");
+        hr(device_->CreateRenderTargetView(output_state_.Get(), nullptr, &output_state_rtv_), "create output state RTV");
+        hr(device_->CreateShaderResourceView(output_state_.Get(), nullptr, &output_state_srv_), "create output state SRV");
+        texture_desc.Format = DXGI_FORMAT_R32_FLOAT;
         texture_desc.Usage = D3D11_USAGE_STAGING;
         texture_desc.BindFlags = 0;
         texture_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         hr(device_->CreateTexture2D(&texture_desc, nullptr, &readback_), "create readback texture");
+        texture_desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        hr(device_->CreateTexture2D(&texture_desc, nullptr, &state_readback_), "create state readback texture");
 
         D3D11_BUFFER_DESC counter_desc{};
         counter_desc.ByteWidth = UINT(CounterBytes);
@@ -229,20 +247,31 @@ public:
 
     std::vector<float> render(const std::vector<float>& current,
                               const std::vector<float>& previous,
-                              const Parameters& parameters) {
+                              const Parameters& parameters,
+                              const std::vector<std::array<float, 4>>& previous_state = {}) {
         need(current.size() == PixelCount && previous.size() == PixelCount,
              "incorrect input plane size");
+        need(previous_state.empty() || previous_state.size() == PixelCount,
+             "incorrect input state plane size");
         set_constants(parameters);
         context_->UpdateSubresource(current_.Get(), 0, nullptr, current.data(),
                                     Width * UINT(sizeof(float)), 0);
         context_->UpdateSubresource(previous_.Get(), 0, nullptr, previous.data(),
                                     Width * UINT(sizeof(float)), 0);
+        std::vector<std::array<float, 4>> zero_state;
+        const auto* state_data = &previous_state;
+        if (previous_state.empty()) {
+            zero_state.resize(PixelCount);
+            state_data = &zero_state;
+        }
+        context_->UpdateSubresource(previous_state_.Get(), 0, nullptr, state_data->data(),
+                                    Width * UINT(sizeof(std::array<float, 4>)), 0);
 
-        ID3D11RenderTargetView* rtv = output_rtv_.Get();
+        ID3D11RenderTargetView* rtvs[]{output_rtv_.Get(), output_state_rtv_.Get()};
         const UINT zeros[4]{};
         context_->ClearUnorderedAccessViewUint(counters_uav_.Get(), zeros);
         context_->OMSetRenderTargetsAndUnorderedAccessViews(
-            1, &rtv, nullptr, 1, 1, counters_uav_.GetAddressOf(), nullptr);
+            2, rtvs, nullptr, 2, 1, counters_uav_.GetAddressOf(), nullptr);
         const D3D11_VIEWPORT viewport{0.f, 0.f, float(Width), float(Height), 0.f, 1.f};
         context_->RSSetViewports(1, &viewport);
         context_->RSSetState(rasterizer_.Get());
@@ -252,12 +281,15 @@ public:
         context_->PSSetShader(pixel_shader_.Get(), nullptr, 0);
         ID3D11Buffer* cb = constants_.Get();
         context_->PSSetConstantBuffers(0, 1, &cb);
-        ID3D11ShaderResourceView* srvs[]{current_srv_.Get(), previous_srv_.Get()};
-        context_->PSSetShaderResources(0, 2, srvs);
+        ID3D11ShaderResourceView* srvs[]{current_srv_.Get(), previous_srv_.Get(), previous_state_srv_.Get()};
+        context_->PSSetShaderResources(0, 3, srvs);
         context_->Draw(3, 0);
+        ID3D11UnorderedAccessView* no_uav[]{nullptr};
+        context_->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 2, 1, no_uav, nullptr);
         context_->OMSetRenderTargets(0, nullptr, nullptr);
         context_->CopyResource(counter_readback_.Get(), counters_.Get());
         context_->CopyResource(readback_.Get(), output_.Get());
+        context_->CopyResource(state_readback_.Get(), output_state_.Get());
 
         D3D11_MAPPED_SUBRESOURCE mapped{};
         hr(context_->Map(readback_.Get(), 0, D3D11_MAP_READ, 0, &mapped), "map output depth");
@@ -267,13 +299,21 @@ public:
             std::memcpy(result.data() + size_t(y) * Width, row, size_t(Width) * sizeof(float));
         }
         context_->Unmap(readback_.Get(), 0);
+        D3D11_MAPPED_SUBRESOURCE state_mapped{};
+        hr(context_->Map(state_readback_.Get(), 0, D3D11_MAP_READ, 0, &state_mapped), "map output state");
+        last_state_.resize(PixelCount);
+        for (UINT y = 0; y < Height; ++y) {
+            const auto* row = static_cast<const unsigned char*>(state_mapped.pData) + size_t(y) * state_mapped.RowPitch;
+            std::memcpy(last_state_.data() + size_t(y) * Width, row, size_t(Width) * sizeof(last_state_[0]));
+        }
+        context_->Unmap(state_readback_.Get(), 0);
         D3D11_MAPPED_SUBRESOURCE counter_mapped{};
         hr(context_->Map(counter_readback_.Get(), 0, D3D11_MAP_READ, 0, &counter_mapped),
            "map diagnostic counters");
         std::memcpy(last_counters_.data(), counter_mapped.pData, CounterBytes);
         context_->Unmap(counter_readback_.Get(), 0);
-        ID3D11ShaderResourceView* empty[]{nullptr, nullptr};
-        context_->PSSetShaderResources(0, 2, empty);
+        ID3D11ShaderResourceView* empty[]{nullptr, nullptr, nullptr};
+        context_->PSSetShaderResources(0, 3, empty);
         context_->OMSetRenderTargets(0, nullptr, nullptr);
         return result;
     }
@@ -283,6 +323,8 @@ public:
         return {last_counters_[base], last_counters_[base+1], last_counters_[base+2],
                 last_counters_[base+3], last_counters_[base+4], last_counters_[base+5]};
     }
+
+    const std::vector<std::array<float, 4>>& last_state() const { return last_state_; }
 };
 
 float plane_z(float ndc_x, float ndc_y) {
@@ -526,6 +568,156 @@ void test_reset_bypasses_history(StabilizeFixture& fixture) {
     need(std::abs(at(valid_history_result, 12, 8) - at(reset_result, 12, 8)) > 1.e-5f,
          "reset fixture did not distinguish temporal history from current-only output");
 }
+
+std::vector<float> image_with_column(float other_raw, float column_raw, UINT x_column) {
+    std::vector<float> image(PixelCount, other_raw);
+    for (UINT y = 0; y < Height; ++y) image[size_t(y) * Width + x_column] = column_raw;
+    return image;
+}
+
+void test_persistence_hold_release_and_controls(StabilizeFixture& fixture) {
+    constexpr UINT x = 15, y = 8;
+    const float fg = 1.f / 5.f, bg = 1.f / 20.f;
+    Parameters p;
+    p.persistence_config = {1.f, 8.f, .2f, 4.f};
+    p.previous_range_weight[2] = .95f;
+    p.previous_range_weight[3] = 1.f;
+    p.edge_tolerances = {2.f, 0.f, .5f, 0.f};
+    auto previous_depth = std::vector<float>(PixelCount, bg);
+    std::vector<std::array<float, 4>> previous_state;
+
+    // Seed the production state from a one-pixel-wide foreground feature.
+    auto frame = image_with_column(bg, fg, x);
+    previous_depth = fixture.render(frame, previous_depth, p, previous_state);
+    previous_state = fixture.last_state();
+    need(previous_state[size_t(y) * Width + x][2] > .2f,
+         "production state did not acquire confidence on observed foreground support");
+
+    // Alternate an occluding background observation and sky. Each frame is
+    // rendered by the shader, then its real MRT outputs become the next input.
+    // The allowance is checked against the selected depth and state age, not
+    // a CPU reimplementation of the persistence rule.
+    for (UINT unsupported = 1; unsupported <= 8; ++unsupported) {
+        frame = image_with_column(bg, (unsupported & 1) ? bg : 0.f, x);
+        previous_depth = fixture.render(frame, previous_depth, p, previous_state);
+        previous_state = fixture.last_state();
+        const auto& s = previous_state[size_t(y) * Width + x];
+        need(std::abs(at(previous_depth, x, y) - fg) < 2.e-5f,
+             "foreground persistence released before the configured hold window");
+        need(s[3] >= float(unsupported) - .01f,
+             "unsupported foreground age did not advance in the production state MRT");
+    }
+    frame = image_with_column(bg, bg, x);
+    previous_depth = fixture.render(frame, previous_depth, p, previous_state);
+    previous_state = fixture.last_state();
+    std::cout << "persistence hold8 release frame9 raw=" << at(previous_depth, x, y)
+              << " age=" << previous_state[size_t(y) * Width + x][3] << '\n';
+    need(std::abs(at(previous_depth, x, y) - bg) < 2.e-5f,
+         "foreground persistence did not release after nine unsupported frames");
+
+    // A zero-frame hold releases on the first unsupported observation.
+    p.persistence_config[1] = 0.f;
+    previous_depth.assign(PixelCount, bg);
+    previous_state.clear();
+    frame = image_with_column(bg, fg, x);
+    previous_depth = fixture.render(frame, previous_depth, p, previous_state);
+    previous_state = fixture.last_state();
+    frame = image_with_column(bg, bg, x);
+    previous_depth = fixture.render(frame, previous_depth, p, previous_state);
+    previous_state = fixture.last_state();
+    need(std::abs(at(previous_depth, x, y) - bg) < 2.e-5f,
+         "holdFrames=0 did not release foreground immediately");
+
+    // Explicit reset and persistence-off controls must ignore stale state.
+    p.persistence_config[1] = 8.f;
+    p.previous_range_weight[3] = 0.f;
+    previous_depth.assign(PixelCount, bg);
+    previous_state.assign(PixelCount, {fg, bg, 1.f, 0.f});
+    frame = image_with_column(bg, bg, x);
+    previous_depth = fixture.render(frame, previous_depth, p, previous_state);
+    need(std::abs(at(previous_depth, x, y) - bg) < 2.e-5f,
+         "history reset reused stale persistence state");
+    p.previous_range_weight[3] = 1.f;
+    p.persistence_config[0] = 0.f;
+    previous_depth = fixture.render(frame, std::vector<float>(PixelCount, fg), p, previous_state);
+    need(std::abs(at(previous_depth, x, y) - bg) < 2.e-5f,
+         "persistence toggle off reused stale state");
+    p.persistence_config[0] = 1.f;
+    p.previous_range_weight[2] = 0.f;
+    previous_depth = fixture.render(frame, std::vector<float>(PixelCount, fg), p, previous_state);
+    need(std::abs(at(previous_depth, x, y) - bg) < 2.e-5f,
+         "history weight zero reused stale persistence state");
+
+    // A newly observed nearer foreground must replace a persisted background
+    // immediately, independent of the old state endpoint.
+    p.persistence_config[0] = 1.f;
+    previous_state.assign(PixelCount, {bg, bg, 0.f, 0.f});
+    previous_depth.assign(PixelCount, bg);
+    p.previous_range_weight[2] = .95f;
+    frame = image_with_column(bg, fg, x);
+    previous_depth = fixture.render(frame, previous_depth, p, previous_state);
+    need(std::abs(at(previous_depth, x, y) - fg) < 2.e-5f,
+         "nearer current foreground did not replace persisted background immediately");
+}
+
+void test_jitter_rms_and_reprojection_bound(StabilizeFixture& fixture) {
+    auto run = [&](float percent) {
+        Parameters p;
+        p.persistence_config = {1.f, 8.f, .2f, 4.f};
+        p.previous_range_weight[2] = percent;
+        p.previous_range_weight[3] = 1.f;
+        p.edge_tolerances = {2.f, 0.f, .5f, 0.f};
+        std::vector<float> selected(PixelCount, .1f);
+        std::vector<std::array<float, 4>> state;
+        double squared = 0.0;
+        constexpr int frames = 12;
+        for (int f = 0; f < frames; ++f) {
+            const float z = 10.f + ((f & 1) ? .25f : -.25f);
+            auto raw = std::vector<float>(PixelCount, 1.f / z);
+            selected = fixture.render(raw, selected, p, state);
+            state = fixture.last_state();
+            for (float v : selected) {
+                const double delta = double(v - .1f);
+                squared += delta * delta;
+            }
+        }
+        return float(std::sqrt(squared / double(frames * PixelCount)));
+    };
+    const float rms_zero = run(0.f);
+    const float rms_95 = run(.95f);
+    std::cout << "whole-map alternating surface-depth jitter RMS: weight0=" << rms_zero
+              << " weight95=" << rms_95 << '\n';
+    need(rms_95 < rms_zero * .7f,
+         "95% temporal history did not reduce whole-map surface-depth jitter RMS");
+
+    // Reprojection outside the configured pixel limit must reject history;
+    // camera motion within the limit must still find the prior surface.
+    Parameters p;
+    p.persistence_config = {1.f, 8.f, .2f, .75f};
+    p.previous_range_weight[2] = .95f;
+    p.previous_range_weight[3] = 1.f;
+    p.edge_tolerances = {.05f, 0.f, .5f, 0.f};
+    p.previous_clip_from_current_eye[3] = 3.f;
+    // A deliberately inconsistent inverse creates a large round-trip
+    // reprojection residual even though the forward transform is unchanged.
+    p.current_eye_from_previous_eye[3] = 0.f;
+    auto current = constant_depth(9.8f), prior = constant_depth(10.f);
+    std::vector<std::array<float, 4>> state(PixelCount, {1.f/10.f, 1.f/10.f, 1.f, 0.f});
+    const auto bounded = fixture.render(current, prior, p, state);
+    need(std::abs(at(bounded, 12, 8) - at(current, 12, 8)) < 1.e-6f,
+         "history beyond maxReprojPixels was not rejected");
+
+    // With a sufficient pixel bound the production reprojection path can use
+    // the matching prior surface after camera translation.
+    p.persistence_config[3] = 4.f;
+    p.current_eye_from_previous_eye[3] = -3.f;
+    p.edge_tolerances[0] = .5f;
+    current.assign(PixelCount, 1.f / 10.2f);
+    prior.assign(PixelCount, 1.f / 10.f);
+    const auto followed = fixture.render(current, prior, p, state);
+    need(at(followed, 12, 8) > at(current, 12, 8) + 1.e-5f,
+         "reprojected history within maxReprojPixels did not follow camera motion");
+}
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -540,6 +732,8 @@ int main(int argc, char** argv) try {
     test_invalid_sky_support_does_not_fill_foreground(fixture);
     test_camera_reprojection_tracks_motion(fixture);
     test_reset_bypasses_history(fixture);
+    test_persistence_hold_release_and_controls(fixture);
+    test_jitter_rms_and_reprojection_bound(fixture);
     std::cout << "PASS actual PSStabilizeDepth on D3D11 WARP: jitter, edges, temporal rejection, motion reprojection, reset\n";
     return 0;
 } catch (const std::exception& error) {

@@ -164,8 +164,63 @@ static SharedTimelineResult run_shared_timeline_case(GPU& gpu,float weight){
          "production class did not expose completed GPU shader counters");
     return {rendered,measured};
 }
+static void run_strong_persistence_cross_slot_case(GPU& gpu){
+    DepthStabilizer slotA,slotB;
+    auto timeline=std::make_shared<DepthHistoryTimeline>();
+    slotA.set_history_timeline(timeline);slotB.set_history_timeline(timeline);
+    const DepthViewport view{0,0,8,8,0,1};
+    const std::array<float,4> persistence{1.f,3.f,.2f,2.f};
+    const float weight=.95f;
+    auto foregroundLeft=gpu.depth(8,8,.25f),foregroundRight=gpu.depth(8,8,.25f);
+    auto backgroundLeft=gpu.depth(8,8,.1f),backgroundRight=gpu.depth(8,8,.1f);
+    const auto guides=make_guides(8,8);
+
+    // Warm both slot-local PSOs/resources and shader execution before the
+    // seed starts the 250ms shared-history freshness interval. These draws
+    // intentionally remain unpublished.
+    auto frame=make_frame(398);
+    need(slotA.prepare(gpu.device.Get(),frame,guides,foregroundLeft.Get(),foregroundRight.Get(),
+                       view,view,weight,persistence),"strong slot A warm prepare failed");
+    need(slotA.record(gpu.list.Get()),"strong slot A warm record failed");gpu.submit();
+    frame=make_frame(399);
+    need(slotB.prepare(gpu.device.Get(),frame,guides,foregroundLeft.Get(),foregroundRight.Get(),
+                       view,view,weight,persistence),"strong slot B warm prepare failed");
+    need(slotB.record(gpu.list.Get()),"strong slot B warm record failed");gpu.submit();
+    need(!timeline->valid,"strong warm draws unexpectedly published shared history");
+
+    frame=make_frame(400);
+    need(slotA.prepare(gpu.device.Get(),frame,guides,foregroundLeft.Get(),foregroundRight.Get(),
+                       view,view,weight,persistence),"strong foreground seed prepare failed");
+    need(slotA.record(gpu.list.Get()),"strong foreground seed record failed");gpu.submit();
+    slotA.commit_history(true);
+    need(timeline->valid&&timeline->frame==400,"strong seed did not publish its state MRT");
+
+    for(uint32_t n=1;n<=4;++n) {
+        const uint32_t frameNumber=400+n;
+        auto& slot=(n&1)?slotB:slotA;
+        frame=make_frame(frameNumber);
+        need(slot.prepare(gpu.device.Get(),frame,guides,backgroundLeft.Get(),backgroundRight.Get(),
+                          view,view,weight,persistence),"strong full-background prepare failed");
+        need(slot.diagnostics(0).reason==DepthHistoryReason::Ready&&
+             slot.diagnostics(1).reason==DepthHistoryReason::Ready,
+             "strong cross-slot frame did not consume the preceding published depth/state");
+        need(slot.record(gpu.list.Get()),"strong full-background record failed");
+        ID3D12Resource* left=slot.left();ID3D12Resource* right=slot.right();
+        gpu.submit();slot.commit_history(true);
+        const float leftValue=gpu.center(left,8,8),rightValue=gpu.center(right,8,8);
+        const float expected=n<=3?.25f:.1f;
+        if(std::abs(leftValue-expected)>=1.e-5f||std::abs(rightValue-expected)>=1.e-5f) {
+            std::cerr<<"strong frame "<<frameNumber<<" center depths: left="<<leftValue
+                     <<" right="<<rightValue<<" expected="<<expected<<'\n';
+            throw std::runtime_error(n<=3?
+                "strong state MRT failed to retain foreground across slots during its hold window":
+                "strong state MRT failed to release foreground after its hold window");
+        }
+    }
+}
 int main()try{
     GPU gpu;
+    run_strong_persistence_cross_slot_case(gpu);
     const auto temporal_off=run_shared_timeline_case(gpu,0.f);
     const auto temporal_on=run_shared_timeline_case(gpu,.75f);
     need(std::abs(temporal_off.output-.249f)<1.e-5f,
@@ -234,6 +289,6 @@ int main()try{
     need(resized.record(gpu.list.Get()),"resize record failed");
     need(std::abs(gpu.center(resized.left(),10,8)-.4f)<1.e-5f&&
          std::abs(gpu.center(resized.right(),10,8)-.6f)<1.e-5f,"resize output incorrect");
-    std::cout<<"PASS: D3D12/WARP alternating-slot shared history, measured temporal weight, failed-submit preservation, resize, validation\n";
+    std::cout<<"PASS: D3D12/WARP strong state MRT across alternating slots, temporal weight, failed-submit preservation, resize, validation\n";
     return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}
