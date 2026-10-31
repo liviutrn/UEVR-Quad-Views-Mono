@@ -92,6 +92,19 @@ def main():
         '                matrix[1][1]=layout->context_projection[2]; matrix[2][1]=layout->context_projection[3];\n'
         '            }\n')
 
+    # 3b. The left fovea crops the frozen view-0 projection, which is now the shared
+    #     union frustum. Restore the LEFT eye frustum before its crop (headset B1:
+    #     left fovea distorted).
+    edit(root, hook,
+        '                for (int col=0; col!=4; ++col) for (int row=0; row!=4; ++row) matrix[col][row]=(*base)[col*4+row];\n',
+        '                for (int col=0; col!=4; ++col) for (int row=0; row!=4; ++row) matrix[col][row]=(*base)[col*4+row];\n'
+        '                if (eye == 0 && layout->shared_context) {\n'
+        '                    if (const auto left=vr->quadview_base_projection(key,0)) {\n'
+        '                        matrix[0][0]=(*left)[0]; matrix[2][0]=(*left)[8];\n'
+        '                        matrix[1][1]=(*left)[5]; matrix[2][1]=(*left)[9];\n'
+        '                    } else vr->set_quadview_status("Tri-view left fovea lacks its frozen eye frustum");\n'
+        '                }\n')
+
     # 4. Skip rendering view 1; require roles 0,2,3 for this draw's quartet.
     edit(root, hook,
         '            });\n        if (!qv_dispatch_result) {',
