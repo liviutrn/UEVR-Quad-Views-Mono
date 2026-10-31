@@ -149,21 +149,33 @@ CHANGES = [
     #    complete full-screen CI79 pass.
     (VR + "DuoViewSurfaceD3D12.hpp",
      "    Ptr<ID3D12PipelineState> reverse_,forward_,backward_;",
-     "    Ptr<ID3D12PipelineState> reverse_,forward_,backward_,detail_,lowpass_;"),
+     "    Ptr<ID3D12PipelineState> reverse_,forward_,backward_,detail_,lowpass_;\n"
+     "    D3D12_GRAPHICS_PIPELINE_STATE_DESC ci79_desc_{};"),
     (VR + "DuoViewSurfaceD3D12.hpp",
      """        if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&backward_)),"Backward dual-depth fovea PSO"))return false;""",
      """        if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&backward_)),"Backward dual-depth fovea PSO"))return false;
-        // CI79: RIGHT fovea pass, own shader, same pipeline state as the backward pass.
+        // CI79 pipelines are built from this state on first use (create_ci79_pipelines),
+        // so nothing extra is compiled while the CI79 switch is off.
+        ci79_desc_=p;"""),
+    (VR + "DuoViewSurfaceD3D12.hpp",
+     "    bool create_map(UINT pass,UINT width,UINT height) {",
+     """    bool create_ci79_pipelines() {
+        if(detail_&&lowpass_)return true;
+        auto p=ci79_desc_;
+        // RIGHT fovea pass: own shader, same pipeline state as the backward pass.
         p.PS={detail_transfer_pixel_shader_bytecode,sizeof(detail_transfer_pixel_shader_bytecode)};
-        if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&detail_)),"CI79 RIGHT fovea PSO"))return false;
-        // CI79: LEFT crop blurred to RIGHT resolution; colour only, no depth.
+        if(!check(device_->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&detail_)),"CI79 RIGHT fovea PSO"))return false;
+        // LEFT crop blurred to RIGHT resolution; colour only, no depth.
         p.PS={left_lowpass_pixel_shader_bytecode,sizeof(left_lowpass_pixel_shader_bytecode)};
         p.DepthStencilState.DepthEnable=FALSE;p.DepthStencilState.DepthWriteMask=D3D12_DEPTH_WRITE_MASK_ZERO;
         p.DSVFormat=DXGI_FORMAT_UNKNOWN;
-        if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&lowpass_)),"CI79 LEFT low-pass PSO"))return false;"""),
+        return check(device_->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&lowpass_)),"CI79 LEFT low-pass PSO");
+    }
+    bool create_map(UINT pass,UINT width,UINT height) {"""),
     (VR + "DuoViewSurfaceD3D12.hpp",
-     "        if(device_.Get()!=device||srgb_!=srgb||!root_||!reverse_||!forward_||!backward_||!constants_||!rtv_||!dsv_) {",
-     "        if(device_.Get()!=device||srgb_!=srgb||!root_||!reverse_||!forward_||!backward_||!detail_||!lowpass_||!constants_||!rtv_||!dsv_) {"),
+     "        if(!create_map(0,fw,fh)||!create_map(1,pw,ph))return false;",
+     """        if(!create_map(0,fw,fh)||!create_map(1,pw,ph))return false;
+        if((constants[0].mesh_config[3]&128u)!=0u && !create_ci79_pipelines())return false;"""),
     (VR + "DuoViewSurfaceD3D12.hpp",
      "                cmd->SetPipelineState(backward_.Get());cmd->DrawInstanced(3,1,0,0);",
      "                cmd->SetPipelineState((config[3]&128u)!=0u?detail_.Get():backward_.Get());cmd->DrawInstanced(3,1,0,0);"),

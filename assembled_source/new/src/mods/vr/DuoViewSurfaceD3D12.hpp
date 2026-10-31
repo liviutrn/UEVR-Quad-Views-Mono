@@ -30,6 +30,7 @@ class SurfaceReprojector {
     Ptr<ID3D12Device> device_;
     Ptr<ID3D12RootSignature> root_;
     Ptr<ID3D12PipelineState> reverse_,forward_,backward_,detail_,lowpass_;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC ci79_desc_{};
     Ptr<ID3D12DescriptorHeap> rtv_,dsv_;
     Ptr<ID3D12Resource> color_[2],depth_[2],constants_;
     UINT width_[2]{},height_[2]{};
@@ -86,14 +87,9 @@ class SurfaceReprojector {
         p.PS={backward_pixel_shader_bytecode,sizeof(backward_pixel_shader_bytecode)};
         p.DepthStencilState.DepthFunc=D3D12_COMPARISON_FUNC_ALWAYS;
         if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&backward_)),"Backward dual-depth fovea PSO"))return false;
-        // CI79: RIGHT fovea pass, own shader, same pipeline state as the backward pass.
-        p.PS={detail_transfer_pixel_shader_bytecode,sizeof(detail_transfer_pixel_shader_bytecode)};
-        if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&detail_)),"CI79 RIGHT fovea PSO"))return false;
-        // CI79: LEFT crop blurred to RIGHT resolution; colour only, no depth.
-        p.PS={left_lowpass_pixel_shader_bytecode,sizeof(left_lowpass_pixel_shader_bytecode)};
-        p.DepthStencilState.DepthEnable=FALSE;p.DepthStencilState.DepthWriteMask=D3D12_DEPTH_WRITE_MASK_ZERO;
-        p.DSVFormat=DXGI_FORMAT_UNKNOWN;
-        if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&lowpass_)),"CI79 LEFT low-pass PSO"))return false;
+        // CI79 pipelines are built from this state on first use (create_ci79_pipelines),
+        // so nothing extra is compiled while the CI79 switch is off.
+        ci79_desc_=p;
         D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.NumDescriptors=2;hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if(!check(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&rtv_)),"Surface RTV heap"))return false;
         hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
@@ -105,6 +101,18 @@ class SurfaceReprojector {
         buffer.Height=buffer.DepthOrArraySize=buffer.MipLevels=1;buffer.SampleDesc.Count=1;buffer.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         return check(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&buffer,D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr,IID_PPV_ARGS(&constants_)),"Surface constant upload");
+    }
+    bool create_ci79_pipelines() {
+        if(detail_&&lowpass_)return true;
+        auto p=ci79_desc_;
+        // RIGHT fovea pass: own shader, same pipeline state as the backward pass.
+        p.PS={detail_transfer_pixel_shader_bytecode,sizeof(detail_transfer_pixel_shader_bytecode)};
+        if(!check(device_->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&detail_)),"CI79 RIGHT fovea PSO"))return false;
+        // LEFT crop blurred to RIGHT resolution; colour only, no depth.
+        p.PS={left_lowpass_pixel_shader_bytecode,sizeof(left_lowpass_pixel_shader_bytecode)};
+        p.DepthStencilState.DepthEnable=FALSE;p.DepthStencilState.DepthWriteMask=D3D12_DEPTH_WRITE_MASK_ZERO;
+        p.DSVFormat=DXGI_FORMAT_UNKNOWN;
+        return check(device_->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&lowpass_)),"CI79 LEFT low-pass PSO");
     }
     bool create_map(UINT pass,UINT width,UINT height) {
         if(color_[pass]&&depth_[pass]&&width_[pass]==width&&height_[pass]==height)return true;
@@ -129,11 +137,12 @@ public:
     bool prepare(ID3D12Device* device,bool srgb,UINT fw,UINT fh,UINT pw,UINT ph,
             const std::array<SurfaceConstants,2>& constants) {
         if(!device||!fw||!fh||!pw||!ph||fw>16384||fh>16384||pw>16384||ph>16384)return false;
-        if(device_.Get()!=device||srgb_!=srgb||!root_||!reverse_||!forward_||!backward_||!detail_||!lowpass_||!constants_||!rtv_||!dsv_) {
+        if(device_.Get()!=device||srgb_!=srgb||!root_||!reverse_||!forward_||!backward_||!constants_||!rtv_||!dsv_) {
             *this=SurfaceReprojector{};
             if(!create_objects(device,srgb))return false;
         }
         if(!create_map(0,fw,fh)||!create_map(1,pw,ph))return false;
+        if((constants[0].mesh_config[3]&128u)!=0u && !create_ci79_pipelines())return false;
         void* data{};D3D12_RANGE read{0,0};
         if(!check(constants_->Map(0,&read,&data),"Surface constant map"))return false;
         for(size_t pass=0;pass<2;++pass)
