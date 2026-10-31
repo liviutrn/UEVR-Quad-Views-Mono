@@ -307,7 +307,6 @@ BackwardSurfaceOutput PSResearchBackwardSurface(VertexOut i) {
 }
 
 BackwardSurfaceOutput PSBackwardSurface(VertexOut i) {
-    if((MeshConfig.w&128u)!=0u)return PSDetailTransferSurface(i);
     if((MeshConfig.w&16u)!=0u)return PSResearchBackwardSurface(i);
     BackwardSurfaceOutput o=(BackwardSurfaceOutput)0;
     o.color=0;o.depth=(MeshConfig.w&4u)!=0 ? 0.f : 1.f;

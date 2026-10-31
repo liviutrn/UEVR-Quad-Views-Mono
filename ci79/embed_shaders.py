@@ -15,6 +15,7 @@ entries = [
     ('VSSurface', 'vs_5_0', 'surface_vertex_shader_bytecode', 'DuoViewSurfaceReproject.hlsl'),
     ('PSSurface', 'ps_5_0', 'surface_pixel_shader_bytecode', 'DuoViewSurfaceReproject.hlsl'),
     ('PSBackwardSurface', 'ps_5_0', 'backward_pixel_shader_bytecode', 'DuoViewSurfaceReproject.hlsl'),
+    ('PSDetailTransferSurface', 'ps_5_0', 'detail_transfer_pixel_shader_bytecode', 'DuoViewSurfaceReproject.hlsl'),
     ('PSLeftLowPass', 'ps_5_0', 'left_lowpass_pixel_shader_bytecode', 'DuoViewSurfaceReproject.hlsl'),
 ]
 sections = []

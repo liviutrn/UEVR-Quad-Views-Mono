@@ -29,7 +29,7 @@ class SurfaceReprojector {
     template<class T> using Ptr=Microsoft::WRL::ComPtr<T>;
     Ptr<ID3D12Device> device_;
     Ptr<ID3D12RootSignature> root_;
-    Ptr<ID3D12PipelineState> reverse_,forward_,backward_,lowpass_;
+    Ptr<ID3D12PipelineState> reverse_,forward_,backward_,detail_,lowpass_;
     Ptr<ID3D12DescriptorHeap> rtv_,dsv_;
     Ptr<ID3D12Resource> color_[2],depth_[2],constants_;
     UINT width_[2]{},height_[2]{};
@@ -86,6 +86,9 @@ class SurfaceReprojector {
         p.PS={backward_pixel_shader_bytecode,sizeof(backward_pixel_shader_bytecode)};
         p.DepthStencilState.DepthFunc=D3D12_COMPARISON_FUNC_ALWAYS;
         if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&backward_)),"Backward dual-depth fovea PSO"))return false;
+        // CI79: RIGHT fovea pass, own shader, same pipeline state as the backward pass.
+        p.PS={detail_transfer_pixel_shader_bytecode,sizeof(detail_transfer_pixel_shader_bytecode)};
+        if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&detail_)),"CI79 RIGHT fovea PSO"))return false;
         // CI79: LEFT crop blurred to RIGHT resolution; colour only, no depth.
         p.PS={left_lowpass_pixel_shader_bytecode,sizeof(left_lowpass_pixel_shader_bytecode)};
         p.DepthStencilState.DepthEnable=FALSE;p.DepthStencilState.DepthWriteMask=D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -126,7 +129,7 @@ public:
     bool prepare(ID3D12Device* device,bool srgb,UINT fw,UINT fh,UINT pw,UINT ph,
             const std::array<SurfaceConstants,2>& constants) {
         if(!device||!fw||!fh||!pw||!ph||fw>16384||fh>16384||pw>16384||ph>16384)return false;
-        if(device_.Get()!=device||srgb_!=srgb||!root_||!reverse_||!forward_||!backward_||!lowpass_||!constants_||!rtv_||!dsv_) {
+        if(device_.Get()!=device||srgb_!=srgb||!root_||!reverse_||!forward_||!backward_||!detail_||!lowpass_||!constants_||!rtv_||!dsv_) {
             *this=SurfaceReprojector{};
             if(!create_objects(device,srgb))return false;
         }
@@ -174,7 +177,7 @@ public:
             const auto& config=constants[pass].mesh_config;
             const bool backward=pass==0 && (config[3]&2u)!=0;
             if(backward) {
-                cmd->SetPipelineState(backward_.Get());cmd->DrawInstanced(3,1,0,0);
+                cmd->SetPipelineState((config[3]&128u)!=0u?detail_.Get():backward_.Get());cmd->DrawInstanced(3,1,0,0);
                 cmd->SetPipelineState(reverse[pass]?reverse_.Get():forward_.Get());
             }
             // CI79's RIGHT fovea pass is a complete full-screen result: no mesh after it.

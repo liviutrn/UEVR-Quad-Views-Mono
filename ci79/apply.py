@@ -82,12 +82,9 @@ CHANGES = [
 };
 #include "DuoViewDetailTransfer.hlsl"
 """),
-    (VR + "DuoViewSurfaceReproject.hlsl",
-     """BackwardSurfaceOutput PSBackwardSurface(VertexOut i) {
-    if((MeshConfig.w&16u)!=0u)return PSResearchBackwardSurface(i);""",
-     """BackwardSurfaceOutput PSBackwardSurface(VertexOut i) {
-    if((MeshConfig.w&128u)!=0u)return PSDetailTransferSurface(i);
-    if((MeshConfig.w&16u)!=0u)return PSResearchBackwardSurface(i);"""),
+    # PSBackwardSurface stays exactly as in CI77b. The CI79 passes are separate
+    # shader entries (PSLeftLowPass, PSDetailTransferSurface) with their own PSOs,
+    # so the existing shader does not grow (the WARP test crashed with it merged).
 
     # 2. Final composite: flags, corrected LEFT fallback, CI79 RIGHT fovea.
     (VR + "DuoViewStereoCompositeRaster.hlsl",
@@ -152,10 +149,13 @@ CHANGES = [
     #    complete full-screen CI79 pass.
     (VR + "DuoViewSurfaceD3D12.hpp",
      "    Ptr<ID3D12PipelineState> reverse_,forward_,backward_;",
-     "    Ptr<ID3D12PipelineState> reverse_,forward_,backward_,lowpass_;"),
+     "    Ptr<ID3D12PipelineState> reverse_,forward_,backward_,detail_,lowpass_;"),
     (VR + "DuoViewSurfaceD3D12.hpp",
      """        if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&backward_)),"Backward dual-depth fovea PSO"))return false;""",
      """        if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&backward_)),"Backward dual-depth fovea PSO"))return false;
+        // CI79: RIGHT fovea pass, own shader, same pipeline state as the backward pass.
+        p.PS={detail_transfer_pixel_shader_bytecode,sizeof(detail_transfer_pixel_shader_bytecode)};
+        if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&detail_)),"CI79 RIGHT fovea PSO"))return false;
         // CI79: LEFT crop blurred to RIGHT resolution; colour only, no depth.
         p.PS={left_lowpass_pixel_shader_bytecode,sizeof(left_lowpass_pixel_shader_bytecode)};
         p.DepthStencilState.DepthEnable=FALSE;p.DepthStencilState.DepthWriteMask=D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -163,7 +163,10 @@ CHANGES = [
         if(!check(device->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&lowpass_)),"CI79 LEFT low-pass PSO"))return false;"""),
     (VR + "DuoViewSurfaceD3D12.hpp",
      "        if(device_.Get()!=device||srgb_!=srgb||!root_||!reverse_||!forward_||!backward_||!constants_||!rtv_||!dsv_) {",
-     "        if(device_.Get()!=device||srgb_!=srgb||!root_||!reverse_||!forward_||!backward_||!lowpass_||!constants_||!rtv_||!dsv_) {"),
+     "        if(device_.Get()!=device||srgb_!=srgb||!root_||!reverse_||!forward_||!backward_||!detail_||!lowpass_||!constants_||!rtv_||!dsv_) {"),
+    (VR + "DuoViewSurfaceD3D12.hpp",
+     "                cmd->SetPipelineState(backward_.Get());cmd->DrawInstanced(3,1,0,0);",
+     "                cmd->SetPipelineState((config[3]&128u)!=0u?detail_.Get():backward_.Get());cmd->DrawInstanced(3,1,0,0);"),
     (VR + "DuoViewSurfaceD3D12.hpp",
      "        for(UINT pass=0;pass<(periphery?2u:1u);++pass) {",
      """        if((constants[0].mesh_config[3]&128u)!=0u) {
