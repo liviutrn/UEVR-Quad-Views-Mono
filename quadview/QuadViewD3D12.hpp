@@ -246,9 +246,13 @@ public:
         srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MipLevels = 1;
+        // Tri-view never renders source 1: alias its slot to source 0 so it is
+        // neither sampled nor transitioned from a state it may not be in.
+        auto active = sources;
+        if (layout.shared_context) active[1] = sources[0];
         auto descriptor = srv_heap_->GetCPUDescriptorHandleForHeapStart();
         const auto stride = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        for (auto* source : sources) {
+        for (auto* source : active) {
             device_->CreateShaderResourceView(source, &srv, descriptor);
             descriptor.ptr += stride;
         }
@@ -262,8 +266,8 @@ public:
         destination_ = destination;
         for (size_t i = 0; i != 4; ++i) {
             bool duplicate = false;
-            for (size_t j = 0; j < i; ++j) duplicate = duplicate || sources[j] == sources[i];
-            if (!duplicate) barrier(commands, sources[i], source_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            for (size_t j = 0; j < i; ++j) duplicate = duplicate || active[j] == active[i];
+            if (!duplicate) barrier(commands, active[i], source_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
         barrier(commands, destination, destination_state, D3D12_RESOURCE_STATE_RENDER_TARGET);
         commands->SetPipelineState(pipeline_.Get());
@@ -289,8 +293,8 @@ public:
         }
         for (size_t i = 0; i != 4; ++i) {
             bool duplicate = false;
-            for (size_t j = 0; j < i; ++j) duplicate = duplicate || sources[j] == sources[i];
-            if (!duplicate) barrier(commands, sources[i], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, source_state);
+            for (size_t j = 0; j < i; ++j) duplicate = duplicate || active[j] == active[i];
+            if (!duplicate) barrier(commands, active[i], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, source_state);
         }
         barrier(commands, destination, D3D12_RESOURCE_STATE_RENDER_TARGET, destination_state);
         recorded_ = true;

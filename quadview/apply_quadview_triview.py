@@ -37,8 +37,9 @@ def main():
         '                m_quadview_tri_view->draw("Tri-view: one shared centre periphery (3 renders; OFF = 4)");\n')
     edit(root, "src/mods/VR.cpp",
         '            layout=m_quadview_layout_latch.freeze(key.generation,key.draw_serial,*candidate);\n',
-        '            if (m_quadview_tri_view->value() && draw_config.base_projection_valid &&\n'
-        '                !uevr::quadview::apply_shared_context(*candidate,draw_config.projections[0],draw_config.projections[1]))\n'
+        '            if (m_quadview_tri_view->value() && !is_stereo_emulation_enabled() &&\n'
+        '                !(draw_config.base_projection_valid &&\n'
+        '                  uevr::quadview::apply_shared_context(*candidate,draw_config.projections[0],draw_config.projections[1])))\n'
         '                set_quadview_status("Tri-view could not derive the shared context frustum; using four views");\n'
         '            layout=m_quadview_layout_latch.freeze(key.generation,key.draw_serial,*candidate);\n')
 
