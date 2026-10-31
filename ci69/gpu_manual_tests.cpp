@@ -20,6 +20,15 @@ using stock_dibr::DepthCapture;
 using namespace uevr::duoview;
 thread_local bool g_inside_depth_stencil_observer=false;
 void check(HRESULT h){if(FAILED(h))throw std::runtime_error("HRESULT="+std::to_string(uint32_t(h)));}
+ComPtr<ID3D12Device> g_dev; // global: must outlive main's locals, which are gone when catch runs
+// Diagnostic: when the test fails, print why the device died and every debug-layer message.
+void dump_device_state(){
+ if(!g_dev)return;
+ std::cerr<<"DEVICE_REMOVED_REASON="<<uint32_t(g_dev->GetDeviceRemovedReason())<<'\n';
+ ComPtr<ID3D12InfoQueue> q;if(FAILED(g_dev->QueryInterface(IID_PPV_ARGS(&q))))return;
+ for(UINT64 i=0;i<q->GetNumStoredMessages();++i){SIZE_T n{};q->GetMessage(i,nullptr,&n);std::vector<uint8_t> b(n);auto* m=reinterpret_cast<D3D12_MESSAGE*>(b.data());
+  if(SUCCEEDED(q->GetMessage(i,m,&n)))std::cerr<<"D3D12 message severity="<<int(m->Severity)<<": "<<m->pDescription<<'\n';}
+}
 void need(bool b,const char* why){if(!b)throw std::runtime_error(why);}
 D3D12_RESOURCE_DESC texture(UINT w,UINT h,DXGI_FORMAT f,D3D12_RESOURCE_FLAGS flags=D3D12_RESOURCE_FLAG_NONE){
  D3D12_RESOURCE_DESC d{};d.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;d.Width=w;d.Height=h;
@@ -154,7 +163,8 @@ void shader_test(ID3D12Device* device){
 int main()try {
  ComPtr<ID3D12Debug> debug;if(SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))debug->EnableDebugLayer();
  ComPtr<IDXGIFactory4> factory;check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));ComPtr<IDXGIAdapter> adapter;check(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter)));ComPtr<ID3D12Device> device;check(D3D12CreateDevice(adapter.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&device)));
+ g_dev=device;
  capture_test(device.Get(),D3D12_COMMAND_LIST_TYPE_DIRECT,false);capture_test(device.Get(),D3D12_COMMAND_LIST_TYPE_COMPUTE,true);shader_test(device.Get());
  ComPtr<ID3D12InfoQueue> info;if(SUCCEEDED(device.As(&info))){for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T n{};info->GetMessage(i,nullptr,&n);std::vector<uint8_t> bytes(n);auto* m=reinterpret_cast<D3D12_MESSAGE*>(bytes.data());check(info->GetMessage(i,m,&n));if(m->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)throw std::runtime_error(m->pDescription);}}
  std::cout<<"PASS: CI69 manual NGX WARP capture, half depth, DIRECT+COMPUTE and stereo shader; no game/headset executed\n";return 0;
-}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
+}catch(const std::exception& e){std::cerr<<e.what()<<'\n';dump_device_state();return 1;}
