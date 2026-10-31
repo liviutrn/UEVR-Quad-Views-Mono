@@ -114,20 +114,38 @@ static SharedTimelineResult run_shared_timeline_case(GPU& gpu,float weight){
     auto timeline=std::make_shared<DepthHistoryTimeline>();
     slotA.set_history_timeline(timeline);slotB.set_history_timeline(timeline);
     const DepthViewport view{0,0,8,8,0,1};
-    auto left=gpu.depth(8,8,.25f),right=gpu.depth(8,8,.25f);
-    auto frame=make_frame(200);auto guides=make_guides(8,8);
-    need(slotA.prepare(gpu.device.Get(),frame,guides,left.Get(),right.Get(),view,view,.75f),
-         "slot A shared-timeline seed prepare failed");
+    // Complete input allocations/uploads and execute a warm shader draw on
+    // both slots before the seed publication starts the 250ms age. WARP may
+    // lazily compile the first pixel shader dispatch.
+    auto seedLeft=gpu.depth(8,8,.25f),seedRight=gpu.depth(8,8,.25f);
+    auto currentLeft=gpu.depth(8,8,.249f),currentRight=gpu.depth(8,8,.249f);
+    auto guides=make_guides(8,8);
+    auto warm_a=make_frame(198);
+    need(slotA.prepare(gpu.device.Get(),warm_a,guides,seedLeft.Get(),seedRight.Get(),view,view,.75f),
+         "slot A shared-timeline warm prepare failed");
+    need(slotA.record(gpu.list.Get()),"slot A shared-timeline warm record failed");gpu.submit();
+    auto warm_frame=make_frame(199);
+    need(slotB.prepare(gpu.device.Get(),warm_frame,guides,currentLeft.Get(),currentRight.Get(),view,view,weight),
+         "slot B shared-timeline warm prepare failed");
+    need(slotB.record(gpu.list.Get()),"slot B shared-timeline warm record failed");gpu.submit();
+    auto frame=make_frame(200);
+    need(slotA.prepare(gpu.device.Get(),frame,guides,seedLeft.Get(),seedRight.Get(),view,view,.75f),
+         "slot A shared-timeline seed re-prepare failed");
     need(slotA.record(gpu.list.Get()),"slot A shared-timeline seed record failed");
     gpu.submit();slotA.commit_history(true);
     need(timeline->valid&&timeline->frame==200,"submitted slot A did not publish its shared history");
 
-    left=gpu.depth(8,8,.249f);right=gpu.depth(8,8,.249f);
     frame=make_frame(201);
-    need(slotB.prepare(gpu.device.Get(),frame,guides,left.Get(),right.Get(),view,view,weight),
+    need(slotB.prepare(gpu.device.Get(),frame,guides,currentLeft.Get(),currentRight.Get(),view,view,weight),
          "slot B shared-timeline consumer prepare failed");
-    need(slotB.diagnostics(0).reason==(weight>0.f?DepthHistoryReason::Ready:DepthHistoryReason::Disabled),
-         "alternating compositor slot did not report the expected shared-history eligibility");
+    const auto reason=slotB.diagnostics(0).reason;
+    const auto& eligibility=slotB.diagnostics(0);
+    if(reason!=(weight>0.f?DepthHistoryReason::Ready:DepthHistoryReason::Disabled)) {
+        std::cerr<<"shared history eligibility: reason="<<depth_history_reason_name(reason)
+                 <<" age_ms="<<eligibility.age_ms<<" frame_gap="<<eligibility.frame_gap
+                 <<" source_frame="<<eligibility.history_source_frame<<'\n';
+        throw std::runtime_error("alternating compositor slot did not report the expected shared-history eligibility");
+    }
     need(slotB.diagnostics(0).history_source_frame==200,
          "alternating compositor slot did not import the immediately preceding frame");
     need(slotB.record(gpu.list.Get()),"slot B shared-timeline consumer record failed");
@@ -137,9 +155,9 @@ static SharedTimelineResult run_shared_timeline_case(GPU& gpu,float weight){
 
     // The class reads GPU counters only after the slot fence has retired. A
     // subsequent prepare consumes the completed sparse diagnostics readback.
-    left=gpu.depth(8,8,.249f);right=gpu.depth(8,8,.249f);
+    auto drainLeft=gpu.depth(8,8,.249f),drainRight=gpu.depth(8,8,.249f);
     frame=make_frame(202);
-    need(slotB.prepare(gpu.device.Get(),frame,guides,left.Get(),right.Get(),view,view,0.f),
+    need(slotB.prepare(gpu.device.Get(),frame,guides,drainLeft.Get(),drainRight.Get(),view,view,0.f),
          "counter-drain prepare failed");
     const auto measured=slotB.diagnostics(0);
     need(measured.measured&&measured.sampled_pixels>0,
@@ -165,28 +183,41 @@ int main()try{
     seed.set_history_timeline(timeline);failed_slot.set_history_timeline(timeline);
     after_failure.set_history_timeline(timeline);
     const DepthViewport leftView{0,0,8,8,0,1},rightView{0,0,8,8,0,1};
-    auto left=gpu.depth(8,8,.25f),right=gpu.depth(8,8,.25f);
-    auto frame=make_frame(300);auto guides=make_guides(8,8);
-    need(seed.prepare(gpu.device.Get(),frame,guides,left.Get(),right.Get(),leftView,rightView,.75f),"failure seed prepare failed");
+    auto seedLeft=gpu.depth(8,8,.25f),seedRight=gpu.depth(8,8,.25f);
+    auto currentLeft=gpu.depth(8,8,.249f),currentRight=gpu.depth(8,8,.249f);
+    auto frame=make_frame(297);auto guides=make_guides(8,8);
+    need(failed_slot.prepare(gpu.device.Get(),frame,guides,currentLeft.Get(),currentRight.Get(),leftView,rightView,.75f),
+         "failed slot prewarm prepare failed");
+    need(failed_slot.record(gpu.list.Get()),"failed slot prewarm record failed");gpu.submit();
+    frame=make_frame(298);
+    need(after_failure.prepare(gpu.device.Get(),frame,guides,currentLeft.Get(),currentRight.Get(),leftView,rightView,.75f),
+         "post-failure slot prewarm prepare failed");
+    need(after_failure.record(gpu.list.Get()),"post-failure slot prewarm record failed");gpu.submit();
+    frame=make_frame(300);
+    need(seed.prepare(gpu.device.Get(),frame,guides,seedLeft.Get(),seedRight.Get(),leftView,rightView,.75f),"failure seed prepare failed");
     need(seed.record(gpu.list.Get()),"failure seed record failed");gpu.submit();seed.commit_history(true);
     need(timeline->frame==300,"failure seed was not published");
-    left=gpu.depth(8,8,.249f);right=gpu.depth(8,8,.249f);frame=make_frame(301);
-    need(failed_slot.prepare(gpu.device.Get(),frame,guides,left.Get(),right.Get(),leftView,rightView,.75f),"failed slot prepare failed");
+    frame=make_frame(301);
+    need(failed_slot.prepare(gpu.device.Get(),frame,guides,currentLeft.Get(),currentRight.Get(),leftView,rightView,.75f),"failed slot prepare failed");
     need(failed_slot.record(gpu.list.Get()),"failed slot record failed");
     failed_slot.commit_history(false);gpu.discard();
     need(timeline->valid&&timeline->frame==300,"failed submission cleared or replaced valid shared history");
-    left=gpu.depth(8,8,.249f);right=gpu.depth(8,8,.249f);frame=make_frame(301);
-    need(after_failure.prepare(gpu.device.Get(),frame,guides,left.Get(),right.Get(),leftView,rightView,.75f),"post-failure prepare failed");
-    need(after_failure.diagnostics(0).reason==DepthHistoryReason::Ready&&
-         after_failure.diagnostics(0).history_source_frame==300,
-         "post-failure slot could not consume the last successfully submitted history");
+    need(after_failure.prepare(gpu.device.Get(),frame,guides,currentLeft.Get(),currentRight.Get(),leftView,rightView,.75f),"post-failure prepare failed");
+    if(after_failure.diagnostics(0).reason!=DepthHistoryReason::Ready||
+       after_failure.diagnostics(0).history_source_frame!=300) {
+        const auto& diagnostic=after_failure.diagnostics(0);
+        std::cerr<<"post-failure history: reason="<<depth_history_reason_name(diagnostic.reason)
+                 <<" age_ms="<<diagnostic.age_ms<<" frame_gap="<<diagnostic.frame_gap
+                 <<" source_frame="<<diagnostic.history_source_frame<<'\n';
+        throw std::runtime_error("post-failure slot could not consume the last successfully submitted history");
+    }
     need(after_failure.record(gpu.list.Get()),"post-failure record failed");gpu.submit();after_failure.commit_history(true);
 
     // A dimension change must reject the old allocation's history and produce
     // a fresh spatial result even when the same stabilizer retains a timeline.
     auto resize_timeline=std::make_shared<DepthHistoryTimeline>();
     DepthStabilizer resized;resized.set_history_timeline(resize_timeline);
-    left=gpu.depth(8,8,.25f);right=gpu.depth(8,8,.25f);
+    auto left=gpu.depth(8,8,.25f),right=gpu.depth(8,8,.25f);
     frame=make_frame(302);guides=make_guides(8,8);
     need(resized.prepare(gpu.device.Get(),frame,guides,left.Get(),right.Get(),leftView,rightView,.75f),
          "resize seed prepare failed");
