@@ -14,6 +14,7 @@
 #include <cstring>
 #include <chrono>
 #include <string>
+#include <memory>
 
 namespace uevr::duoview::dx12 {
 
@@ -30,21 +31,117 @@ struct alignas(16) DepthStabilizeConstants {
     float previous_range_weight[4]{};
     float edge_tolerances[4]{};
     float previous_rect[4]{};
+    float diagnostic_config[4]{};
 };
-static_assert(sizeof(DepthStabilizeConstants)==432);
+static_assert(sizeof(DepthStabilizeConstants)==448);
 
-// Per-command-slot, per-eye jitter removal and conservative temporal history.
-// The owner is one fenced compositor slot; history never crosses eye or slot.
+// Per-eye jitter removal and conservative temporal history. GPU resources
+// remain slot-owned; submitted previous-frame depth is shared on one queue.
 // It writes full-allocation R32_FLOAT maps whose values remain in the input
 // device-depth range, so every downstream depth reader can use the same rect.
+enum class DepthHistoryReason : uint32_t {
+    Ready, Disabled, NoHistory, Generation, NonMonotonic, FeatureChanged,
+    FeatureReset, TooOld, InvalidProjection, ResourcesRecreated, ExtentChanged
+};
+inline const char* depth_history_reason_name(DepthHistoryReason reason) {
+    switch(reason) {
+    case DepthHistoryReason::Ready:return "ready";
+    case DepthHistoryReason::Disabled:return "disabled";
+    case DepthHistoryReason::NoHistory:return "warming up";
+    case DepthHistoryReason::Generation:return "layout generation changed";
+    case DepthHistoryReason::NonMonotonic:return "non-monotonic frame";
+    case DepthHistoryReason::FeatureChanged:return "NGX feature changed";
+    case DepthHistoryReason::FeatureReset:return "NGX reset";
+    case DepthHistoryReason::TooOld:return "history older than 250ms";
+    case DepthHistoryReason::InvalidProjection:return "invalid previous projection";
+    case DepthHistoryReason::ResourcesRecreated:return "depth allocation changed";
+    case DepthHistoryReason::ExtentChanged:return "history dimensions changed";
+    }return "unknown";
+}
+struct DepthHistoryDiagnostics {
+    DepthHistoryReason reason{DepthHistoryReason::NoHistory};
+    uint64_t frame_gap{}, sampled_frame{},history_source_frame{},history_sequence{};
+    float age_ms{}, requested_weight{};
+    uint32_t sampled_pixels{},valid_pixels{},eligible_pixels{},accepted_pixels{},edge_pixels{};
+    float mean_applied_weight{};
+    bool measured{};
+};
+// Shared only by compositor slots submitted in order to one DIRECT queue.
+// Publish after the caller's enqueue proof; GPU completion is unnecessary:
+// queue ordering places the next read after the previous render. Each consumer
+// separately retains the resource until its own slot fence has retired.
+struct DepthHistoryTimeline {
+    Microsoft::WRL::ComPtr<ID3D12Resource> depth[2];
+    Microsoft::WRL::ComPtr<ID3D12Device> device;
+    uint64_t generation{},frame{},sequence{};
+    uint64_t feature_generation[2]{};
+    uintptr_t feature[2]{};
+    uint32_t reset[2]{};
+    CameraPose camera[2]{};
+    std::array<float,16> projection[2]{};
+    DepthViewport viewport[2]{};
+    std::array<float,4> crop{};
+    bool temporal{},valid{};
+    std::chrono::steady_clock::time_point record_time{};
+    void clear() {
+        depth[0].Reset();depth[1].Reset();device.Reset();
+        valid=false;generation=frame=0;
+    }
+};
 class DepthStabilizer {
     template<class T> using Ptr=Microsoft::WRL::ComPtr<T>;
     using Matrix=surface::Matrix;
+    std::shared_ptr<DepthHistoryTimeline> timeline_;
+    DepthHistoryTimeline pending_history_;
+    bool pending_history_ready_{};
+    Ptr<ID3D12Resource> previous_resource_[2];
+    void import_history() {
+        if(!timeline_) {
+            for(UINT eye=0;eye<2;++eye)
+                previous_resource_[eye]=history_index_[eye]<0?nullptr:history_[eye][history_index_[eye]].Get();
+            return;
+        }
+        have_previous_frame_=timeline_->valid&&timeline_->device.Get()==device_.Get();
+        if(!have_previous_frame_) {
+            previous_resource_[0].Reset();previous_resource_[1].Reset();
+            previous_temporal_[0]=previous_temporal_[1]=false;return;
+        }
+        previous_generation_=timeline_->generation;previous_frame_=timeline_->frame;
+        previous_crop_=timeline_->crop;previous_record_time_=timeline_->record_time;
+        for(UINT eye=0;eye<2;++eye) {
+            previous_resource_[eye]=timeline_->depth[eye];
+            previous_camera_[eye]=timeline_->camera[eye];previous_projection_[eye]=timeline_->projection[eye];
+            previous_viewport_[eye]=timeline_->viewport[eye];
+            previous_feature_[eye]=timeline_->feature[eye];
+            previous_feature_generation_[eye]=timeline_->feature_generation[eye];
+            previous_reset_[eye]=timeline_->reset[eye];previous_temporal_[eye]=timeline_->temporal;
+        }
+    }
     Ptr<ID3D12Device> device_;
     Ptr<ID3D12RootSignature> root_;
     Ptr<ID3D12PipelineState> pipeline_;
     Ptr<ID3D12DescriptorHeap> srv_heap_,rtv_heap_;
     Ptr<ID3D12Resource> constants_;
+    Ptr<ID3D12Resource> counters_,counter_readback_;
+    DepthHistoryDiagnostics diagnostics_[2]{};
+    bool counters_pending_{};
+    uint64_t counters_frame_{};
+    void consume_counters() {
+        if(!counters_pending_||!counter_readback_)return;
+        void* data{};D3D12_RANGE range{0,64};
+        if(SUCCEEDED(counter_readback_->Map(0,&range,&data))) {
+            const auto* counts=static_cast<const uint32_t*>(data);
+            for(UINT eye=0;eye<2;++eye) {
+                auto& d=diagnostics_[eye];const auto* c=counts+eye*8;
+                d.sampled_pixels=c[0];d.valid_pixels=c[1];d.eligible_pixels=c[2];
+                d.accepted_pixels=c[3];d.edge_pixels=c[4];
+                d.mean_applied_weight=c[3]?float(c[5])/(1000.f*float(c[3])):0.f;
+                d.sampled_frame=counters_frame_;d.measured=true;
+            }
+            D3D12_RANGE none{0,0};counter_readback_->Unmap(0,&none);
+        }
+        counters_pending_=false;
+    }
     Ptr<ID3D12Resource> raw_[2];
     Ptr<ID3D12Resource> history_[2][2];
     UINT width_[2]{},height_[2]{};
@@ -109,12 +206,14 @@ class DepthStabilizer {
         D3D12_DESCRIPTOR_RANGE range{};range.RangeType=D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         range.NumDescriptors=2;range.BaseShaderRegister=0;range.RegisterSpace=0;
         range.OffsetInDescriptorsFromTableStart=D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-        D3D12_ROOT_PARAMETER params[2]{};
+        D3D12_ROOT_PARAMETER params[3]{};
         params[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[0].DescriptorTable={1,&range};params[0].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
         params[1].ParameterType=D3D12_ROOT_PARAMETER_TYPE_CBV;params[1].Descriptor={0,0};
         params[1].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
-        const D3D12_ROOT_SIGNATURE_DESC root_desc{2,params,0,nullptr,D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        params[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_UAV;params[2].Descriptor={1,0};
+        params[2].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
+        const D3D12_ROOT_SIGNATURE_DESC root_desc{3,params,0,nullptr,D3D12_ROOT_SIGNATURE_FLAG_NONE};
         Ptr<ID3DBlob> serialized,errors;
         if(!check(D3D12SerializeRootSignature(&root_desc,D3D_ROOT_SIGNATURE_VERSION_1,&serialized,&errors),
                     "Depth stabilizer root serialization")||
@@ -149,6 +248,15 @@ class DepthStabilizer {
         if(!check(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&buffer,
                 D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&constants_)),
                 "Depth stabilizer constants"))return false;
+        buffer.Width=64;buffer.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        heap.Type=D3D12_HEAP_TYPE_DEFAULT;
+        if(!check(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&buffer,
+                D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&counters_)),
+                "Depth history counters"))return false;
+        buffer.Flags=D3D12_RESOURCE_FLAG_NONE;heap.Type=D3D12_HEAP_TYPE_READBACK;
+        if(!check(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&buffer,
+                D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&counter_readback_)),
+                "Depth history counter readback"))return false;
         return true;
     }
     bool create_history(UINT eye,UINT width,UINT height) {
@@ -186,23 +294,43 @@ class DepthStabilizer {
         for(size_t k=0;k<16;++k)if(!std::isfinite(a[k])||!std::isfinite(b[k])||std::abs(a[k]-b[k])>1.e-5f)return false;
         return true;
     }
-    bool temporal_history_valid(UINT eye,const ViewFrame& frame,const ngx::Guide& guide,
-            const DepthViewport& viewport,const std::array<float,4>& crop,float weight) const {
-        if(weight<=0.f||!have_previous_frame_||history_index_[eye]<0||!previous_temporal_[eye])return false;
+    DepthHistoryReason temporal_history_reason(UINT eye,const ViewFrame& frame,
+            const ngx::Guide& guide,float weight) const {
+        if(weight<=0.f)return DepthHistoryReason::Disabled;
+        if(!have_previous_frame_||!previous_resource_[eye]||!previous_temporal_[eye])return DepthHistoryReason::NoHistory;
         const uint64_t generation=uint64_t(frame.config.key.generation),number=uint64_t(frame.config.key.frame);
-        if(!generation||!number||generation!=previous_generation_||number<=previous_frame_||number-previous_frame_>8)return false;
-        if(guide.reset!=0||guide.feature!=previous_feature_[eye]||
-           guide.feature_generation!=previous_feature_generation_[eye]||
-           guide.reset!=previous_reset_[eye])return false;
-        if(!same_rect(viewport,previous_viewport_[eye],eye==0))return false;
-        if(eye==0 && (std::abs((crop[1]-crop[0])-(previous_crop_[1]-previous_crop_[0]))>1.e-6f||
-                      std::abs((crop[3]-crop[2])-(previous_crop_[3]-previous_crop_[2]))>1.e-6f))return false;
-        const auto& projection=eye==0?frame.projection:frame.projection_right;
-        if(!same_projection(projection,previous_projection_[eye]))return false;
-        if(std::chrono::steady_clock::now()-previous_record_time_>std::chrono::milliseconds(250))return false;
-        return true;
+        if(!generation||generation!=previous_generation_)return DepthHistoryReason::Generation;
+        if(!number||number<=previous_frame_)return DepthHistoryReason::NonMonotonic;
+        if(guide.reset!=0)return DepthHistoryReason::FeatureReset;
+        // A reset pulse invalidates its frame, not the following healthy frame.
+        const auto old=previous_resource_[eye]->GetDesc();
+        if(old.Width!=width_[eye]||old.Height!=height_[eye])return DepthHistoryReason::ExtentChanged;
+        if(guide.feature!=previous_feature_[eye]||guide.feature_generation!=previous_feature_generation_[eye])
+            return DepthHistoryReason::FeatureChanged;
+        if(std::chrono::steady_clock::now()-previous_record_time_>std::chrono::milliseconds(250))return DepthHistoryReason::TooOld;
+        // Projection/crop/viewport changes are handled by the explicit previous
+        // and current transforms. An XR image may be reused after >8 UE frames;
+        // elapsed age, identity and shader correspondence bound that reuse.
+        return DepthHistoryReason::Ready;
     }
+
 public:
+    void set_history_timeline(std::shared_ptr<DepthHistoryTimeline> timeline) {timeline_=std::move(timeline);}
+    // Call after submission proof. Merely recording commands never publishes.
+    void commit_history(bool submitted) {
+        if(!submitted) {
+            // An unsubmitted list must not erase another slot's valid history.
+            pending_history_ready_=false;return;
+        }
+        if(!pending_history_ready_)return;
+        if(timeline_ && (!timeline_->valid || pending_history_.generation!=timeline_->generation ||
+                         pending_history_.frame>timeline_->frame)) {
+            const uint64_t next=timeline_->sequence+1;
+            *timeline_=pending_history_;timeline_->sequence=next;
+        }
+        pending_history_ready_=false;
+    }
+    const DepthHistoryDiagnostics& diagnostics(UINT eye) const {return diagnostics_[eye<2?eye:0];}
     const std::string& error() const {return error_;}
     ID3D12Resource* left() const {return write_index_[0]>=0?history_[0][write_index_[0]].Get():nullptr;}
     ID3D12Resource* right() const {return write_index_[1]>=0?history_[1][write_index_[1]].Get():nullptr;}
@@ -210,13 +338,21 @@ public:
     void reset() {
         history_index_[0]=history_index_[1]=-1;
         write_index_[0]=write_index_[1]=-1;
+        previous_resource_[0].Reset();previous_resource_[1].Reset();
+        pending_history_ready_=false;
         previous_temporal_[0]=previous_temporal_[1]=false;
         have_previous_frame_=false;previous_generation_=previous_frame_=0;
+        for(auto& d:diagnostics_) {
+            d.reason=DepthHistoryReason::Disabled;d.requested_weight=0.f;
+            d.frame_gap=0;d.age_ms=0.f;
+        }
     }
 
     bool prepare(ID3D12Device* device,const ViewFrame& frame,const std::array<ngx::Guide,2>& guides,
             ID3D12Resource* raw_left,ID3D12Resource* raw_right,
             const DepthViewport& left_view,const DepthViewport& right_view,float history_weight) {
+        // Caller owns a retired command slot; its previous readback is now safe.
+        consume_counters();pending_history_ready_=false;
         error_.clear();write_index_[0]=write_index_[1]=-1;
         if(!device||!raw_left||!raw_right||raw_left==raw_right||!guides[0]||!guides[1]) {
             error_="Depth stabilization requires a valid device, distinct per-eye depths, and paired NGX guides";return false;
@@ -242,13 +378,15 @@ public:
             if(width_[eye]!=UINT(d.Width)||height_[eye]!=UINT(d.Height)||raw_format_[eye]!=d.Format)recreate=true;
         }
         if(recreate) {
-            *this=DepthStabilizer{};
+            auto timeline=timeline_;
+            *this=DepthStabilizer{};timeline_=std::move(timeline);
             if(!create_objects(device))return false;
             for(UINT eye=0;eye<2;++eye) {
                 const auto d=raw[eye]->GetDesc();raw_format_[eye]=d.Format;
                 if(!create_history(eye,UINT(d.Width),UINT(d.Height)))return false;
             }
         }
+        import_history();
         const float crop[4]{frame.config.layout.u0,frame.config.layout.u1,
                             frame.config.layout.v0,frame.config.layout.v1};
         pending_crop_={crop[0],crop[1],crop[2],crop[3]};
@@ -268,10 +406,21 @@ public:
             if(!inverse_projection||!finite_matrix(projection)) {
                 error_="Depth stabilizer camera projection is singular";return false;
             }
-            const bool use_history=temporal_history_valid(eye,frame,guides[eye],views[eye],
-                {crop[0],crop[1],crop[2],crop[3]},history_weight);
+            auto& diagnostic=diagnostics_[eye];
+            diagnostic.reason=temporal_history_reason(eye,frame,guides[eye],history_weight);
+            if(recreate && history_weight>0.f && !have_previous_frame_)
+                diagnostic.reason=DepthHistoryReason::ResourcesRecreated;
+            diagnostic.frame_gap=have_previous_frame_&&pending_frame_>previous_frame_?pending_frame_-previous_frame_:0;
+            diagnostic.age_ms=have_previous_frame_?std::chrono::duration<float,std::milli>(
+                std::chrono::steady_clock::now()-previous_record_time_).count():0.f;
+            diagnostic.requested_weight=history_weight;
+            diagnostic.history_source_frame=have_previous_frame_?previous_frame_:0;
+            diagnostic.history_sequence=timeline_?timeline_->sequence:0;
+            const bool use_history=diagnostic.reason==DepthHistoryReason::Ready;
             history_valid_[eye]=use_history;
             write_index_[eye]=history_index_[eye]<0?0:(history_index_[eye]^1);
+            if(history_[eye][write_index_[eye]].Get()==previous_resource_[eye].Get())
+                write_index_[eye]^=1;
             const auto* old_camera=use_history?&previous_camera_[eye]:current_camera[eye];
             const auto& old_projection_data=use_history?previous_projection_[eye]:*projections[eye];
             auto old_projection=surface::projection(old_projection_data);
@@ -279,7 +428,7 @@ public:
                 use_history?previous_crop_[0]:crop[0],use_history?previous_crop_[2]:crop[2],
                 use_history?previous_crop_[1]:crop[1],use_history?previous_crop_[3]:crop[3]);
             const auto old_inverse=surface::inverse(old_projection);
-            if(!old_inverse) {history_valid_[eye]=false;}
+            if(!old_inverse) {history_valid_[eye]=false;diagnostic.reason=DepthHistoryReason::InvalidProjection;}
             const auto previous_eye_from_clip=history_valid_[eye]?*old_inverse:*inverse_projection;
             const auto previous_from_current=surface::target_eye_from_source(
                 current_camera[eye]->rotation,current_camera[eye]->position,
@@ -318,6 +467,7 @@ public:
             const auto old_view=history_valid_[eye]?previous_viewport_[eye]:views[eye];
             c.previous_rect[0]=old_view.x;c.previous_rect[1]=old_view.y;
             c.previous_rect[2]=old_view.width;c.previous_rect[3]=old_view.height;
+            c.diagnostic_config[0]=1.f;c.diagnostic_config[1]=float(eye*32);c.diagnostic_config[2]=16.f;
             pending_camera_[eye]=*current_camera[eye];
             pending_projection_[eye]=*projections[eye];
             pending_viewport_[eye]=views[eye];
@@ -331,11 +481,13 @@ public:
             const UINT base=eye*2;
             device->CreateShaderResourceView(raw[eye],&view,srv_cpu(base));
             view.Format=DXGI_FORMAT_R32_FLOAT;
-            ID3D12Resource* old=history_[eye][history_index_[eye]<0?1:history_index_[eye]].Get();
+            ID3D12Resource* old=history_valid_[eye]?previous_resource_[eye].Get():
+                history_[eye][write_index_[eye]^1].Get();
             device->CreateShaderResourceView(old,&view,srv_cpu(base+1));
         }
         void* mapped{};D3D12_RANGE read{0,0};
         if(!check(constants_->Map(0,&read,&mapped),"Depth stabilizer constant map"))return false;
+        std::memset(mapped,0,1024); // bytes448..511 provide immutable counter clear data
         for(UINT eye=0;eye<2;++eye)
             std::memcpy(static_cast<uint8_t*>(mapped)+eye*512,&constants[eye],sizeof(DepthStabilizeConstants));
         D3D12_RANGE written{0,1024};constants_->Unmap(0,&written);
@@ -348,8 +500,11 @@ public:
         if(!cmd||!ready()||cmd->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT) {
             error_="Depth stabilizer record called without a prepared direct command list";return false;
         }
+        cmd->CopyBufferRegion(counters_.Get(),0,constants_.Get(),448,64);
+        transition(cmd,counters_.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ID3D12DescriptorHeap* heaps[]{srv_heap_.Get()};cmd->SetDescriptorHeaps(1,heaps);
         cmd->SetGraphicsRootSignature(root_.Get());cmd->SetPipelineState(pipeline_.Get());
+        cmd->SetGraphicsRootUnorderedAccessView(2,counters_->GetGPUVirtualAddress());
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         const D3D12_RESOURCE_STATES readable=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|
                                                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -367,6 +522,10 @@ public:
             cmd->DrawInstanced(3,1,0,0);
             transition(cmd,output,D3D12_RESOURCE_STATE_RENDER_TARGET,readable);
         }
+        transition(cmd,counters_.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
+        cmd->CopyBufferRegion(counter_readback_.Get(),0,counters_.Get(),0,64);
+        transition(cmd,counters_.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+        counters_pending_=true;counters_frame_=pending_frame_;
         for(UINT eye=0;eye<2;++eye)history_index_[eye]=write_index_[eye];
         previous_generation_=pending_generation_;previous_frame_=pending_frame_;
         previous_crop_=pending_crop_;have_previous_frame_=previous_generation_!=0&&previous_frame_!=0;
@@ -380,6 +539,21 @@ public:
             previous_reset_[eye]=pending_reset_[eye];
             previous_temporal_[eye]=pending_temporal_;
         }
+        pending_history_=DepthHistoryTimeline{};
+        pending_history_.device=device_;pending_history_.generation=previous_generation_;
+        pending_history_.frame=previous_frame_;pending_history_.crop=previous_crop_;
+        pending_history_.record_time=previous_record_time_;pending_history_.temporal=pending_temporal_;
+        pending_history_.valid=have_previous_frame_;
+        for(UINT eye=0;eye<2;++eye) {
+            pending_history_.depth[eye]=history_[eye][write_index_[eye]];
+            pending_history_.camera[eye]=previous_camera_[eye];
+            pending_history_.projection[eye]=previous_projection_[eye];
+            pending_history_.viewport[eye]=previous_viewport_[eye];
+            pending_history_.feature[eye]=previous_feature_[eye];
+            pending_history_.feature_generation[eye]=previous_feature_generation_[eye];
+            pending_history_.reset[eye]=previous_reset_[eye];
+        }
+        pending_history_ready_=true;
         return true;
     }
 };

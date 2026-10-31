@@ -26,6 +26,7 @@ constexpr UINT Width = 32;
 constexpr UINT Height = 16;
 constexpr size_t PixelCount = size_t(Width) * Height;
 constexpr size_t ConstantBytes = 512;
+constexpr size_t CounterBytes = 64;
 
 void need(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -72,6 +73,11 @@ struct Parameters {
     Matrix current_clip_from_current_eye{reciprocal_projection()};
     std::array<float, 4> current_projection{0.f, 1.f, 1.f, 0.f};
     std::array<float, 4> previous_projection{0.f, 1.f, 1.f, 0.f};
+    std::array<float, 4> diagnostic_config{1.f, 0.f, 16.f, 0.f};
+};
+
+struct CounterStats {
+    uint32_t sampled{}, valid{}, eligible{}, accepted{}, edge{}, weighted_sum{};
 };
 
 class StabilizeFixture final {
@@ -81,12 +87,15 @@ class StabilizeFixture final {
     ComPtr<ID3D11VertexShader> vertex_shader_;
     ComPtr<ID3D11Buffer> constants_;
     ComPtr<ID3D11Texture2D> current_, previous_, output_, readback_;
+    ComPtr<ID3D11Buffer> counters_, counter_readback_;
     ComPtr<ID3D11ShaderResourceView> current_srv_, previous_srv_;
     ComPtr<ID3D11RenderTargetView> output_rtv_;
+    ComPtr<ID3D11UnorderedAccessView> counters_uav_;
     ComPtr<ID3D11RasterizerState> rasterizer_;
     ComPtr<ID3D11ShaderReflection> reflection_;
     ID3D11ShaderReflectionConstantBuffer* config_{};
     std::array<unsigned char, ConstantBytes> constant_data_{};
+    std::array<uint32_t, 16> last_counters_{};
 
     void set_bytes(const char* variable, const void* data, size_t bytes) {
         D3D11_SHADER_VARIABLE_DESC desc{};
@@ -118,6 +127,7 @@ class StabilizeFixture final {
         set_vec4("PreviousRangeWeight", p.previous_range_weight);
         set_vec4("EdgeTolerances", p.edge_tolerances);
         set_vec4("PreviousRect", p.previous_rect);
+        set_vec4("DiagnosticConfig", p.diagnostic_config);
         context_->UpdateSubresource(constants_.Get(), 0, nullptr,
                                     constant_data_.data(), 0, 0);
     }
@@ -152,10 +162,15 @@ public:
 
         hr(D3DReflect(pixel_bytecode->GetBufferPointer(), pixel_bytecode->GetBufferSize(),
             IID_PPV_ARGS(&reflection_)), "reflect stabilization PS");
+        D3D11_SHADER_INPUT_BIND_DESC counter_binding{};
+        hr(reflection_->GetResourceBindingDescByName("HistoryCounters", &counter_binding),
+           "reflect diagnostic UAV binding");
+        need(counter_binding.Type == D3D_SIT_UAV_RWBYTEADDRESS && counter_binding.BindPoint == 1,
+             "diagnostic byte-address UAV must bind at u1 beside RTV0");
         config_ = reflection_->GetConstantBufferByName("StabilizeDepthConfig");
         D3D11_SHADER_BUFFER_DESC config_desc{};
         hr(config_->GetDesc(&config_desc), "reflect stabilization constants");
-        need(config_desc.Size == 432, "stabilization b0 ABI is not 432 bytes");
+        need(config_desc.Size == 448, "stabilization b0 ABI is not 448 bytes");
 
         D3D11_BUFFER_DESC buffer_desc{};
         buffer_desc.ByteWidth = UINT(ConstantBytes);
@@ -185,6 +200,26 @@ public:
         texture_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         hr(device_->CreateTexture2D(&texture_desc, nullptr, &readback_), "create readback texture");
 
+        D3D11_BUFFER_DESC counter_desc{};
+        counter_desc.ByteWidth = UINT(CounterBytes);
+        counter_desc.Usage = D3D11_USAGE_DEFAULT;
+        counter_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+        counter_desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+        hr(device_->CreateBuffer(&counter_desc, nullptr, &counters_), "create diagnostic counter buffer");
+        D3D11_UNORDERED_ACCESS_VIEW_DESC counter_view{};
+        counter_view.Format = DXGI_FORMAT_R32_TYPELESS;
+        counter_view.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+        counter_view.Buffer.NumElements = UINT(CounterBytes / sizeof(uint32_t));
+        counter_view.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+        hr(device_->CreateUnorderedAccessView(counters_.Get(), &counter_view, &counters_uav_),
+           "create diagnostic counter UAV");
+        counter_desc.Usage = D3D11_USAGE_STAGING;
+        counter_desc.BindFlags = 0;
+        counter_desc.MiscFlags = 0;
+        counter_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        hr(device_->CreateBuffer(&counter_desc, nullptr, &counter_readback_),
+           "create diagnostic counter readback");
+
         D3D11_RASTERIZER_DESC raster_desc{};
         raster_desc.FillMode = D3D11_FILL_SOLID;
         raster_desc.CullMode = D3D11_CULL_NONE;
@@ -204,7 +239,10 @@ public:
                                     Width * UINT(sizeof(float)), 0);
 
         ID3D11RenderTargetView* rtv = output_rtv_.Get();
-        context_->OMSetRenderTargets(1, &rtv, nullptr);
+        const UINT zeros[4]{};
+        context_->ClearUnorderedAccessViewUint(counters_uav_.Get(), zeros);
+        context_->OMSetRenderTargetsAndUnorderedAccessViews(
+            1, &rtv, nullptr, 1, 1, counters_uav_.GetAddressOf(), nullptr);
         const D3D11_VIEWPORT viewport{0.f, 0.f, float(Width), float(Height), 0.f, 1.f};
         context_->RSSetViewports(1, &viewport);
         context_->RSSetState(rasterizer_.Get());
@@ -217,6 +255,8 @@ public:
         ID3D11ShaderResourceView* srvs[]{current_srv_.Get(), previous_srv_.Get()};
         context_->PSSetShaderResources(0, 2, srvs);
         context_->Draw(3, 0);
+        context_->OMSetRenderTargets(0, nullptr, nullptr);
+        context_->CopyResource(counter_readback_.Get(), counters_.Get());
         context_->CopyResource(readback_.Get(), output_.Get());
 
         D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -227,10 +267,21 @@ public:
             std::memcpy(result.data() + size_t(y) * Width, row, size_t(Width) * sizeof(float));
         }
         context_->Unmap(readback_.Get(), 0);
+        D3D11_MAPPED_SUBRESOURCE counter_mapped{};
+        hr(context_->Map(counter_readback_.Get(), 0, D3D11_MAP_READ, 0, &counter_mapped),
+           "map diagnostic counters");
+        std::memcpy(last_counters_.data(), counter_mapped.pData, CounterBytes);
+        context_->Unmap(counter_readback_.Get(), 0);
         ID3D11ShaderResourceView* empty[]{nullptr, nullptr};
         context_->PSSetShaderResources(0, 2, empty);
         context_->OMSetRenderTargets(0, nullptr, nullptr);
         return result;
+    }
+
+    CounterStats counters(UINT eye = 0) const {
+        const size_t base = size_t(eye) * 8;
+        return {last_counters_[base], last_counters_[base+1], last_counters_[base+2],
+                last_counters_[base+3], last_counters_[base+4], last_counters_[base+5]};
     }
 };
 
@@ -315,15 +366,27 @@ void test_step_has_no_fictional_intermediate_z(StabilizeFixture& fixture) {
 
 void test_temporal_weight_reduces_same_surface_noise(StabilizeFixture& fixture) {
     Parameters p;
-    p.previous_range_weight[2] = .5f;
     p.previous_range_weight[3] = 1.f;
     p.edge_tolerances = {.5f, 0.f, .5f, 0.f};
     const auto current = constant_depth(10.2f);
     const auto previous = constant_depth(10.f);
+    p.previous_range_weight[2] = 0.f;
+    const auto no_history = fixture.render(current, previous, p);
+    const auto disabled_stats = fixture.counters();
+    p.previous_range_weight[2] = .75f;
     const auto result = fixture.render(current, previous, p);
+    const auto accepted_stats = fixture.counters();
     const float z = z_from_raw(at(result, 12, 8));
     need(z < 10.2f && z > 10.f, "same-surface temporal history was not blended");
-    need(std::abs(z - 10.1f) < .01f, "temporal weight did not reduce same-surface depth noise");
+    need(std::abs(at(result,12,8)-at(no_history,12,8))>1.e-5f,
+         "history weight .75 produced no measurable output change from weight 0");
+    need(z < 10.06f && z > 10.04f, "temporal weight did not produce the expected .75 blend");
+    need(accepted_stats.sampled>0 && accepted_stats.eligible>0 && accepted_stats.accepted>0,
+         "production shader counters did not report accepted same-surface history");
+    need(disabled_stats.accepted==0 && disabled_stats.weighted_sum==0,
+         "weight 0 unexpectedly accepted temporal history");
+    need(accepted_stats.weighted_sum > 0,
+         "production shader did not measure a positive applied temporal weight");
 
     // The production near-field cutoff should disable history even when the
     // previous surface is otherwise compatible and would blend without it.
@@ -370,6 +433,37 @@ void test_history_holds_supported_foreground_endpoint_at_edge(StabilizeFixture& 
          "history did not retain the supported foreground endpoint at the edge");
     need(std::abs(at(retained, 16, 8) - backgroundRaw) < 1.e-6f,
          "history retained foreground where the current footprint has no foreground support");
+}
+
+void test_history_restores_current_foreground_against_sky(StabilizeFixture& fixture) {
+    Parameters p;
+    p.current_range_jitter[2] = .6f; // footprint has .4 foreground and .6 invalid sky
+    p.edge_tolerances = {5.f, 0.f, 1.5f, 80.f};
+    const float foregroundRaw = 1.f / 500.f;
+    std::vector<float> current(PixelCount, 0.f); // raw zero is sky for reciprocal Z
+    for (UINT y = 0; y < Height; ++y)
+        current[size_t(y) * Width + 15] = foregroundRaw;
+    const auto previous_foreground = constant_depth(500.f);
+
+    p.previous_range_weight[2] = .9f;
+    p.previous_range_weight[3] = 0.f;
+    const auto temporal_off = fixture.render(current, previous_foreground, p);
+    need(std::abs(at(temporal_off, 15, 8)) < 1.e-7f,
+         "temporal-off sky footprint did not preserve current sky");
+
+    p.previous_range_weight[3] = 1.f;
+    const auto retained = fixture.render(current, previous_foreground, p);
+    need(std::abs(at(retained, 15, 8) - foregroundRaw) < 1.e-6f,
+         "history did not recover the current-supported foreground endpoint from sky");
+    need(std::abs(at(retained, 16, 8)) < 1.e-7f,
+         "history painted foreground into a neighboring footprint without current support");
+
+    // A matching old object alone cannot create a trail after the current
+    // footprint loses all foreground support.
+    const std::vector<float> current_all_sky(PixelCount, 0.f);
+    const auto no_current_support = fixture.render(current_all_sky, previous_foreground, p);
+    need(std::abs(at(no_current_support, 15, 8)) < 1.e-7f,
+         "old foreground history created a trail with no current-frame support");
 }
 
 void test_invalid_sky_support_does_not_fill_foreground(StabilizeFixture& fixture) {
@@ -442,6 +536,7 @@ int main(int argc, char** argv) try {
     test_temporal_weight_reduces_same_surface_noise(fixture);
     test_new_foreground_rejects_old_background(fixture);
     test_history_holds_supported_foreground_endpoint_at_edge(fixture);
+    test_history_restores_current_foreground_against_sky(fixture);
     test_invalid_sky_support_does_not_fill_foreground(fixture);
     test_camera_reprojection_tracks_motion(fixture);
     test_reset_bypasses_history(fixture);

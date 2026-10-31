@@ -1,5 +1,5 @@
-name: DuoView CI77b stabilized depth and thin geometry Windows build
-run-name: DuoView CI77b stabilized depth + pixel footprints - Windows build (#${{ github.run_number }})
+name: DuoView CI80 temporal history and classic DIBR Windows build
+run-name: DuoView CI80 submitted-frame history + classic DIBR - Windows build (#${{ github.run_number }})
 on:
   push:
     branches:
@@ -26,6 +26,7 @@ on:
       - experiment/ci75-lossless-diagnostic-recorder-20261030
       - experiment/ci76-capture-guided-stability-20261030
       - experiment/ci77-stabilized-depth-left-geometry-20261030
+      - experiment/ci80-temporal-history-classic-dibr-20261031
     paths:
       - ci51/**
       - ci69/**
@@ -568,6 +569,16 @@ jobs:
           ./ci77-depth-class.exe *> evidence/ci77-depth-class.log
           $code=$LASTEXITCODE; Get-Content evidence/ci77-depth-class.log
           if ($code -ne 0) { throw 'CI77 actual depth resource/state integration failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX /wd4100 /Ibackend/src/mods/vr workspace/ci77/history_gpu_tests.cpp /Fe:ci80-history.exe /link d3d12.lib d3dcompiler.lib dxgi.lib
+          if ($LASTEXITCODE -ne 0) { throw 'CI80 history test compile failed' }
+          ./ci80-history.exe *> evidence/ci80-history.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci80-history.log
+          if ($code -ne 0) { throw 'CI80 submitted history GPU tests failed' }
+          cl /nologo /std:c++20 /EHsc /W4 /WX workspace/ci77/foreground_gpu_tests.cpp /Fe:ci80-foreground.exe /link d3d11.lib d3dcompiler.lib dxgi.lib
+          if ($LASTEXITCODE -ne 0) { throw 'CI80 foreground test compile failed' }
+          ./ci80-foreground.exe backend/src/mods/vr/DuoViewStereoCompositeRaster.hlsl *> evidence/ci80-foreground.log
+          $code=$LASTEXITCODE; Get-Content evidence/ci80-foreground.log
+          if ($code -ne 0) { throw 'CI80 foreground/padded viewport GPU tests failed' }
           cl /nologo /std:c++20 /EHsc /W4 /WX workspace/ci77/footprint_gpu_tests.cpp /Fe:ci77-footprint.exe /link d3d11.lib d3dcompiler.lib dxgi.lib
           if ($LASTEXITCODE -ne 0) { throw 'CI77b footprint GPU fixture compilation failed' }
           ./ci77-footprint.exe backend/src/mods/vr/DuoViewSurfaceReproject.hlsl backend/src/mods/vr *> evidence/ci77-footprint-gpu.log
@@ -764,7 +775,7 @@ jobs:
             ngx_fallback='Mono, no DSV candidate substitution'; ngx_observer_default='enabled'; ngx_manual_gallery=$true; ngx_dsv_copy_disabled=$true;
             motion_vectors_captured='optional diagnostic if input compatible'; motion_vectors_used_for_temporal_reconstruction=$false;
             depth_eye_frame_stage_identity_verified=$false; depth_pass_jitter_authenticated=$false;
-            mode='experimental-ci77-stabilized-depth-left-geometry'; ci77_depth_phase_correction=$true; ci77_camera_reprojected_depth_history=$true; ci77_left_geometry_primary=$true; ci77b_pixel_footprints_configurable=$true; ci77_processed_depth_preview=$true; ci76_exclusive_owners=$true; ci76_same_feature_resize=$true; ci76_pair_recovery=8; ci76_mpc_readback=$true; stable_release=$false; ci69_manual_ngx=$true;
+            mode='experimental-ci80-submitted-frame-history-classic-dibr'; ci80_submitted_history=$true; ci80_measured_history_counters=$true; ci80_classic_dibr=$true; ci77_depth_phase_correction=$true; ci77_camera_reprojected_depth_history=$true; ci77_left_geometry_primary=$true; ci77b_pixel_footprints_configurable=$true; ci77_processed_depth_preview=$true; ci76_exclusive_owners=$true; ci76_same_feature_resize=$true; ci76_pair_recovery=8; ci76_mpc_readback=$true; stable_release=$false; ci69_manual_ngx=$true;
             ci74_right_owner_mask_jitter_compensated=$true; ci74_target_footprint_centered=$true;
             ci75_lossless_sequence_recorder=$true; ci75_sequence_schema='duoview-diagnostic-sequence-2';
             ci75_upload_part_limit_bytes=20971520; ci75_size_truncation=$false
@@ -792,27 +803,27 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'TRUE STEREO XR V1') { throw 'Missing or stale actual stereo headset instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-CI77-Experimental-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-CI80-Experimental-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
           Copy-Item package/final-generated-source-sha256.json evidence/final-public-source/
           Copy-Item workspace/ci51/README_TEST_BUILD.md evidence/final-public-source/
-          $sourceZip="UEVR-DuoView-CI77-Public-Source-${{ github.run_number }}.zip"
+          $sourceZip="UEVR-DuoView-CI80-Public-Source-${{ github.run_number }}.zip"
           Compress-Archive -Path evidence/final-public-source/* -DestinationPath $sourceZip -Force
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI77-Experimental-${{ github.run_number }}
+          name: UEVR-DuoView-CI80-Experimental-${{ github.run_number }}
           path: |
-            UEVR-DuoView-CI77-Experimental-*.zip
-            UEVR-DuoView-CI77-Experimental-*.zip.sha256
+            UEVR-DuoView-CI80-Experimental-*.zip
+            UEVR-DuoView-CI80-Experimental-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-CI77-Public-Source-${{ github.run_number }}
-          path: UEVR-DuoView-CI77-Public-Source-*.zip
+          name: UEVR-DuoView-CI80-Public-Source-${{ github.run_number }}
+          path: UEVR-DuoView-CI80-Public-Source-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance

@@ -1,3 +1,18 @@
+# CI80 — submitted-frame depth history and classic DIBR comparison
+
+Based on CI77b build116; keeps its color/shading and LEFT primary geometry.
+
+- Temporal history follows the immediately preceding successfully submitted frame across XR image slots, with one-queue ordering and independent LEFT/RIGHT transforms. Unnecessary exact-projection/frame-gap vetoes are removed; dimension/identity/age and surface checks remain.
+- Live menu and log show the actual sparse GPU acceptance count, applied weight, history frame, and rejection reason. Sample frame is labeled because fenced readbacks arrive later.
+- Bounded foreground retention also handles sky, requiring current-frame foreground support and valid reprojection. This is not a freeze-depth mode.
+- **Mono foreground guard (hands)** defaults ON. It replaces the union of both current near-hand silhouettes with current RIGHT-camera imagery in both eyes and suppresses displaced near geometry. This sacrifices local hand stereo/sharpness; OFF restores reconstructed near geometry.
+- **Joey Classic Single-View DIBR** is available inside rendering method4. It uses Joey's existing classic depth-scaled disparity branch, curve/cap1, bypassing later projection reprojection and repairs. See JOEY_CLASSIC_PROVENANCE.md. Full-FOV one-source construction and existing readiness controls remain.
+- Native source sampling continues to use the real active viewport within the larger allocation. Sampling unused padding is not a resize fix. Dimension changes reset incompatible temporal history. Game resize recovery remains an in-headset acceptance item.
+
+Start with Mode5, depth stabilization and temporal ON, weight75%, thin geometryON. Compare weight0/75 while observing the live counters. The processed depth preview is the same guide reconstruction reads. Test the hand guard ON/OFF separately. Joey comparison: choose rendering method4, then enable its classic toggle; disparity remains configurable.
+
+No claim of zero remaining shimmer, native-stereo equivalence, complete resize repair, or measured headset performance is made from compilation/GPU fixtures alone.
+
 # CI77b — stabilized depth and measured pixel footprints
 
 Experimental successor to CI76 build106. This build prioritizes stable depth guides and high-resolution LEFT geometry, with direct raw/processed visual comparison. A Windows build and GPU tests do not certify headset quality.

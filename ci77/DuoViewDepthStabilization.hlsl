@@ -3,6 +3,7 @@
 // The input and output keep device-depth encoding and the source allocation.
 Texture2D<float> CurrentDepth : register(t0);
 Texture2D<float> PreviousDepth : register(t1);
+RWByteAddressBuffer HistoryCounters : register(u1);
 
 cbuffer StabilizeDepthConfig : register(b0) {
     row_major float4x4 CurrentEyeFromClip;
@@ -17,6 +18,7 @@ cbuffer StabilizeDepthConfig : register(b0) {
     float4 PreviousRangeWeight;    // minDepth, maxDepth, historyWeight, historyValid
     float4 EdgeTolerances;         // absZ, relZ, maxReprojectionErrorPx, reserved
     float4 PreviousRect;           // previous active depth viewport, same allocation
+    float4 DiagnosticConfig;       // enabled, eye counter byte offset, sampling stride, reserved
 };
 
 struct VertexOut {
@@ -138,7 +140,9 @@ bool CurrentForegroundEndpoint(int2 pixel,int2 size,float historyZ,float current
     return true;
 }
 
-float TemporalBlend(int2 pixel, float currentRaw, float currentZ, int2 size) {
+float TemporalBlend(int2 pixel, float currentRaw, float currentZ, int2 size,
+                    out float appliedWeight,out bool edgeReused) {
+    appliedWeight=0.f;edgeReused=false;
     if(PreviousRangeWeight.w<0.5f||PreviousRangeWeight.z<=0.f||currentZ<=0.f)return currentRaw;
     float effectiveHistoryWeight=saturate(min(PreviousRangeWeight.z,0.9f));
     // Production config supplies the near-field cutoff in EdgeTolerances.w.
@@ -208,11 +212,14 @@ float TemporalBlend(int2 pixel, float currentRaw, float currentZ, int2 size) {
     }
     // Keep only a current-supported foreground endpoint. This is bounded edge
     // hysteresis, not a cross-surface depth average.
-    if(edgeScore>0.f&&edgeHistorySupport>=0.5f)return edgeRaw;
+    if(edgeScore>0.f&&edgeHistorySupport>=0.5f) {
+        edgeReused=true;appliedWeight=effectiveHistoryWeight;return edgeRaw;
+    }
     // Require meaningful same-surface coverage before reusing history.
     if(support<0.15f)return currentRaw;
     const float historyZ=zsum/support;
     const float weight=effectiveHistoryWeight*saturate(support);
+    appliedWeight=weight;
     const float blendedZ=lerp(currentZ,historyZ,weight);
     return RawFromForwardZ(blendedZ,CurrentRangeJitter.xy,CurrentProjection);
 }
@@ -223,6 +230,37 @@ float PSStabilizeDepth(VertexOut i) : SV_TARGET0 {
     const int2 pixel=int2(i.pos.xy);
     float currentZ;
     const float currentRaw=StabilizeSpatial(pixel,size,currentZ);
-    if(currentZ<=0.f)return currentRaw;
-    return TemporalBlend(pixel,currentRaw,currentZ,size);
+    float appliedWeight=0.f;bool edgeReused=false;
+    float result=currentRaw;
+    if(currentZ>0.f) {
+        result=TemporalBlend(pixel,currentRaw,currentZ,size,appliedWeight,edgeReused);
+    } else if(PreviousRangeWeight.w>.5f && PreviousRangeWeight.z>0.f &&
+              all(pixel>=ActiveMin(size,ActiveRect)) && all(pixel<=ActiveMax(size,ActiveRect))) {
+        // Infinite/sky samples cannot be unprojected directly. Query history
+        // with a far ray, but retain ONLY a foreground endpoint also supported
+        // by the CURRENT jitter footprint and a valid round-trip projection.
+        // A completely exposed sky pixel never inherits old foreground depth.
+        const float farZ=1.e6f;
+        const float farRaw=RawFromForwardZ(farZ,CurrentRangeJitter.xy,CurrentProjection);
+        const float candidate=TemporalBlend(pixel,farRaw,farZ,size,appliedWeight,edgeReused);
+        if(edgeReused)result=candidate;
+        else appliedWeight=0.f;
+    }
+    // Sparse GPU measurements of actual shader decisions, not host intent.
+    // One sample per 16x16 block bounds atomic work at full headset resolution.
+    const uint stride=max(1u,uint(DiagnosticConfig.z));
+    if(DiagnosticConfig.x>.5f && uint(pixel.x)%stride==0u && uint(pixel.y)%stride==0u &&
+       all(pixel>=ActiveMin(size,ActiveRect)) && all(pixel<=ActiveMax(size,ActiveRect))) {
+        const uint base=uint(DiagnosticConfig.y);uint ignored;
+        HistoryCounters.InterlockedAdd(base,1u,ignored);
+        if(currentZ>0.f)HistoryCounters.InterlockedAdd(base+4u,1u,ignored);
+        if((currentZ>max(0.f,EdgeTolerances.w) || edgeReused) && PreviousRangeWeight.w>.5f &&
+           PreviousRangeWeight.z>0.f)HistoryCounters.InterlockedAdd(base+8u,1u,ignored);
+        if(appliedWeight>0.f) {
+            HistoryCounters.InterlockedAdd(base+12u,1u,ignored);
+            HistoryCounters.InterlockedAdd(base+20u,uint(round(appliedWeight*1000.f)),ignored);
+        }
+        if(edgeReused)HistoryCounters.InterlockedAdd(base+16u,1u,ignored);
+    }
+    return result;
 }
