@@ -91,10 +91,13 @@ BACKEND = {
    '    void triview_note_eye_pose(int32_t index, const double* rotation, const double* position);\n'
    '    bool triview_centre_pose(double* rotation, double* position) const;\n'
    '    void note_triview_views_demanded() { m_triview_owns_index_two.store(true, std::memory_order_release); }\n'
-   '    // Once Tri-View has asked UE for a third view, view index 2 is always ours (never the\n'
-   '    // legacy one-based eye index), even during the frame in which the user switches away.\n'
+   '    void clear_triview_views_demanded() { m_triview_owns_index_two.store(false, std::memory_order_release); }\n'
+   '    // View index 2 is ours while Tri-View is active, and for the frames still carrying a third view\n'
+   '    // that Tri-View demanded. The latch is dropped by the first GetDesiredNumberOfViews call that no\n'
+   '    // longer demands it, and is ignored once another rendering method is selected.\n'
    '    bool triview_owns_view_index_two() const {\n'
-   '        return is_triview_active() || m_triview_owns_index_two.load(std::memory_order_acquire);\n'
+   '        return is_triview_active() ||\n'
+   '            (is_triview_selected() && m_triview_owns_index_two.load(std::memory_order_acquire));\n'
    '    }\n'
    '    std::atomic<uint64_t> m_triview_third_renders{}, m_triview_pair_only{};\n'
    '    std::atomic<uint64_t> m_triview_composites{}, m_triview_composite_rejects{};\n'),
@@ -173,6 +176,7 @@ BACKEND = {
    '        vr->note_triview_views_demanded();\n'
    '        return 3;\n'
    '    }\n\n'
+   '    if (!vr->is_triview_active()) { vr->clear_triview_views_demanded(); }\n\n'
    '    return 2;\n}'),
   # adjust_view_rect: index 2 before the legacy one-based heuristic.
   ('    if (!g_framework->is_game_data_intialized()) {\n        return;\n    }\n\n'
@@ -266,7 +270,7 @@ BACKEND = {
    '    utility::ScopeGuard triview_restore_count{[&]() {\n'
    '        if (triview_family != nullptr) { triview_family->get_views()->count = 3; }\n'
    '    }};\n'
-   '    if (native_stereo_fix_enabled && vr->triview_owns_view_index_two()) {\n'
+   '    if (native_stereo_fix_enabled) {\n'
    '        const auto triview_main_target = rtm != nullptr ? rtm->get_view_family_render_target() : nullptr;\n'
    '        for (const auto family : view_families) {\n'
    '            if (family == nullptr || triview_main_target == nullptr ||\n'
@@ -274,11 +278,17 @@ BACKEND = {
    '            auto* const family_views = family->get_views();\n'
    '            if (family_views == nullptr ||\n'
    '                !is_readable_process_range(reinterpret_cast<uintptr_t>(family_views), sizeof(*family_views)) ||\n'
-   '                family_views->count != 3 || family_views->capacity < 3 || family_views->data == nullptr ||\n'
-   '                !is_readable_process_range(reinterpret_cast<uintptr_t>(family_views->data), sizeof(void*) * 3)) { continue; }\n'
-   '            auto* const third = family_views->data[2];\n'
-   '            if (third == nullptr || third == family_views->data[0] || third == family_views->data[1]) { continue; }\n'
-   '            triview_third_view = third;\n'
+   '                family_views->count != 3) { continue; }\n'
+   '            // Fail closed: a Native Fix main family with three views is ALWAYS cut back to Joey\'s two\n'
+   '            // eyes (count restored on exit), even when the third view cannot be identified or Tri-View\n'
+   '            // was just switched off; then the third view is simply not rendered.\n'
+   '            if (family_views->capacity >= 3 && family_views->data != nullptr &&\n'
+   '                is_readable_process_range(reinterpret_cast<uintptr_t>(family_views->data), sizeof(void*) * 3)) {\n'
+   '                auto* const third = family_views->data[2];\n'
+   '                if (third != nullptr && third != family_views->data[0] && third != family_views->data[1]) {\n'
+   '                    triview_third_view = third;\n'
+   '                }\n'
+   '            }\n'
    '            triview_family = family;\n'
    '            family_views->count = 2;\n'
    '            break;\n'
@@ -467,6 +477,9 @@ std::optional<uevr::triview::Layout> VR::triview_layout() {
 
 void VR::triview_note_eye_pose(int32_t index, const double* rotation, const double* position) {
     if (index != 0 && index != 1) return;
+    // UE builds eye 0, then eye 1, then the centre view in one pass: eye 0 invalidates last frame's
+    // eye 1, so the centre camera can only be built from poses noted in the same frame.
+    if (index == 0) { m_triview_eye_seen[1] = false; }
     auto& pose = m_triview_eye_pose[index];
     for (int i = 0; i < 3; ++i) { pose[i] = rotation[i]; pose[3 + i] = position[i]; }
     m_triview_eye_seen[index] = true;
