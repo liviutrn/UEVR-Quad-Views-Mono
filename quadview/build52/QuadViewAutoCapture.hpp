@@ -1,6 +1,10 @@
 #pragma once
 // Build 52 only: one-shot, read-only GPU capture, no headset-image modifications.
 // The command-list slot owns this object until its GPU fence retires.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <spdlog/spdlog.h>
@@ -10,6 +14,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <limits>
