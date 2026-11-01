@@ -31,7 +31,7 @@ public:
     // destination: the double-wide XR image in RENDER_TARGET state. All are left in those states.
     bool record(ID3D12Device* device, ID3D12GraphicsCommandList* cmd, ID3D12Resource* main,
                 ID3D12Resource* capture, ID3D12Resource* destination, const PacketLayout& frame,
-                bool border) {
+                unsigned debug_bits) {
         error_.clear();
         if (!device || !cmd || !main || !capture || !destination || main == capture ||
             main == destination || capture == destination || !frame.valid ||
@@ -105,7 +105,7 @@ public:
             {mr.ax, mr.bx, mr.ay, mr.by},
             {float(l.periphery_x), 0.f, float(l.periphery_width), float(l.periphery_height)},
             {float(md.Width), float(md.Height), float(cd.Width), float(cd.Height)},
-            {0.08f, frame.third ? 1.f : 0.f, border ? 1.f : 0.f, convert}};
+            {0.08f, frame.third ? 1.f : 0.f, static_cast<float>(debug_bits), convert}};
 
         transition(cmd, main, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         transition(cmd, capture, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

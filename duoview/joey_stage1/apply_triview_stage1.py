@@ -85,7 +85,9 @@ BACKEND = {
    '    }\n'
    '    bool is_triview_active() const;\n'
    '    bool triview_third_view_enabled() const { return m_triview_third_view->value(); }\n'
-   '    bool triview_debug_border() const { return m_triview_border->value(); }\n'
+   '    unsigned triview_debug_mode() const {\n'
+   '        return (m_triview_border->value() ? 1u : 0u) | (m_triview_raw_view->value() ? 2u : 0u);\n'
+   '    }\n'
    '    int triview_flag_offset() const { return static_cast<int>(std::lround(m_triview_flag_offset->value())); }\n'
    '    std::optional<uevr::triview::Layout> triview_layout();\n'
    '    void triview_note_eye_pose(int32_t index, const double* rotation, const double* position);\n'
@@ -106,13 +108,14 @@ BACKEND = {
    '    const ModToggle::Ptr m_triview_third_view{ModToggle::create(generate_name("TriViewThirdView"), true)};\n'
    '    const ModSlider::Ptr m_triview_periphery_scale{ModSlider::create(generate_name("TriViewPeripheryScale"), .25f, 1.f, .5f)};\n'
    '    const ModToggle::Ptr m_triview_border{ModToggle::create(generate_name("TriViewDebugBorder"), false)};\n'
+   '    const ModToggle::Ptr m_triview_raw_view{ModToggle::create(generate_name("TriViewRawView"), false)};\n'
    '    const ModSlider::Ptr m_triview_flag_offset{ModSlider::create(generate_name("TriViewFlagOffset"), -1.f, 300.f, 200.f)};\n'
    '    std::atomic<bool> m_triview_owns_index_two{false};\n'
    '    std::array<std::array<double, 6>, 2> m_triview_eye_pose{}; // game thread only\n'
    '    std::array<bool, 2> m_triview_eye_seen{};\n'),
   ('            *m_duo_sharp_periphery,',
    '            *m_duo_sharp_periphery,\n'
-   '            *m_triview_third_view, *m_triview_periphery_scale, *m_triview_border, *m_triview_flag_offset,'),
+   '            *m_triview_third_view, *m_triview_periphery_scale, *m_triview_border, *m_triview_raw_view, *m_triview_flag_offset,'),
  ],
  "src/mods/VR.cpp": [
   ('bool VR::should_force_native_stereo_fix_same_pass() const {\n    if (is_duoview_renderer_active()) {',
@@ -135,6 +138,7 @@ BACKEND = {
    '                m_triview_third_view->draw("Third view (periphery). OFF = cropped stereo windows only");\n'
    '                m_triview_periphery_scale->draw("Periphery resolution scale");\n'
    '                m_triview_border->draw("Fovea border highlight");\n'
+   '                m_triview_raw_view->draw("Debug: show raw render targets (left eye = whole main target, right eye = capture)");\n'
    '                m_triview_flag_offset->draw("Experimental: engine flag byte offset (-1 = leave untouched)");\n'
    '                if (const auto layout = triview_layout()) {\n'
    '                    ImGui::Text("Fovea %ux%u per eye, periphery %ux%u", layout->fovea_width, layout->fovea_height,\n'
@@ -430,7 +434,7 @@ BACKEND = {
    '                                if (!slot) { slot = std::make_unique<uevr::triview::dx12::Compositor>(); }\n'
    '                                triview_composed = slot->record(device, commands.cmd_list.Get(),\n'
    '                                    m_game_tex.texture.Get(), m_scene_capture_tex.texture.Get(), destination,\n'
-   '                                    triview_frame, vr->triview_debug_border());\n'
+   '                                    triview_frame, vr->triview_debug_mode());\n'
    '                                if (triview_composed) {\n'
    '                                    commands.has_commands = true;\n'
    '                                    if (native_stereo_packet != nullptr && native_stereo_hook != nullptr) {\n'

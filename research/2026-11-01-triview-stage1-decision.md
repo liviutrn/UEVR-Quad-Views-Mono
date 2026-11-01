@@ -92,3 +92,16 @@ Both foveas render and look right, fps better than Native Stereo, periphery blac
   offset or -1 (untouched). FrameCounter proof dropped (it only served the wrong guess). A hex dump of family bytes +0x9C..+0x12B is logged
   once, so 0xC8 can be checked against the real layout. Whether the flag is needed at all is still [estimated]; test 2 shows it:
   left fovea must stay sharp while the periphery appears.
+
+## 8. Headset test 2 (build 2 = 1dd5277, 1 Nov 21:40) [headset-verified + log]
+- The third render RAN (`Rendering the centre periphery view ... flag offset 200`), no engine errors or new warnings (the "vtable already hooked" /
+  "stale submit" warnings occur at the same rate in the build-1 log). Picture is WRONG: Liviu reports distortion, the periphery image appearing where
+  the left eye should be, and black edges.
+- Flag layout CONFIRMED by the logged bytes (family +0xC8..+0xCB = 00 01 00 01 = bAdditionalViewFamily=0, bRealtimeUpdate=1, bDeferClear=0,
+  bResolveScene=1, the declared order in UE 5.5.2 SceneView.h per ChatGPT's audit); +0xAC FrameNumber, +0xB0 FrameCounter, +0xB8 = TOptional<uint64>.
+- Leading hypothesis [estimated]: the third image lands at the corner (0,0) of the main target, over the left fovea, instead of at x = W; the right half
+  stays black. Fits all three symptoms. Cause unknown (rect handling in the singleton render?). Build 3 adds a menu toggle "Debug: show raw render
+  targets" (left eye = whole main target squeezed 2:1, right eye = capture target) to see exactly where each render landed, plus the ChatGPT review
+  fixes (frame-scoped index-2 ownership, same-frame eye poses, fail-closed 3-view family).
+- Liviu moved the flag-offset slider during the test (87, 42, 57, 284, 300, 110 in the log): each position briefly wrote 1 into a byte that read 0 and
+  restored it. Not the cause, but do not touch that slider.

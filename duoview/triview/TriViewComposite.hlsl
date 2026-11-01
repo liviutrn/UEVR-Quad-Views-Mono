@@ -13,7 +13,7 @@ cbuffer TriViewConstants : register(b0) {
     float4 PeriphMapR;    // same, right eye
     float4 PeriphRect;    // x, y, width, height of the periphery in MainSource pixels
     float4 SourceSizes;   // MainSource width/height, CaptureSource width/height
-    float4 Params;        // feather (fraction of fovea), periphery present (0/1), border (0/1),
+    float4 Params;        // feather (fraction of fovea), periphery present (0/1), debug bits (1 border, 2 raw targets),
                           // colour fix: 0 none, 1 sRGB decode (UNORM source -> sRGB XR), 2 encode (reverse)
 };
 
@@ -63,7 +63,14 @@ float4 PSMain(VertexOut i) : SV_TARGET0 {
             : MainSource.SampleLevel(LinearClamp, texel / SourceSizes.xy, 0.0);
         result = lerp(periphery, fovea, weight);
     }
-    if (Params.z > 0.5 && weight > 0.01 && weight < 0.1) result.rgb = float3(1.0, 0.3, 0.0);
+    const uint debugBits = (uint)(Params.z + 0.5);
+    // Debug bit 2: raw render targets. Left eye = the WHOLE main target squeezed 2:1 (fovea on the left,
+    // periphery on the right if it landed there); right eye = the whole capture target.
+    if ((debugBits & 2u) != 0u) {
+        result = rightEye ? CaptureSource.SampleLevel(LinearClamp, uv, 0.0)
+                          : MainSource.SampleLevel(LinearClamp, uv, 0.0);
+    }
+    if ((debugBits & 1u) != 0u && weight > 0.01 && weight < 0.1) result.rgb = float3(1.0, 0.3, 0.0);
     if (Params.w > 1.5) result.rgb = LinearToSrgb(saturate(result.rgb));
     else if (Params.w > 0.5) result.rgb = SrgbToLinear(saturate(result.rgb));
     result.a = 1.0;
