@@ -1,6 +1,6 @@
-name: Build52 auto QuadViews GPU source diagnostics Windows DLL
+name: Build52 v2 failure-tolerant QuadViews diagnostics Windows DLL
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: Build52 automatic QuadViews diagnostics (${{ github.run_number }})
+run-name: Build52 v2 automatic evidence (${{ github.run_number }})
 on:
   push:
     branches: [experiment/build52-auto-diagnostics-20261101]
@@ -231,11 +231,11 @@ jobs:
           Build52 - Quad Views Stereo ID7 - AUTOMATIC DIAGNOSTICS - test candidate
           Start a fresh game process and inject this complete package.
           Enable Quad Views Stereo (ID7). Keep the same settings as the Build50 test initially.
-          This build preserves Build51 rendering and captures seven GPU strips from each source after 120 accepted composites.
+          This build preserves Build51 rendering, logs early failed stages, and captures seven strips per source after 120 accepted composites.
           Working DuoView source is preserved. This is not headset-verified or production-ready.
           No visual inspection required. Keep rendering active for about 15 seconds.
-          After exit find %TEMP%\UEVR_Build52_Diagnostics_<PID>.zip and send it with UEVR.log if available.
-          The readback is one-shot, read-only and fence-synchronized; do not tune sliders.
+          After exit find %TEMP%\UEVR_Build52_Diagnostics_<PID>.zip (if present) and %TEMP%\UEVR_Build52_Trace_<PID>.csv (fallback). Send either or both, plus UEVR.log if available.
+          The readback is one-shot, read-only and fence-synchronized. Early-stage traces persist without any GPU image. Do not tune sliders.
           Send only the evidence ZIP and logs. No description of headset output needed.
           Exact backend symbols are retained with the matching CI run.
           '@ | Set-Content package/READ_FIRST.txt
