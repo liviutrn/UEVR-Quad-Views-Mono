@@ -24,11 +24,30 @@ def patch_header(text):
         '        for (size_t i = 0; i != 4; ++i) {',
         '        // Build52: read-only GPU copy AFTER composition, BEFORE sources leave shader state.\n'
         '        // Readback is consumed only when the existing per-slot fence retires.\n'
-        '        build52_capture_.queue(commands,device_.Get(),sources,layout);\n'
+        '        build52_capture_.queue(commands,device_.Get(),sources,layout,
+                               source_generation,source_serial,source_engine_frame);\n'
         '        for (size_t i = 0; i != 4; ++i) {'))
+    text = once(text, '                std::shared_ptr<const void> owner, UINT64 timestamp_frequency = 0) {\n        recorded_ = false;', 
+                '                std::shared_ptr<const void> owner, UINT64 timestamp_frequency = 0,\n'
+                '                uint64_t source_generation = 0,uint64_t source_serial = 0,\n'
+                '                uint32_t source_engine_frame = 0) {\n        recorded_ = false;')
     text = once(text, '    ComPtr<ID3D12Device> device_;',
                 '    uevr::quadview::diagnostics::AutoCapture build52_capture_{};\n'
                 '    ComPtr<ID3D12Device> device_;')
+    return text
+
+def patch_consumer(text):
+    anchor='''                                        frozen->settings.gpu_timing ? timestamp_frequency : 0);'''
+    return once(text,anchor,
+        '''                                        frozen->settings.gpu_timing ? timestamp_frequency : 0,
+                                        source->generation,source->serial,source->engine_frame);''')
+
+def patch_hook_trace(text):
+    anchor='namespace uevr::quadview {\nint hook_trace_mode() {'
+    text=once(text,anchor,'#include "QuadViewAutoTrace.hpp"\n'+anchor)
+    text=once(text,'    if(!decision.emit) return;\n    SPDLOG_INFO(',
+        '    if(!decision.emit) return;\n'
+        '    diagnostics::persist_hook_event(site,r,decision.count);\n    SPDLOG_INFO(')
     return text
 
 def main():
@@ -37,14 +56,22 @@ def main():
     source=Path(__file__).resolve().parent
     target=Path(sys.argv[1]) / "src/mods/vr"
     file=target / "QuadViewD3D12.hpp"
-    raw=file.read_text(encoding="utf-8")
-    patched=patch_header(raw)  # Fail closed, before changing any file.
+    consumer=target / "D3D12Component.cpp"
+    hook=target / "FFakeStereoRenderingHook.cpp"
+    # Validate all three generated sources before writing any modified files.
+    patched=patch_header(file.read_text(encoding="utf-8"))
+    patched_consumer=patch_consumer(consumer.read_text(encoding="utf-8"))
+    patched_hook=patch_hook_trace(hook.read_text(encoding="utf-8"))
     capture=source / "QuadViewAutoCapture.hpp"
-    if not capture.is_file():
-        raise RuntimeError("Missing Build52 capture header")
+    trace=source / "QuadViewAutoTrace.hpp"
+    if not capture.is_file() or not trace.is_file():
+        raise RuntimeError("Missing Build52 capture/trace headers")
     shutil.copyfile(capture,target / "QuadViewAutoCapture.hpp")
+    shutil.copyfile(trace,target / "QuadViewAutoTrace.hpp")
     file.write_text(patched,encoding="utf-8")
-    print("Build52: guarded capture instrumentation added. No shader or eye-image changes.")
+    consumer.write_text(patched_consumer,encoding="utf-8")
+    hook.write_text(patched_hook,encoding="utf-8")
+    print("Build52: persistent pre-compositor trace + frame-stamped GPU capture applied.")
 
 if __name__=="__main__":
     main()
