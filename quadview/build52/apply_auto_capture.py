@@ -24,8 +24,8 @@ def patch_header(text):
         '        for (size_t i = 0; i != 4; ++i) {',
         '        // Build52: read-only GPU copy AFTER composition, BEFORE sources leave shader state.\n'
         '        // Readback is consumed only when the existing per-slot fence retires.\n'
-        '        build52_capture_.queue(commands,device_.Get(),sources,layout,
-                               source_generation,source_serial,source_engine_frame);\n'
+        '        build52_capture_.queue(commands,device_.Get(),sources,layout,\n'
+        '                               source_generation,source_serial,source_engine_frame);\n'
         '        for (size_t i = 0; i != 4; ++i) {'))
     text = once(text, '                std::shared_ptr<const void> owner, UINT64 timestamp_frequency = 0) {\n        recorded_ = false;', 
                 '                std::shared_ptr<const void> owner, UINT64 timestamp_frequency = 0,\n'
