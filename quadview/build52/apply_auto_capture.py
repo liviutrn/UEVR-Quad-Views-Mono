@@ -48,6 +48,19 @@ def patch_hook_trace(text):
     text=once(text,'    if(!decision.emit) return;\n    SPDLOG_INFO(',
         '    if(!decision.emit) return;\n'
         '    diagnostics::persist_hook_event(site,r,decision.count);\n    SPDLOG_INFO(')
+    demand='''    if (vr->is_quadview_mode_selected()) {
+        const auto demanded=vr->quadview_desired_view_count();'''
+    text=once(text,demand,'''    if (vr->is_quadview_mode_selected()) {
+        // Build52: this fires even if a four-view family is never accepted.
+        {
+            uevr::quadview::HookTraceRecord r{};
+            r.event="VIEW_DEMAND";r.reason="quadview_selected";
+            r.mode=7;r.generation=vr->mono_generation();
+            r.result=vr->is_quadview_renderer_active()?1:0;
+            r.pending=vr->quadview_desired_view_count();
+            uevr::quadview::emit_hook_trace(142,r);
+        }
+        const auto demanded=vr->quadview_desired_view_count();''')
     return text
 
 def main():
