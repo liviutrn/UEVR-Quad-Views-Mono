@@ -8,7 +8,7 @@ Research-only: never change camera poses, view rectangles, shader, eye output, o
 2. Exit the game and open Windows Run (Win+R), paste `%TEMP%`, press Enter. Find the most recent `UEVR_Build52_Diagnostics_<PID>.zip`. Send the ZIP, plus the ordinary UEVR.log if readily available.
 
 ## Automatic data
-- Five? No: SEVEN horizontal source strips, 8 rows each, at 3%,13%,25%,50%,75%,87%,97% of the image height. Collected from all four actual D3D12 source textures.
+- Seven horizontal source strips, 8 rows each, at 3%,13%,25%,50%,75%,87%,97% of the image height. Collected from all four actual D3D12 source textures.
 - P6 PPM images role_0 through role_3 (full source width, stacked strips).
 - coverage_summary.csv: first/last visible pixels, counts in left/right half, in the *expected* Build51 view rectangle, and at zero-origin.
 - coverage_tiles_64px.csv: spatial coverage every 64 pixels across each source.
