@@ -366,6 +366,11 @@ BACKEND = {
    '        }\n'),
  ],
  # ---- D3D12: compose instead of Joey's copy, only while ID 7 is active ----------------------------
+ # v207 source-contract test counts D3D12 consume sites (4 -> 5: the Tri-View compositor is the new one).
+ "tests/CadenceReplayTests.cpp": [
+  ('copies == (std::string(backend) == "D3D11" ? 2 : 4) &&',
+   'copies == (std::string(backend) == "D3D11" ? 2 : 5) &&'),
+ ],
  "src/mods/vr/D3D12Component.hpp": [
   ('#include "d3d12/TextureContext.hpp"\n#include "DuoViewD3D12.hpp"',
    '#include "d3d12/TextureContext.hpp"\n#include "DuoViewD3D12.hpp"\n#include "TriViewD3D12.hpp"'),
@@ -405,6 +410,11 @@ BACKEND = {
    '                                if (triview_composed) {\n'
    '                                    commands.has_commands = true;\n'
    '                                    if (native_stereo_packet != nullptr && native_stereo_hook != nullptr) {\n'
+   '                                        if (native_frame_ticket) {\n'
+   '                                            native_stereo_hook->record_native_frame_stage(*native_stereo_packet, native_frame_ticket,\n'
+   '                                                frame_diag::Backend::d3d12, frame_diag::Runtime::openxr, frame_diag::Stage::copy_recorded,\n'
+   '                                                0, 2, 0, m_scene_capture_tex.texture.Get(), destination);\n'
+   '                                        }\n'
    '                                        native_stereo_hook->note_native_stereo_frame_packet_consumed(native_stereo_packet->serial);\n'
    '                                    }\n'
    '                                } else {\n'
