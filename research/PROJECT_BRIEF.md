@@ -1,7 +1,7 @@
 # DuoView project brief (team handoff)
 
 Canonical copy: https://github.com/liviutrn/UEVR-Quad-Views-Mono/blob/claude/team-brief/research/PROJECT_BRIEF.md
-Last update: 1 Nov 2026, 00:35 (Claude). Any team member may update it: keep it current, factual and short.
+Last update: 1 Nov 2026, 19:10 (Claude). Any team member may update it: keep it current, factual and short.
 
 ## How we work (all models, one team)
 - Liviu (owner) is not a programmer: plain words, few steps, at most three precise test
@@ -14,7 +14,22 @@ Last update: 1 Nov 2026, 00:35 (Claude). Any team member may update it: keep it 
 - One build per hypothesis or stage. Before every build: replay the patch scripts locally and get
   an independent fresh-eyes review; send the reviewer the order BEFORE pushing.
 
-## Current goal: DuoView AFW (decided by Liviu, 1 Nov 2026)
+## Current goal: Tri-View built from Joey's Native Stereo (decided by Liviu, 1 Nov 2026)
+Fastest CORRECT tri-view test build. Base: v207 backend (Joey 5ac7edc). New rendering method ID 7
+next to DuoView ID 6 (modes 0-6 unchanged), built on Joey's Native Stereo + Native Fix (each eye
+its own correctly projected render on 2.10), NOT on DuoView's mono machinery.
+- Stage 1: both eyes cropped to a fixed centre 0.5 x 0.5 window (stereo foveas) + a THIRD render:
+  one mono low-res full-FOV periphery from the centre camera, rendered like Native Fix renders its
+  eyes. Each eye = periphery underneath + own fovea on top. Menu switch turns the third view off.
+  Accepted: near objects tear at the fovea border. Measure fps at 3.8k x 3.1k vs Native Stereo (24).
+- Later: depth-synthesized stereo periphery, eye tracking, FOV fix and other v207 features.
+- Builder: Claude, branch claude/triview-stage1-20261101; design research/2026-11-01-triview-stage1-decision.md.
+  Found (source-read): Joey's stereo hooks treat any view index 2 as "one-based eyes" and then skip
+  the left eye's HMD pose forever; tri-view handles index 2 before that code.
+
+## ABANDONED 1 Nov 2026: DuoView AFW
+Headset test of AFW: fps fine, image quality rejected (flicker, motion inconsistencies, less smooth
+than native stereo with frame generation). Kept below for reference only.
 Exactly what stable DuoView Mono v207 does today (no more, no less), plus STEREO through
 PureDark's AFW warp. Must look cleaner than our synthetic stereo (CI127) and run faster than
 Native Stereo (24 fps at 3.8k x 3.1k). Stock AFW (38 fps at 3.8k) is the reference.
@@ -80,7 +95,8 @@ Not required: letmein-vr Lua hands/IK mod compatibility, PIP scopes.
   "DXBC" + >= 64 bytes to /Fo, run apply_* scripts in workflow order on fresh copies;
   verify_stage234 needs the private SDK (run with its two SDK asserts stripped).
 - E1 (failed): claude/e1-shared-render-20261031.
-- Tri-view (parked): claude/triview-b1-20261031, claude/triview-b2-20261031 (B3 = 4c0ee7f, run
+- Tri-View Stage 1 (ID 7, on v207): claude/triview-stage1-20261101, workflow triview-stage1.yml.
+- Old tri-view (broke on 2.10): claude/triview-b1-20261031, claude/triview-b2-20261031 (B3 = 4c0ee7f, run
   41239720583, artifact id 13057178165); workflow triview-b1.yml; based on Build 51 (f4e086c).
   Reviews: experiment/triview-b1-review-e9bcbfd-20261031, experiment/triview-b2-deep-review-20261031.
 - Build 51 quad base: liviutrn/MUSE-UEVR-DUOVIEW workflow id7-build51-source-lifetime.yml (run
