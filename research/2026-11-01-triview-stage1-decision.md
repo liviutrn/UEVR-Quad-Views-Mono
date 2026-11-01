@@ -80,3 +80,15 @@ compositor in CI; local replay of the full v207 chain + this patch; independent 
 From Liviu's numbers (~7 ms per render family; Native Stereo 24 fps at 3.8k x 3.1k): Tri-View = 3 families but
 ~0.77 eye-areas of pixels instead of 2 -> about 28-32 fps at 3.8k (+15-30%). Old broken B3 measured ~28-30.
 If the headset shows < 24 fps at 3.8k, the extra family costs more than modelled.
+
+## 7. Headset test 1 (build 0bce657, 1 Nov 21:00) [headset-verified]
+Both foveas render and look right, fps better than Native Stereo, periphery black. Log: every frame
+`Third view skipped: additional-family flag not proven (readable=true steps=2 flag=4)`.
+- FrameNumber is at +0xAC; FrameCounter at +0xB0 stepped by exactly 1 (proven), so the guess "flag = FrameCounter + 8 = +0xB8" was a UE5.7-era
+  layout and reads 4 on UE 5.5.4. The safety gate worked: nothing was written, foveas stayed intact.
+- Joey's NASCAR25 table (UE 5.5.4, `NascarHookCompatibility.hpp` layout25, "independently checked against the runtime image and source")
+  has `family_size 0x1B0, family_additional_offset 0xC8`. His UE5.6.1 table has 0xB0 (= the 5.7 position). [source-read]
+- Build 2: default flag offset = 0xC8 (200), written only if it currently reads 0, restored after the render; the menu field can name another
+  offset or -1 (untouched). FrameCounter proof dropped (it only served the wrong guess). A hex dump of family bytes +0x9C..+0x12B is logged
+  once, so 0xC8 can be checked against the real layout. Whether the flag is needed at all is still [estimated]; test 2 shows it:
+  left fovea must stay sharp while the periphery appears.
