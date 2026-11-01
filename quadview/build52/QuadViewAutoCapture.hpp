@@ -7,6 +7,8 @@
 #include <Windows.h>
 #include <d3d12.h>
 #include <wrl/client.h>
+#include "QuadViewHookTrace.hpp"
+#include "QuadViewAutoTrace.hpp"
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <array>
@@ -75,11 +77,14 @@ public:
     // Invoked AFTER the existing shader draw. Sources are still in PIXEL_SHADER_RESOURCE state.
     // Never change the image sent to the headset, and never fail the render on capture failure.
     void queue(ID3D12GraphicsCommandList* cmd,ID3D12Device* device,
-               const std::array<ID3D12Resource*,4>& src,const Layout& layout) {
+               const std::array<ID3D12Resource*,4>& src,const Layout& layout,
+               uint64_t generation,uint64_t serial,uint32_t engine_frame) {
         if (pending_ || !cmd || !device || frames_.fetch_add(1,std::memory_order_relaxed)<120) return;
+        source_generation_=generation;source_serial_=serial;source_engine_frame_=engine_frame;
         unsigned expected=0;
         if (!global_.compare_exchange_strong(expected,1,std::memory_order_acq_rel)) return;
         if (!prepare(device,src,layout)) {
+            report_event("GPU_STAGE_FAILED","staging_or_format_rejected",0);
             spdlog::warn("[QuadViews][Build52] GPU diagnostic staging failed, retrying later");
             buffer_.Reset();
             global_.store(0,std::memory_order_release);
@@ -100,6 +105,7 @@ public:
             transition(cmd,src[role],D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
         pending_=true;
+        report_event("GPU_CAPTURE_QUEUED","copy_recorded",1);
         spdlog::info("[QuadViews][Build52] GPU copy queued: width={} height={} format={} rows/band={} bands={} roles=4",
                      width_,height_,static_cast<int>(format_),ROWS,BANDS);
     }
@@ -113,6 +119,7 @@ public:
             D3D12_RANGE range{0,static_cast<SIZE_T>(bytes_)};
             void* mapped{};
             if (FAILED(buffer_->Map(0,&range,&mapped)) || !mapped) {
+                report_event("GPU_MAP_FAILED","readback_mapping_failed",0);
                 spdlog::warn("[QuadViews][Build52] readback Map failed");
                 global_.store(0,std::memory_order_release);
                 buffer_.Reset();return;
@@ -179,18 +186,25 @@ public:
                     <<" expected_y="<<layout_.views[role].y
                     <<" expected_w="<<layout_.views[role].width
                     <<" expected_h="<<layout_.views[role].height<<"\n";
+            meta<<"source_generation="<<source_generation_<<" source_serial="<<source_serial_
+                <<" engine_frame="<<source_engine_frame_<<"\n";
             entries.push_back({"README.txt",meta.str()});
+            const auto hook_trace=read_persisted_hook_events();
+            if (!hook_trace.empty()) entries.push_back({"hook_trace.csv",hook_trace});
             std::error_code ec;
             auto folder=std::filesystem::temp_directory_path(ec);
             if (ec) folder=std::filesystem::current_path();
             const auto path=folder/("UEVR_Build52_Diagnostics_"+std::to_string(GetCurrentProcessId())+".zip");
             const bool ok=write_store_zip(path,entries);
+            report_event(ok?"GPU_ARCHIVE_SAVED":"GPU_ARCHIVE_FAILED",ok?"written":"zip_write_failed",ok?1:0);
             spdlog::info("[QuadViews][Build52] {} diagnostics ZIP: {}",ok?"saved":"FAILED saving",path.string());
             global_.store(ok?2u:0u,std::memory_order_release);
         } catch (const std::exception& e) {
+            report_event("GPU_ARCHIVE_FAILED","serialization_exception",0);
             spdlog::error("[QuadViews][Build52] diagnostic serialization failed: {}",e.what());
             global_.store(0,std::memory_order_release);
         } catch (...) {
+            report_event("GPU_ARCHIVE_FAILED","unknown_exception",0);
             spdlog::error("[QuadViews][Build52] unknown diagnostic serialization failure");
             global_.store(0,std::memory_order_release);
         }
@@ -209,8 +223,17 @@ private:
     DXGI_FORMAT format_{DXGI_FORMAT_UNKNOWN};
     uint32_t width_{},height_{},bpp_{};
     uint64_t bytes_{};
+    uint64_t source_generation_{},source_serial_{};
+    uint32_t source_engine_frame_{};
     bool pending_{};
 
+    void report_event(const char* event,const char* reason,int ok) const {
+        HookTraceRecord r{};r.mode=7;r.event=event;r.reason=reason;
+        r.generation=source_generation_;r.serial=source_serial_;
+        r.frame=source_engine_frame_;r.canonical_frame=source_engine_frame_;
+        r.result=ok;r.source=true;
+        persist_hook_event(141,r,1);
+    }
     static uint64_t align(uint64_t n,uint64_t a) {return (n+a-1)&~(a-1);}
     static void transition(ID3D12GraphicsCommandList* cmd,ID3D12Resource* res,
                            D3D12_RESOURCE_STATES before,D3D12_RESOURCE_STATES after) {
@@ -246,17 +269,20 @@ private:
         const std::array<float,BANDS> fractions{{.03f,.13f,.25f,.50f,.75f,.87f,.97f}};
         for (size_t band=0;band<BANDS;++band)
             ys_[band]=(std::min)(static_cast<uint32_t>(height_*fractions[band]),height_-ROWS);
-        const uint64_t row_pitch=align(uint64_t(width_)*bpp_,D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+        // Use the device's authoritative copy layout; do not guess row pitch or alignment.
+        D3D12_RESOURCE_DESC strip=d;
+        strip.Height=ROWS;
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT computed{};
+        UINT row_count{};
+        UINT64 row_bytes{},strip_bytes{};
+        device->GetCopyableFootprints(&strip,0,1,0,&computed,&row_count,&row_bytes,&strip_bytes);
+        if (row_count!=ROWS || row_bytes!=uint64_t(width_)*bpp_ ||
+            computed.Footprint.RowPitch < row_bytes || !strip_bytes) return false;
         bytes_=0;
         for (auto& footprint:footprints_) {
             bytes_=align(bytes_,D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
-            footprint.Offset=bytes_;
-            footprint.Footprint.Format=format_;
-            footprint.Footprint.Width=width_;
-            footprint.Footprint.Height=ROWS;
-            footprint.Footprint.Depth=1;
-            footprint.Footprint.RowPitch=static_cast<uint32_t>(row_pitch);
-            bytes_+=row_pitch*ROWS;
+            footprint=computed;footprint.Offset=bytes_;
+            bytes_+=strip_bytes;
         }
         D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_READBACK;
         heap.CreationNodeMask=heap.VisibleNodeMask=1;
