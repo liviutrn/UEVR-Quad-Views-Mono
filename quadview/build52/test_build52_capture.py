@@ -42,7 +42,13 @@ class Build52SourceContract(unittest.TestCase):
     def test_consumer_capture_correlation(self):
         before=(ROOT/"apply_quadview_consumer.py").read_text(encoding="utf-8")
         after=module.patch_consumer(before)
-        self.assertIn('source->generation,source->serial,source->engine_frame);',after)
+        self.assertIn('const auto capture_generation=source->generation;',after)
+        self.assertIn('const auto capture_serial=source->serial;',after)
+        self.assertIn('const auto capture_engine_frame=source->engine_frame;',after)
+        self.assertIn('capture_generation,capture_serial,capture_engine_frame,',after)
+        self.assertIn('capture_generation,capture_serial,capture_engine_frame);',after)
+        # Reject accidental use of the out-of-scope optional in the callback.
+        self.assertNotIn('source->generation,source->serial,source->engine_frame);',after)
         with self.assertRaises(RuntimeError):
             module.patch_consumer(after)
     def test_hook_trace_runs_before_compositor(self):
