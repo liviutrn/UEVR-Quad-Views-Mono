@@ -106,12 +106,13 @@ public:
         if (!buffer_) { global_.store(0,std::memory_order_release);return; }
         try {
             D3D12_RANGE range{0,static_cast<SIZE_T>(bytes_)};
-            const uint8_t* memory{};
-            if (FAILED(buffer_->Map(0,&range,reinterpret_cast<void**>(const_cast<uint8_t**>(&memory)))) || !memory) {
+            void* mapped{};
+            if (FAILED(buffer_->Map(0,&range,&mapped)) || !mapped) {
                 spdlog::warn("[QuadViews][Build52] readback Map failed");
                 global_.store(0,std::memory_order_release);
                 buffer_.Reset();return;
             }
+            const auto* memory=static_cast<const uint8_t*>(mapped);
             std::vector<ZipEntry> entries;
             std::ostringstream summary, tiles;
             summary<<"role,band,y,first_nonblack_x,last_nonblack_x,nonblack_left_half,nonblack_right_half,"
