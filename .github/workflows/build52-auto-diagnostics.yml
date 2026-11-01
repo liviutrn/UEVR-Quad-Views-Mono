@@ -3,7 +3,7 @@ name: Build52 v2 failure-tolerant QuadViews diagnostics Windows DLL
 run-name: Build52 v2 automatic evidence (${{ github.run_number }})
 on:
   push:
-    branches: [experiment/build52-auto-diagnostics-20261101]
+    branches: [experiment/build52-evidence-complete-20261101]
     paths: ['.github/workflows/build52-auto-diagnostics.yml', 'quadview/build52/**']
   workflow_dispatch:
 permissions:
