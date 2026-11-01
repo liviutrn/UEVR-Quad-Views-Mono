@@ -37,10 +37,25 @@ def patch_header(text):
     return text
 
 def patch_consumer(text):
+    # The GPU callback has an explicit capture list. Capture only stable scalars,
+    # not the optional source owner; the compiler rejects uncaptured 'source'.
+    outer='''                            const bool accepted=m_openxr.copy(
+                                (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE,nullptr,'''
+    replacement='''                            const auto capture_generation=source->generation;
+                            const auto capture_serial=source->serial;
+                            const auto capture_engine_frame=source->engine_frame;
+                            const bool accepted=m_openxr.copy(
+                                (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE,nullptr,'''
+    text=once(text,outer,replacement)
+    capture='''[this,packet,frozen,native_sources,timestamp_frequency,&recorded,&output,&command_list]'''
+    text=once(text,capture,
+        '''[this,packet,frozen,native_sources,timestamp_frequency,
+                                 capture_generation,capture_serial,capture_engine_frame,
+                                 &recorded,&output,&command_list]''')
     anchor='''                                        frozen->settings.gpu_timing ? timestamp_frequency : 0);'''
     return once(text,anchor,
         '''                                        frozen->settings.gpu_timing ? timestamp_frequency : 0,
-                                        source->generation,source->serial,source->engine_frame);''')
+                                        capture_generation,capture_serial,capture_engine_frame);''')
 
 def patch_hook_trace(text):
     anchor='namespace uevr::quadview {\nint hook_trace_mode() {'
