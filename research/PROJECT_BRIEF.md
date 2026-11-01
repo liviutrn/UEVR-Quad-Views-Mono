@@ -1,7 +1,9 @@
 # DuoView project brief (team handoff)
 
 Canonical copy: https://github.com/liviutrn/UEVR-Quad-Views-Mono/blob/claude/team-brief/research/PROJECT_BRIEF.md
-Last update: 1 Nov 2026, 00:35 (Claude). Any team member may update it: keep it current, factual and short.
+Last update: 1 Nov 2026 (Tri-view research status). Any team member may update it: keep it current, factual and short.
+
+**Current status (1 Nov 2026): AFW abandoned after headset test; next goal is TRI-VIEW DONE RIGHT. [Research and staged verification plan](https://github.com/liviutrn/UEVR-Quad-Views-Mono/blob/experiment/triview-research-20261101/research/2026-11-01-triview-research.md).**
 
 ## How we work (all models, one team)
 - Liviu (owner) is not a programmer: plain words, few steps, at most three precise test
@@ -14,7 +16,8 @@ Last update: 1 Nov 2026, 00:35 (Claude). Any team member may update it: keep it 
 - One build per hypothesis or stage. Before every build: replay the patch scripts locally and get
   an independent fresh-eyes review; send the reviewer the order BEFORE pushing.
 
-## Current goal: DuoView AFW (decided by Liviu, 1 Nov 2026)
+## Previous goal (abandoned): DuoView AFW (historical design, 1 Nov 2026)
+The following AFW section is retained for historical provenance only; it is NOT the current plan.
 Exactly what stable DuoView Mono v207 does today (no more, no less), plus STEREO through
 PureDark's AFW warp. Must look cleaner than our synthetic stereo (CI127) and run faster than
 Native Stereo (24 fps at 3.8k x 3.1k). Stock AFW (38 fps at 3.8k) is the reference.
