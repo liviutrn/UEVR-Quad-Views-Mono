@@ -35,7 +35,8 @@ int main() {
     auto partial=d::reconcile_ui_settings(invalid,modified);
     assert((partial.rejected & d::reject_sharpen)!=0 && near(partial.settings.sharpen_strength,.4f));
     invalid=modified;invalid.sharpen_strength=5.f;
-    assert(latch.set_settings(invalid)); // upper endpoint is valid.
+    d::ConfigLatch separate_range_check;
+    assert(separate_range_check.set_settings(invalid)); // upper endpoint is valid.
     invalid=modified;invalid.sharpen_strength=std::nanf("");
     assert(!latch.set_settings(invalid));
     auto still=latch.for_frame({5,12},3000,3000,{.5f,.5f});
