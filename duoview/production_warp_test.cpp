@@ -140,6 +140,114 @@ int main() try {
         if(std::memcmp(sample(x,y),sample(x+32,y),4))
             throw std::runtime_error("Fused native Mono eye duplication mismatch");
     readback->Unmap(0,nullptr);
+    // v211: Exercise the EXACT SAME optional NGX depth producer copy, queue
+    // submission proof, retained SRV and foveal GPU shader. This WARP test
+    // uses a synthetic DLSS input, not an NVIDIA runtime. It cannot prove the
+    // game's NGX hook or depth convention, which require headset validation.
+    check(allocator->Reset());
+    check(cmd->Reset(allocator.Get(),nullptr));
+    auto depth_desc=texture(32,32,D3D12_RESOURCE_FLAG_NONE);
+    depth_desc.Format=DXGI_FORMAT_R32_FLOAT;
+    auto raw_depth=resource(device.Get(),depth_desc,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT depth_foot{};
+    UINT64 depth_bytes{};
+    device->GetCopyableFootprints(&depth_desc,0,1,0,&depth_foot,nullptr,nullptr,&depth_bytes);
+    auto depth_upload=resource(device.Get(),buffer(depth_bytes),D3D12_HEAP_TYPE_UPLOAD,
+                               D3D12_RESOURCE_STATE_GENERIC_READ);
+    void* dp{};
+    check(depth_upload->Map(0,&zero,&dp));
+    for(UINT y=0;y<32;++y) for(UINT x=0;x<32;++x) {
+        const float raw=0.5f;
+        std::memcpy(static_cast<uint8_t*>(dp)+y*depth_foot.Footprint.RowPitch+x*sizeof(raw),
+                    &raw,sizeof(raw));
+    }
+    depth_upload->Unmap(0,nullptr);
+    D3D12_TEXTURE_COPY_LOCATION depth_from{depth_upload.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    depth_from.PlacedFootprint=depth_foot;
+    D3D12_TEXTURE_COPY_LOCATION depth_to{raw_depth.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    cmd->CopyTextureRegion(&depth_to,0,0,0,&depth_from,nullptr);
+    transition(cmd.Get(),raw_depth.Get(),D3D12_RESOURCE_STATE_COPY_DEST,
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    auto& samples=uevr::duoview::ngx::candidates();
+    samples.clear();
+    samples.set_expected(layout->fovea.width,layout->fovea.height,
+                         layout->periphery.width,layout->periphery.height);
+    uevr::duoview::ngx::DepthCandidate candidate{};
+    candidate.feature=static_cast<uintptr_t>(0x12345);
+    candidate.output_width=layout->fovea.width;
+    candidate.output_height=layout->fovea.height;
+    candidate.render_width=layout->fovea.width;
+    candidate.render_height=layout->fovea.height;
+    candidate.depth_width=32;candidate.depth_height=32;
+    candidate.depth_present=true;candidate.color_present=true;
+    samples.observe(candidate);
+    auto pick=samples.choose();
+    if(!pick.exact || pick.source[0]!=candidate.feature)
+        throw std::runtime_error("Synthetic NGX output was not recognized as the frozen fovea");
+    auto& pool=uevr::duoview::ngx::depth_snapshots();
+    if(!pool.bind_queue(queue.Get()))throw std::runtime_error("WARP depth queue was rejected");
+    pool.set_enabled(true);
+    const uevr::duoview::FrameKey depth_key{1,4};
+    pool.capture(cmd.Get(),raw_depth.Get(),candidate,depth_key);
+    if(pool.captures()==0)throw std::runtime_error("Depth copy not recorded");
+    check(cmd->Close());
+    queue->ExecuteCommandLists(1,lists);
+    pool.submitted(queue.Get(),1,lists);
+    if(pool.submits()==0)throw std::runtime_error("Depth producer submission was not verified");
+    check(queue->Signal(fence.Get(),4));
+    event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    check(fence->SetEventOnCompletion(4,event));
+    if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
+        throw std::runtime_error("Synthetic NGX depth producer timed out");
+    CloseHandle(event);
+
+    nativeFrame.config.key=depth_key;
+    nativeFrame.projection[14]=10.f; // 10 cm near plane -> 0.10 metres
+    nativeFrame.config.settings.distance_sharpen_enabled=true;
+    nativeFrame.config.settings.sharpen_near_strength=5.f;
+    nativeFrame.config.settings.sharpen_far_strength=1.f;
+    nativeFrame.config.settings.sharpen_near_m=.10f;
+    nativeFrame.config.settings.sharpen_far_m=.50f;
+    nativeFrame.config.settings.sharpen_distance_smooth=false;
+    nativeFrame.config.settings.depth_reversed_z=true;
+    auto depth_draw=[&](uint32_t preview,UINT64 signal) {
+        check(allocator->Reset());
+        check(cmd->Reset(allocator.Get(),nullptr));
+        nativeFrame.config.settings.depth_preview_mode=preview;
+        transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_RENDER_TARGET);
+        if(!compositor.record_native(device.Get(),cmd.Get(),
+                native_fovea.Get(),native_periphery.Get(),stereo.Get(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
+                nativeFrame,{},frequency,queue.Get()))
+            throw std::runtime_error("v211 WARP depth compositor rejected: "+compositor.error());
+        transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_SOURCE);
+        cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+        check(cmd->Close());queue->ExecuteCommandLists(1,lists);
+        check(queue->Signal(fence.Get(),signal));
+        auto done=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+        check(fence->SetEventOnCompletion(signal,done));
+        if(WaitForSingleObject(done,30000)!=WAIT_OBJECT_0)
+            throw std::runtime_error("WARP live depth compositor timeout");
+        CloseHandle(done);
+        check(readback->Map(0,&read,&mapped));
+        const auto pixel=sample(16,16);
+        const int red=pixel[2],green=pixel[1],blue=pixel[0];
+        for(UINT y=0;y<32;++y) for(UINT x=0;x<32;++x)
+            if(std::memcmp(sample(x,y),sample(x+32,y),4))
+                throw std::runtime_error("Depth shader broke Mono eye duplication");
+        readback->Unmap(0,nullptr);
+        if(std::abs(red-green)>2 || std::abs(red-blue)>2)
+            throw std::runtime_error("Depth preview failed to write grayscale in fovea");
+        return red;
+    };
+    const int raw_grey=depth_draw(1,5);
+    if(raw_grey<120 || raw_grey>136)
+        throw std::runtime_error("Raw depth should be .5 (128 grey), got "+std::to_string(raw_grey));
+    const int distance_grey=depth_draw(2,6);
+    // reversed Z 0.5 with 10 cm near => 0.20 m. Ramp [.10,.50] -> 0.25.
+    if(distance_grey<56 || distance_grey>72)
+        throw std::runtime_error("Metric depth blend should be 0.25 (64 grey), got "+std::to_string(distance_grey));
+    std::cout<<"v211 NGX GPU copy, same-queue fence, raw and metric depth visualization WARP: PASS\\n";
     std::cout << "Native fused Glamarye WARP path, focus-only, no duplicate full XR pass: PASS\\n";
     std::cout << "Production shader, BGRA8 raster, moved gaze, retired-slot reuse, GPU timestamps: 2048 exact pixel pairs PASS\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n';return 1; }
