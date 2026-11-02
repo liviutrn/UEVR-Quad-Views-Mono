@@ -253,6 +253,13 @@ int main() try {
     // reversed Z 0.5 with 10 cm near => 0.20 m. Ramp [.10,.50] -> 0.25.
     if(distance_grey<56 || distance_grey>72)
         throw std::runtime_error("Metric depth blend should be 0.25 (64 grey), got "+std::to_string(distance_grey));
+    // If Unreal projection metadata is missing, NGX raw depth must still be
+    // visible. Metric preview then fails explicitly, not as a normal image.
+    nativeFrame.projection[14]=0.f;
+    const int raw_no_near=depth_draw(1,7);
+    if(raw_no_near<120 || raw_no_near>136)
+        throw std::runtime_error("Raw NGX preview incorrectly required a metric near plane");
+    nativeFrame.projection[14]=10.f;
     // The legacy atlas/gather compositor is a possible source-format
     // fallback. It must show magenta for requested depth preview rather than
     // silently displaying normal image when NGX is unavailable.
@@ -266,9 +273,9 @@ int main() try {
     transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_SOURCE);
     cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
     check(cmd->Close());queue->ExecuteCommandLists(1,lists);
-    check(queue->Signal(fence.Get(),7));
+    check(queue->Signal(fence.Get(),8));
     event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
-    check(fence->SetEventOnCompletion(7,event));
+    check(fence->SetEventOnCompletion(8,event));
     if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
         throw std::runtime_error("Legacy missing-depth preview GPU timeout");
     CloseHandle(event);
