@@ -177,8 +177,8 @@ int main() try {
         return static_cast<uint8_t*>(mapped)+out_fp.Offset+y*out_fp.Footprint.RowPitch+x*4;
     };
     // fovea crop is output x=16..48, interior x=24 (near) / 40 (far).
-    const auto near=pix(24,32),far=pix(40,32);
-    for(int ch=0;ch<3;++ch)if(near[ch]>12 || far[ch]<240)
+    const auto px_near=pix(24,32),px_far=pix(40,32);
+    for(int ch=0;ch<3;++ch)if(px_near[ch]>12 || px_far[ch]<240)
         throw std::runtime_error("Live depth preview did not sample near/far on WARP");
     for(uint32_t x:{24u,40u})for(int ch=0;ch<4;++ch)
         if(pix(x,32)[ch]!=pix(x+W,32)[ch])
