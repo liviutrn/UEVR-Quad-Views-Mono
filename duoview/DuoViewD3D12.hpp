@@ -1,6 +1,7 @@
 #pragma once
 #include "DuoViewConfig.hpp"
 #include "DuoViewMonoCopyD3D12.hpp"
+#include "DuoViewNgxDepthCapture.hpp"
 #include "DuoViewState.hpp"
 #include "DuoViewShaderSource.hpp"
 #include <memory>
@@ -18,8 +19,11 @@ struct ShaderConstants {
     uint32_t output_offset[2];
     float sharpen_strength, sharpen_max_change, sharpen_fxaa_bias;
     uint32_t sharpen_flags;
+    uint32_t depth_tex_size[2], depth_base[2], depth_active_size[2];
+    float depth_near_strength, depth_far_strength, depth_near_m, depth_far_m, depth_nearclip_m;
+    uint32_t depth_flags;
 };
-static_assert(sizeof(ShaderConstants) == 120);
+static_assert(sizeof(ShaderConstants) == 168);
 
 class Compositor {
 public:
@@ -70,7 +74,7 @@ public:
             {l.periphery.x, l.periphery.y, l.periphery.width, l.periphery.height},
             {l.u0, l.v0, l.u1, l.v1}, frame.settings.feather_fraction,
             frame.settings.debug_border ? 1u : 0u, frame.settings.diagnostic_view, 0.f};
-        ensure_srvs(device,atlas,atlas,format);
+        ensure_srvs(device,atlas,atlas,format,nullptr);
         source_ = atlas;
         transition(cmd, atlas, atlas_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         recorded_commands_ = true;
@@ -107,7 +111,8 @@ public:
                 ID3D12Resource* primary, ID3D12Resource* secondary,
                 ID3D12Resource* destination, D3D12_RESOURCE_STATES primary_state,
                 D3D12_RESOURCE_STATES secondary_state, const ViewFrame& frame,
-                std::shared_ptr<const void> packet_lifetime, UINT64 frequency = 0) {
+                std::shared_ptr<const void> packet_lifetime, UINT64 frequency = 0,
+                 ID3D12CommandQueue* source_queue = nullptr) {
         recorded_commands_=false;
         error_.clear();
         last_native_direct_xr_=false;
@@ -472,6 +477,7 @@ private:
         if (device_.Get() == device && output_ && pipeline_ && native_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
         output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
         srv_first_reference_.Reset(); srv_second_reference_.Reset(); xr_rtv_reference_.Reset();
+        srv_depth_reference_.Reset(); depth_reference_.reset(); depth_srv_valid_=false;
         srv_descriptors_valid_=false; srv_cached_format_=DXGI_FORMAT_UNKNOWN;
         xr_rtv_format_=DXGI_FORMAT_UNKNOWN;
         srv_cpu_start_={}; srv_gpu_start_={}; rtv_cpu_start_={}; direct_xr_rtv_cpu_={};
@@ -480,7 +486,7 @@ private:
         device_ = device; width_ = width; height_ = height; srgb_ = srgb;
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 2;
+        range.NumDescriptors = 3;
         D3D12_ROOT_PARAMETER params[2]{};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[0].DescriptorTable = {1, &range};
@@ -534,7 +540,7 @@ private:
         output_->SetName(L"DuoView::MonoComposite");
         D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.NumDescriptors = 2; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (!check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_)), "Create RTV heap")) return false;
-        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; hd.NumDescriptors = 2;
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; hd.NumDescriptors = 3;
         if (!check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srv_)), "Create SRV heap")) return false;
         srv_cpu_start_=srv_->GetCPUDescriptorHandleForHeapStart();
         srv_gpu_start_=srv_->GetGPUDescriptorHandleForHeapStart();
@@ -548,7 +554,8 @@ private:
     }
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12Resource> output_, source_, atlas_, primary_reference_, secondary_reference_;
-    ComPtr<ID3D12Resource> srv_first_reference_, srv_second_reference_, xr_rtv_reference_;
+    ComPtr<ID3D12Resource> srv_first_reference_, srv_second_reference_, xr_rtv_reference_, srv_depth_reference_;
+    std::shared_ptr<uevr::duoview::ngx::DepthSnapshot> depth_reference_;
     std::shared_ptr<const void> packet_lifetime_{};
     ComPtr<ID3D12RootSignature> root_;
     ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_;
@@ -564,7 +571,7 @@ private:
     uint64_t last_native_source_extents_{};
     uint64_t srv_descriptor_refresh_count_{}, xr_rtv_refresh_count_{};
     DXGI_FORMAT srv_cached_format_{DXGI_FORMAT_UNKNOWN}, xr_rtv_format_{DXGI_FORMAT_UNKNOWN};
-    bool srv_descriptors_valid_{};
+    bool srv_descriptors_valid_{}, depth_srv_valid_{};
     UINT width_{}, height_{};
     bool srgb_{};
     std::string error_;
