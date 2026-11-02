@@ -1,5 +1,6 @@
-// Tri-View Stage 1: run the real compositor (precompiled shader + PSO) on the D3D12 WARP device
-// and check pixels: own fovea in each eye centre, periphery outside, black when view 2 is off.
+// Tri-View: run the real compositor (precompiled shader + PSO) on the D3D12 WARP device and check pixels:
+// own fovea in each eye centre, periphery (own texture, image at its origin) outside, black when view 2 is
+// off, and nothing read from the main target's old right-half periphery spot. Then run the GPU capture.
 #define NOMINMAX
 #include <windows.h>
 #include "TriViewD3D12.hpp"
@@ -9,6 +10,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 
@@ -94,13 +97,19 @@ int main() try {
     // Joey's main target (typeless like an engine RT), capture target and the double-wide XR image.
     auto main_rt = make(g.device.Get(), tex(2 * W, H, DXGI_FORMAT_B8G8R8A8_TYPELESS, rt), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
     auto capture = make(g.device.Get(), tex(W, H, DXGI_FORMAT_B8G8R8A8_TYPELESS, rt), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+    auto periphery = make(g.device.Get(), tex(W, H, DXGI_FORMAT_B8G8R8A8_TYPELESS, rt), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
     auto xr = make(g.device.Get(), tex(2 * W, H, DXGI_FORMAT_B8G8R8A8_UNORM, rt), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_RENDER_TARGET);
     auto not_rt = make(g.device.Get(), tex(2 * W, H, DXGI_FORMAT_B8G8R8A8_UNORM, D3D12_RESOURCE_FLAG_NONE), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON);
-    const std::array<uint8_t, 4> red{0, 0, 255, 255}, blue{255, 0, 0, 255}, green{0, 255, 0, 255};
-    ComPtr<ID3D12Resource> up1, up2;
+    const std::array<uint8_t, 4> red{0, 0, 255, 255}, blue{255, 0, 0, 255}, green{0, 255, 0, 255},
+        magenta{255, 0, 255, 255};
+    ComPtr<ID3D12Resource> up1, up2, up3;
+    // Main target: left fovea at (0,0); a decoy in the old right-half periphery spot that must never show.
     fill(g, main_rt.Get(), {{{0, 0, LONG(l.fovea_width), LONG(l.fovea_height)}, red},
-                            {{LONG(l.periphery_x), 0, LONG(l.periphery_x + l.periphery_width), LONG(l.periphery_height)}, green}}, up1);
+                            {{LONG(W), 0, LONG(2 * W), LONG(H)}, magenta}}, up1);
     fill(g, capture.Get(), {{{0, 0, LONG(l.fovea_width), LONG(l.fovea_height)}, blue}}, up2);
+    // Periphery target: image at its origin, the rest magenta (outside the rendered rect, never sampled).
+    fill(g, periphery.Get(), {{{0, 0, LONG(W), LONG(H)}, magenta},
+                              {{0, 0, LONG(l.periphery_width), LONG(l.periphery_height)}, green}}, up3);
 
     const auto xd = xr->GetDesc(); D3D12_PLACED_SUBRESOURCE_FOOTPRINT foot{}; UINT64 bytes{};
     g.device->GetCopyableFootprints(&xd, 0, 1, 0, &foot, nullptr, nullptr, &bytes);
@@ -108,11 +117,11 @@ int main() try {
 
     tv::dx12::Compositor compositor;
     tv::PacketLayout frame{l, true, true};
-    if (compositor.record(g.device.Get(), g.cmd.Get(), main_rt.Get(), capture.Get(), not_rt.Get(), frame, false))
+    if (compositor.record(g.device.Get(), g.cmd.Get(), main_rt.Get(), capture.Get(), periphery.Get(), not_rt.Get(), frame, 0))
         throw std::runtime_error("non-render-target XR image accepted");
     for (const bool third : {true, false}) {
         frame.third = third;
-        if (!compositor.record(g.device.Get(), g.cmd.Get(), main_rt.Get(), capture.Get(), xr.Get(), frame, false))
+        if (!compositor.record(g.device.Get(), g.cmd.Get(), main_rt.Get(), capture.Get(), periphery.Get(), xr.Get(), frame, 0))
             throw std::runtime_error("record rejected: " + compositor.error());
         barrier(g.cmd.Get(), xr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION from{xr.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX}; from.SubresourceIndex = 0;
@@ -132,8 +141,34 @@ int main() try {
         if (!is(W + W / 2, H / 2, blue)) throw std::runtime_error("right eye centre is not the right fovea");
         for (const auto [x, y] : {std::pair<UINT, UINT>{1, 1}, {W - 2, H - 2}, {W + 1, H - 2}, {2 * W - 2, 1}})
             if (!is(x, y, outside)) throw std::runtime_error(third ? "eye corner is not periphery" : "third view OFF is not black");
+        for (UINT y = 0; y < H; y += 3) for (UINT x = 0; x < 2 * W; x += 3)
+            if (is(x, y, magenta)) throw std::runtime_error("a pixel came from outside a rendered image");
         readback->Unmap(0, nullptr);
     }
+
+    // Automatic capture: copies four images after a composite, then writes the ZIP synchronously.
+    frame.third = true;
+    if (!compositor.record(g.device.Get(), g.cmd.Get(), main_rt.Get(), capture.Get(), periphery.Get(), xr.Get(), frame, 0))
+        throw std::runtime_error("record rejected before capture: " + compositor.error());
+    tv::dx12::GpuCapture grab;
+    const auto zip = std::filesystem::temp_directory_path() / "TriView_Capture_test.zip";
+    std::filesystem::remove(zip);
+    const std::vector<tv::dx12::GpuCapture::Source> sources{
+        {"main_left", main_rt.Get(), W, H, {{"fovea", 0, 0, l.fovea_width, l.fovea_height}}},
+        {"capture", capture.Get(), W, H, {}},
+        {"periphery", periphery.Get(), W, H, {{"image", 0, 0, l.periphery_width, l.periphery_height}}},
+        {"xr", xr.Get(), 2 * W, H, {}}};
+    if (!grab.record(g.device.Get(), g.cmd.Get(), sources, g.fence.Get(), g.value + 1, zip, "test report\n"))
+        throw std::runtime_error("capture record failed");
+    if (grab.poll(true)) throw std::runtime_error("capture finished before the GPU ran");
+    g.run();
+    if (!grab.poll(true) || grab.pending()) throw std::runtime_error("capture did not complete");
+    std::ifstream in(zip, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (bytes.size() < 1000 || bytes.find("main_left_half.bmp") == std::string::npos ||
+        bytes.find("main_left fovea [0,0)") == std::string::npos ||
+        bytes.find("nonblack 100.0%") == std::string::npos)
+        throw std::runtime_error("capture ZIP incomplete");
     std::puts("Tri-View compositor WARP pixel tests passed.");
     return 0;
 } catch (const std::exception& e) {

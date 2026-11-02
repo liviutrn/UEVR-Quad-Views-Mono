@@ -48,8 +48,8 @@ int main() try {
     expect(l.fovea_width == 1000 && l.fovea_height == 1020, "fovea is half of each eye axis");
     expect(approx(l.periphery.left, -1.30) && approx(l.periphery.right, 1.30) &&
            approx(l.periphery.top, 1.25) && approx(l.periphery.bottom, -1.30), "union frustum");
-    expect(l.periphery_x == 2000 && l.periphery_width == 1106 && l.periphery_height == 1020,
-           "periphery rect sits in the free right half at the requested density");
+    expect(l.periphery_x == 0 && l.periphery_width == 1106 && l.periphery_height == 1020,
+           "periphery image at its own target origin, at the requested density");
 
     // Fovea crop: the window corners land exactly on the viewport edges.
     auto fovea = joey_projection(left);

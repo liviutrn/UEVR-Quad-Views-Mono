@@ -1,9 +1,13 @@
-// Tri-View Stage 1 compositor (rendering method ID 7), one draw over the double-wide XR image.
-// t0 = Joey's main Native Fix target: left fovea at (0,0), centre periphery at PeriphRect.
+// Tri-View compositor (rendering method ID 7), one draw over the double-wide XR image.
+// Every engine render of STALKER 2.10 (UE 5.5.4) lands at (0,0) of its own target (Build 52 GPU capture),
+// so each source image is read from its own texture at local origin:
+// t0 = Joey's main Native Fix target: left fovea at (0,0).
 // t1 = Joey's Native Fix scene-capture target: right fovea at (0,0).
+// t2 = Tri-View's own periphery target: centre periphery at (0,0) (null when view 2 was not rendered).
 // Each eye: periphery remapped into that eye (affine, parallel eyes) underneath, own fovea on top.
 Texture2D<float4> MainSource : register(t0);
 Texture2D<float4> CaptureSource : register(t1);
+Texture2D<float4> PeripherySource : register(t2);
 SamplerState LinearClamp : register(s0);
 
 cbuffer TriViewConstants : register(b0) {
@@ -11,9 +15,9 @@ cbuffer TriViewConstants : register(b0) {
     float4 FoveaWindow;   // u0, v0, u1, v1 in eye UV
     float4 PeriphMapL;    // ax, bx, ay, by: periphery uv = (ax*u + bx, ay*v + by), left eye
     float4 PeriphMapR;    // same, right eye
-    float4 PeriphRect;    // x, y, width, height of the periphery in MainSource pixels
+    float4 PeriphRect;    // periphery image width, height (pixels, at (0,0) of t2); t2 width, height
     float4 SourceSizes;   // MainSource width/height, CaptureSource width/height
-    float4 Params;        // feather (fraction of fovea), periphery present (0/1), debug bits (1 border, 2 raw targets),
+    float4 Params;        // feather (fraction of fovea), periphery present (0/1), debug bits (1 border),
                           // colour fix: 0 none, 1 sRGB decode (UNORM source -> sRGB XR), 2 encode (reverse)
 };
 
@@ -31,8 +35,10 @@ VertexOut VSMain(uint id : SV_VertexID) {
     return o;
 }
 
-float2 ActiveTexel(float2 local, float2 origin, float2 size) {
-    return origin + clamp(saturate(local) * size, float2(0.5, 0.5), size - 0.5);
+// Texel position of a local UV inside an image of `size` pixels at the texture origin,
+// clamped half a texel inside so bilinear taps never read outside the rendered image.
+float2 ActiveTexel(float2 local, float2 size) {
+    return clamp(saturate(local) * size, float2(0.5, 0.5), size - 0.5);
 }
 
 float4 PSMain(VertexOut i) : SV_TARGET0 {
@@ -44,8 +50,7 @@ float4 PSMain(VertexOut i) : SV_TARGET0 {
     if (Params.y > 0.5) {
         const float4 m = rightEye ? PeriphMapR : PeriphMapL;
         const float2 puv = float2(m.x * uv.x + m.y, m.z * uv.y + m.w);
-        periphery = MainSource.SampleLevel(LinearClamp,
-            ActiveTexel(puv, PeriphRect.xy, PeriphRect.zw) / SourceSizes.xy, 0.0);
+        periphery = PeripherySource.SampleLevel(LinearClamp, ActiveTexel(puv, PeriphRect.xy) / PeriphRect.zw, 0.0);
     }
 
     const float2 local = (uv - FoveaWindow.xy) / (FoveaWindow.zw - FoveaWindow.xy);
@@ -57,19 +62,13 @@ float4 PSMain(VertexOut i) : SV_TARGET0 {
 
     float4 result = periphery;
     if (weight > 0.0) {
-        const float2 texel = ActiveTexel(local, float2(0.0, 0.0), EyeAndFovea.zw);
+        const float2 texel = ActiveTexel(local, EyeAndFovea.zw);
         const float4 fovea = rightEye
             ? CaptureSource.SampleLevel(LinearClamp, texel / SourceSizes.zw, 0.0)
             : MainSource.SampleLevel(LinearClamp, texel / SourceSizes.xy, 0.0);
         result = lerp(periphery, fovea, weight);
     }
     const uint debugBits = (uint)(Params.z + 0.5);
-    // Debug bit 2: raw render targets. Left eye = the WHOLE main target squeezed 2:1 (fovea on the left,
-    // periphery on the right if it landed there); right eye = the whole capture target.
-    if ((debugBits & 2u) != 0u) {
-        result = rightEye ? CaptureSource.SampleLevel(LinearClamp, uv, 0.0)
-                          : MainSource.SampleLevel(LinearClamp, uv, 0.0);
-    }
     if ((debugBits & 1u) != 0u && weight > 0.01 && weight < 0.1) result.rgb = float3(1.0, 0.3, 0.0);
     if (Params.w > 1.5) result.rgb = LinearToSrgb(saturate(result.rgb));
     else if (Params.w > 0.5) result.rgb = SrgbToLinear(saturate(result.rgb));

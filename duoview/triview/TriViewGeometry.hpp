@@ -18,7 +18,8 @@ struct Tans {
 struct Layout {
     uint32_t eye_width{}, eye_height{};           // full per-eye render size (one half of the main target)
     uint32_t fovea_width{}, fovea_height{};       // each eye's fovea render, placed at (0,0) of its target
-    uint32_t periphery_x{};                       // periphery render rect in the main target: (x, 0, w, h)
+    uint32_t periphery_x{};                       // always 0: the periphery has its own target (UE 5.5.4 puts
+                                                  // every singleton render at the target origin)
     uint32_t periphery_width{}, periphery_height{};
     float u0{}, v0{}, u1{}, v1{};                 // fovea window in eye UV (top-left origin)
     Tans eye[2]{};                                // left / right eye frusta
@@ -87,7 +88,7 @@ inline std::optional<Layout> make_layout(uint32_t eye_width, uint32_t eye_height
     };
     l.periphery_width = clamp_size(eye_width * periphery_scale * wide, eye_width);
     l.periphery_height = clamp_size(eye_height * periphery_scale * tall, eye_height);
-    l.periphery_x = eye_width;                     // free right half of the 2W x H main target
+    l.periphery_x = 0;                             // own render target, image at its origin
     return l;
 }
 
