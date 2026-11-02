@@ -224,3 +224,10 @@ The actual live depth-to-color association remains the prerequisite.
 **source-read:** A fresh Luna review found no blocking issue in the v208 patch,
 validation tests, hash scope check or workflow ordering before the first push.
 Reviewer did not independently execute Windows/GPU tests.
+
+## CI startup correction
+
+**CI-verified:** Run #214 / 41451754971 reached and applied the new patch,
+but the source-scope test compared Windows backslash keys to slash keys.
+Normalize snapshot keys with Path.as_posix(); no runtime source change.
+Real fxc shader compilation and existing patch checks passed before that failure.

@@ -7,7 +7,7 @@ import sys
 
 
 def snapshot(root):
-    return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+    return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in sorted((root / "src").rglob("*")) if p.is_file()}
 
 
