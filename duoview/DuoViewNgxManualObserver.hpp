@@ -5,6 +5,7 @@
 // inside the original NGX invocation and are NOT retained past the callback.
 #include <Windows.h>
 #include <d3d12.h>
+#include <d3d11.h>
 #include <safetyhook.hpp>
 #include <algorithm>
 #include <array>
