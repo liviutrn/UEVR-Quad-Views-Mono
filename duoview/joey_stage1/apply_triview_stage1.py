@@ -125,6 +125,49 @@ void D3D12Component::triview_take_capture(d3d12::CommandContext& commands, ID3D1
 '''
 
 
+TRIVIEW_CTOR = r'''    // Tri-View ID7 (S4): test 1 capture showed the engine builds view index 2 with the GAME camera and the game's
+    // ~92 deg FOV (its own pose, not the HMD; rect from adjust_view_rect), so the periphery swam against the foveas.
+    // Write the centre camera and the union projection straight into this view's init options, the same way
+    // Joey's SceneView-compatibility path writes eye views. The view is recognised by its rect (0,0,pw,ph),
+    // which differs from the fovea rect by construction, in the main viewport family.
+    if (vr->is_triview_active() && vr->triview_owns_view_index_two() && is_ue5 && !is_ue50_to_53) {
+        const auto layout = vr->triview_layout();
+        auto* const family = init_options->get_view_family();
+        const auto rtm = g_hook->get_render_target_manager();
+        FIntRect current{};
+        std::memcpy(current.bounds, &init_options_ue5->view_rect, sizeof(current.bounds));
+        const bool is_periphery = layout.has_value() && family != nullptr && rtm != nullptr &&
+            family->get_render_target() == rtm->get_view_family_render_target() &&
+            current.bounds[0] == 0 && current.bounds[1] == 0 &&
+            current.bounds[2] == static_cast<int32_t>(layout->periphery_width) &&
+            current.bounds[3] == static_cast<int32_t>(layout->periphery_height);
+        double rotation[3]{}, position[3]{};
+        if (is_periphery && vr->triview_centre_pose(rotation, position)) {
+            const auto* before = reinterpret_cast<const double*>(&init_options_ue5->projection_matrix);
+            const auto* origin_before = reinterpret_cast<const double*>(&init_options_ue5->view_origin);
+            static uint64_t triview_ctor_logs{};
+            if (triview_ctor_logs++ % 600 == 0) {
+                SPDLOG_INFO("[TriView][ctor] view 2 as built by the engine: proj m00 {:.5f} m20 {:.5f} m11 {:.5f} m21 {:.5f} origin {:.1f} {:.1f} {:.1f}",
+                    before[0], before[8], before[5], before[9], origin_before[0], origin_before[1], origin_before[2]);
+                SPDLOG_INFO("[TriView][ctor] writing centre camera pitch {:.2f} yaw {:.2f} roll {:.2f} origin {:.1f} {:.1f} {:.1f}",
+                    rotation[0], rotation[1], rotation[2], position[0], position[1], position[2]);
+            }
+            const auto conversion = glm::mat4{0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1};
+            const glm::vec3 euler{static_cast<float>(rotation[0]), static_cast<float>(rotation[1]), static_cast<float>(rotation[2])};
+            auto projection = vr->get_projection_matrix(VRRuntime::Eye::LEFT);
+            uevr::triview::apply_periphery_projection(projection, *layout);
+            init_options_ue5->view_rotation_matrix = conversion * utility::math::ue_inverse_rotation_matrix(euler);
+            init_options_ue5->projection_matrix = projection;
+            auto* const origin = reinterpret_cast<double*>(&init_options_ue5->view_origin);
+            origin[0] = position[0]; origin[1] = position[1]; origin[2] = position[2];
+            vr->m_triview_ctor_overrides.fetch_add(1, std::memory_order_relaxed);
+        } else if (is_periphery) {
+            SPDLOG_WARNING_EVERY_N_SEC(2, "[TriView][ctor] view 2 found but this frame's eye poses are missing; engine camera kept");
+        }
+    }
+
+'''
+
 TRIVIEW_TARGET_IMPL = r'''// ---- Tri-View ID7: the centre periphery's own render target ---------------------------------------
 // Built exactly like Joey's STALKER 2 Native Fix capture target (create_scene_capture below): a Kismet
 // render target, kept alive by a passive capture component on Joey's capture actor (no rooting, so it is
@@ -371,6 +414,9 @@ BACKEND = {
    '    std::atomic<const char*> m_triview_target_status{"not requested"};\n'
    '    std::atomic<uint64_t> m_triview_target_builds{}, m_triview_third_skipped{};\n'
    '    std::atomic<uint32_t> m_triview_captures{};\n'
+   '    std::atomic<uint64_t> m_triview_ctor_overrides{};\n'
+   '    // Entering Tri-View from another method: restart Native Fix once (fresh capture + pair learning).\n'
+   '    bool triview_fresh_start_due();\n'
    '    std::optional<uevr::triview::Layout> triview_layout();\n'
    '    void triview_note_eye_pose(int32_t index, const double* rotation, const double* position);\n'
    '    bool triview_centre_pose(double* rotation, double* position) const;\n'
@@ -397,6 +443,7 @@ BACKEND = {
    '    std::optional<uevr::triview::Layout> m_triview_layout_cached{};\n'
    '    uevr::duoview::CropStability m_triview_stability{};\n'
    '    std::atomic<bool> m_triview_gaze_live{false};\n'
+   '    uint64_t m_triview_fresh_generation{UINT64_MAX}; // game thread\n'
    '    const ModToggle::Ptr m_triview_border{ModToggle::create(generate_name("TriViewDebugBorder"), false)};\n'
 
    '    std::atomic<bool> m_triview_owns_index_two{false};\n'
@@ -442,6 +489,7 @@ BACKEND = {
    '                    static_cast<unsigned long long>(m_triview_pair_only.load()),\n'
    '                    static_cast<unsigned long long>(m_triview_third_skipped.load()));\n'
    '                ImGui::Text("Automatic captures written: %u (TriView_Capture_N.zip next to the UEVR log)", m_triview_captures.load());\n'
+   '                ImGui::Text("Periphery camera written by Tri-View: %llu views", static_cast<unsigned long long>(m_triview_ctor_overrides.load()));\n'
    '                ImGui::Text("Composited frames: %llu, rejected (Joey copy shown): %llu",\n'
    '                    static_cast<unsigned long long>(m_triview_composites.load()),\n'
    '                    static_cast<unsigned long long>(m_triview_composite_rejects.load()));\n'
@@ -508,6 +556,13 @@ BACKEND = {
    '        // Tri-View: view 2 = centre periphery, built by the engine exactly like the two eyes, once its\n'
    '        // own render target exists (created on demand, same lifetime as Joey\'s capture target).\n'
    '        auto* const triview_rtm = g_hook->get_render_target_manager();\n'
+   '        if (triview_rtm != nullptr && vr->triview_fresh_start_due()) {\n'
+   '            // Test 1: switching DuoView ID6 -> Tri-View gave a black picture; the Native Stereo + Fix detour\n'
+   '            // (fresh capture generation, pair re-learned) fixed it. Do that detour automatically, once.\n'
+   '            SPDLOG_INFO("[TriView] Entering Tri-View: restarting Native Fix with a fresh capture generation");\n'
+   '            triview_rtm->destroy_scene_capture();\n'
+   '            return 2;\n'
+   '        }\n'
    '        if (triview_rtm != nullptr && triview_rtm->request_triview_target(\n'
    '                static_cast<uint32_t>(vr->get_hmd_width()), static_cast<uint32_t>(vr->get_hmd_height())) != nullptr) {\n'
    '            vr->note_triview_views_demanded();\n'
@@ -597,6 +652,9 @@ BACKEND = {
    '            }\n'
    '        }\n'
    '        if (duo_fovea || duo_full) {'),
+  # FSceneView constructor: view 2 gets the centre camera + union projection written into its init options.
+  ('    if (vr->is_splitscreen_compatibility_enabled() ||\n        vr->is_sceneview_compatibility_enabled() ||\n        dune_manual_custom_present_pose) {\n        int32_t w = vr->get_hmd_width();',
+   TRIVIEW_CTOR + '    if (vr->is_splitscreen_compatibility_enabled() ||\n        vr->is_sceneview_compatibility_enabled() ||\n        dune_manual_custom_present_pose) {\n        int32_t w = vr->get_hmd_width();'),
   # BeginRenderingViewFamily: hide view 2 from every existing Native Fix path.
   ('    if (view_family == nullptr) {\n        call_original();\n        return;\n    }\n\n'
    '    using SceneViewsArrayPtr = decltype(view_family->get_views());',
@@ -793,6 +851,21 @@ BACKEND = {
    '                        (triview_composed ? vr->m_triview_composites : vr->m_triview_composite_rejects)\n'
    '                            .fetch_add(1, std::memory_order_relaxed);\n'
    '                    } else if (native_stereo_packet == nullptr ||'),
+  ('                    } else if (vr->is_using_mono()) {\n                        bool recorded = false;\n',
+   '                    } else if (vr->is_using_mono()) {\n'
+   '                        if (vr->is_triview_selected()) {\n'
+   '                            SPDLOG_WARNING_EVERY_N_SEC(2, "[TriView][D3D12] Mono submit path taken while Tri-View is selected");\n'
+   '                        }\n'
+   '                        bool recorded = false;\n'),
+  ('                               dune_using_hmd_mono_expansion) {\n                        m_openxr.copy((uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE, backbuffer.Get(), scene_source_state, nullptr);',
+   '                               dune_using_hmd_mono_expansion) {\n'
+   '                        if (vr->is_triview_selected()) {\n'
+   '                            SPDLOG_WARNING_EVERY_N_SEC(2, "[TriView][D3D12] Plain backbuffer copy: active={} packet={} triview_valid={} last_valid={} game_tex={} capture_tex={}",\n'
+   '                                vr->is_triview_active(), native_stereo_packet != nullptr,\n'
+   '                                native_stereo_packet != nullptr && native_stereo_packet->triview.valid, m_triview_last.valid,\n'
+   '                                m_game_tex.texture.Get() != nullptr, m_scene_capture_tex.texture.Get() != nullptr);\n'
+   '                        }\n'
+   '                        m_openxr.copy((uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE, backbuffer.Get(), scene_source_state, nullptr);'),
  ],
 }
 
@@ -874,6 +947,14 @@ void VR::triview_note_eye_pose(int32_t index, const double* rotation, const doub
     auto& pose = m_triview_eye_pose[index];
     for (int i = 0; i < 3; ++i) { pose[i] = rotation[i]; pose[3 + i] = position[i]; }
     m_triview_eye_seen[index] = true;
+}
+
+bool VR::triview_fresh_start_due() {
+    const uint64_t generation = mono_generation();
+    if (m_triview_fresh_generation == generation) return false;
+    m_triview_fresh_generation = generation;
+    m_native_stereo_fix->value() = true; // keep Joey's own Native Fix switch consistent with Tri-View
+    return true;
 }
 
 // UE builds view 2 right after views 0 and 1 in the same Draw, so these are this frame's eyes.

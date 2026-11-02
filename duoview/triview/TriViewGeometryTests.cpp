@@ -102,6 +102,11 @@ int main() try {
     expect(edge && approx(edge->window[0].u1, 1) && approx(edge->window[0].v1, 1) &&
            approx(edge->window[1].u0, .5) && approx(edge->window[1].v0, .5), "far gaze clamps the window inside the eye");
     expect(!tv::make_layout(2000, 2040, left, right, .5f, .9f), "fovea size out of range rejected");
+    for (float size = .3f; size <= .8f; size += .01f) for (float scale = .25f; scale <= 1.f; scale += .01f) {
+        const auto any = tv::make_layout(2000, 2040, left, left, scale, size);
+        expect(any && (any->periphery_width != any->fovea_width || any->periphery_height != any->fovea_height),
+               "periphery rect always differs from the fovea rect");
+    }
 
     expect(!tv::make_layout(2000, 2040, left, right, 2.f), "invalid scale rejected");
     expect(!tv::make_layout(2000, 2040, {1, -1, 1, -1}, right, .5f), "invalid frustum rejected");

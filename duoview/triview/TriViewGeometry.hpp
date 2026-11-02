@@ -118,6 +118,10 @@ inline std::optional<Layout> make_layout(uint32_t eye_width, uint32_t eye_height
     l.periphery_width = clamp_size(eye_width * periphery_scale * wide, eye_width);
     l.periphery_height = clamp_size(eye_height * periphery_scale * tall, eye_height);
     l.periphery_x = 0;                             // own render target, image at its origin
+    // The engine-side hooks recognise view 2 by its rect: never let it equal the fovea rect.
+    if (l.periphery_width == l.fovea_width && l.periphery_height == l.fovea_height) {
+        l.periphery_width = l.periphery_width + 2 <= eye_width ? l.periphery_width + 2 : l.periphery_width - 2;
+    }
     return l;
 }
 
