@@ -13,6 +13,7 @@
 #include <mutex>
 #include <unordered_map>
 #include "../DuoViewNgxManualDepth.hpp"
+#include "../DuoViewNgxDepthCapture.hpp"
 
 namespace uevr::duoview::ngx {
 struct NgxParameters {
@@ -55,6 +56,8 @@ inline ID3D12Resource* ngx_resource(const NgxParameters* p,const char* k) noexce
 class ManualNgxObserver final {
     using Hooks=std::array<safetyhook::InlineHook,4>;
     Hooks evals_{},creates_{},releases_{};
+    safetyhook::InlineHook execute_{};
+    bool execute_ok_{};
     std::array<bool,4> eval_ok_{},create_ok_{},release_ok_{};
     mutable std::mutex mutex_;
     struct Feature {uint32_t kind{};bool created{};};
@@ -104,6 +107,20 @@ class ManualNgxObserver final {
            uint64_t(sample.depth_y)+sample.render_height>desc.Height)return;
         candidates().observe(sample);
         ++qualified_;
+        // Proven on this CPU producer draw key, not inferred from "largest texture".
+        // The native compositor independently checks the SAME packet key,
+        // exact output rectangle and already-submitted original game queue.
+        const auto pick=candidates().choose();
+        if(pick.source!=std::array<uintptr_t,3>{feature_id,out_width,out_height} ||
+           !pick.exact) return;
+        const auto vr=vrmod::VR::get();
+        if(!vr || !vr->is_duoview_renderer_active())return;
+        const auto key=vr->duoview_producer_key();
+        const auto frozen=vr->duoview_state().snapshot(key);
+        if(!frozen || frozen->config.key!=key ||
+           frozen->config.layout.fovea.width!=out_width ||
+           frozen->config.layout.fovea.height!=out_height)return;
+        depth_snapshots().capture(cmd,depth,sample,key);
     }
     template<unsigned N> static uint32_t __cdecl evaluate(
         ID3D12GraphicsCommandList* cmd,void* feature,NgxParameters* p,void* cb) {
@@ -139,6 +156,14 @@ class ManualNgxObserver final {
         }
         return result;
     }
+    static void __cdecl execute_commands(ID3D12CommandQueue* queue,
+        UINT count,ID3D12CommandList* const* lists) {
+        auto& instance=self();
+        instance.execute_.call<void>(queue,count,lists);
+        // Publish only if the actual producer list was submitted on the
+        // original game's DIRECT queue. No CPU or GPU blocking.
+        depth_snapshots().submitted(queue,count,lists);
+    }
     static void install_group(Hooks& hooks,std::array<bool,4>& installed,
         std::array<const char*,2> exports,std::array<void*,4> callbacks) {
         static const wchar_t* dlls[]{L"nvngx_dlss.dll",L"_nvngx.dll"};
@@ -173,6 +198,7 @@ public:
     }
     void set_active(bool active) {
         active_.store(active,std::memory_order_release);
+        depth_snapshots().set_enabled(active);
         if(!active)candidates().clear();
     }
     void install() {
@@ -190,6 +216,24 @@ public:
             {"NVSDK_NGX_D3D12_ReleaseFeature","NVSDK_NGX_D3D12_ReleaseFeature_C"},
             {reinterpret_cast<void*>(&release<0>),reinterpret_cast<void*>(&release<1>),
              reinterpret_cast<void*>(&release<2>),reinterpret_cast<void*>(&release<3>)});
+    }
+    void install_queue(ID3D12CommandQueue* queue) {
+        if(!active_.load(std::memory_order_acquire) || !queue)return;
+        std::scoped_lock lock(mutex_);
+        if(!execute_ok_) {
+            // ID3D12CommandQueue vtable index 10 = ExecuteCommandLists.
+            auto* vtbl=*reinterpret_cast<void***>(queue);
+            if(!vtbl || !vtbl[10])return;
+            auto hook=safetyhook::create_inline(vtbl[10],
+                reinterpret_cast<void*>(&execute_commands),
+                safetyhook::InlineHook::StartDisabled);
+            if(hook) {
+                execute_=std::move(hook);
+                if(execute_.enable())execute_ok_=true;
+                else execute_.reset();
+            }
+        }
+        if(execute_ok_)depth_snapshots().bind_queue(queue);
     }
     uint64_t calls()const{return eval_count_.load();}
     uint64_t candidates_seen()const{return qualified_.load();}
