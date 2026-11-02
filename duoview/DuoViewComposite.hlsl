@@ -27,6 +27,15 @@ cbuffer DuoViewCompositeConfig : register(b0)
     float SharpenMaxChange;  // v0.1 limiter (0.10 default)
     float SharpenFXAABias;  // v0.1 edge detector (0.02 default)
     uint SharpenFlags;      // bit0=edge protection; bit1=bigger; bit2=manual SDR decode
+    uint2 DepthTexSize;
+    uint2 DepthBase;
+    uint2 DepthActiveSize;
+    float DepthNearStrength;
+    float DepthFarStrength;
+    float DepthNearMeters;
+    float DepthFarMeters;
+    float DepthNearClipMeters;
+    uint DepthFlags;       // bit0 valid, bit1 curve, bit2 smooth, bit3 reversed, bits4-5 preview
 };
 
 float2 AtlasSampleUV(uint4 rect, float2 localUv)
