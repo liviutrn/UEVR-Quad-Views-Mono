@@ -1,5 +1,5 @@
-name: DuoView v209 Distance Sharpen Controls Preview
-run-name: DuoView v209 distance controls preview (${{ github.run_number }})
+name: DuoView v210 Manual NGX Fovea Depth Browser
+run-name: DuoView v210 NGX depth manual source browser (${{ github.run_number }})
 on:
   push:
     branches:
@@ -14,6 +14,7 @@ on:
       - claude/**
       - experiment/v208-depth-sharpen-optimization-20261102
       - experiment/v209-distance-sharpen-curve-20261102
+      - experiment/v210-ngx-manual-depth-20261102
   pull_request:
     branches:
       - build-182
@@ -142,6 +143,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'v209 staged controls failed exact anchors' }
           python workspace/duoview/joey_stage1/test_v209_scope.py --verify backend evidence/v209-source-before.json
           if ($LASTEXITCODE -ne 0) { throw 'v209 touched unexpected shader, render, SDK or other source' }
+          python workspace/duoview/joey_stage1/test_v210_scope.py --capture backend evidence/v210-source-before.json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot capture v209 source before NGX observer' }
+          python workspace/duoview/joey_stage1/apply_v210_ngx_manual.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'v210 manual NGX depth observer exact anchors failed' }
+          python workspace/duoview/joey_stage1/test_v210_scope.py --verify backend evidence/v210-source-before.json
+          if ($LASTEXITCODE -ne 0) { throw 'v210 source scope invalid, unexpected shader or renderer modification' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Patched backend contains whitespace errors' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
@@ -263,6 +270,7 @@ jobs:
           Experimental: Source/test/CI passing cannot prove exact game GPU producer completion or headset stability.
           NEVER overwrite 30-minute-proven Build3! Extract this ZIP into a SEPARATE TEST DIRECTORY.
           Built-in gaze freshness/age counters are read from the UI; no smoothing/deadzone forced.
+          v210: Native DLSS-SR depth source metadata browser and manual source pinning are active in DuoView ID6. Expected fovea output size comes from the frozen source packet. Source selection does NOT yet copy depth pixels or enable distance sharpening. No synthetic stereo.
           v209: Distance sharpening controls are staged only. DLSS depth is NOT connected. The original fixed-strength Glamarye shader remains active even if the staged toggle is ON.
           Stage5 gaze requires installed PSVR2 Toolkit CAPI and still requires headset calibration validation.
           Restored engine view order and optical gaze mapping are source verified. Actual Lumen/shadow/exposure and visual parity require a headset test; no gamma correction applied.
@@ -273,16 +281,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-Mono-v209-Distance-Controls-Preview-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-Mono-v210-NGX-Depth-Browser-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-Mono-v209-Distance-Controls-Preview-${{ github.run_number }}
+          name: UEVR-DuoView-Mono-v210-NGX-Depth-Browser-${{ github.run_number }}
           path: |
-            UEVR-DuoView-Mono-v209-Distance-Controls-Preview-*.zip
-            UEVR-DuoView-Mono-v209-Distance-Controls-Preview-*.zip.sha256
+            UEVR-DuoView-Mono-v210-NGX-Depth-Browser-*.zip
+            UEVR-DuoView-Mono-v210-NGX-Depth-Browser-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -297,7 +305,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-DuoView-v209-Evidence-${{ github.run_number }}
+          name: UEVR-DuoView-v210-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
