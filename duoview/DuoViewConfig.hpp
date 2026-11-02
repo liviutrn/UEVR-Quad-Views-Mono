@@ -5,6 +5,7 @@
 // subsequent shader blend into different crop positions or densities.
 #include "DuoViewFrame.hpp"
 #include "DuoViewGaze.hpp"
+#include "DuoViewDistanceCurve.hpp"
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -39,6 +40,13 @@ struct Settings {
     float gaze_breakout_radius{.035f}; // when farther from locked crop, go 1:1
     float gaze_still_radius{.008f};    // per-sample motion treated as stationary
     uint32_t gaze_relock_samples{3};  // quiet samples before leaving fast tracking
+    // v211 distance sharpening of the cropped fovea only.
+    bool distance_sharpen_enabled{false};
+    float sharpen_near_strength{5.f}, sharpen_far_strength{1.f};
+    float sharpen_near_m{.5f}, sharpen_far_m{10.f};
+    bool sharpen_distance_smooth{true};
+    bool depth_reversed_z{true};
+    uint32_t depth_preview_mode{};
     // v207: Catmull-Rom (bicubic) upscaling of the low-resolution periphery.
     // OFF keeps the original bilinear sampling bit-for-bit. Keep this LAST:
     // designated initializers in VR::configure_duoview follow field order.
@@ -55,7 +63,8 @@ enum UiReject : uint32_t {
     reject_hold=1u<<9, reject_reacquire=1u<<10, reject_offset_u=1u<<11,
     reject_offset_v=1u<<12, reject_micro=1u<<13,
     reject_breakout=1u<<14, reject_still=1u<<15, reject_relock=1u<<16,
-    reject_sharpen=1u<<17
+    reject_sharpen=1u<<17, reject_sharpen_near=1u<<18,
+    reject_sharpen_far=1u<<19, reject_sharpen_distance=1u<<20
 };
 struct UiReconciled {
     Settings settings{};
@@ -110,6 +119,10 @@ inline UiReconciled reconcile_ui_settings(const Settings& requested,
     out.independent_shading=requested.independent_shading;
     out.native_fix_same_pass=requested.native_fix_same_pass;
     out.sharp_periphery=requested.sharp_periphery;
+    out.distance_sharpen_enabled=requested.distance_sharpen_enabled;
+    out.sharpen_distance_smooth=requested.sharpen_distance_smooth;
+    out.depth_reversed_z=requested.depth_reversed_z;
+    out.depth_preview_mode=requested.depth_preview_mode<=2u?requested.depth_preview_mode:current.depth_preview_mode;
     const auto scalar=[&](float value,float lo,float hi,uint32_t mask,
                           float Settings::* field) {
         if (valid(value,lo,hi)) out.*field=value;
@@ -126,7 +139,15 @@ inline UiReconciled reconcile_ui_settings(const Settings& requested,
         else result.rejected|=mask;
     };
     scalar(requested.feather_fraction,0.f,.45f,reject_feather,&Settings::feather_fraction);
-    scalar(requested.sharpen_strength,0.f,2.f,reject_sharpen,&Settings::sharpen_strength);
+    scalar(requested.sharpen_strength,0.f,5.f,reject_sharpen,&Settings::sharpen_strength);
+    scalar(requested.sharpen_near_strength,0.f,5.f,reject_sharpen_near,&Settings::sharpen_near_strength);
+    scalar(requested.sharpen_far_strength,0.f,5.f,reject_sharpen_far,&Settings::sharpen_far_strength);
+    if (valid_distance_sharpen_range(requested.sharpen_near_m, requested.sharpen_far_m)) {
+        out.sharpen_near_m=requested.sharpen_near_m;
+        out.sharpen_far_m=requested.sharpen_far_m;
+    } else {
+        result.rejected|=reject_sharpen_distance;
+    }
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
     scalar(requested.gaze_offset_v,-.25f,.25f,reject_offset_v,&Settings::gaze_offset_v);
@@ -169,7 +190,13 @@ public:
     bool set_settings(Settings proposed) {
         std::scoped_lock lock{mutex_};
         if (!std::isfinite(proposed.sharpen_strength) || proposed.sharpen_strength<0.f ||
-            proposed.sharpen_strength>2.f ||
+            proposed.sharpen_strength>5.f ||
+            !std::isfinite(proposed.sharpen_near_strength) ||
+            proposed.sharpen_near_strength<0.f || proposed.sharpen_near_strength>5.f ||
+            !std::isfinite(proposed.sharpen_far_strength) ||
+            proposed.sharpen_far_strength<0.f || proposed.sharpen_far_strength>5.f ||
+            proposed.depth_preview_mode>2u ||
+            !valid_distance_sharpen_range(proposed.sharpen_near_m, proposed.sharpen_far_m) ||
             !std::isfinite(proposed.feather_fraction) ||
             proposed.feather_fraction < 0.f || proposed.feather_fraction > .45f ||
             proposed.fovea_view > 1 || proposed.diagnostic_view > 2 ||
