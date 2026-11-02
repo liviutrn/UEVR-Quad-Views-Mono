@@ -64,14 +64,15 @@ void D3D12Component::triview_take_capture(d3d12::CommandContext& commands, ID3D1
     for (uint32_t e = 0; e < 2; ++e) {
         const uint32_t base = e * eye;
         const std::string n = e == 0 ? "L_" : "R_";
-        const uint32_t y0 = at(tall, l.v0 + (l.v1 - l.v0) * .25f), y1 = at(tall, l.v1 - (l.v1 - l.v0) * .25f);
-        xr_regions.push_back({n + "fovea", base + at(eye, l.u0), at(tall, l.v0), base + at(eye, l.u1), at(tall, l.v1)});
+        const auto& win = l.window[e];
+        const uint32_t y0 = at(tall, win.v0 + (win.v1 - win.v0) * .25f), y1 = at(tall, win.v1 - (win.v1 - win.v0) * .25f);
+        xr_regions.push_back({n + "fovea", base + at(eye, win.u0), at(tall, win.v0), base + at(eye, win.u1), at(tall, win.v1)});
         xr_regions.push_back({n + "outer_edge", base, 0, base + at(eye, .08f), tall});
         xr_regions.push_back({n + "top_edge", base, 0, base + eye, at(tall, .08f)});
-        xr_regions.push_back({n + "seam_left_inside", base + at(eye, l.u0 + .02f), y0, base + at(eye, l.u0 + .05f), y1});
-        xr_regions.push_back({n + "seam_left_outside", base + at(eye, l.u0 - .05f), y0, base + at(eye, l.u0 - .02f), y1});
-        xr_regions.push_back({n + "seam_right_inside", base + at(eye, l.u1 - .05f), y0, base + at(eye, l.u1 - .02f), y1});
-        xr_regions.push_back({n + "seam_right_outside", base + at(eye, l.u1 + .02f), y0, base + at(eye, l.u1 + .05f), y1});
+        xr_regions.push_back({n + "seam_left_inside", base + at(eye, win.u0 + .02f), y0, base + at(eye, win.u0 + .05f), y1});
+        xr_regions.push_back({n + "seam_left_outside", base + at(eye, win.u0 - .05f), y0, base + at(eye, win.u0 - .02f), y1});
+        xr_regions.push_back({n + "seam_right_inside", base + at(eye, win.u1 - .05f), y0, base + at(eye, win.u1 - .02f), y1});
+        xr_regions.push_back({n + "seam_right_outside", base + at(eye, win.u1 + .02f), y0, base + at(eye, win.u1 + .05f), y1});
     }
     const std::vector<uevr::triview::dx12::GpuCapture::Source> sources{
         {"main_left_half", m_game_tex.texture.Get(), w, h,
@@ -86,15 +87,16 @@ void D3D12Component::triview_take_capture(d3d12::CommandContext& commands, ID3D1
         {"xr_both_eyes", destination, static_cast<uint32_t>(dd.Width), tall, xr_regions}};
     char text[2048];
     std::snprintf(text, sizeof(text),
-        "Tri-View automatic capture %u (build: Tri-View S2, own periphery target)\n"
-        "eye %ux%u, XR image %llux%u, fovea %ux%u, window u %.4f..%.4f v %.4f..%.4f, periphery %ux%u\n"
+        "Tri-View automatic capture %u (build: Tri-View S3, own periphery target, eye-tracked foveas)\n"
+        "eye %ux%u, XR image %llux%u, fovea %ux%u, window L u %.4f..%.4f v %.4f..%.4f R u %.4f..%.4f v %.4f..%.4f, periphery %ux%u\n"
         "eye L tans l %.5f r %.5f t %.5f b %.5f | eye R tans l %.5f r %.5f t %.5f b %.5f\n"
         "periphery union tans l %.5f r %.5f t %.5f b %.5f\n"
         "map L ax %.6f bx %.6f ay %.6f by %.6f | map R ax %.6f bx %.6f ay %.6f by %.6f\n"
         "packet third=%d, periphery target status: %s, target builds %llu\n"
         "engine frames: third %llu, eyes only %llu, third skipped %llu; composites %llu, rejected %llu\n",
         taken + 1, w, h, static_cast<unsigned long long>(dd.Width), tall, l.fovea_width, l.fovea_height,
-        l.u0, l.u1, l.v0, l.v1, l.periphery_width, l.periphery_height,
+        l.window[0].u0, l.window[0].u1, l.window[0].v0, l.window[0].v1,
+        l.window[1].u0, l.window[1].u1, l.window[1].v0, l.window[1].v1, l.periphery_width, l.periphery_height,
         l.eye[0].left, l.eye[0].right, l.eye[0].top, l.eye[0].bottom, l.eye[1].left, l.eye[1].right, l.eye[1].top, l.eye[1].bottom,
         l.periphery.left, l.periphery.right, l.periphery.top, l.periphery.bottom,
         uevr::triview::periphery_map(l, 0).ax, uevr::triview::periphery_map(l, 0).bx, uevr::triview::periphery_map(l, 0).ay,
@@ -378,6 +380,14 @@ BACKEND = {
    '    std::once_flag m_duoview_settings_once;\n'
    '    const ModToggle::Ptr m_triview_third_view{ModToggle::create(generate_name("TriViewThirdView"), true)};\n'
    '    const ModSlider::Ptr m_triview_periphery_scale{ModSlider::create(generate_name("TriViewPeripheryScale"), .25f, 1.f, .5f)};\n'
+   '    const ModToggle::Ptr m_triview_eye_tracked{ModToggle::create(generate_name("TriViewEyeTracked"), true)};\n'
+   '    const ModSlider::Ptr m_triview_fovea_size{ModSlider::create(generate_name("TriViewFoveaSize"), .3f, .8f, .5f)};\n'
+   '    // Tri-View S3: one layout per engine frame (gaze sampled once), shared by every hook of that frame.\n'
+   '    std::mutex m_triview_layout_mutex{};\n'
+   '    uint64_t m_triview_layout_frame{UINT64_MAX};\n'
+   '    std::optional<uevr::triview::Layout> m_triview_layout_cached{};\n'
+   '    uevr::duoview::CropStability m_triview_stability{};\n'
+   '    std::atomic<bool> m_triview_gaze_live{false};\n'
    '    const ModToggle::Ptr m_triview_border{ModToggle::create(generate_name("TriViewDebugBorder"), false)};\n'
 
    '    std::atomic<bool> m_triview_owns_index_two{false};\n'
@@ -385,7 +395,7 @@ BACKEND = {
    '    std::array<bool, 2> m_triview_eye_seen{};\n'),
   ('            *m_duo_sharp_periphery,',
    '            *m_duo_sharp_periphery,\n'
-   '            *m_triview_third_view, *m_triview_periphery_scale, *m_triview_border,'),
+   '            *m_triview_third_view, *m_triview_periphery_scale, *m_triview_border, *m_triview_eye_tracked, *m_triview_fovea_size,'),
  ],
  "src/mods/VR.cpp": [
   ('bool VR::should_force_native_stereo_fix_same_pass() const {\n    if (is_duoview_renderer_active()) {',
@@ -407,6 +417,10 @@ BACKEND = {
    '                    : "Tri-View inactive (needs STALKER 2, D3D12, OpenXR, no AFR / 2D screen): rendering plain Native Stereo.");\n'
    '                m_triview_third_view->draw("Third view (periphery). OFF = cropped stereo windows only");\n'
    '                m_triview_periphery_scale->draw("Periphery resolution scale");\n'
+   '                m_triview_eye_tracked->draw("Eye-tracked fovea (PSVR2; uses DuoView\'s gaze offset / smoothing settings)");\n'
+   '                m_triview_fovea_size->draw("Fovea size (fraction of each eye)");\n'
+   '                ImGui::Text("Gaze: %s", !m_triview_eye_tracked->value() ? "off (fixed centre)" :\n'
+   '                    m_triview_gaze_live.load() ? "tracking" : "no PSVR2 gaze (centre or last position)");\n'
    '                m_triview_border->draw("Fovea border highlight");\n'
    '                ImGui::Text("Periphery target: %s (built %llu times)", m_triview_target_status.load(),\n'
    '                    static_cast<unsigned long long>(m_triview_target_builds.load()));\n'
@@ -569,7 +583,7 @@ BACKEND = {
    '            double_matrix = fmat;\n        }\n'
    '        if (vr->is_triview_active() && g_hook->m_has_double_precision && (view_index == 0 || view_index == 1)) {\n'
    '            if (const auto layout = vr->triview_layout()) {\n'
-   '                uevr::triview::apply_fovea_projection(double_matrix, *layout);\n'
+   '                uevr::triview::apply_fovea_projection(double_matrix, *layout, static_cast<int>(true_index));\n'
    '            }\n'
    '        }\n'
    '        if (duo_fovea || duo_full) {'),
@@ -781,14 +795,60 @@ bool VR::is_triview_active() const {
     return stalker2;
 }
 
-// Pure function of the current eye projections, HMD render size and the periphery setting.
+// One layout per engine frame: eye projections, HMD render size, periphery/fovea settings and (S3) the PSVR2
+// gaze, sampled once by the first hook of the frame and reused by every later hook of the same frame
+// (projection crops, view rects, the packet), so the compositor always gets the windows the engine rendered.
 std::optional<uevr::triview::Layout> VR::triview_layout() {
-    if (!get_runtime()) return {};
-    const auto left = uevr::triview::tans_from_projection(get_projection_matrix(VRRuntime::Eye::LEFT));
+    const auto runtime = get_runtime();
+    if (!runtime) return {};
+    const auto left_projection = get_projection_matrix(VRRuntime::Eye::LEFT);
+    const auto left = uevr::triview::tans_from_projection(left_projection);
     const auto right = uevr::triview::tans_from_projection(get_projection_matrix(VRRuntime::Eye::RIGHT));
     if (!left || !right) return {};
-    return uevr::triview::make_layout(get_hmd_width(), get_hmd_height(), *left, *right,
-        m_triview_periphery_scale->value());
+    const uint64_t frame = runtime->internal_frame_count;
+    std::scoped_lock lock{m_triview_layout_mutex};
+    if (m_triview_layout_cached && m_triview_layout_frame == frame &&
+        m_triview_layout_cached->eye_width == get_hmd_width() && m_triview_layout_cached->eye_height == get_hmd_height()) {
+        return m_triview_layout_cached;
+    }
+    std::optional<uevr::triview::GazeTan> gaze{};
+    if (m_triview_eye_tracked->value()) {
+        // Same PSVR2 reader and crop stability as DuoView ID6, with DuoView's gaze settings.
+        auto frozen_projection = left_projection;
+        const float near_plane = sdk::globals::get_near_clipping_plane();
+        if (std::isfinite(near_plane) && near_plane > 0.f) frozen_projection[3][2] = near_plane;
+        std::array<float, 16> frozen{};
+        std::memcpy(frozen.data(), &frozen_projection[0][0], sizeof(frozen));
+        const auto eye = get_eye_transform(0);
+        const std::array<float, 9> optical{eye[0][0], eye[0][1], eye[0][2], eye[1][0], eye[1][1], eye[1][2],
+            eye[2][0], eye[2][1], eye[2][2]};
+        m_duoview_gaze.set_recovery_controls(static_cast<uint32_t>(m_duo_hold->value()),
+            static_cast<uint32_t>(m_duo_reacquire->value()));
+        const auto sample = m_duoview_gaze.read_uv(frozen, optical);
+        m_triview_gaze_live.store(sample.has_value(), std::memory_order_relaxed);
+        uevr::duoview::Settings settings{};
+        settings.crop_width = settings.crop_height = m_triview_fovea_size->value();
+        settings.eye_tracked = true;
+        settings.gaze_offset_u = m_duo_offset_x->value();
+        settings.gaze_offset_v = m_duo_offset_y->value();
+        settings.gaze_micro_gain = m_duo_micro_gain->value();
+        settings.gaze_breakout_radius = m_duo_breakout->value();
+        settings.gaze_still_radius = m_duo_stillness->value();
+        settings.gaze_relock_samples = static_cast<uint32_t>(m_duo_relock->value());
+        settings.gaze_quant_pixels = 0;
+        const auto centre = m_triview_stability.update(uevr::duoview::FrameKey{1, frame}, get_hmd_width(),
+            get_hmd_height(), settings, sample, GetTickCount64());
+        if (sample.has_value() || centre.u != .5f || centre.v != .5f) {
+            gaze = uevr::triview::GazeTan{left->left + centre.u * (left->right - left->left),
+                                          left->top - centre.v * (left->top - left->bottom)};
+        }
+    } else {
+        m_triview_gaze_live.store(false, std::memory_order_relaxed);
+    }
+    m_triview_layout_cached = uevr::triview::make_layout(get_hmd_width(), get_hmd_height(), *left, *right,
+        m_triview_periphery_scale->value(), m_triview_fovea_size->value(), gaze);
+    m_triview_layout_frame = frame;
+    return m_triview_layout_cached;
 }
 
 void VR::triview_note_eye_pose(int32_t index, const double* rotation, const double* position) {

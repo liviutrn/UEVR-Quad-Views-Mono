@@ -1,6 +1,7 @@
 #pragma once
 // Tri-View Stage 1 geometry (rendering method ID 7). No UE/D3D dependencies.
-// Views 0/1 = the two real eyes cropped to a fixed centre window (the foveas).
+// Views 0/1 = the two real eyes cropped to a window (the foveas): fixed centre, or centred on the
+//             PSVR2 gaze direction (S3), the same gaze direction mapped into each eye.
 // View 2    = one centre camera covering the union of both eye frusta (the periphery).
 // Assumes parallel eye views (true for PSVR2); the menu reports the measured eye cant.
 #include <algorithm>
@@ -15,13 +16,18 @@ struct Tans {
     float left{}, right{}, top{}, bottom{};
 };
 
+// Fovea window in eye UV (top-left origin).
+struct Window {
+    float u0{}, v0{}, u1{}, v1{};
+};
+
 struct Layout {
     uint32_t eye_width{}, eye_height{};           // full per-eye render size (one half of the main target)
     uint32_t fovea_width{}, fovea_height{};       // each eye's fovea render, placed at (0,0) of its target
     uint32_t periphery_x{};                       // always 0: the periphery has its own target (UE 5.5.4 puts
                                                   // every singleton render at the target origin)
     uint32_t periphery_width{}, periphery_height{};
-    float u0{}, v0{}, u1{}, v1{};                 // fovea window in eye UV (top-left origin)
+    Window window[2]{};                           // left / right eye fovea windows
     Tans eye[2]{};                                // left / right eye frusta
     Tans periphery{};                             // union frustum rendered by view 2
 };
@@ -62,10 +68,27 @@ void apply_uv_window(Matrix& m, double u0, double u1, double v0, double v1) {
     }
 }
 
+// Gaze direction as view-space tangents (x right, y up), shared by both (parallel) eyes.
+struct GazeTan {
+    float x{}, y{};
+};
+
+// Window of `size` (fraction of the eye per axis) centred on `centre`, kept inside the eye.
+inline Window window_around(float cu, float cv, float size) {
+    const float half = size * .5f;
+    const float u = std::clamp(cu, half, 1.f - half), v = std::clamp(cv, half, 1.f - half);
+    return {u - half, v - half, u + half, v + half};
+}
+
+// fovea_size: window size per axis (0.3 .. 0.8 of the eye); gaze: centre both windows on that direction
+// (each eye's own UV of the same direction), otherwise each eye's UV centre (Stage 1 behaviour).
 inline std::optional<Layout> make_layout(uint32_t eye_width, uint32_t eye_height,
-                                         const Tans& left, const Tans& right, float periphery_scale) {
+                                         const Tans& left, const Tans& right, float periphery_scale,
+                                         float fovea_size = .5f, std::optional<GazeTan> gaze = std::nullopt) {
     if (eye_width < 64 || eye_height < 64 || eye_width > 16384 || eye_height > 16384 ||
-        !std::isfinite(periphery_scale) || periphery_scale < .1f || periphery_scale > 1.f) return {};
+        !std::isfinite(periphery_scale) || periphery_scale < .1f || periphery_scale > 1.f ||
+        !std::isfinite(fovea_size) || fovea_size < .3f || fovea_size > .8f) return {};
+    if (gaze && (!std::isfinite(gaze->x) || !std::isfinite(gaze->y))) gaze.reset();
     for (const auto* t : {&left, &right}) {
         if (!std::isfinite(t->left) || !std::isfinite(t->right) || !std::isfinite(t->top) ||
             !std::isfinite(t->bottom) || !(t->right > t->left) || !(t->top > t->bottom)) return {};
@@ -73,11 +96,17 @@ inline std::optional<Layout> make_layout(uint32_t eye_width, uint32_t eye_height
     Layout l{};
     l.eye_width = eye_width;
     l.eye_height = eye_height;
-    l.u0 = .25f; l.u1 = .75f; l.v0 = .25f; l.v1 = .75f;     // fixed centre 0.5 x 0.5 window
-    l.fovea_width = static_cast<uint32_t>(std::lround(eye_width * (l.u1 - l.u0)));
-    l.fovea_height = static_cast<uint32_t>(std::lround(eye_height * (l.v1 - l.v0)));
     l.eye[0] = left;
     l.eye[1] = right;
+    for (int e = 0; e < 2; ++e) {
+        const auto& t = l.eye[e];
+        const float cu = gaze ? (gaze->x - t.left) / (t.right - t.left) : .5f;
+        const float cv = gaze ? (t.top - gaze->y) / (t.top - t.bottom) : .5f;
+        l.window[e] = window_around(cu, cv, fovea_size);
+    }
+    // Both eyes render the same fovea size (window size is identical; only its position differs).
+    l.fovea_width = static_cast<uint32_t>(std::lround(eye_width * fovea_size));
+    l.fovea_height = static_cast<uint32_t>(std::lround(eye_height * fovea_size));
     l.periphery = {(std::min)(left.left, right.left), (std::max)(left.right, right.right),
                    (std::max)(left.top, right.top), (std::min)(left.bottom, right.bottom)};
     // Same angular pixel density as a full eye render times the periphery scale.
@@ -92,10 +121,11 @@ inline std::optional<Layout> make_layout(uint32_t eye_width, uint32_t eye_height
     return l;
 }
 
-// Views 0/1: crop the eye's own projection to the fovea window.
+// Views 0/1: crop the eye's own projection to that eye's fovea window.
 template <typename Matrix>
-void apply_fovea_projection(Matrix& m, const Layout& l) {
-    apply_uv_window(m, l.u0, l.u1, l.v0, l.v1);
+void apply_fovea_projection(Matrix& m, const Layout& l, int eye) {
+    const auto& w = l.window[eye != 0 ? 1 : 0];
+    apply_uv_window(m, w.u0, w.u1, w.v0, w.v1);
 }
 
 // View 2: widen the LEFT eye projection to the union frustum (centre camera, left-eye rotation).

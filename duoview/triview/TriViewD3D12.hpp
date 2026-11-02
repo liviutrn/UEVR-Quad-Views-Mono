@@ -23,14 +23,15 @@ using Microsoft::WRL::ComPtr;
 
 struct Constants {
     float eye_and_fovea[4];
-    float fovea_window[4];
+    float fovea_window_left[4];
+    float fovea_window_right[4];
     float map_left[4];
     float map_right[4];
     float periphery_rect[4];
     float source_sizes[4];
     float params[4];
 };
-static_assert(sizeof(Constants) == 112, "Must match TriViewConstants in TriViewComposite.hlsl");
+static_assert(sizeof(Constants) == 128, "Must match TriViewConstants in TriViewComposite.hlsl");
 
 class Compositor {
 public:
@@ -119,7 +120,8 @@ public:
         const auto ml = periphery_map(l, 0), mr = periphery_map(l, 1);
         const Constants k{
             {float(dd.Width / 2), float(dd.Height), float(l.fovea_width), float(l.fovea_height)},
-            {l.u0, l.v0, l.u1, l.v1},
+            {l.window[0].u0, l.window[0].v0, l.window[0].u1, l.window[0].v1},
+            {l.window[1].u0, l.window[1].v0, l.window[1].u1, l.window[1].v1},
             {ml.ax, ml.bx, ml.ay, ml.by},
             {mr.ax, mr.bx, mr.ay, mr.by},
             {float(l.periphery_width), float(l.periphery_height), float(pd.Width), float(pd.Height)},

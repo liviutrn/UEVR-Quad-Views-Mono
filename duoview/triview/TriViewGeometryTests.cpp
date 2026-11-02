@@ -53,7 +53,7 @@ int main() try {
 
     // Fovea crop: the window corners land exactly on the viewport edges.
     auto fovea = joey_projection(left);
-    tv::apply_fovea_projection(fovea, l);
+    tv::apply_fovea_projection(fovea, l, 0);
     const double w0 = left.right - left.left, h0 = left.top - left.bottom;
     const auto a = ndc(fovea, left.left + .25 * w0, left.top - .25 * h0);
     const auto b = ndc(fovea, left.left + .75 * w0, left.top - .75 * h0);
@@ -84,6 +84,24 @@ int main() try {
             }
         }
     }
+
+    // S3 gaze windows: the same gaze direction lands at the centre of each eye's fovea render.
+    const tv::GazeTan gaze{.30f, -.20f};
+    const auto g = tv::make_layout(2000, 2040, left, right, .5f, .4f, gaze);
+    expect(g.has_value() && g->fovea_width == 800 && g->fovea_height == 816, "fovea size follows the setting");
+    for (int eye = 0; eye < 2; ++eye) {
+        auto m = joey_projection(l.eye[eye]);
+        tv::apply_fovea_projection(m, *g, eye);
+        const auto centre = ndc(m, gaze.x, gaze.y);
+        expect(approx(centre[0], 0, 1e-4) && approx(centre[1], 0, 1e-4), "gaze at the centre of each eye's fovea");
+        const auto& w = g->window[eye];
+        expect(approx(w.u1 - w.u0, .4, 1e-6) && approx(w.v1 - w.v0, .4, 1e-6), "window size");
+    }
+    expect(!approx(g->window[0].u0, g->window[1].u0, 1e-3), "asymmetric eyes: different UV for the same direction");
+    const auto edge = tv::make_layout(2000, 2040, left, right, .5f, .5f, tv::GazeTan{5.f, -5.f});
+    expect(edge && approx(edge->window[0].u1, 1) && approx(edge->window[0].v1, 1) &&
+           approx(edge->window[1].u0, .5) && approx(edge->window[1].v0, .5), "far gaze clamps the window inside the eye");
+    expect(!tv::make_layout(2000, 2040, left, right, .5f, .9f), "fovea size out of range rejected");
 
     expect(!tv::make_layout(2000, 2040, left, right, 2.f), "invalid scale rejected");
     expect(!tv::make_layout(2000, 2040, {1, -1, 1, -1}, right, .5f), "invalid frustum rejected");

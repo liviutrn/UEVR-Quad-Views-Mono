@@ -12,7 +12,8 @@ SamplerState LinearClamp : register(s0);
 
 cbuffer TriViewConstants : register(b0) {
     float4 EyeAndFovea;   // eye width, eye height, fovea width, fovea height (pixels)
-    float4 FoveaWindow;   // u0, v0, u1, v1 in eye UV
+    float4 FoveaWindowL;  // u0, v0, u1, v1 in eye UV, left eye (moves with the gaze)
+    float4 FoveaWindowR;  // same, right eye
     float4 PeriphMapL;    // ax, bx, ay, by: periphery uv = (ax*u + bx, ay*v + by), left eye
     float4 PeriphMapR;    // same, right eye
     float4 PeriphRect;    // periphery image width, height (pixels, at (0,0) of t2); t2 width, height
@@ -53,7 +54,8 @@ float4 PSMain(VertexOut i) : SV_TARGET0 {
         periphery = PeripherySource.SampleLevel(LinearClamp, ActiveTexel(puv, PeriphRect.xy) / PeriphRect.zw, 0.0);
     }
 
-    const float2 local = (uv - FoveaWindow.xy) / (FoveaWindow.zw - FoveaWindow.xy);
+    const float4 foveaWindow = rightEye ? FoveaWindowR : FoveaWindowL;
+    const float2 local = (uv - foveaWindow.xy) / (foveaWindow.zw - foveaWindow.xy);
     float weight = 0.0;
     if (local.x >= 0.0 && local.y >= 0.0 && local.x <= 1.0 && local.y <= 1.0) {
         const float edge = min(min(local.x, 1.0 - local.x), min(local.y, 1.0 - local.y));
