@@ -31,6 +31,19 @@ def apply(root, source):
     ngx_depth_browser.set_active(browser_active);
     if (browser_active) ngx_depth_browser.install();
 """, "D3D12Component.cpp")
+    new_dx = only_once(new_dx,
+        '                                    recorded = compositor.record_native(device, commands.cmd_list.Get(),',
+        '''                                    // Source role comes from the SAME immutable
+                                    // fovea/periphery packet as the actual compositor.
+                                    // Expected output sizes are NOT the large allocated
+                                    // Native color texture sizes.
+                                    uevr::duoview::ngx::candidates().set_expected(
+                                        packet_frame->config.layout.fovea.width,
+                                        packet_frame->config.layout.fovea.height,
+                                        packet_frame->config.layout.periphery.width,
+                                        packet_frame->config.layout.periphery.height);
+                                    recorded = compositor.record_native(device, commands.cmd_list.Get(),''',
+        "D3D12Component.cpp")
     new_vr = only_once(old_vr, '#include "VR.hpp"\n#include <cstring>',
         '#include "VR.hpp"\n#include <cstring>\n#include "vr/DuoViewNgxManualDepth.hpp"',
         "VR.cpp")
@@ -42,6 +55,15 @@ def apply(root, source):
                     ImGui::TextWrapped("Native NGX-SR depth sources are now OBSERVED and can be manually pinned. This browser does not yet copy or sample the depth pixels. Distance sharpening still uses fixed strength until matching the producing fovea is proven.");
                     const auto found=uevr::duoview::ngx::candidates().browse();
                     const auto pin=uevr::duoview::ngx::candidates().selected();
+                    const auto geometry=uevr::duoview::ngx::candidates().expected();
+                    const auto resolved=uevr::duoview::ngx::candidates().choose();
+                    ImGui::Text("Expected from frozen packet: Fovea %ux%u / Periphery %ux%u",
+                        geometry[0],geometry[1],geometry[2],geometry[3]);
+                    ImGui::Text("Depth selection: %s%s",
+                        resolved.source[0]?(resolved.manual?"MANUALLY PINNED":
+                            "AUTO: UNIQUE EXACT FOVEA OUTPUT"):(resolved.ambiguous?
+                            "AMBIGUOUS: manually choose one":"NO EXACT MATCH: fixed sharpening"),
+                        resolved.source[0]?" (depth pixels NOT yet copied)":"");
                     ImGui::Text("Observed candidates: %zu; configured fovea UE view: %d",
                         found.size(),m_duo_fovea_view->value());
                     if (ImGui::Button("Clear selected NGX depth source"))
