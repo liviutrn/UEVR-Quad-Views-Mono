@@ -412,21 +412,40 @@ public:
     UINT64 timing_frequency() const { return frequency_; }
 private:
     void ensure_srvs(ID3D12Device* device, ID3D12Resource* first,
-                     ID3D12Resource* second, DXGI_FORMAT format) {
-        if (srv_descriptors_valid_ && srv_first_reference_.Get()==first &&
-            srv_second_reference_.Get()==second && srv_cached_format_==format) return;
+                     ID3D12Resource* second, DXGI_FORMAT format,
+                     ID3D12Resource* depth) {
+        const bool colors_match=srv_descriptors_valid_ &&
+            srv_first_reference_.Get()==first &&
+            srv_second_reference_.Get()==second && srv_cached_format_==format;
+        const bool depth_match=depth_srv_valid_ &&
+            srv_depth_reference_.Get()==depth;
+        if(colors_match && depth_match)return;
         D3D12_SHADER_RESOURCE_VIEW_DESC view{};
         view.Format=format;
         view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;
         view.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         view.Texture2D.MipLevels=1;
         auto cpu=srv_cpu_start_;
-        device->CreateShaderResourceView(first,&view,cpu);
-        cpu.ptr+=srv_descriptor_increment_;
-        device->CreateShaderResourceView(second,&view,cpu);
-        srv_first_reference_=first; srv_second_reference_=second;
-        srv_cached_format_=format; srv_descriptors_valid_=true;
-        ++srv_descriptor_refresh_count_;
+        if(!colors_match) {
+            device->CreateShaderResourceView(first,&view,cpu);
+            cpu.ptr+=srv_descriptor_increment_;
+            device->CreateShaderResourceView(second,&view,cpu);
+            srv_first_reference_=first; srv_second_reference_=second;
+            srv_cached_format_=format; srv_descriptors_valid_=true;
+            ++srv_descriptor_refresh_count_;
+        }
+        if(!depth_match) {
+            cpu=srv_cpu_start_;
+            cpu.ptr+=srv_descriptor_increment_*2;
+            D3D12_SHADER_RESOURCE_VIEW_DESC dv{};
+            dv.Format=DXGI_FORMAT_R32_FLOAT;
+            dv.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;
+            dv.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            dv.Texture2D.MipLevels=1;
+            device->CreateShaderResourceView(depth,&dv,cpu);
+            srv_depth_reference_=depth;
+            depth_srv_valid_=true;
+        }
     }
     void update_timing(bool timed, bool direct_xr) {
         if (!timed || (timing_pending_ && pending_direct_xr_!=direct_xr)) {
