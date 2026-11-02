@@ -217,15 +217,52 @@ public:
             3u | (srgb_ ? 0u : 4u) | // larger radius, edge protection, SDR conversion
                 (frame.config.settings.sharp_periphery ? 8u : 0u) // v207 Catmull-Rom periphery
         };
-        ensure_srvs(device,fovea,periphery,sampling_format);
+        // Captured on the producing NGX command list; never retain game Depth.
+        // Require the same frozen producer key, selected NGX SR feature and queue.
+        std::shared_ptr<uevr::duoview::ngx::DepthSnapshot> depth{};
+        const float clip_m=frame.projection[14]*0.01f; // Unreal near in centimeters.
+        const auto pick=uevr::duoview::ngx::candidates().choose();
+        if((frame.config.settings.distance_sharpen_enabled ||
+            frame.config.settings.depth_preview_mode!=0u) &&
+            std::isfinite(clip_m) && clip_m>=0.001f && clip_m<=2.f &&
+            pick.exact && pick.source[0]) {
+            depth=uevr::duoview::ngx::depth_snapshots().find(
+                device,source_queue,frame.config.key,pick.source[0],
+                layout.fovea.width,layout.fovea.height);
+        }
+        if(depth && depth->texture) {
+            constants.depth_tex_size[0]=depth->tex_w;
+            constants.depth_tex_size[1]=depth->tex_h;
+            constants.depth_base[0]=depth->base_x;
+            constants.depth_base[1]=depth->base_y;
+            constants.depth_active_size[0]=depth->input_w;
+            constants.depth_active_size[1]=depth->input_h;
+            constants.depth_near_strength=frame.config.settings.sharpen_near_strength;
+            constants.depth_far_strength=frame.config.settings.sharpen_far_strength;
+            constants.depth_near_m=frame.config.settings.sharpen_near_m;
+            constants.depth_far_m=frame.config.settings.sharpen_far_m;
+            constants.depth_nearclip_m=clip_m;
+            constants.depth_flags=1u |
+                (frame.config.settings.distance_sharpen_enabled?2u:0u) |
+                (frame.config.settings.sharpen_distance_smooth?4u:0u) |
+                (frame.config.settings.depth_reversed_z?8u:0u) |
+                ((frame.config.settings.depth_preview_mode&3u)<<4);
+        }
+        ensure_srvs(device,fovea,periphery,sampling_format,
+                    depth ? depth->texture.Get() : nullptr);
         // GPU lifetime remains bound to the exact retired OpenXR command slot,
         // never to whichever engine packet happens to arrive next.
         primary_reference_=primary; secondary_reference_=secondary;
         packet_lifetime_=std::move(packet_lifetime);
+        depth_reference_=std::move(depth); // held by exact fenced XR command slot
         const bool timed=frequency && frequency==frequency_ && queries_ && timestamps_;
         update_timing(timed,direct_xr);
         transition(cmd,fovea,fovea_state,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         transition(cmd,periphery,peripheral_state,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        if(depth_reference_ && depth_reference_->texture)
+            transition(cmd,depth_reference_->texture.Get(),
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         recorded_commands_=true;
         if (timed) cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);
         ID3D12DescriptorHeap* heaps[]{srv_.Get()};
@@ -269,6 +306,10 @@ public:
         }
         transition(cmd,fovea,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,fovea_state);
         transition(cmd,periphery,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,peripheral_state);
+        if(depth_reference_ && depth_reference_->texture)
+            transition(cmd,depth_reference_->texture.Get(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         const bool copied=direct_xr ||
             copy_composite_to_stereo(cmd,device,output_.Get(),destination,
                 D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET);
