@@ -85,3 +85,12 @@ Started 2 Nov 2026 02:00 (Claude, overnight). Base: claude/triview-stage1-fixes-
 - [log-verified] Gaze is sampled 2-3 times per engine frame (frame key changes mid-frame); S5 makes the packet use
   the windows the projection hook applied, so render and composite agree.
 - Open: headset verdict on S5/S6 picture (periphery trembling? eye-tracking shake?).
+
+## PARKED (2 Nov 2026, 14:42, Liviu): Tri-View stopped - no usable result.
+- Last headset report (S6-11): periphery still trembles with eye tracking on and off, mostly the third view.
+- Proven by then: placement (own target at 0,0), camera of all three views identical per frame (0.02 deg),
+  still-frame alignment ~0.2 deg, steady pacing (~40 fps), automatic Native Fix restart, gaze stabilisation.
+- Unresolved: temporal trembling of the periphery render. Leading untested lead: the game's temporal
+  processing for the extra view (DLSS / TAA / TSR / motion blur history), or a DLSS add-on (Cheeky foveated
+  DLSS NR) treating view 2 wrongly. Quick checks never run: add-on removed, upscaler off, motion blur off.
+- Latest code: branch claude/triview-s3-gaze-20261102 (S6 = f2ff31e, run 41442278608, artifact Tri-View-S6-11).
