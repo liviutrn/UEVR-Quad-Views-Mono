@@ -21,6 +21,7 @@ namespace uevr::duoview::ngx {
 using Microsoft::WRL::ComPtr;
 struct DepthSnapshot {
     ComPtr<ID3D12Resource> texture;
+    ComPtr<ID3D12Resource> source_reference; // source must survive GPU copy until producer fence
     FrameKey key{};
     uintptr_t feature{};
     uint32_t out_w{}, out_h{}, tex_w{}, tex_h{}, input_w{}, input_h{};
@@ -81,7 +82,6 @@ public:
         if(desc.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
            desc.DepthOrArraySize!=1 || desc.MipLevels!=1 ||
            desc.SampleDesc.Count!=1 || !depth_format(desc.Format) ||
-           (desc.Flags&D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)!=0 ||
            uint64_t(c.depth_x)+c.render_width>desc.Width ||
            uint64_t(c.depth_y)+c.render_height>desc.Height) {++skips_;return;}
         const bool full=(desc.Flags&D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)!=0;
@@ -129,6 +129,7 @@ public:
         cmd->CopyTextureRegion(&to,0,0,0,&from,full?nullptr:&crop);
         transition(cmd,slot->texture.Get(),D3D12_RESOURCE_STATE_COPY_DEST,read);
         transition(cmd,depth,D3D12_RESOURCE_STATE_COPY_SOURCE,read);
+        slot->source_reference=depth; // producer lifetime, never sample this borrowed input
         slot->key=key;slot->feature=c.feature;
         slot->out_w=c.output_width;slot->out_h=c.output_height;
         slot->tex_w=w;slot->tex_h=h;slot->input_w=c.render_width;slot->input_h=c.render_height;
