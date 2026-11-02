@@ -1,6 +1,6 @@
 # Copy of the v207 workflow (duoview-joey-stage234.yml) plus Tri-View Stage 1 (rendering method 7).
 name: Tri-View (v207 + Native Fix + own periphery target, rendering method 7)
-run-name: Tri-View S5 (${{ github.run_number }})
+run-name: Tri-View S6 diag (${{ github.run_number }})
 on:
   push:
     branches:
@@ -218,7 +218,7 @@ jobs:
           Copy-Item evidence/duoview-stage234-hashes.json package/
           Copy-Item evidence/triview-stage1-hashes.json package/
           @'
-          TRI-VIEW (S5) - EXPERIMENTAL. Compiled in GitHub Actions only. NOT tested in a headset yet.
+          TRI-VIEW (S6, diagnostic logging) - EXPERIMENTAL. Compiled in GitHub Actions only. NOT tested in a headset yet.
           Built on DuoView Mono v207 (Joey Hodge UEVR 5ac7edc + DuoView patches). Modes 0-6 are unchanged.
 
           Rendering method 7, "Tri-View (Experimental)". STALKER 2, DX12, OpenXR only.
@@ -231,6 +231,7 @@ jobs:
           swimming); entering Tri-View restarts Native Fix by itself (no Native Stereo detour needed).
           NEW in S5: eye-tracked windows use DuoView's stabilisation (no more shaking); the compositor uses
           exactly the window each eye was rendered with.
+          S6: same picture as S5, plus detailed [TriDiag] log lines (one frame per second) about every camera step.
           Menu (Rendering Method > Tri-View - settings and status): Eye-tracked fovea on/off, Fovea size.
 
           TEST (no need to describe the picture):
@@ -245,16 +246,16 @@ jobs:
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="Tri-View-S5-${{ github.run_number }}.zip"
+          $zip="Tri-View-S6-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: Tri-View-S5-${{ github.run_number }}
+          name: Tri-View-S6-${{ github.run_number }}
           path: |
-            Tri-View-S5-*.zip
-            Tri-View-S5-*.zip.sha256
+            Tri-View-S6-*.zip
+            Tri-View-S6-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance

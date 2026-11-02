@@ -5,6 +5,7 @@
 // View 2    = one centre camera covering the union of both eye frusta (the periphery).
 // Assumes parallel eye views (true for PSVR2); the menu reports the measured eye cant.
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -155,3 +156,24 @@ inline EyeMap periphery_map(const Layout& l, int eye) {
 }
 
 } // namespace uevr::triview
+
+// Tri-View diagnostics (S6, log only): one engine frame per second is logged step by step
+// ([TriDiag] lines), and the periphery-vs-left-eye camera difference is measured every frame.
+namespace uevr::triview::diag {
+inline std::atomic<bool> armed{false};
+inline std::atomic<uint64_t> frame{0};
+inline uint64_t armed_at_ms{};                 // game thread
+inline double rot_diff_max{}, rot_diff_sum{};  // game thread, degrees, since the last report
+inline uint64_t rot_diff_count{};
+inline float eye_rotation[2][9]{};             // eye view rotation (3x3) as the engine received it
+inline bool eye_rotation_valid[2]{};
+inline uint64_t eye_rotation_frame{};
+inline int eye_views_seen{};
+// Angle between two 3x3 rotation matrices (row-major arrays), degrees.
+inline double angle_between(const float* a, const float* b) {
+    double trace = 0;
+    for (int i = 0; i < 3; ++i) for (int k = 0; k < 3; ++k) trace += double(a[i * 3 + k]) * double(b[i * 3 + k]);
+    const double c = std::clamp((trace - 1.0) * 0.5, -1.0, 1.0);
+    return std::acos(c) * 57.29577951308232;
+}
+} // namespace uevr::triview::diag

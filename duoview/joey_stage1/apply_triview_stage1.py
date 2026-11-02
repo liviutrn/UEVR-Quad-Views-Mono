@@ -141,6 +141,34 @@ TRIVIEW_CTOR = r'''    // Tri-View ID7 (S4): test 1 capture showed the engine bu
             current.bounds[0] == 0 && current.bounds[1] == 0 &&
             current.bounds[2] == static_cast<int32_t>(layout->periphery_width) &&
             current.bounds[3] == static_cast<int32_t>(layout->periphery_height);
+        // S6 diagnostics: what the engine handed to the FSceneView constructor for every view.
+        namespace dg = uevr::triview::diag;
+        const auto conversion_inverse = glm::inverse(glm::mat4{0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1});
+        const glm::mat4 engine_rotation{init_options_ue5->view_rotation_matrix};
+        const auto engine_euler = utility::math::ue_euler_from_rotation_matrix(glm::inverse(conversion_inverse * engine_rotation));
+        if (dg::eye_rotation_frame != g_frame_count) {
+            dg::eye_rotation_frame = g_frame_count;
+            dg::eye_views_seen = 0;
+            dg::eye_rotation_valid[0] = dg::eye_rotation_valid[1] = false;
+        }
+        const bool is_eye = layout.has_value() && current.bounds[0] == 0 && current.bounds[1] == 0 &&
+            current.bounds[2] == static_cast<int32_t>(layout->fovea_width) &&
+            current.bounds[3] == static_cast<int32_t>(layout->fovea_height);
+        if (is_eye && dg::eye_views_seen < 2) {
+            auto* m = dg::eye_rotation[dg::eye_views_seen];
+            for (int i = 0; i < 3; ++i) for (int k = 0; k < 3; ++k) m[i * 3 + k] = engine_rotation[i][k];
+            dg::eye_rotation_valid[dg::eye_views_seen] = true;
+            ++dg::eye_views_seen;
+        }
+        if (dg::armed.load()) {
+            const auto* pm = reinterpret_cast<const double*>(&init_options_ue5->projection_matrix);
+            const auto* org = reinterpret_cast<const double*>(&init_options_ue5->view_origin);
+            SPDLOG_INFO("[TriDiag] ctor {} rect {}x{} at {},{} pass {} engine rot p {:.3f} y {:.3f} r {:.3f} origin {:.2f} {:.2f} {:.2f} proj m00 {:.5f} m20 {:.5f} m11 {:.5f} m21 {:.5f} family_target_main {}",
+                is_periphery ? "PERIPHERY" : is_eye ? "eye" : "other", current.bounds[2] - current.bounds[0],
+                current.bounds[3] - current.bounds[1], current.bounds[0], current.bounds[1], init_options->get_stereo_pass(),
+                engine_euler.x, engine_euler.y, engine_euler.z, org[0], org[1], org[2], pm[0], pm[8], pm[5], pm[9],
+                family != nullptr && rtm != nullptr && family->get_render_target() == rtm->get_view_family_render_target());
+        }
         double rotation[3]{}, position[3]{};
         if (is_periphery && vr->triview_centre_pose(rotation, position)) {
             const auto* before = reinterpret_cast<const double*>(&init_options_ue5->projection_matrix);
@@ -156,7 +184,27 @@ TRIVIEW_CTOR = r'''    // Tri-View ID7 (S4): test 1 capture showed the engine bu
             const glm::vec3 euler{static_cast<float>(rotation[0]), static_cast<float>(rotation[1]), static_cast<float>(rotation[2])};
             auto projection = vr->get_projection_matrix(VRRuntime::Eye::LEFT);
             uevr::triview::apply_periphery_projection(projection, *layout);
-            init_options_ue5->view_rotation_matrix = conversion * utility::math::ue_inverse_rotation_matrix(euler);
+            const glm::mat4 written_rotation = conversion * utility::math::ue_inverse_rotation_matrix(euler);
+            if (dg::eye_rotation_valid[0]) {
+                float written[9]{};
+                for (int i = 0; i < 3; ++i) for (int k = 0; k < 3; ++k) written[i * 3 + k] = written_rotation[i][k];
+                const double diff_eye0 = dg::angle_between(written, dg::eye_rotation[0]);
+                const double diff_engine = [&] {
+                    float engine[9]{};
+                    for (int i = 0; i < 3; ++i) for (int k = 0; k < 3; ++k) engine[i * 3 + k] = engine_rotation[i][k];
+                    return dg::angle_between(engine, dg::eye_rotation[0]);
+                }();
+                dg::rot_diff_max = (std::max)(dg::rot_diff_max, diff_eye0);
+                dg::rot_diff_sum += diff_eye0;
+                ++dg::rot_diff_count;
+                if (dg::armed.load()) {
+                    SPDLOG_INFO("[TriDiag] ctor PERIPHERY written rot p {:.3f} y {:.3f} r {:.3f}: differs from left eye by {:.4f} deg; the engine's own view-2 rotation differed by {:.4f} deg",
+                        euler.x, euler.y, euler.z, diff_eye0, diff_engine);
+                }
+            } else if (dg::armed.load()) {
+                SPDLOG_INFO("[TriDiag] ctor PERIPHERY: no left-eye view seen earlier in this engine frame");
+            }
+            init_options_ue5->view_rotation_matrix = written_rotation;
             init_options_ue5->projection_matrix = projection;
             auto* const origin = reinterpret_cast<double*>(&init_options_ue5->view_origin);
             origin[0] = position[0]; origin[1] = position[1]; origin[2] = position[2];
@@ -165,6 +213,21 @@ TRIVIEW_CTOR = r'''    // Tri-View ID7 (S4): test 1 capture showed the engine bu
             SPDLOG_WARNING_EVERY_N_SEC(2, "[TriView][ctor] view 2 found but this frame's eye poses are missing; engine camera kept");
         }
     }
+
+'''
+
+TRIVIEW_DIAG_HELPERS = r'''// ---- Tri-View S6 diagnostics helpers ([TriDiag] log lines, one armed engine frame per second) ----
+namespace {
+bool triview_diag_on() { return uevr::triview::diag::armed.load(std::memory_order_relaxed); }
+// UE5 FMinimalViewInfo starts with FVector Location (3 doubles) and FRotator Rotation (pitch, yaw, roll doubles).
+void triview_diag_view_info(const char* stage, const void* view_info, uintptr_t extra) {
+    if (!triview_diag_on() || view_info == nullptr) return;
+    double v[6]{};
+    if (!is_readable_process_range(reinterpret_cast<uintptr_t>(view_info), sizeof(v))) return;
+    std::memcpy(v, view_info, sizeof(v));
+    SPDLOG_INFO("[TriDiag] {} ({:x}) loc {:.2f} {:.2f} {:.2f} rot p {:.3f} y {:.3f} r {:.3f}", stage, extra, v[0], v[1], v[2], v[3], v[4], v[5]);
+}
+} // namespace
 
 '''
 
@@ -565,6 +628,20 @@ BACKEND = {
    '        vr->triview_third_view_enabled() && g_hook->m_has_double_precision && vr->triview_layout().has_value()) {\n'
    '        // Tri-View: view 2 = centre periphery, built by the engine exactly like the two eyes, once its\n'
    '        // own render target exists (created on demand, same lifetime as Joey\'s capture target).\n'
+   '        {\n'
+   '            namespace dg = uevr::triview::diag;\n'
+   '            const auto now_ms = steady_clock_milliseconds();\n'
+   '            if (dg::armed.load() && now_ms - dg::armed_at_ms > 500) { dg::armed.store(false); } // frame never finished\n'
+   '            if (!dg::armed.load() && now_ms - dg::armed_at_ms >= 1000) {\n'
+   '                dg::armed_at_ms = now_ms;\n'
+   '                SPDLOG_INFO("[TriDiag] ===== frame {} engine {} ===== periphery vs left-eye camera since last: max {:.3f} deg, mean {:.3f} deg over {} frames",\n'
+   '                    dg::frame.fetch_add(1) + 1, g_frame_count, dg::rot_diff_max,\n'
+   '                    dg::rot_diff_count ? dg::rot_diff_sum / static_cast<double>(dg::rot_diff_count) : 0.0, dg::rot_diff_count);\n'
+   '                dg::rot_diff_max = dg::rot_diff_sum = 0.0;\n'
+   '                dg::rot_diff_count = 0;\n'
+   '                dg::armed.store(true);\n'
+   '            }\n'
+   '        }\n'
    '        auto* const triview_rtm = g_hook->get_render_target_manager();\n'
    '        if (triview_rtm != nullptr && vr->triview_fresh_start_due()) {\n'
    '            // Test 1: switching DuoView ID6 -> Tri-View gave a black picture; the Native Stereo + Fix detour\n'
@@ -576,6 +653,7 @@ BACKEND = {
    '        if (triview_rtm != nullptr && triview_rtm->request_triview_target(\n'
    '                static_cast<uint32_t>(vr->get_hmd_width()), static_cast<uint32_t>(vr->get_hmd_height())) != nullptr) {\n'
    '            vr->note_triview_views_demanded();\n'
+   '            if (uevr::triview::diag::armed.load()) { SPDLOG_INFO("[TriDiag] GetDesiredNumberOfViews -> 3"); }\n'
    '            return 3;\n'
    '        }\n'
    '        SPDLOG_INFO_EVERY_N_SEC(2, "[TriView] Waiting for the periphery render target ({}); eyes only", vr->m_triview_target_status.load());\n'
@@ -595,6 +673,7 @@ BACKEND = {
    '        *y = 0;\n'
    '        *w = layout ? layout->periphery_width : VR::get()->get_hmd_width() / 2;\n'
    '        *h = layout ? layout->periphery_height : VR::get()->get_hmd_height() / 2;\n'
+   '        if (uevr::triview::diag::armed.load()) { SPDLOG_INFO("[TriDiag] AdjustViewRect index 2 -> {}x{} at 0,0", *w, *h); }\n'
    '        return;\n'
    '    }\n\n'
    '    static bool index_starts_from_one = true;\n    const bool medium_one_based_eye_pass = medium_is_current_game();'),
@@ -606,6 +685,7 @@ BACKEND = {
    '            *y = 0;\n'
    '            *w = layout->fovea_width;\n'
    '            *h = layout->fovea_height;\n'
+   '            if (uevr::triview::diag::armed.load()) { SPDLOG_INFO("[TriDiag] AdjustViewRect index {} -> {}x{} at 0,0", index, *w, *h); }\n'
    '            return;\n'
    '        }\n'
    '    }\n'
@@ -613,6 +693,12 @@ BACKEND = {
   # calculate_stereo_view_offset: index 2 = centre camera, before the legacy statics and Lua callbacks.
   ('    auto vr = VR::get();\n    if (vr->is_duoview_renderer_active() && g_hook->m_has_double_precision && view_index == 1) {',
    '    auto vr = VR::get();\n'
+   '    if (uevr::triview::diag::armed.load() && g_hook->m_has_double_precision && view_rotation != nullptr && view_location != nullptr) {\n'
+   '        const auto* r = reinterpret_cast<const Rotator<double>*>(view_rotation);\n'
+   '        const auto* l = reinterpret_cast<const Vector3d*>(view_location);\n'
+   '        SPDLOG_INFO("[TriDiag] StereoViewOffset in  index {} loc {:.2f} {:.2f} {:.2f} rot p {:.3f} y {:.3f} r {:.3f}",\n'
+   '            view_index, l->x, l->y, l->z, r->pitch, r->yaw, r->roll);\n'
+   '    }\n'
    '    if (view_index == 2 && vr->triview_owns_view_index_two()) {\n'
    '        // Tri-View centre camera: midpoint of the two eye poses computed above for this frame,\n'
    '        // left-eye rotation. Never reaches the legacy index-2 heuristics below.\n'
@@ -622,6 +708,12 @@ BACKEND = {
    '            auto* pos = reinterpret_cast<Vector3d*>(view_location);\n'
    '            rot->pitch = rotation[0]; rot->yaw = rotation[1]; rot->roll = rotation[2];\n'
    '            pos->x = position[0]; pos->y = position[1]; pos->z = position[2];\n'
+   '            if (uevr::triview::diag::armed.load()) {\n'
+   '                SPDLOG_INFO("[TriDiag] StereoViewOffset out index 2 (Tri-View centre) loc {:.2f} {:.2f} {:.2f} rot p {:.3f} y {:.3f} r {:.3f}",\n'
+   '                    pos->x, pos->y, pos->z, rot->pitch, rot->yaw, rot->roll);\n'
+   '            }\n'
+   '        } else if (uevr::triview::diag::armed.load()) {\n'
+   '            SPDLOG_INFO("[TriDiag] StereoViewOffset index 2: eye poses of this frame missing, engine camera kept");\n'
    '        }\n'
    '        return;\n'
    '    }\n'
@@ -632,6 +724,10 @@ BACKEND = {
    '            const double rotation[3]{rot_d->pitch, rot_d->yaw, rot_d->roll};\n'
    '            const double position[3]{view_d->x, view_d->y, view_d->z};\n'
    '            vr->triview_note_eye_pose(view_index, rotation, position);\n'
+   '            if (uevr::triview::diag::armed.load()) {\n'
+   '                SPDLOG_INFO("[TriDiag] StereoViewOffset out index {} (true eye {}) loc {:.2f} {:.2f} {:.2f} rot p {:.3f} y {:.3f} r {:.3f}",\n'
+   '                    view_index, true_index, position[0], position[1], position[2], rotation[0], rotation[1], rotation[2]);\n'
+   '            }\n'
    '        }\n'
    '        if (vr->is_duoview_renderer_active() && g_hook->m_has_double_precision && view_index == 0) {'),
   # projection: index 2 = union frustum, before the legacy statics.
@@ -645,6 +741,10 @@ BACKEND = {
    '            matrix = vr->get_projection_matrix(VRRuntime::Eye::LEFT);\n'
    '            if (const auto layout = vr->triview_layout()) {\n'
    '                uevr::triview::apply_periphery_projection(matrix, *layout);\n'
+   '                if (uevr::triview::diag::armed.load()) {\n'
+   '                    SPDLOG_INFO("[TriDiag] StereoProjection index 2 -> m00 {:.5f} m20 {:.5f} m11 {:.5f} m21 {:.5f} m32 {:.4f}",\n'
+   '                        matrix[0][0], matrix[2][0], matrix[1][1], matrix[2][1], matrix[3][2]);\n'
+   '                }\n'
    '            }\n'
    '        } else {\n'
    '            *out = vr->get_projection_matrix(VRRuntime::Eye::LEFT);\n'
@@ -660,10 +760,31 @@ BACKEND = {
    '            if (const auto layout = vr->triview_layout()) {\n'
    '                uevr::triview::apply_fovea_projection(double_matrix, *layout, static_cast<int>(true_index));\n'
    '                vr->triview_note_applied_window(static_cast<int>(true_index), layout->window[true_index != 0 ? 1 : 0]);\n'
+   '                if (uevr::triview::diag::armed.load()) {\n'
+   '                    const auto& w = layout->window[true_index != 0 ? 1 : 0];\n'
+   '                    SPDLOG_INFO("[TriDiag] StereoProjection index {} (true eye {}) -> m00 {:.5f} m20 {:.5f} m11 {:.5f} m21 {:.5f} m32 {:.4f} window u {:.4f}..{:.4f} v {:.4f}..{:.4f}",\n'
+   '                        view_index, true_index, double_matrix[0][0], double_matrix[2][0], double_matrix[1][1], double_matrix[2][1],\n'
+   '                        double_matrix[3][2], w.u0, w.u1, w.v0, w.v1);\n'
+   '                }\n'
    '            }\n'
    '        }\n'
    '        if (duo_fovea || duo_full) {'),
+  # S6 diagnostics: ISceneViewExtension::SetupViewPoint and ULocalPlayer::GetViewPoint in/out.
+  ('void FFakeStereoRenderingHook::setup_viewpoint(ISceneViewExtension* extension, void* player_controller, void* view_info) {\n'
+   '    ZoneScopedN("SetupViewPoint");\n    SPDLOG_INFO_ONCE("Called SetupViewPoint for the first time");\n',
+   'void FFakeStereoRenderingHook::setup_viewpoint(ISceneViewExtension* extension, void* player_controller, void* view_info) {\n'
+   '    ZoneScopedN("SetupViewPoint");\n    SPDLOG_INFO_ONCE("Called SetupViewPoint for the first time");\n'
+   '    triview_diag_view_info("ext.SetupViewPoint in", view_info, reinterpret_cast<uintptr_t>(extension));\n'
+   '    utility::ScopeGuard triview_diag_viewpoint_out{[&]() {\n'
+   '        triview_diag_view_info("ext.SetupViewPoint out", view_info, reinterpret_cast<uintptr_t>(extension));\n'
+   '    }};\n'),
+  ('    g_hook->m_localplayer_get_viewpoint_hook.call<void>(localplayer, view_info, pass);\n}',
+   '    triview_diag_view_info("LocalPlayer.GetViewPoint in", view_info, reinterpret_cast<uintptr_t>(pass));\n'
+   '    g_hook->m_localplayer_get_viewpoint_hook.call<void>(localplayer, view_info, pass);\n'
+   '    triview_diag_view_info("LocalPlayer.GetViewPoint out", view_info, reinterpret_cast<uintptr_t>(pass));\n}'),
   # FSceneView constructor: view 2 gets the centre camera + union projection written into its init options.
+  ('sdk::FSceneView* FFakeStereoRenderingHook::sceneview_constructor(sdk::FSceneView* view, sdk::FSceneViewInitOptions* init_options, void* a3, void* a4) {',
+   TRIVIEW_DIAG_HELPERS + 'sdk::FSceneView* FFakeStereoRenderingHook::sceneview_constructor(sdk::FSceneView* view, sdk::FSceneViewInitOptions* init_options, void* a3, void* a4) {'),
   ('    if (vr->is_splitscreen_compatibility_enabled() ||\n        vr->is_sceneview_compatibility_enabled() ||\n        dune_manual_custom_present_pose) {\n        int32_t w = vr->get_hmd_width();',
    TRIVIEW_CTOR + '    if (vr->is_splitscreen_compatibility_enabled() ||\n        vr->is_sceneview_compatibility_enabled() ||\n        dune_manual_custom_present_pose) {\n        int32_t w = vr->get_hmd_width();'),
   # BeginRenderingViewFamily: hide view 2 from every existing Native Fix path.
@@ -759,6 +880,11 @@ BACKEND = {
    '            SPDLOG_INFO_ONCE("[TriView] Rendering the centre periphery into its own target {:x} ({}x{}, rect {}x{} at 0,0), capture generation {}, FrameNumber +0x{:x}={}",\n'
    '                reinterpret_cast<uintptr_t>(target->render_target), target->width, target->height,\n'
    '                layout->periphery_width, layout->periphery_height, target->generation, frame_offset, frame_before);\n'
+   '            if (uevr::triview::diag::armed.load()) {\n'
+   '                SPDLOG_INFO("[TriDiag] third render: view {:x} into target {:x}, FrameNumber before {} skip_decrement {}",\n'
+   '                    reinterpret_cast<uintptr_t>(triview_third_view), reinterpret_cast<uintptr_t>(target->render_target),\n'
+   '                    frame_before, triview_skip_decrement);\n'
+   '            }\n'
    '            view_family->set_render_target(target->render_target);\n'
    '            views.data[0] = triview_third_view;\n'
    '            views.count = 1;\n'
@@ -783,6 +909,14 @@ BACKEND = {
    '                    if (const auto applied = vr->triview_applied_window(eye)) { rendered_layout.window[eye] = *applied; }\n'
    '                }\n'
    '                packet->triview = uevr::triview::PacketLayout{rendered_layout, true, triview_rendered};\n'
+   '                if (uevr::triview::diag::armed.load()) {\n'
+   '                    const auto& a = rendered_layout.window[0];\n'
+   '                    const auto& b = rendered_layout.window[1];\n'
+   '                    SPDLOG_INFO("[TriDiag] packet engine {} third {} windows L u {:.4f}..{:.4f} v {:.4f}..{:.4f} R u {:.4f}..{:.4f} v {:.4f}..{:.4f} (layout L u {:.4f} R u {:.4f})",\n'
+   '                        g_frame_count, triview_rendered, a.u0, a.u1, a.v0, a.v1, b.u0, b.u1, b.v0, b.v1,\n'
+   '                        layout->window[0].u0, layout->window[1].u0);\n'
+   '                    uevr::triview::diag::armed.store(false);\n'
+   '                }\n'
    '                packet->triview_target = triview_rendered ? triview_used_target : nullptr;\n'
    '                (triview_rendered ? vr->m_triview_third_renders : vr->m_triview_pair_only)\n'
    '                    .fetch_add(1, std::memory_order_relaxed);\n'
@@ -865,6 +999,19 @@ BACKEND = {
    '                            }, std::nullopt, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr);\n'
    '                        (triview_composed ? vr->m_triview_composites : vr->m_triview_composite_rejects)\n'
    '                            .fetch_add(1, std::memory_order_relaxed);\n'
+   '                        {\n'
+   '                            static uint64_t pacing_ms{}, pacing_ok{}, pacing_bad{}, pacing_new{};\n'
+   '                            if (native_stereo_packet != nullptr) { ++pacing_new; }\n'
+   '                            (triview_composed ? pacing_ok : pacing_bad) += 1;\n'
+   '                            const auto now = GetTickCount64();\n'
+   '                            if (pacing_ms == 0) { pacing_ms = now; }\n'
+   '                            if (now - pacing_ms >= 5000) {\n'
+   '                                const double seconds = double(now - pacing_ms) / 1000.0;\n'
+   '                                SPDLOG_INFO("[TriDiag] pacing over {:.1f} s: {:.1f} new engine packets/s, {:.1f} composited/s, {:.1f} XR copies skipped/s",\n'
+   '                                    seconds, pacing_new / seconds, pacing_ok / seconds, pacing_bad / seconds);\n'
+   '                                pacing_ms = now; pacing_ok = pacing_bad = pacing_new = 0;\n'
+   '                            }\n'
+   '                        }\n'
    '                    } else if (native_stereo_packet == nullptr ||'),
   ('                    } else if (vr->is_using_mono()) {\n                        bool recorded = false;\n',
    '                    } else if (vr->is_using_mono()) {\n'
@@ -947,6 +1094,10 @@ std::optional<uevr::triview::Layout> VR::triview_layout() {
         settings.gaze_reacquire_samples = m_duo_reacquire->value();
         const auto centre = m_triview_stability.update(uevr::duoview::FrameKey{1, frame}, get_hmd_width(),
             get_hmd_height(), settings, sample, GetTickCount64());
+        if (uevr::triview::diag::armed.load()) {
+            SPDLOG_INFO("[TriDiag] gaze frame {} sample {} u {:.4f} v {:.4f} -> stabilised centre u {:.4f} v {:.4f}",
+                frame, sample.has_value(), sample ? sample->u : -1.f, sample ? sample->v : -1.f, centre.u, centre.v);
+        }
         if (sample.has_value() || centre.u != .5f || centre.v != .5f) {
             gaze = uevr::triview::GazeTan{left->left + centre.u * (left->right - left->left),
                                           left->top - centre.v * (left->top - left->bottom)};
