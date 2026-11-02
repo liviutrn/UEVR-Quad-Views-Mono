@@ -72,3 +72,16 @@ Started 2 Nov 2026 02:00 (Claude, overnight). Base: claude/triview-stage1-fixes-
   with that swapchain slot -> try_wait failed). Same code path as Joey's Native Stereo; worth measuring there.
 - S5 (d15b518): stabilisation always on (DuoView's lock-until-saccade, guard, pixel snap, hold/reacquire);
   the packet carries the window each eye's projection hook really applied.
+
+## Test 3 (Liviu, 2 Nov 14:30, S6-11 = S5 picture + [TriDiag] logs)
+- [log-verified] Every camera step for views 0/1/2 logged once per second. The engine builds view 2 with exactly
+  the left eye's rotation (0.009 deg) and the eye-midpoint position; written periphery vs left eye: max 0.024 deg
+  over every frame. Projections: eyes m00 1.786 m20 +-0.308 m11 2.367 m21 0.374; periphery = union (0.774/0/1.184/0.187).
+- [log-verified] Game camera (SetupViewPoint) yaw -156.4 vs eye yaw -139.1 = 17.3 deg: the size of test 1's error,
+  so in test 1 view 2 was rendered with the game camera instead of the head (cause of that S3-only failure unknown;
+  S4+ write the camera in the constructor, so it cannot recur).
+- [capture-verified] Periphery vs foveas within ~1 half-res periphery pixel (~0.2 deg) with eye tracking ON (S4: ~2 deg).
+- [log-verified] Pacing steady: ~40 composited/s, 0 skipped except at start/end. Not a frame-rate problem.
+- [log-verified] Gaze is sampled 2-3 times per engine frame (frame key changes mid-frame); S5 makes the packet use
+  the windows the projection hook applied, so render and composite agree.
+- Open: headset verdict on S5/S6 picture (periphery trembling? eye-tracking shake?).
