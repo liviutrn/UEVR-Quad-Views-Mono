@@ -15,9 +15,7 @@ for name,source_code,required in (
     ("Capture",capture,("CopyTextureRegion","D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE",
        "submitted(ID3D12CommandQueue*","fence_->GetCompletedValue()", "slot->key==key",
        "slot->feature==feature","MaxLeases=12")),
-    ("Observer",observer,("depth_snapshots().capture(","depth_snapshots().submitted(",
-        "get_command_queue","install_queue(") if False else
-       ("depth_snapshots().capture(","depth_snapshots().submitted(", "install_queue(")),
+    ("Observer",observer,("depth_snapshots().capture(","depth_snapshots().submitted(", "install_queue(")),
     ("Compositor",compositor,("depth_reference_","candidates().choose()",
         "depth_snapshots().find(","depth_srv_valid_","DepthSnapshot",
         "record_native_gather","sizeof(ShaderConstants) == 168",
@@ -37,9 +35,8 @@ for name,source_code,required in (
         if token not in source_code: raise AssertionError(name+": "+token)
 assert "Future fovea distance sharpening" not in vr
 assert "depth pixels NOT yet copied" not in vr
-assert "0..2" not in shader or True
 # Reusable baseline path and source-view mappings are deliberately still present.
 assert "record_native_gather(" in compositor
 assert "frame.config.settings.fovea_view==0 ? primary : secondary" in compositor
-assert "if (depth_reference_ && depth_reference_->texture)" in compositor
+assert "if(depth_reference_ && depth_reference_->texture)" in compositor
 print("PASS v211: producer capture/submit, owner lifetime, exact source, shader curve, UI wiring")
