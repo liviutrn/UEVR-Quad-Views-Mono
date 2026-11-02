@@ -159,7 +159,9 @@ int main() try {
     for(UINT y=0;y<32;++y) for(UINT x=0;x<32;++x) {
         // Normalized depth endpoints are valid: reversed-Z sky=0,
         // near-plane=1. The middle stays 0.5 for metric-ramp tests.
-        const float raw=x<8?0.f:(x>=24?1.f:.5f);
+        // Actual NGX capture crops the first 16x16 input subrect.
+        // Put both endpoints *inside* that captured input, not in padding.
+        const float raw=x<6?0.f:(x>=11?1.f:.5f);
         std::memcpy(static_cast<uint8_t*>(dp)+y*depth_foot.Footprint.RowPitch+x*sizeof(raw),
                     &raw,sizeof(raw));
     }
@@ -250,7 +252,11 @@ int main() try {
             const auto low=sample(12,16),high=sample(20,16);
             if(low[0]>12 || low[1]>12 || low[2]>12 ||
                high[0]<242 || high[1]<242 || high[2]<242)
-                throw std::runtime_error("Valid depth 0/1 incorrectly shown as magenta");
+                throw std::runtime_error("Valid depth 0/1 output mismatch: lo=("+
+                    std::to_string(low[0])+","+std::to_string(low[1])+","+
+                    std::to_string(low[2])+") hi=("+
+                    std::to_string(high[0])+","+std::to_string(high[1])+","+
+                    std::to_string(high[2])+")");
         }
         return red;
     };
