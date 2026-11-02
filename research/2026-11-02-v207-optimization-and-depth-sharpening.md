@@ -231,3 +231,32 @@ Reviewer did not independently execute Windows/GPU tests.
 but the source-scope test compared Windows backslash keys to slash keys.
 Normalize snapshot keys with Path.as_posix(); no runtime source change.
 Real fxc shader compilation and existing patch checks passed before that failure.
+
+## Deeper Cheeky diagnostics and retained caches (source-read)
+
+R13's `skip_dlss_nr_history(view_id)` only sets `was_enabled=false`
+(`src/dlss_nr.cpp:1507-1510`); `skip_d3d12_history` only invalidates crop history
+(`src/d3d12_backend.cpp:734-737`). These calls do not retire the selected view's
+existing private resources. **estimated:** Changing Both to one source can stop
+new custom processing without immediately returning all previously cached VRAM.
+This is retained cache behavior, not proof of a leak. A future cache-retirement
+change must use the existing submission/lifetime tracking and must not free GPU
+resources or private features still referenced by recorded/submitted work.
+NR stores up to six cached GPU resource sets per view (`dlss_nr.cpp:183-189`),
+plus feature/history state; do not estimate total residency from only one texture.
+
+Existing support data is useful but not a complete per-source execution proof:
+- `view_details[].evaluations` counts processing preparation, before all SR
+  success/fallback paths have completed; Left/Right is the role coordinator label.
+- NR totals are global and NR history statistics describe the latest view.
+- `nr_details.vram_bytes` is the formula for the latest region/working texture
+  set (`dlss_nr.cpp:1343-1345`), not DXGI residency or all cached resource sets.
+- AFW eye counters must not be interpreted as ordinary DuoView source counters.
+Do not claim exact successful SR/NR evaluations per game frame from those fields
+alone. Use them to inspect settings, dimensions and likely source selection;
+add per-source instrumentation if exact successful-call proof is required.
+
+Runtime export names `CheekyRuntime_Snapshot` / `CheekyUEVR_Snapshot` expose JSON,
+not depth. The existing UI path is **Cheeky Foveated DLSS > Support > Create
+support ZIP only**. Its ZIP contains diagnostics.json, settings.ini and logs.
+It can establish the installed version and settings relevant to the next stage.
