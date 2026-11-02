@@ -44,3 +44,17 @@ Started 2 Nov 2026 02:00 (Claude, overnight). Base: claude/triview-stage1-fixes-
 - FPS: compare with Native Stereo at the same resolution; tune fovea size / periphery scale.
 - Periphery is mono from the centre camera: near objects (hands) can shift up to ~5 deg at the fovea edge.
   Next quality step = per-eye depth reprojection of the periphery (Liviu's plan: cheap synthetic stereo only there).
+
+## Test 1 (Liviu, 2 Nov 10:40, S3-8) and S4
+- [headset-reported] Black picture when switching DuoView -> Tri-View; worked after Native Stereo + Fix -> Tri-View.
+  Bad flicker; with third view + eye tracking OFF the two foveas were OK; third view ON looked wrong, head lag.
+- [capture-verified, TriView_Capture_1] Placement is right now: periphery only inside its own target's rect,
+  foveas at (0,0) (rest of main/capture = stale pixels from the Native Stereo visit, never sampled).
+- [capture-verified, SIFT] Foveas agree with each other exactly (scale 1.004, offset 188 px = design).
+  The periphery does NOT: it covers eye tangents x -0.75..1.32, y 0.55..-0.92 = a ~92 deg game-FOV camera
+  pointing ~16 deg right / 11 deg down of the head. => UE 5.5 builds view index 2 with the game camera and FOV
+  (only its rect comes from our hook). Same class as Build 40/51 "FOV problem" on 2.10 (their views 2/3).
+- S4 (commit 06d3aa6, CI run 41416704393): FSceneView constructor writes the centre camera (eye-pose midpoint,
+  head rotation) and union projection into view 2's init options, like Joey's SceneView-compat path does for eyes;
+  logs "[TriView][ctor]" with the engine's original values. Entering Tri-View restarts Native Fix once
+  (automatic version of the detour). D3D12 logs which submit path runs if Tri-View is selected but not composited.
