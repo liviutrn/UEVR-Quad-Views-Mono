@@ -20,7 +20,18 @@ if(WIN32)
   target_link_libraries(DuoViewPinnedProductionWarp PRIVATE d3d12 dxgi d3dcompiler)
   add_test(NAME pinned-duoview-dx12-warp COMMAND DuoViewPinnedProductionWarp)
   set_tests_properties(pinned-duoview-dx12-warp PROPERTIES TIMEOUT 60)
+  # v208: shared compose texture + "same image for both eyes" pixel contract.
+  add_executable(DuoViewV208SharedEyeWarp V208SharedEyeWarp.cpp)
+  target_include_directories(DuoViewV208SharedEyeWarp PRIVATE "${JOYEY_BACKEND_DIR}/src/mods/vr")
+  target_link_libraries(DuoViewV208SharedEyeWarp PRIVATE d3d12 dxgi d3dcompiler)
+  add_test(NAME v208-shared-eye-dx12-warp COMMAND DuoViewV208SharedEyeWarp)
+  set_tests_properties(v208-shared-eye-dx12-warp PROPERTIES TIMEOUT 60)
 endif()
+
+# v208: shared OpenXR rectangle covers both eye crops with its exact FOV.
+add_executable(DuoViewV208SharedCrop V208SharedCropTests.cpp)
+target_include_directories(DuoViewV208SharedCrop PRIVATE "${JOYEY_BACKEND_DIR}/src/mods/vr")
+add_test(NAME v208-shared-eye-crop COMMAND DuoViewV208SharedCrop)
 
 find_package(Threads REQUIRED)
 add_executable(DuoViewDeliveryTests DeliveryTests.cpp)
