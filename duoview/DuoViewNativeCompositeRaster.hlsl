@@ -98,10 +98,17 @@ float4 PSNativeMain(VertexOut i) : SV_TARGET0 {
             }
         }
         const uint preview=(DepthFlags>>4u)&3u;
-        if (preview!=0u && validDepth) {
-            const float intensity=preview==1u?depthRaw:depthBlend;
-            fovea.rgb=float3(intensity,intensity,intensity);
-        } else if (pixelStrength>0.0 && DebugViewMode==0 && preview==0u) {
+        if (preview!=0u) {
+            // Magenta means NO valid live depth for this pixel, not a
+            // grayscale scene. Never silently display normal sharpness
+            // when the user explicitly requests a depth preview.
+            if(validDepth) {
+                const float intensity=preview==1u?depthRaw:depthBlend;
+                fovea.rgb=float3(intensity,intensity,intensity);
+            } else {
+                fovea.rgb=float3(1.0,0.0,1.0);
+            }
+        } else if (pixelStrength>0.0 && DebugViewMode==0) {
             fovea.rgb=GlamSharpenNativeFovea(fullUv,fovea.rgb,pixelStrength);
         }
         result = DebugViewMode == 2 ? fovea : lerp(periphery,fovea,weight);
