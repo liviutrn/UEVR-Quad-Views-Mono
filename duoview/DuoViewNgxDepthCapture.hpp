@@ -212,18 +212,22 @@ public:
         if(!enabled_ || !device || device!=device_.Get() ||
            !queue || queue!=producer_.Get() || !fovea || !feature)return {};
         const auto identity=reinterpret_cast<uintptr_t>(fovea);
-        for(auto i=leases_.rbegin();i!=leases_.rend();++i) {
-            auto& slot=*i;
+        std::shared_ptr<DepthSnapshot> latest{};
+        for(const auto& slot:leases_) {
             if(slot->submitted && !slot->pending && !slot->key.generation &&
                !slot->key.frame && slot->output_identity==identity &&
                slot->producer_fence && slot->sequence>last_unkeyed_used_sequence_ &&
-               slot->feature==feature && slot->out_w==w && slot->out_h==h) {
-                last_unkeyed_used_sequence_=slot->sequence;
-                ++output_matches_;
-                return slot;
-            }
+               slot->feature==feature && slot->out_w==w && slot->out_h==h &&
+               (!latest || slot->sequence>latest->sequence))
+                latest=slot;
         }
-        return {};
+        if(latest) {
+            // Pool order is NOT temporal order: lease slots are recycled.
+            // Always choose newest real producer copy, never last vector slot.
+            last_unkeyed_used_sequence_=latest->sequence;
+            ++output_matches_;
+        }
+        return latest;
     }
     void note_used()noexcept {++used_;}
     uint64_t used()const{return used_.load();}

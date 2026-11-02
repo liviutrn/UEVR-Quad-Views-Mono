@@ -239,7 +239,8 @@ jobs:
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
-          v208: FOVEAL SHARPENING RANGE 0..5. Based on v207 4020a44. Default remains 1.0; 0 disables. Shader, depth, rendering, resolutions and GPU allocations unchanged. This build has NO distance-based sharpening.
+          v216: Live optional distance-dependent foveal sharpening from original NGX DLSS-SR depth input. First preference: exact immutable UE producer key on NGX call or matching submitted D3D12 command list; fallback requires exact original NGX Output identity == fused foveal color resource, correct game GPU queue and non-replayed capture. Raw depth preview 1, distance ramp preview 2; missing depth stays explicitly magenta. HEADSET UNVERIFIED, NOT guaranteed every game uses a directly matching NGX Output.
+          v208 foundation: FOVEAL SHARPENING RANGE 0..5, fixed sharpening unchanged when depth is unavailable. Default 1.0, 0 disables.
           DUOVIEW NATIVE STEREO FIX v22 — ORIGINAL PRIMARY + SECONDARY SOURCES, MONO OUTPUT. HEADSET UNVERIFIED.
           Backend: exact Joey 5ac7edc207866569334175e4ed8a7517971547f6 + guarded DuoView modifications.
           Restricted SDK unchanged: joeyhodge/UESDK 3cffbc82429b6165ceec2714f0f0d9ae48f55596.
