@@ -164,10 +164,10 @@ int main() try {
     g.run();
     if (!grab.poll(true) || grab.pending()) throw std::runtime_error("capture did not complete");
     std::ifstream in(zip, std::ios::binary);
-    const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (bytes.size() < 1000 || bytes.find("main_left_half.bmp") == std::string::npos ||
-        bytes.find("main_left fovea [0,0)") == std::string::npos ||
-        bytes.find("nonblack 100.0%") == std::string::npos)
+    const std::string zip_bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (zip_bytes.size() < 1000 || zip_bytes.find("main_left_half.bmp") == std::string::npos ||
+        zip_bytes.find("main_left fovea [0,0)") == std::string::npos ||
+        zip_bytes.find("nonblack 100.0%") == std::string::npos)
         throw std::runtime_error("capture ZIP incomplete");
     std::puts("Tri-View compositor WARP pixel tests passed.");
     return 0;

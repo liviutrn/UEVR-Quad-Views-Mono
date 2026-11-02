@@ -1,10 +1,11 @@
 # Copy of the v207 workflow (duoview-joey-stage234.yml) plus Tri-View Stage 1 (rendering method 7).
-name: Tri-View Stage 1 (v207 + Native Fix third view, rendering method 7)
-run-name: Tri-View Stage 1 (${{ github.run_number }})
+name: Tri-View (v207 + Native Fix + own periphery target, rendering method 7)
+run-name: Tri-View S2 (${{ github.run_number }})
 on:
   push:
     branches:
       - claude/triview-stage1-20261101
+      - claude/triview-s2-20261102
   workflow_dispatch:
 permissions:
   contents: read
@@ -216,39 +217,37 @@ jobs:
           Copy-Item evidence/duoview-stage234-hashes.json package/
           Copy-Item evidence/triview-stage1-hashes.json package/
           @'
-          TRI-VIEW STAGE 1 - EXPERIMENTAL. Compiled in GitHub Actions only. NOT tested in a headset yet.
+          TRI-VIEW (S2) - EXPERIMENTAL. Compiled in GitHub Actions only. NOT tested in a headset yet.
           Built on DuoView Mono v207 (Joey Hodge UEVR 5ac7edc + DuoView patches). Modes 0-6 are unchanged.
 
-          NEW: rendering method 7, "Tri-View (Experimental)". STALKER 2, DX12, OpenXR only.
-          It is Joey's Native Stereo + Native Fix, with two changes:
+          Rendering method 7, "Tri-View (Experimental)". STALKER 2, DX12, OpenXR only.
+          Joey's Native Stereo + Native Fix, plus:
           - each eye renders only its centre half (sharp, real stereo),
           - one extra low-resolution full-view render from between the eyes fills the edges of both eyes.
-          Expected in this stage: close objects (hands, gun) tear or double at the edge of the sharp centre.
-          Not in this stage: eye tracking, FOV fix, DLSS NR. Keep "Pass depth to runtime" OFF.
+          NEW in S2: the edge render has its OWN render target (STALKER 2.10 put it on top of the left eye before).
 
-          SETUP
-          1. Extract this ZIP into a NEW folder. Keep your v207 folder as it is.
-          2. Inject, open the UEVR menu, set Rendering Method to "Tri-View (Experimental)".
-             Native Stereo Fix is switched on automatically for this mode.
-          3. Under Rendering Method open "Tri-View (Stage 1) - settings and status".
-             "Third view" OFF shows only the two sharp centre windows (for diagnosis).
-          4. If the edges stay black with "Third view" ON after a few seconds, send the UEVR log
-             (lines starting with [TriView]) - the third view refuses to run unless it is safe.
+          TEST (no need to describe the picture):
+          1. Extract this ZIP into a NEW folder. Delete old UEVR settings for STALKER 2 if you like.
+          2. Inject, set Rendering Method to "Tri-View (Experimental)" directly (no need to visit other modes).
+          3. Play normally for about 2 minutes (walk and look around).
+          4. Close the game. Send: log.txt and TriView_Capture_1.zip + TriView_Capture_2.zip from
+             %APPDATA%\UnrealVRMod\<game folder> (the same folder as the UEVR log).
+          Optional: say if the picture looked right, and the fps compared to Native Stereo.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','duoview-stage234-hashes.json','triview-stage1-hashes.json','exact-baseline-source.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="Tri-View-Stage1-${{ github.run_number }}.zip"
+          $zip="Tri-View-S2-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: Tri-View-Stage1-${{ github.run_number }}
+          name: Tri-View-S2-${{ github.run_number }}
           path: |
-            Tri-View-Stage1-*.zip
-            Tri-View-Stage1-*.zip.sha256
+            Tri-View-S2-*.zip
+            Tri-View-S2-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance

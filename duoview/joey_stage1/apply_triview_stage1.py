@@ -32,12 +32,282 @@ V207_ADDED = {
     "src/mods/vr/DuoViewMonoCopyD3D12.hpp", "src/mods/vr/DuoViewShaderSource.hpp",
 }
 TRIVIEW_EDITED = {"src/mods/vr/RenderingMethodSetting.hpp"}
-MODULE_FILES = ("TriViewGeometry.hpp", "TriViewD3D12.hpp")
+MODULE_FILES = ("TriViewGeometry.hpp", "TriViewD3D12.hpp", "TriViewCapture.hpp")
 TRIVIEW_ADDED = {"src/mods/vr/" + n for n in MODULE_FILES} | {"src/mods/vr/TriViewShaderSource.hpp"}
 FRONTEND_EDITED = {"UEVR/RenderingModeOptions.cs", "tests/RenderingModes/Program.cs"}
 FRONTEND_GENERATED = {"UEVR/FilteredExecutables.json"}
 
 LABEL = "Tri-View (Experimental)"
+
+TRIVIEW_CAPTURE_IMPL = r'''// Tri-View ID7: automatic GPU capture, twice per session (after 600 and 3600 composited frames), so the
+// physical placement of all three renders and the final image can be checked without headset questions.
+// Writes TriView_Capture_N.zip next to the UEVR log: half-size BMPs of the main target's left half, the
+// capture target, the periphery target and the XR image, plus report.txt with region statistics.
+void D3D12Component::triview_take_capture(d3d12::CommandContext& commands, ID3D12Resource* destination,
+                                          const uevr::triview::PacketLayout& frame, ID3D12Resource* periphery) try {
+    auto& vr = VR::get();
+    const auto taken = vr->m_triview_captures.load(std::memory_order_acquire);
+    const uint64_t due = taken == 0 ? 600 : 3600;
+    if (taken >= 2 || periphery == nullptr || destination == nullptr || commands.fence == nullptr ||
+        vr->m_triview_composites.load(std::memory_order_acquire) + 1 < due) {
+        return;
+    }
+    if (m_triview_capture == nullptr) { m_triview_capture = std::make_unique<uevr::triview::dx12::GpuCapture>(); }
+    if (m_triview_capture->pending()) { return; }
+    const auto& l = frame.layout;
+    const auto dd = destination->GetDesc();
+    const uint32_t eye = static_cast<uint32_t>(dd.Width / 2), tall = dd.Height;
+    const uint32_t w = l.eye_width, h = l.eye_height;
+    using Region = uevr::triview::capture::Region;
+    const auto at = [](uint32_t size, float f) { return static_cast<uint32_t>(std::lround((std::max)(0.f, f) * size)); };
+    std::vector<Region> xr_regions;
+    for (uint32_t e = 0; e < 2; ++e) {
+        const uint32_t base = e * eye;
+        const std::string n = e == 0 ? "L_" : "R_";
+        const uint32_t y0 = at(tall, l.v0 + (l.v1 - l.v0) * .25f), y1 = at(tall, l.v1 - (l.v1 - l.v0) * .25f);
+        xr_regions.push_back({n + "fovea", base + at(eye, l.u0), at(tall, l.v0), base + at(eye, l.u1), at(tall, l.v1)});
+        xr_regions.push_back({n + "outer_edge", base, 0, base + at(eye, .08f), tall});
+        xr_regions.push_back({n + "top_edge", base, 0, base + eye, at(tall, .08f)});
+        xr_regions.push_back({n + "seam_left_inside", base + at(eye, l.u0 + .02f), y0, base + at(eye, l.u0 + .05f), y1});
+        xr_regions.push_back({n + "seam_left_outside", base + at(eye, l.u0 - .05f), y0, base + at(eye, l.u0 - .02f), y1});
+        xr_regions.push_back({n + "seam_right_inside", base + at(eye, l.u1 - .05f), y0, base + at(eye, l.u1 - .02f), y1});
+        xr_regions.push_back({n + "seam_right_outside", base + at(eye, l.u1 + .02f), y0, base + at(eye, l.u1 + .05f), y1});
+    }
+    const std::vector<uevr::triview::dx12::GpuCapture::Source> sources{
+        {"main_left_half", m_game_tex.texture.Get(), w, h,
+            {{"fovea", 0, 0, l.fovea_width, l.fovea_height}, {"right_of_fovea", l.fovea_width, 0, w, l.fovea_height},
+             {"below_fovea", 0, l.fovea_height, w, h}}},
+        {"capture", m_scene_capture_tex.texture.Get(), w, h,
+            {{"fovea", 0, 0, l.fovea_width, l.fovea_height}, {"right_of_fovea", l.fovea_width, 0, w, l.fovea_height},
+             {"below_fovea", 0, l.fovea_height, w, h}}},
+        {"periphery", periphery, w, h,
+            {{"image", 0, 0, l.periphery_width, l.periphery_height}, {"right_of_image", l.periphery_width, 0, w, h},
+             {"below_image", 0, l.periphery_height, l.periphery_width, h}}},
+        {"xr_both_eyes", destination, static_cast<uint32_t>(dd.Width), tall, xr_regions}};
+    char text[2048];
+    std::snprintf(text, sizeof(text),
+        "Tri-View automatic capture %u (build: Tri-View S2, own periphery target)\n"
+        "eye %ux%u, XR image %llux%u, fovea %ux%u, window u %.4f..%.4f v %.4f..%.4f, periphery %ux%u\n"
+        "eye L tans l %.5f r %.5f t %.5f b %.5f | eye R tans l %.5f r %.5f t %.5f b %.5f\n"
+        "periphery union tans l %.5f r %.5f t %.5f b %.5f\n"
+        "map L ax %.6f bx %.6f ay %.6f by %.6f | map R ax %.6f bx %.6f ay %.6f by %.6f\n"
+        "packet third=%d, periphery target status: %s, target builds %llu\n"
+        "engine frames: third %llu, eyes only %llu, third skipped %llu; composites %llu, rejected %llu\n",
+        taken + 1, w, h, static_cast<unsigned long long>(dd.Width), tall, l.fovea_width, l.fovea_height,
+        l.u0, l.u1, l.v0, l.v1, l.periphery_width, l.periphery_height,
+        l.eye[0].left, l.eye[0].right, l.eye[0].top, l.eye[0].bottom, l.eye[1].left, l.eye[1].right, l.eye[1].top, l.eye[1].bottom,
+        l.periphery.left, l.periphery.right, l.periphery.top, l.periphery.bottom,
+        uevr::triview::periphery_map(l, 0).ax, uevr::triview::periphery_map(l, 0).bx, uevr::triview::periphery_map(l, 0).ay,
+        uevr::triview::periphery_map(l, 0).by, uevr::triview::periphery_map(l, 1).ax, uevr::triview::periphery_map(l, 1).bx,
+        uevr::triview::periphery_map(l, 1).ay, uevr::triview::periphery_map(l, 1).by,
+        frame.third ? 1 : 0, vr->m_triview_target_status.load(),
+        static_cast<unsigned long long>(vr->m_triview_target_builds.load()),
+        static_cast<unsigned long long>(vr->m_triview_third_renders.load()),
+        static_cast<unsigned long long>(vr->m_triview_pair_only.load()),
+        static_cast<unsigned long long>(vr->m_triview_third_skipped.load()),
+        static_cast<unsigned long long>(vr->m_triview_composites.load()),
+        static_cast<unsigned long long>(vr->m_triview_composite_rejects.load()));
+    const auto path = Framework::get_persistent_dir() / ("TriView_Capture_" + std::to_string(taken + 1) + ".zip");
+    if (m_triview_capture->record(g_framework->get_d3d12_hook()->get_device(), commands.cmd_list.Get(), sources,
+            commands.fence.Get(), commands.fence_value + 1, path, text)) {
+        vr->m_triview_captures.fetch_add(1, std::memory_order_acq_rel);
+        SPDLOG_INFO("[TriView] Automatic capture {} queued: {}", taken + 1, path.string());
+    } else {
+        vr->m_triview_captures.fetch_add(1, std::memory_order_acq_rel);
+        SPDLOG_WARNING("[TriView] Automatic capture {} could not be recorded", taken + 1);
+    }
+} catch (...) {
+    SPDLOG_WARNING_EVERY_N_SEC(10, "[TriView] Automatic capture failed with an exception");
+}
+
+'''
+
+
+TRIVIEW_TARGET_IMPL = r'''// ---- Tri-View ID7: the centre periphery's own render target ---------------------------------------
+// Built exactly like Joey's STALKER 2 Native Fix capture target (create_scene_capture below): a Kismet
+// render target, kept alive by a passive capture component on Joey's capture actor (no rooting, so it is
+// collected with the world like his), validated through the same +0x110/+0x10/+0x50 chain on the render
+// thread, and given the same display gamma as the viewport. Keyed to Joey's capture generation: a new
+// world or a new capture generation means a new periphery target.
+namespace {
+float triview_target_display_gamma(const sdk::FRenderTarget*) {
+    const auto rtm = g_hook != nullptr ? g_hook->get_render_target_manager() : nullptr;
+    const auto viewport = rtm != nullptr ? rtm->get_viewport() : nullptr;
+    if (viewport != nullptr) {
+        const auto gamma = viewport->get_display_gamma();
+        if (std::isfinite(gamma) && gamma > 0.0f) { return gamma; }
+    }
+    return 2.2f;
+}
+
+// Hooked FRenderTarget vtables, one per original vtable, never freed (a render-thread call may still be
+// reading one while a target retires).
+uintptr_t triview_hooked_vtable_for(uintptr_t original, size_t gamma_index) {
+    static std::mutex mutex;
+    static std::vector<std::pair<uintptr_t, std::array<uintptr_t, 100>*>> tables;
+    std::scoped_lock lock{mutex};
+    for (const auto& [from, table] : tables) {
+        if (from == original || reinterpret_cast<uintptr_t>(table->data()) == original) {
+            return reinterpret_cast<uintptr_t>(table->data());
+        }
+    }
+    auto* table = new std::array<uintptr_t, 100>{};
+    std::memcpy(table->data(), reinterpret_cast<const void*>(original), table->size() * sizeof(uintptr_t));
+    (*table)[gamma_index] = reinterpret_cast<uintptr_t>(&triview_target_display_gamma);
+    tables.emplace_back(original, table);
+    return reinterpret_cast<uintptr_t>(table->data());
+}
+} // namespace
+
+std::shared_ptr<const VRRenderTargetManager_Base::TriViewTargetSnapshot>
+VRRenderTargetManager_Base::request_triview_target(uint32_t width, uint32_t height) {
+    const auto generation = scene_capture_generation.load(std::memory_order_acquire);
+    auto current = triview_target_snapshot.load(std::memory_order_acquire);
+    if (current != nullptr && current->generation == generation && generation != 0 &&
+        current->width == width && current->height == height) {
+        return current;
+    }
+    if (generation == 0 || width == 0 || height == 0 || triview_target_requested.exchange(true, std::memory_order_acq_rel)) {
+        return nullptr;
+    }
+    try {
+        GameThreadWorker::get().enqueue([this, generation, width, height]() {
+            triview_target_requested.store(false, std::memory_order_release);
+            build_triview_target(generation, width, height);
+        });
+    } catch (...) {
+        triview_target_requested.store(false, std::memory_order_release);
+    }
+    return nullptr;
+}
+
+void VRRenderTargetManager_Base::build_triview_target(uint64_t generation, uint32_t width, uint32_t height) try {
+    auto* const vr = VR::get().get();
+    if (generation != scene_capture_generation.load(std::memory_order_acquire)) { return; }
+    if (const auto current = triview_target_snapshot.load(std::memory_order_acquire);
+        current != nullptr && current->generation == generation && current->width == width && current->height == height) {
+        return;
+    }
+    if (triview_target_building == generation || steady_clock_milliseconds() < triview_target_retry_after_ms) { return; }
+    if (!stalker2_uses_validated_ue55_native_fix_capture_layout()) {
+        vr->m_triview_target_status.store("unavailable: not the validated STALKER 2 UE5.5 capture layout");
+        SPDLOG_WARNING_EVERY_N_SEC(5, "[TriView] Periphery target needs Joey's validated STALKER 2 UE5.5 capture layout");
+        return;
+    }
+    if (triview_target_attempts >= 24) {
+        vr->m_triview_target_status.store("gave up after 24 attempts (see log)");
+        SPDLOG_ERROR_EVERY_N_SEC(10, "[TriView] Periphery target creation gave up after {} attempts", triview_target_attempts);
+        return;
+    }
+    if (this->scene_capture_actor == nullptr || !this->scene_capture_actor.valid()) {
+        vr->m_triview_target_status.store("waiting for Joey's capture actor");
+        return;
+    }
+    sdk::UKismetRenderingLibrary* kismet{};
+    if (const auto kismet_class = sdk::UKismetRenderingLibrary::static_class(); kismet_class != nullptr) {
+        kismet = kismet_class->get_class_default_object<sdk::UKismetRenderingLibrary>();
+    }
+    static auto scene_capture_c = sdk::USceneCaptureComponent2D::static_class();
+    auto* const engine = sdk::UGameEngine::get();
+    auto* const world = engine != nullptr ? engine->get_world() : nullptr;
+    if (kismet == nullptr || scene_capture_c == nullptr || world == nullptr) {
+        vr->m_triview_target_status.store("waiting for world / Kismet");
+        return;
+    }
+    ++triview_target_attempts;
+    vr->m_triview_target_builds.fetch_add(1, std::memory_order_relaxed);
+    triview_target_retry_after_ms = steady_clock_milliseconds() + 2000;
+    const float clear_color[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    auto owner = std::make_shared<TriViewTargetOwner>();
+    sdk::UTexture* texture_raw = kismet->create_render_target_2d(world, width, height, 2, clear_color, false);
+    if (texture_raw == nullptr) {
+        vr->m_triview_target_status.store("Kismet could not create the target (retrying)");
+        SPDLOG_ERROR("[TriView] Kismet failed to create the {}x{} periphery target", width, height);
+        return;
+    }
+    owner->texture = texture_raw;
+    const auto plan = uevr::scene_capture::component_plan(false, false, is_ue_5_5_dx_backend());
+    owner->component = static_cast<sdk::USceneCaptureComponent2D*>(
+        this->scene_capture_actor->add_component_by_class(scene_capture_c, plan.deferred_add));
+    if (owner->component == nullptr) {
+        vr->m_triview_target_status.store("could not add the holder component (retrying)");
+        SPDLOG_ERROR("[TriView] Failed to add the periphery holder component to Joey's capture actor");
+        return;
+    }
+    // Passive holder, like Joey's: never captures, only keeps the texture referenced.
+    owner->component->set_texture_target(owner->texture);
+    owner->component->set_visibility(false);
+    if (auto capture_every_frame = scene_capture_c->find_property(L"bCaptureEveryFrame"); capture_every_frame != nullptr) {
+        *capture_every_frame->get_data<bool>(owner->component) = false;
+    }
+    if (auto capture_on_movement = scene_capture_c->find_property(L"bCaptureOnMovement"); capture_on_movement != nullptr) {
+        *capture_on_movement->get_data<bool>(owner->component) = false;
+    }
+    if (plan.finish_after_configuration) {
+        this->scene_capture_actor->finish_add_component(owner->component);
+    }
+    triview_target_building = generation;
+    vr->m_triview_target_status.store("created, waiting for the engine to initialise it");
+    SPDLOG_INFO("[TriView] Created periphery target {:x} ({}x{}) for capture generation {}",
+        reinterpret_cast<uintptr_t>(texture_raw), width, height, generation);
+
+    const auto release_building = [this, generation]() {
+        try {
+            GameThreadWorker::get().enqueue([this, generation]() {
+                if (triview_target_building == generation) { triview_target_building = 0; }
+            });
+        } catch (...) {}
+    };
+    RenderThreadWorker::ConditionalJobFunc job = [this, owner, generation, width, height, release_building]() mutable -> bool {
+        if (generation != scene_capture_generation.load(std::memory_order_acquire)) { return true; }
+        if (!owner->texture.valid()) {
+            SPDLOG_WARNING("[TriView] Periphery texture disappeared before validation; will retry");
+            release_building();
+            return true;
+        }
+        const auto chain = validate_native_fix_texture_chain(owner->texture.get(), width, height,
+            STALKER2_UE55_NATIVE_FIX_TEXTURE_LAYOUT);
+        if (!chain) {
+            SPDLOG_INFO_EVERY_N_SEC(2, "[TriView] Waiting for the periphery target's +0x110/+0x10 texture chain");
+            return false;
+        }
+        const auto gamma_index = sdk::FRenderTarget::get_display_gamma_index();
+        uintptr_t original{};
+        if (!gamma_index.has_value() || *gamma_index >= 100 ||
+            !safe_read_value(reinterpret_cast<uintptr_t>(chain->render_target), original) ||
+            !is_readable_process_range(original, 100 * sizeof(uintptr_t))) {
+            SPDLOG_ERROR("[TriView] Periphery target: FRenderTarget vtable / gamma slot unavailable; not publishing");
+            release_building();
+            return true;
+        }
+        *reinterpret_cast<uintptr_t*>(chain->render_target) = triview_hooked_vtable_for(original, *gamma_index);
+        auto snapshot = std::make_shared<TriViewTargetSnapshot>();
+        snapshot->render_target = chain->render_target;
+        snapshot->native = chain->native_resource;
+        snapshot->generation = generation;
+        snapshot->width = width;
+        snapshot->height = height;
+        snapshot->owner = owner;
+        triview_target_snapshot.store(std::move(snapshot), std::memory_order_release);
+        VR::get()->m_triview_target_status.store("ready");
+        SPDLOG_INFO("[TriView] Periphery target ready: FRenderTarget {:x}, D3D12 {:x}, {}x{}, generation {}",
+            reinterpret_cast<uintptr_t>(chain->render_target), reinterpret_cast<uintptr_t>(chain->native_resource.Get()),
+            width, height, generation);
+        return true;
+    };
+    RenderThreadWorker::ConditionalJobTimeoutFunc on_timeout = [generation, release_building]() {
+        SPDLOG_ERROR("[TriView] Periphery target generation {} did not initialise in time; will retry", generation);
+        release_building();
+    };
+    RenderThreadWorker::get().enqueue_conditional(job, on_timeout, std::chrono::seconds(5));
+} catch (const std::exception& e) {
+    SPDLOG_ERROR("[TriView] Exception while creating the periphery target: {}", e.what());
+} catch (...) {
+    SPDLOG_ERROR("[TriView] Unknown exception while creating the periphery target");
+}
+
+'''
+
 
 BACKEND = {
  # ---- rendering method ID 7 ------------------------------------------------------------------
@@ -85,10 +355,11 @@ BACKEND = {
    '    }\n'
    '    bool is_triview_active() const;\n'
    '    bool triview_third_view_enabled() const { return m_triview_third_view->value(); }\n'
-   '    unsigned triview_debug_mode() const {\n'
-   '        return (m_triview_border->value() ? 1u : 0u) | (m_triview_raw_view->value() ? 2u : 0u);\n'
-   '    }\n'
-   '    int triview_flag_offset() const { return static_cast<int>(std::lround(m_triview_flag_offset->value())); }\n'
+   '    unsigned triview_debug_mode() const { return m_triview_border->value() ? 1u : 0u; }\n'
+   '    // Periphery render-target status for the menu and the capture report (string literals only).\n'
+   '    std::atomic<const char*> m_triview_target_status{"not requested"};\n'
+   '    std::atomic<uint64_t> m_triview_target_builds{}, m_triview_third_skipped{};\n'
+   '    std::atomic<uint32_t> m_triview_captures{};\n'
    '    std::optional<uevr::triview::Layout> triview_layout();\n'
    '    void triview_note_eye_pose(int32_t index, const double* rotation, const double* position);\n'
    '    bool triview_centre_pose(double* rotation, double* position) const;\n'
@@ -108,14 +379,13 @@ BACKEND = {
    '    const ModToggle::Ptr m_triview_third_view{ModToggle::create(generate_name("TriViewThirdView"), true)};\n'
    '    const ModSlider::Ptr m_triview_periphery_scale{ModSlider::create(generate_name("TriViewPeripheryScale"), .25f, 1.f, .5f)};\n'
    '    const ModToggle::Ptr m_triview_border{ModToggle::create(generate_name("TriViewDebugBorder"), false)};\n'
-   '    const ModToggle::Ptr m_triview_raw_view{ModToggle::create(generate_name("TriViewRawView"), false)};\n'
-   '    const ModSlider::Ptr m_triview_flag_offset{ModSlider::create(generate_name("TriViewFlagOffset"), -1.f, 300.f, 200.f)};\n'
+
    '    std::atomic<bool> m_triview_owns_index_two{false};\n'
    '    std::array<std::array<double, 6>, 2> m_triview_eye_pose{}; // game thread only\n'
    '    std::array<bool, 2> m_triview_eye_seen{};\n'),
   ('            *m_duo_sharp_periphery,',
    '            *m_duo_sharp_periphery,\n'
-   '            *m_triview_third_view, *m_triview_periphery_scale, *m_triview_border, *m_triview_raw_view, *m_triview_flag_offset,'),
+   '            *m_triview_third_view, *m_triview_periphery_scale, *m_triview_border,'),
  ],
  "src/mods/VR.cpp": [
   ('bool VR::should_force_native_stereo_fix_same_pass() const {\n    if (is_duoview_renderer_active()) {',
@@ -131,22 +401,24 @@ BACKEND = {
    '    if (!m_stalker2_native_pair_experiment->value()'),
   ('        if (rendering_method_changed && !is_mono_transition_pending() && get_runtime() != nullptr) {',
    '        if (is_triview_selected()) {\n'
-   '            if (ImGui::TreeNode("Tri-View (Stage 1) - settings and status")) {\n'
+   '            if (ImGui::TreeNode("Tri-View - settings and status")) {\n'
    '                ImGui::TextWrapped(is_triview_active()\n'
    '                    ? "Tri-View active: both eyes render their centre half (Native Fix), plus one low-res full-view periphery from the centre camera."\n'
    '                    : "Tri-View inactive (needs STALKER 2, D3D12, OpenXR, no AFR / 2D screen): rendering plain Native Stereo.");\n'
    '                m_triview_third_view->draw("Third view (periphery). OFF = cropped stereo windows only");\n'
    '                m_triview_periphery_scale->draw("Periphery resolution scale");\n'
    '                m_triview_border->draw("Fovea border highlight");\n'
-   '                m_triview_raw_view->draw("Debug: show raw render targets (left eye = whole main target, right eye = capture)");\n'
-   '                m_triview_flag_offset->draw("Experimental: engine flag byte offset (-1 = leave untouched)");\n'
+   '                ImGui::Text("Periphery target: %s (built %llu times)", m_triview_target_status.load(),\n'
+   '                    static_cast<unsigned long long>(m_triview_target_builds.load()));\n'
    '                if (const auto layout = triview_layout()) {\n'
    '                    ImGui::Text("Fovea %ux%u per eye, periphery %ux%u", layout->fovea_width, layout->fovea_height,\n'
    '                        layout->periphery_width, layout->periphery_height);\n'
    '                }\n'
-   '                ImGui::Text("Engine frames: %llu with third view, %llu eyes only",\n'
+   '                ImGui::Text("Engine frames: %llu with third view, %llu eyes only (%llu third views skipped)",\n'
    '                    static_cast<unsigned long long>(m_triview_third_renders.load()),\n'
-   '                    static_cast<unsigned long long>(m_triview_pair_only.load()));\n'
+   '                    static_cast<unsigned long long>(m_triview_pair_only.load()),\n'
+   '                    static_cast<unsigned long long>(m_triview_third_skipped.load()));\n'
+   '                ImGui::Text("Automatic captures written: %u (TriView_Capture_N.zip next to the UEVR log)", m_triview_captures.load());\n'
    '                ImGui::Text("Composited frames: %llu, rejected (Joey copy shown): %llu",\n'
    '                    static_cast<unsigned long long>(m_triview_composites.load()),\n'
    '                    static_cast<unsigned long long>(m_triview_composite_rejects.load()));\n'
@@ -165,7 +437,40 @@ BACKEND = {
    '#include "Stalker2NativePolicy.hpp"\n#include "DuoViewState.hpp"\n#include "TriViewGeometry.hpp"'),
   ('        bool duoview_pose_valid{};',
    '        bool duoview_pose_valid{};\n'
-   '        uevr::triview::PacketLayout triview{}; // Tri-View ID7: layout + whether view 2 was rendered'),
+   '        uevr::triview::PacketLayout triview{}; // Tri-View ID7: layout + whether view 2 was rendered\n'
+   '        // Tri-View ID7: the periphery target view 2 was rendered into (keeps its D3D12 resource alive).\n'
+   '        std::shared_ptr<const VRRenderTargetManager_Base::TriViewTargetSnapshot> triview_target{};'),
+  ('    std::shared_ptr<const SceneCaptureTargetSnapshot> get_scene_capture_target_snapshot() const {\n',
+   '    // Tri-View ID7: the centre periphery gets its own render target, of the same kind as the Native Fix\n'
+   '    // capture (STALKER 2.10 / UE 5.5.4 puts every singleton render at (0,0) of its target). A passive\n'
+   '    // capture component on Joey\'s capture actor keeps the texture alive, so it lives and dies with\n'
+   '    // Joey\'s capture generation and world.\n'
+   '    struct TriViewTargetOwner {\n'
+   '        sdk::UObjectReference<sdk::UTexture> texture{nullptr};\n'
+   '        sdk::UObjectReference<sdk::USceneCaptureComponent2D> component{nullptr};\n'
+   '    };\n'
+   '    struct TriViewTargetSnapshot {\n'
+   '        sdk::FRenderTarget* render_target{};\n'
+   '        Microsoft::WRL::ComPtr<ID3D12Resource> native{};\n'
+   '        uint64_t generation{};          // Joey\'s scene-capture generation it belongs to\n'
+   '        uint32_t width{}, height{};\n'
+   '        std::shared_ptr<TriViewTargetOwner> owner{};\n'
+   '    };\n'
+   '    std::shared_ptr<const TriViewTargetSnapshot> get_triview_target() const {\n'
+   '        return triview_target_snapshot.load(std::memory_order_acquire);\n'
+   '    }\n'
+   '    // Game thread. Returns the published target when it matches Joey\'s current capture generation and\n'
+   '    // the size; otherwise schedules its creation (game-thread worker) and returns nullptr.\n'
+   '    std::shared_ptr<const TriViewTargetSnapshot> request_triview_target(uint32_t width, uint32_t height);\n'
+   '    std::shared_ptr<const SceneCaptureTargetSnapshot> get_scene_capture_target_snapshot() const {\n'),
+  ('    std::atomic<std::shared_ptr<const SceneCaptureTargetSnapshot>> scene_capture_target_snapshot{};\n',
+   '    std::atomic<std::shared_ptr<const SceneCaptureTargetSnapshot>> scene_capture_target_snapshot{};\n'
+   '    void build_triview_target(uint64_t generation, uint32_t width, uint32_t height);\n'
+   '    std::atomic<std::shared_ptr<const TriViewTargetSnapshot>> triview_target_snapshot{};\n'
+   '    std::atomic_bool triview_target_requested{};\n'
+   '    uint64_t triview_target_building{};          // generation being validated (game thread)\n'
+   '    uint64_t triview_target_retry_after_ms{};    // game thread\n'
+   '    uint32_t triview_target_attempts{};          // game thread, capped\n'),
  ],
  # ---- engine side: view count, index-2 hooks, third render -------------------------------------
  "src/mods/vr/FFakeStereoRenderingHook.cpp": [
@@ -176,9 +481,15 @@ BACKEND = {
    '    }\n\n'
    '    if (vr->is_triview_active() && vr->is_hmd_active() && vr->is_native_stereo_fix_enabled() &&\n'
    '        vr->triview_third_view_enabled() && g_hook->m_has_double_precision && vr->triview_layout().has_value()) {\n'
-   '        // Tri-View: view 2 = centre periphery, built by the engine exactly like the two eyes.\n'
-   '        vr->note_triview_views_demanded();\n'
-   '        return 3;\n'
+   '        // Tri-View: view 2 = centre periphery, built by the engine exactly like the two eyes, once its\n'
+   '        // own render target exists (created on demand, same lifetime as Joey\'s capture target).\n'
+   '        auto* const triview_rtm = g_hook->get_render_target_manager();\n'
+   '        if (triview_rtm != nullptr && triview_rtm->request_triview_target(\n'
+   '                static_cast<uint32_t>(vr->get_hmd_width()), static_cast<uint32_t>(vr->get_hmd_height())) != nullptr) {\n'
+   '            vr->note_triview_views_demanded();\n'
+   '            return 3;\n'
+   '        }\n'
+   '        SPDLOG_INFO_EVERY_N_SEC(2, "[TriView] Waiting for the periphery render target ({}); eyes only", vr->m_triview_target_status.load());\n'
    '    }\n\n'
    '    if (!vr->is_triview_active()) { vr->clear_triview_views_demanded(); }\n\n'
    '    return 2;\n}'),
@@ -186,11 +497,12 @@ BACKEND = {
   ('    if (!g_framework->is_game_data_intialized()) {\n        return;\n    }\n\n'
    '    static bool index_starts_from_one = true;\n    const bool medium_one_based_eye_pass = medium_is_current_game();',
    '    if (!g_framework->is_game_data_intialized()) {\n        return;\n    }\n\n'
-   '    // Tri-View: index 2 is the centre periphery, placed in the free right half of the main\n'
-   '    // target. Handled before the legacy "index 2 means one-based eyes" heuristic below.\n'
+   '    // Tri-View: index 2 is the centre periphery, rendered into its own target at (0,0) (UE 5.5.4\n'
+   '    // ignores the rect position of a singleton render anyway: Build 52 GPU capture).\n'
+   '    // Handled before the legacy "index 2 means one-based eyes" heuristic below.\n'
    '    if (index == 2 && VR::get()->triview_owns_view_index_two()) {\n'
    '        const auto layout = VR::get()->triview_layout();\n'
-   '        *x = static_cast<int>(VR::get()->get_hmd_width());\n'
+   '        *x = 0;\n'
    '        *y = 0;\n'
    '        *w = layout ? layout->periphery_width : VR::get()->get_hmd_width() / 2;\n'
    '        *h = layout ? layout->periphery_height : VR::get()->get_hmd_height() / 2;\n'
@@ -271,6 +583,7 @@ BACKEND = {
    '    sdk::FSceneView* triview_third_view{};\n'
    '    sdk::FSceneViewFamily* triview_family{};\n'
    '    bool triview_rendered{};\n'
+   '    std::shared_ptr<const VRRenderTargetManager_Base::TriViewTargetSnapshot> triview_used_target{};\n'
    '    utility::ScopeGuard triview_restore_count{[&]() {\n'
    '        if (triview_family != nullptr) { triview_family->get_views()->count = 3; }\n'
    '    }};\n'
@@ -299,50 +612,27 @@ BACKEND = {
    '        }\n'
    '    }\n\n'
    '    using SceneViewsArrayPtr = decltype(view_family->get_views());'),
-  # Third render: exactly like Joey's secondary, into the free right half of the main target.
+  # Third render: exactly like Joey's secondary (frame-count decrement, singleton family), into its OWN target.
   ('            render_secondary_view();\n        }\n    }\n    stalker_secondary_frame = stalker_family_frame();',
    '            render_secondary_view();\n        }\n    }\n'
    '    if (triview_third_view != nullptr && triview_family == view_family && vr->is_triview_active()) {\n'
-   '        // Tri-View: render the hidden centre view exactly like the secondary above (frame-count\n'
-   '        // decrement, singleton family), into the main target where adjust_view_rect placed it\n'
-   '        // (x = W, the half Native Fix leaves unused). Joey\'s restore guard puts views/target back.\n'
-   '        // UE may clear the whole family target before the first view of a family unless the family\n'
-   '        // is marked additional (bAdditionalViewFamily), which would erase the left fovea already in\n'
-   '        // this target. Headset log (UE 5.5.4, FrameNumber at +0xAC): the byte guessed from Joey\'s\n'
-   '        // UE5.7 layout (FrameCounter + 8 = +0xB8) reads 4, so that guess is WRONG and is never\n'
-   '        // written. Joey\'s NASCAR25 table (UE 5.5.4, "independently checked against the runtime image\n'
-   '        // and source", NascarHookCompatibility.hpp layout25) puts family_additional_offset at +0xC8\n'
-   '        // (family size 0x1B0); his UE5.6.1 table says +0xB0. Default = 0xC8 (200), set to 1 for this\n'
-   '        // render only, restored afterwards, and only if the byte currently reads 0. The menu can name\n'
-   '        // another absolute offset, or -1 to leave every byte untouched. A hex dump of the bytes around\n'
-   '        // FrameNumber is logged once so the real layout can be checked against the log.\n'
-   '        static bool triview_skip_decrement{}, triview_disabled{}, triview_last_rendered{}, triview_dumped{};\n'
+   '        // Tri-View: render the hidden centre view exactly like Joey\'s secondary above (frame-count\n'
+   '        // decrement, singleton family), but into the periphery\'s own render target at (0,0).\n'
+   '        // STALKER 2.10 (UE 5.5.4) puts a singleton render at its target\'s origin whatever the view rect\n'
+   '        // says (Build 52 GPU capture), so sharing Joey\'s main target would paint over the left fovea.\n'
+   '        // Its own target also means no engine flag writes: clearing that target is harmless.\n'
+   '        // Joey\'s restore guard puts views/count/target back afterwards.\n'
+   '        static bool triview_skip_decrement{}, triview_disabled{}, triview_last_rendered{};\n'
    '        static uint32_t triview_last_frame{};\n'
    '        const size_t frame_offset = SceneViewExtensionAnalyzer::frame_count_offset;\n'
-   '        const size_t dump_from = frame_offset >= 0x10 ? frame_offset - 0x10 : 0;\n'
-   '        constexpr size_t dump_length = 0x90;\n'
    '        auto* const family_bytes = reinterpret_cast<uint8_t*>(view_family);\n'
    '        uint32_t frame_before{};\n'
-   '        const bool layout_readable = frame_offset >= 0x10 && frame_offset < 0x1000 &&\n'
-   '            is_writable_process_range(reinterpret_cast<uintptr_t>(family_bytes) + dump_from, dump_length);\n'
-   '        if (layout_readable && !triview_dumped) {\n'
-   '            triview_dumped = true;\n'
-   '            for (size_t row = 0; row < dump_length; row += 16) {\n'
-   '                char text[64]{};\n'
-   '                for (size_t i = 0; i < 16; ++i) {\n'
-   '                    const uint8_t byte = family_bytes[dump_from + row + i];\n'
-   '                    text[i * 3] = "0123456789abcdef"[byte >> 4];\n'
-   '                    text[i * 3 + 1] = "0123456789abcdef"[byte & 15];\n'
-   '                    text[i * 3 + 2] = \' \';\n'
-   '                }\n'
-   '                SPDLOG_INFO("[TriView] family +0x{:x}: {}", dump_from + row, text);\n'
-   '            }\n'
-   '        }\n'
-   '        if (layout_readable) {\n'
+   '        const bool frame_readable = frame_offset >= 0x10 && frame_offset < 0x1000 &&\n'
+   '            is_readable_process_range(reinterpret_cast<uintptr_t>(family_bytes) + frame_offset, sizeof(frame_before));\n'
+   '        if (frame_readable) {\n'
    '            std::memcpy(&frame_before, family_bytes + frame_offset, sizeof(frame_before));\n'
    '            // The eyes\' frame number must advance every frame. If it stalls after a frame with a third\n'
-   '            // render, the engine did not undo our decrement (an additional family may not advance the\n'
-   '            // scene frame): drop the decrement (one repeated frame number, once); if it still stalls, stop.\n'
+   '            // render, drop the extra decrement (one repeated frame number, once); if it still stalls, stop.\n'
    '            if (triview_last_rendered && frame_before == triview_last_frame) {\n'
    '                if (!triview_skip_decrement) {\n'
    '                    triview_skip_decrement = true;\n'
@@ -355,21 +645,23 @@ BACKEND = {
    '            triview_last_frame = frame_before;\n'
    '            triview_last_rendered = false;\n'
    '        }\n'
-   '        const int flag_choice = vr->triview_flag_offset();\n'
-   '        const bool use_flag = flag_choice >= 0;\n'
-   '        const size_t flag_offset = use_flag ? static_cast<size_t>(flag_choice) : 0;\n'
-   '        const bool flag_ok = !use_flag || (layout_readable && flag_offset >= dump_from &&\n'
-   '            flag_offset < dump_from + dump_length && family_bytes[flag_offset] == 0);\n'
-   '        if (!layout_readable || !flag_ok || triview_disabled) {\n'
-   '            SPDLOG_WARNING_EVERY_N_SEC(2, "[TriView] Third view skipped (readable={} flag_offset={} flag_ok={} disabled={})",\n'
-   '                layout_readable, flag_choice, flag_ok, triview_disabled);\n'
+   '        const auto layout = vr->triview_layout();\n'
+   '        auto target = rtm != nullptr ? rtm->get_triview_target() : nullptr;\n'
+   '        const char* skip = nullptr;\n'
+   '        if (triview_disabled) { skip = "disabled after frame-number stall"; }\n'
+   '        else if (!layout) { skip = "no layout"; }\n'
+   '        else if (target == nullptr || target->render_target == nullptr || target->native == nullptr) { skip = "no periphery target"; }\n'
+   '        else if (target->generation != rtm->get_scene_capture_generation()) { skip = "periphery target belongs to an old capture generation"; }\n'
+   '        else if (target->width < layout->periphery_width || target->height < layout->periphery_height) { skip = "periphery target too small"; }\n'
+   '        else if (target->owner == nullptr || !target->owner->texture.valid()) { skip = "periphery texture no longer exists"; }\n'
+   '        if (skip != nullptr) {\n'
+   '            vr->m_triview_third_skipped.fetch_add(1, std::memory_order_relaxed);\n'
+   '            SPDLOG_WARNING_EVERY_N_SEC(2, "[TriView] Third view skipped: {}", skip);\n'
    '        } else {\n'
-   '            SPDLOG_INFO_ONCE("[TriView] Rendering the centre periphery view: FrameNumber +0x{:x}={} additional-flag offset {} (-1 = untouched)",\n'
-   '                frame_offset, frame_before, flag_choice);\n'
-   '            const uint8_t flag_original = use_flag ? family_bytes[flag_offset] : 0;\n'
-   '            if (use_flag) { family_bytes[flag_offset] = 1; }\n'
-   '            utility::ScopeGuard restore_additional{[&]() { if (use_flag) { family_bytes[flag_offset] = flag_original; } }};\n'
-   '            view_family->set_render_target(original_target);\n'
+   '            SPDLOG_INFO_ONCE("[TriView] Rendering the centre periphery into its own target {:x} ({}x{}, rect {}x{} at 0,0), capture generation {}, FrameNumber +0x{:x}={}",\n'
+   '                reinterpret_cast<uintptr_t>(target->render_target), target->width, target->height,\n'
+   '                layout->periphery_width, layout->periphery_height, target->generation, frame_offset, frame_before);\n'
+   '            view_family->set_render_target(target->render_target);\n'
    '            views.data[0] = triview_third_view;\n'
    '            views.count = 1;\n'
    '            if (auto* scene = reinterpret_cast<sdk::FScene*>(view_family_scene); scene != nullptr && !triview_skip_decrement) {\n'
@@ -377,6 +669,7 @@ BACKEND = {
    '            }\n'
    '            render_secondary_view();\n'
    '            triview_rendered = true;\n'
+   '            triview_used_target = std::move(target);\n'
    '            triview_last_rendered = true;\n'
    '        }\n'
    '    }\n'
@@ -388,10 +681,13 @@ BACKEND = {
    '        if (vr->is_triview_active()) {\n'
    '            if (const auto layout = vr->triview_layout()) {\n'
    '                packet->triview = uevr::triview::PacketLayout{*layout, true, triview_rendered};\n'
+   '                packet->triview_target = triview_rendered ? triview_used_target : nullptr;\n'
    '                (triview_rendered ? vr->m_triview_third_renders : vr->m_triview_pair_only)\n'
    '                    .fetch_add(1, std::memory_order_relaxed);\n'
    '            }\n'
    '        }\n'),
+  ('bool VRRenderTargetManager_Base::create_ue58_ui_texture() {',
+   TRIVIEW_TARGET_IMPL + 'bool VRRenderTargetManager_Base::create_ue58_ui_texture() {'),
  ],
  # ---- D3D12: compose instead of Joey's copy, only while ID 7 is active ----------------------------
  # v207 source-contract test counts D3D12 consume sites (4 -> 5: the Tri-View compositor is the new one).
@@ -407,7 +703,11 @@ BACKEND = {
    '        std::unordered_map<d3d12::CommandContext*, std::unique_ptr<uevr::triview::dx12::Compositor>> triview_compositors;'),
   ('    uint32_t m_scene_capture_height{};\n',
    '    uint32_t m_scene_capture_height{};\n'
-   '    uevr::triview::PacketLayout m_triview_last{}; // Tri-View: layout of the last composed packet\n'),
+   '    uevr::triview::PacketLayout m_triview_last{}; // Tri-View: layout of the last composed packet\n'
+   '    Microsoft::WRL::ComPtr<ID3D12Resource> m_triview_last_periphery{}; // its periphery target (if rendered)\n'
+   '    std::unique_ptr<uevr::triview::dx12::GpuCapture> m_triview_capture{}; // automatic one-shot captures\n'
+   '    void triview_take_capture(d3d12::CommandContext& commands, ID3D12Resource* destination,\n'
+   '                              const uevr::triview::PacketLayout& frame, ID3D12Resource* periphery);\n'),
  ],
  "src/mods/vr/D3D12Component.cpp": [
   ('    vr->get_openxr_runtime()->invalidate_duoview_scene();\n    this->duoview_compositors.clear();\n',
@@ -415,6 +715,9 @@ BACKEND = {
    '    this->triview_compositors.clear();\n'),
   ('    this->duoview_compositors.clear();\n    this->contexts.clear();\n',
    '    this->duoview_compositors.clear();\n    this->triview_compositors.clear();\n    this->contexts.clear();\n'),
+  # Automatic capture helper (member of D3D12Component), defined before the method that uses it.
+  ('bool D3D12Component::ensure_2d_screen_textures(ID3D12Device* device, const D3D12_RESOURCE_DESC& base_desc) {',
+   TRIVIEW_CAPTURE_IMPL + 'bool D3D12Component::ensure_2d_screen_textures(ID3D12Device* device, const D3D12_RESOURCE_DESC& base_desc) {'),
   ('                    } else if (stalker_exact) {\n                        copy_stalker_pair();\n'
    '                    } else if (native_stereo_packet == nullptr ||',
    '                    } else if (stalker_exact) {\n                        copy_stalker_pair();\n'
@@ -422,10 +725,17 @@ BACKEND = {
    '                               m_scene_capture_tex.texture.Get() != nullptr &&\n'
    '                               (native_stereo_packet != nullptr ? native_stereo_packet->triview.valid : m_triview_last.valid)) {\n'
    '                        // Tri-View ID7: each eye = periphery underneath + own fovea on top, instead of\n'
-   '                        // Joey\'s plain copy. A Present without a new engine packet recomposes the last\n'
-   '                        // layout from the same two targets. Pose and submission stay Native Stereo.\n'
-   '                        if (native_stereo_packet != nullptr) { m_triview_last = native_stereo_packet->triview; }\n'
+   '                        // Joey\'s plain copy. Three textures, each image at its origin: main (left fovea),\n'
+   '                        // capture (right fovea), Tri-View\'s periphery target. A Present without a new engine\n'
+   '                        // packet recomposes the last packet. Pose and submission stay Native Stereo.\n'
+   '                        if (native_stereo_packet != nullptr) {\n'
+   '                            m_triview_last = native_stereo_packet->triview;\n'
+   '                            m_triview_last_periphery = native_stereo_packet->triview_target != nullptr\n'
+   '                                ? native_stereo_packet->triview_target->native : nullptr;\n'
+   '                        }\n'
+   '                        if (m_triview_capture != nullptr) { m_triview_capture->poll(); }\n'
    '                        const auto triview_frame = m_triview_last;\n'
+   '                        ID3D12Resource* const triview_periphery = triview_frame.third ? m_triview_last_periphery.Get() : nullptr;\n'
    '                        bool triview_composed = false;\n'
    '                        m_openxr.copy((uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE, nullptr,\n'
    '                            [&](d3d12::CommandContext& commands, ID3D12Resource* destination) {\n'
@@ -433,10 +743,11 @@ BACKEND = {
    '                                auto& slot = m_openxr.triview_compositors[&commands];\n'
    '                                if (!slot) { slot = std::make_unique<uevr::triview::dx12::Compositor>(); }\n'
    '                                triview_composed = slot->record(device, commands.cmd_list.Get(),\n'
-   '                                    m_game_tex.texture.Get(), m_scene_capture_tex.texture.Get(), destination,\n'
-   '                                    triview_frame, vr->triview_debug_mode());\n'
+   '                                    m_game_tex.texture.Get(), m_scene_capture_tex.texture.Get(), triview_periphery,\n'
+   '                                    destination, triview_frame, vr->triview_debug_mode());\n'
    '                                if (triview_composed) {\n'
    '                                    commands.has_commands = true;\n'
+   '                                    triview_take_capture(commands, destination, triview_frame, triview_periphery);\n'
    '                                    if (native_stereo_packet != nullptr && native_stereo_hook != nullptr) {\n'
    '                                        if (native_frame_ticket) {\n'
    '                                            native_stereo_hook->record_native_frame_stage(*native_stereo_packet, native_frame_ticket,\n'
@@ -455,6 +766,7 @@ BACKEND = {
    '                    } else if (native_stereo_packet == nullptr ||'),
  ],
 }
+
 # VR.cpp implementations, appended like DuoView's configure_duoview().
 VR_CPP_APPEND = '''
 // Tri-View Stage 1 (rendering method ID 7). STALKER 2 + D3D12 + OpenXR, same gate as DuoView ID6.
