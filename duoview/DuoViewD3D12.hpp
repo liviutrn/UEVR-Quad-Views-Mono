@@ -225,10 +225,10 @@ public:
         if((frame.config.settings.distance_sharpen_enabled ||
             frame.config.settings.depth_preview_mode!=0u) &&
             std::isfinite(clip_m) && clip_m>=0.001f && clip_m<=2.f &&
-            pick.exact && pick.source[0]) {
+            (pick.exact || pick.manual) && pick.source[0]) {
             depth=uevr::duoview::ngx::depth_snapshots().find(
                 device,source_queue,frame.config.key,pick.source[0],
-                layout.fovea.width,layout.fovea.height);
+                static_cast<uint32_t>(pick.source[1]),static_cast<uint32_t>(pick.source[2]));
         }
         if(depth && depth->texture) {
             constants.depth_tex_size[0]=depth->tex_w;
