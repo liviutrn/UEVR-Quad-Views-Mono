@@ -15,6 +15,11 @@ sharpen=read("src/mods/vr/DuoViewConfig.hpp")
 native=read("src/mods/vr/DuoViewD3D12.hpp")
 
 checks={
+  "Live ordered producer fallback is bounded, single-use and same-queue": (
+      "find_recent_ordered" in read("src/mods/vr/DuoViewD3D12.hpp") and
+      "now-slot->submission_tick_ms>100u" in read("src/mods/vr/DuoViewNgxDepthCapture.hpp") and
+      "slot->sequence<=last_unkeyed_used_sequence_" in read("src/mods/vr/DuoViewNgxDepthCapture.hpp") and
+      "ngx::depth_snapshots().ordered_matches()" in dx),
   "Submission-time ticket is tied to actual NGX command list": (
       "depth_snapshots().submitted(queue,count,lists,current_rhi_producer_key);" in observer and
       "slot->key=executing_rhi_key;" in read("src/mods/vr/DuoViewNgxDepthCapture.hpp") and

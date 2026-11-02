@@ -108,7 +108,7 @@ def apply(root,source):
         '            ngx_depth_browser.install_queue(g_framework->get_d3d12_hook()->get_command_queue());\n'
         '        if (vr->duoview_depth_requested() && uevr::duoview::ngx::depth_snapshots().used()==0) {\n'
         '            SPDLOG_WARNING_EVERY_N_SEC(8,\n'
-        '                "[DuoView][NGX] unavailable: eval={} qualified={} no_rhi={} hooks={} queue_hook={} captured={} submitted={} used={} skipped={} selected={} inactive={} stale={} attempted={} output={}x{} render={}x{} depth_fmt={} cmd_type={} selected_tid={} output_captured={} output_matched={} late_ticket={}",\n'
+        '                "[DuoView][NGX] unavailable: eval={} qualified={} no_rhi={} hooks={} queue_hook={} captured={} submitted={} used={} skipped={} selected={} inactive={} stale={} attempted={} output={}x{} render={}x{} depth_fmt={} cmd_type={} selected_tid={} output_captured={} output_matched={} late_ticket={} ordered_used={} ordered_expired={}",\n'
         '                ngx_depth_browser.calls(),ngx_depth_browser.candidates_seen(),\n'
         '                ngx_depth_browser.missing_rhi_ticket(),ngx_depth_browser.installed_evaluators(),\n'
         '                ngx_depth_browser.queue_hook_installed(),\n'
@@ -124,7 +124,9 @@ def apply(root,source):
         '                ngx_depth_browser.last_selected_thread(),\n'
         '                uevr::duoview::ngx::depth_snapshots().unkeyed_captures(),\n'
         '                uevr::duoview::ngx::depth_snapshots().output_matches(),\n'
-        '                uevr::duoview::ngx::depth_snapshots().late_tickets());\n'
+        '                uevr::duoview::ngx::depth_snapshots().late_tickets(),\n'
+        '                uevr::duoview::ngx::depth_snapshots().ordered_matches(),\n'
+        '                uevr::duoview::ngx::depth_snapshots().expired_ordered());\n'
         '        }',str(dx))
     d=one(d,'                                        packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0);',
         '                                        packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0,\n'

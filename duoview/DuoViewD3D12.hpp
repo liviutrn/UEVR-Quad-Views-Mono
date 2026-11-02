@@ -250,6 +250,15 @@ public:
                     device,source_queue,fovea,pick.source[0],
                     static_cast<uint32_t>(pick.source[1]),static_cast<uint32_t>(pick.source[2]));
             }
+            if(!depth && pick.exact && !pick.ambiguous) {
+                // NGX executes pre-tonemap; the final BGRA fovea generally is
+                // NOT the same resource as the NVIDIA HDR output.
+                // This one-use, freshly submitted producer depth is an
+                // explicit best-effort fallback, never claimed same-frame.
+                depth=uevr::duoview::ngx::depth_snapshots().find_recent_ordered(
+                    device,source_queue,pick.source[0],
+                    static_cast<uint32_t>(pick.source[1]),static_cast<uint32_t>(pick.source[2]));
+            }
         }
         if(depth && depth->texture) {
             constants.depth_tex_size[0]=depth->tex_w;

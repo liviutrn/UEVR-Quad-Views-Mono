@@ -300,6 +300,27 @@ int main() try {
     const int late_grey=depth_draw(1,11);
     if(late_grey<120 || late_grey>136)
         throw std::runtime_error("NGX submit-time producer ticket did not reach the shader");
+    // Regression: Unreal final BGRA fovea need not equal NGX HDR Output.
+    // Demonstrate useful raw depth from an actual submitted producer copy
+    // under a unique exact source, without falsely assigning a frame ticket.
+    check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));
+    const auto prior_ordered=pool.ordered_matches();
+    pool.capture(cmd.Get(),raw_depth.Get(),candidate,{},native_periphery.Get());
+    check(cmd->Close());queue->ExecuteCommandLists(1,lists);
+    pool.submitted(queue.Get(),1,lists);
+    if(pool.find_recent_ordered(device.Get(),nullptr,candidate.feature,
+           candidate.output_width,candidate.output_height))
+        throw std::runtime_error("Ordered depth accepted a missing GPU queue");
+    if(pool.find_recent_ordered(device.Get(),queue.Get(),candidate.feature,
+           candidate.output_width+1,candidate.output_height))
+        throw std::runtime_error("Ordered depth accepted wrong fovea dimensions");
+    nativeFrame.config.key={1,8};
+    const int ordered_grey=depth_draw(1,12);
+    if(ordered_grey<120 || ordered_grey>136 || pool.ordered_matches()!=prior_ordered+1)
+        throw std::runtime_error("Valid ordered NGX depth not visible through fovea");
+    if(pool.find_recent_ordered(device.Get(),queue.Get(),candidate.feature,
+           candidate.output_width,candidate.output_height))
+        throw std::runtime_error("Already-used ordered NGX depth improperly replayed");
     // The legacy atlas/gather compositor is a possible source-format
     // fallback. It must show magenta for requested depth preview rather than
     // silently displaying normal image when NGX is unavailable.
@@ -313,9 +334,9 @@ int main() try {
     transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_SOURCE);
     cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
     check(cmd->Close());queue->ExecuteCommandLists(1,lists);
-    check(queue->Signal(fence.Get(),12));
+    check(queue->Signal(fence.Get(),14));
     event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
-    check(fence->SetEventOnCompletion(12,event));
+    check(fence->SetEventOnCompletion(14,event));
     if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
         throw std::runtime_error("Legacy missing-depth preview GPU timeout");
     CloseHandle(event);

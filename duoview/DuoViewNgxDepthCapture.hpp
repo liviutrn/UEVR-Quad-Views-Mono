@@ -30,6 +30,7 @@ struct DepthSnapshot {
     uint32_t base_x{}, base_y{};
     ID3D12GraphicsCommandList* producer_list{}; // comparison only, never dereferenced
     uint64_t producer_fence{};
+    uint64_t submission_tick_ms{};
     bool pending{}, submitted{};
 };
 class DepthSnapshotPool final {
@@ -41,7 +42,7 @@ class DepthSnapshotPool final {
     ComPtr<ID3D12Fence> fence_;
     std::vector<std::shared_ptr<DepthSnapshot>> leases_;
     uint64_t signal_{}, next_capture_sequence_{}, last_unkeyed_used_sequence_{};
-    std::atomic<uint64_t> captures_{}, skips_{}, submits_{}, used_{}, unkeyed_captures_{}, output_matches_{}, late_tickets_{};
+    std::atomic<uint64_t> captures_{}, skips_{}, submits_{}, used_{}, unkeyed_captures_{}, output_matches_{}, late_tickets_{}, ordered_matches_{}, expired_ordered_{};
     bool enabled_{};
     static bool depth_format(DXGI_FORMAT f) noexcept {
         return f==DXGI_FORMAT_R32_FLOAT || f==DXGI_FORMAT_D32_FLOAT ||
@@ -151,7 +152,7 @@ public:
         slot->tex_w=w;slot->tex_h=h;slot->input_w=c.render_width;slot->input_h=c.render_height;
         slot->base_x=full?c.depth_x:0;slot->base_y=full?c.depth_y:0;
         slot->producer_list=cmd;slot->pending=true;slot->submitted=false;
-        slot->producer_fence=0;
+        slot->producer_fence=0;slot->submission_tick_ms=0;
         ++captures_;
         if(output_proof)++unkeyed_captures_;
     }
@@ -183,6 +184,7 @@ public:
                 ++late_tickets_;
             }
             slot->pending=false;slot->submitted=true;slot->producer_fence=next;
+            slot->submission_tick_ms=GetTickCount64();
         }
         submits_+=matched.size();
     }
@@ -194,13 +196,14 @@ public:
         std::scoped_lock guard(lock_);
         if(!enabled_ || !device || device!=device_.Get() || !queue ||
            queue!=producer_.Get() || !feature)return {};
-        for(auto i=leases_.rbegin();i!=leases_.rend();++i) {
-            auto& slot=*i;
+        // Lease order is NOT time order: select the newest submitted sample.
+        std::shared_ptr<DepthSnapshot> newest{};
+        for(const auto& slot:leases_)
             if(slot->submitted && !slot->pending && slot->key==key &&
-               slot->feature==feature && slot->out_w==w && slot->out_h==h)
-                return slot;
-        }
-        return {};
+               slot->producer_fence && slot->feature==feature &&
+               slot->out_w==w && slot->out_h==h &&
+               (!newest || slot->sequence>newest->sequence)) newest=slot;
+        return newest;
     }
     // Only the SAME physical NGX Output used by the fused compositor's
     // native fovea can recover a depth snapshot without a UE RHI ticket.
@@ -229,12 +232,43 @@ public:
         }
         return latest;
     }
+    // Last-resort opt-in delivery path for Unreal post-processing:
+    // NGX Output is normally HDR/pre-tonemap while DuoView's native fovea
+    // is LDR/post-tonemap, so physical pointer equality is not possible.
+    // There is NO fabricated UE frame identity here. Require a LIVE unique
+    // selected foveal NGX feature, same actual original game queue/device,
+    // a genuinely submitted depth copy, <=100 ms elapsed, and strict one-use.
+    // This is ordered producer depth, not a proven same-frame mapping.
+    std::shared_ptr<DepthSnapshot> find_recent_ordered(ID3D12Device* device,
+        ID3D12CommandQueue* queue, uintptr_t feature,uint32_t w,uint32_t h) {
+        std::scoped_lock guard(lock_);
+        if(!enabled_ || !device || device!=device_.Get() ||
+           !queue || queue!=producer_.Get() || !feature || !w || !h)return {};
+        const uint64_t now=GetTickCount64();
+        std::shared_ptr<DepthSnapshot> newest{};
+        for(const auto& slot:leases_) {
+            if(!slot->submitted || slot->pending || slot->key.generation ||
+               slot->key.frame || !slot->producer_fence ||
+               slot->sequence<=last_unkeyed_used_sequence_ ||
+               slot->feature!=feature || slot->out_w!=w || slot->out_h!=h ||
+               !slot->submission_tick_ms || slot->submission_tick_ms>now)continue;
+            if(now-slot->submission_tick_ms>100u) {++expired_ordered_;continue;}
+            if(!newest || slot->sequence>newest->sequence)newest=slot;
+        }
+        if(newest) {
+            last_unkeyed_used_sequence_=newest->sequence;
+            ++ordered_matches_;
+        }
+        return newest;
+    }
     void note_used()noexcept {++used_;}
     uint64_t used()const{return used_.load();}
     uint64_t captures()const{return captures_.load();}
     uint64_t unkeyed_captures()const{return unkeyed_captures_.load();}
     uint64_t output_matches()const{return output_matches_.load();}
     uint64_t late_tickets()const{return late_tickets_.load();}
+    uint64_t ordered_matches()const{return ordered_matches_.load();}
+    uint64_t expired_ordered()const{return expired_ordered_.load();}
     uint64_t skips()const{return skips_.load();}
     uint64_t submits()const{return submits_.load();}
 };
