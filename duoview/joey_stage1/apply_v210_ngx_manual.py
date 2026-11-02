@@ -17,8 +17,23 @@ def only_once(value, old, new, name):
 def apply(root, source):
     dx = root / "src/mods/vr/D3D12Component.cpp"
     vr = root / "src/mods/VR.cpp"
+    vrh = root / "src/mods/VR.hpp"
     old_dx = dx.read_text(encoding="utf-8-sig")
     old_vr = vr.read_text(encoding="utf-8-sig")
+    old_vrh = vrh.read_text(encoding="utf-8-sig")
+    new_vrh = only_once(old_vrh,
+        '    bool duoview_gaze_active() const {',
+        '    bool duoview_ngx_browser_enabled() const { return m_duo_ngx_browser->value(); }\\n    bool duoview_gaze_active() const {',
+        "VR.hpp")
+    new_vrh = only_once(new_vrh,
+        '    const ModToggle::Ptr m_duo_distance_smooth{ModToggle::create(generate_name("DuoViewDistanceSmoothstep"), true)};',
+        '    const ModToggle::Ptr m_duo_distance_smooth{ModToggle::create(generate_name("DuoViewDistanceSmoothstep"), true)};\\n    const ModToggle::Ptr m_duo_ngx_browser{ModToggle::create(generate_name("DuoViewNgxDepthBrowser"), false)};',
+        "VR.hpp")
+    new_vrh = only_once(new_vrh,
+        '            *m_duo_far_distance, *m_duo_distance_smooth, *m_duo_gaze,',
+        '            *m_duo_far_distance, *m_duo_distance_smooth, *m_duo_ngx_browser, *m_duo_gaze,',
+        "VR.hpp")
+
     new_dx = only_once(old_dx, '#include "D3D12Component.hpp"',
         '#include "D3D12Component.hpp"\n#include "d3d12/DuoViewNgxManualObserver.hpp"', "D3D12Component.cpp")
     new_dx = only_once(new_dx, 'void D3D12Component::on_post_present(VR* vr) {\n',
@@ -27,7 +42,7 @@ def apply(root, source):
     // Every original NVIDIA evaluate still runs unchanged. No borrowed GPU
     // resource survives the native evaluate callback.
     auto& ngx_depth_browser=uevr::duoview::ngx::ManualNgxObserver::self();
-    const bool browser_active=vr && vr->is_duoview_renderer_active();
+    const bool browser_active=vr && vr->is_duoview_renderer_active() && vr->duoview_ngx_browser_enabled();
     ngx_depth_browser.set_active(browser_active);
     if (browser_active) ngx_depth_browser.install();
 """, "D3D12Component.cpp")
@@ -51,7 +66,7 @@ def apply(root, source):
     new_vr = only_once(new_vr,
         '                m_duo_distance_smooth->draw("Future smooth transition (OFF = linear)");',
         '''                m_duo_distance_smooth->draw("Future smooth transition (OFF = linear)");
-                if (ImGui::CollapsingHeader("DLSS fovea depth sources (v210 manual selection)")) {
+                m_duo_ngx_browser->draw("Enable NGX depth candidate diagnostics (experimental; default OFF)");\n                if (ImGui::CollapsingHeader("DLSS fovea depth sources (v210 manual selection)")) {
                     ImGui::TextWrapped("Native NGX-SR depth sources are now OBSERVED and can be manually pinned. This browser does not yet copy or sample the depth pixels. Distance sharpening still uses fixed strength until matching the producing fovea is proven.");
                     const auto found=uevr::duoview::ngx::candidates().browse();
                     const auto pin=uevr::duoview::ngx::candidates().selected();
@@ -104,6 +119,7 @@ def apply(root, source):
             raise RuntimeError("Missing pinned source: " + str(src))
     dx.write_text(new_dx, encoding="utf-8", newline="")
     vr.write_text(new_vr, encoding="utf-8", newline="")
+    vrh.write_text(new_vrh, encoding="utf-8", newline="")
     for dst, src in copies.items():
         dst.write_bytes(src.read_bytes())
     print("PASS: v210 manual NGX depth observer/selector installed; GPU captures/compositor untouched")
