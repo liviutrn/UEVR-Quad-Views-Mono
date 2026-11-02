@@ -74,6 +74,10 @@ public:
             {l.periphery.x, l.periphery.y, l.periphery.width, l.periphery.height},
             {l.u0, l.v0, l.u1, l.v1}, frame.settings.feather_fraction,
             frame.settings.debug_border ? 1u : 0u, frame.settings.diagnostic_view, 0.f};
+        // The gather raster cannot bind live NGX depth. When the user
+        // requested a preview, show an explicit missing-depth magenta marker
+        // instead of silently displaying an unmodified fovea.
+        constants.depth_flags=(frame.settings.depth_preview_mode&3u)<<4;
         ensure_srvs(device,atlas,atlas,format,nullptr);
         source_ = atlas;
         transition(cmd, atlas, atlas_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
