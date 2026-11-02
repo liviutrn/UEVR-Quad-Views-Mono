@@ -5,6 +5,7 @@
 // Original Native Fix render targets, scene histories and shading are untouched.
 #include "DuoViewCompositeRaster.hlsl"
 Texture2D<float4> PeripheralNativeSource : register(t1);
+Texture2D<float> NativeFoveaNGXDepth : register(t2);
 
 float2 NativeSampleUV(float2 local, uint2 active, uint2 resourceSize) {
     const float2 texels = clamp(saturate(local) * float2(active),
@@ -65,11 +66,44 @@ float4 PSNativeMain(VertexOut i) : SV_TARGET0 {
         const float2 foveaSample = NativeSampleUV(
             localFovea, FoveaRect.zw, NativeFoveaDimensions);
         float4 fovea = SourceAtlas.SampleLevel(LinearClamp, foveaSample, 0.0);
-        // Exactly one sharpening evaluation in one Mono output image; output
-        // is later duplicated to both eyes by the existing v182 copy path.
-        // With Strength=0 the baseline composition remains unchanged.
-        if (SharpenStrength > 0.0 && DebugViewMode == 0)
-            fovea.rgb = GlamSharpenNativeFovea(fullUv, fovea.rgb);
+        // One point-load of NGX input depth within the cropped fovea only.
+        // Unreal (UE5.5) uses reversed-Z by default; allow normal-Z override.
+        // The near-plane scalar comes from the frozen UE projection, converted
+        // from game centimeters into meters. No temporal / cross-frame reuse.
+        float pixelStrength=SharpenStrength;
+        float depthRaw=0.0;
+        float depthMeters=0.0;
+        float depthBlend=0.0;
+        bool validDepth=false;
+        if ((DepthFlags & 1u)!=0u && all(DepthActiveSize>0u) &&
+            all(DepthTexSize>0u) && DepthFarMeters>DepthNearMeters &&
+            DepthNearClipMeters>0.0) {
+            uint2 p=uint2(saturate(localFovea)*float2(DepthActiveSize));
+            p=min(p,DepthActiveSize-1u)+DepthBase;
+            p=min(p,DepthTexSize-1u);
+            depthRaw=NativeFoveaNGXDepth.Load(int3(p,0));
+            // Ignore sky/unwritten pixels and invalid values. Preserve
+            // previous fixed-strength sharpening for this pixel.
+            validDepth=isfinite(depthRaw) && depthRaw>0.000001 &&
+                       depthRaw<0.999999;
+            if(validDepth) {
+                const float div=(DepthFlags&8u)!=0u ? depthRaw : (1.0-depthRaw);
+                depthMeters=DepthNearClipMeters/max(div,0.000001);
+                depthBlend=saturate((depthMeters-DepthNearMeters)/
+                                   max(DepthFarMeters-DepthNearMeters,0.00001));
+                if((DepthFlags&4u)!=0u)
+                    depthBlend=depthBlend*depthBlend*(3.0-2.0*depthBlend);
+                if((DepthFlags&2u)!=0u)
+                    pixelStrength=lerp(DepthNearStrength,DepthFarStrength,depthBlend);
+            }
+        }
+        const uint preview=(DepthFlags>>4u)&3u;
+        if (preview!=0u && validDepth) {
+            const float intensity=preview==1u?depthRaw:depthBlend;
+            fovea.rgb=float3(intensity,intensity,intensity);
+        } else if (pixelStrength>0.0 && DebugViewMode==0 && preview==0u) {
+            fovea.rgb=GlamSharpenNativeFovea(fullUv,fovea.rgb,pixelStrength);
+        }
         result = DebugViewMode == 2 ? fovea : lerp(periphery,fovea,weight);
     }
     if (DebugBorder && weight > 0.01 && weight < 0.1)
