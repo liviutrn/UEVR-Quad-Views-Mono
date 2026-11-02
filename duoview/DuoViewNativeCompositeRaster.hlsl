@@ -82,10 +82,11 @@ float4 PSNativeMain(VertexOut i) : SV_TARGET0 {
             p=min(p,DepthActiveSize-1u)+DepthBase;
             p=min(p,DepthTexSize-1u);
             depthRaw=NativeFoveaNGXDepth.Load(int3(p,0));
-            // Ignore sky/unwritten pixels and invalid values. Preserve
-            // previous fixed-strength sharpening for this pixel.
-            validDepth=isfinite(depthRaw) && depthRaw>0.000001 &&
-                       depthRaw<0.999999;
+            // Both endpoints are VALID normalized hardware depth:
+            // reversed-Z sky may be precisely 0, near-plane geometry 1.
+            // Reject NaN/out-of-range; never paint valid sky magenta.
+            validDepth=isfinite(depthRaw) && depthRaw>=0.0 &&
+                       depthRaw<=1.0;
             if(validDepth && DepthFarMeters>DepthNearMeters &&
                DepthNearClipMeters>0.0 && isfinite(DepthNearClipMeters)) {
                 validMetricDepth=true;

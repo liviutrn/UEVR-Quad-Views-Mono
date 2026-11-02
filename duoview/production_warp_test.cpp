@@ -157,7 +157,9 @@ int main() try {
     void* dp{};
     check(depth_upload->Map(0,&zero,&dp));
     for(UINT y=0;y<32;++y) for(UINT x=0;x<32;++x) {
-        const float raw=0.5f;
+        // Normalized depth endpoints are valid: reversed-Z sky=0,
+        // near-plane=1. The middle stays 0.5 for metric-ramp tests.
+        const float raw=x<8?0.f:(x>=24?1.f:.5f);
         std::memcpy(static_cast<uint8_t*>(dp)+y*depth_foot.Footprint.RowPitch+x*sizeof(raw),
                     &raw,sizeof(raw));
     }
@@ -244,6 +246,12 @@ int main() try {
         readback->Unmap(0,nullptr);
         if(std::abs(red-green)>2 || std::abs(red-blue)>2)
             throw std::runtime_error("Depth preview failed to write grayscale in fovea");
+        if(preview==1u && signal==5) {
+            const auto low=sample(12,16),high=sample(20,16);
+            if(low[0]>12 || low[1]>12 || low[2]>12 ||
+               high[0]<242 || high[1]<242 || high[2]<242)
+                throw std::runtime_error("Valid depth 0/1 incorrectly shown as magenta");
+        }
         return red;
     };
     const int raw_grey=depth_draw(1,5);
@@ -350,7 +358,7 @@ int main() try {
     readback->Unmap(0,nullptr);
     frame.settings.depth_preview_mode=0;
     if(pool.used()<2)throw std::runtime_error("Depth was copied but never used by the compositor");
-    std::cout<<"v212 NGX GPU copy, negative-provenance checks, compositor usage, raw/metric preview: PASS\\n";
+    std::cout<<"v218 NGX GPU copy, ordered matching, valid depth 0/1, raw/metric preview: PASS\\n";
     std::cout << "Native fused Glamarye WARP path, focus-only, no duplicate full XR pass: PASS\\n";
     std::cout << "Production shader, BGRA8 raster, moved gaze, retired-slot reuse, GPU timestamps: 2048 exact pixel pairs PASS\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n';return 1; }

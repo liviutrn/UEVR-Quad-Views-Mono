@@ -220,6 +220,11 @@ public:
             if(slot->submitted && !slot->pending && !slot->key.generation &&
                !slot->key.frame && slot->output_identity==identity &&
                slot->producer_fence && slot->sequence>last_unkeyed_used_sequence_ &&
+               // The physical-output path must not reuse an old capture
+               // simply because Unreal recycled the same ID3D12Resource.
+               slot->submission_tick_ms &&
+               GetTickCount64()>=slot->submission_tick_ms &&
+               GetTickCount64()-slot->submission_tick_ms<=100u &&
                slot->feature==feature && slot->out_w==w && slot->out_h==h &&
                (!latest || slot->sequence>latest->sequence))
                 latest=slot;

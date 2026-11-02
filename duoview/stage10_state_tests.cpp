@@ -1,8 +1,38 @@
 #include "DuoViewState.hpp"
+#include "DuoViewNgxManualDepth.hpp"
 #include <cassert>
 #include <iostream>
 using namespace uevr::duoview;
 int main() {
+    // v218: automatic NGX foveal depth must STOP when a second equal-size
+    // feature arrives; manual pin remains the only permitted resolution.
+    {
+        using namespace uevr::duoview::ngx;
+        ManualDepthCandidates sources;
+        sources.set_expected(1600,1200,640,480);
+        DepthCandidate first{};
+        first.feature=0xabc;first.output_width=1600;first.output_height=1200;
+        first.render_width=800;first.render_height=600;
+        first.depth_width=800;first.depth_height=600;
+        first.depth_present=first.color_present=true;
+        sources.observe(first);
+        auto unique=sources.choose();
+        assert(unique.exact && unique.source[0]==first.feature && !unique.ambiguous);
+        auto second=first;second.feature=0xdef;
+        sources.observe(second);
+        auto ambiguous=sources.choose();
+        assert(ambiguous.ambiguous && !ambiguous.source[0] &&
+               !ambiguous.exact && !ambiguous.manual);
+        assert(sources.pin(first.feature,first.output_width,first.output_height));
+        auto manual=sources.choose();
+        assert(manual.manual && manual.exact && manual.source[0]==first.feature);
+        sources.clear();
+        assert(sources.choose().ambiguous);
+        sources.released(second.feature);
+        auto recovered=sources.choose();
+        assert(recovered.exact && !recovered.ambiguous &&
+               recovered.source[0]==first.feature);
+    }
     // All menu fields must update independently. One invalid/contradictory
     // quality or gaze control may not freeze every other button or slider.
     Settings live;

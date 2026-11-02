@@ -87,12 +87,15 @@ public:
             // Do not automatically apply a heuristic to the sharpening shader.
             return out;
         }
-        if(auto_selected_[0])for(const auto* c:exact)if(key(*c)==auto_selected_) {
-            out.source=auto_selected_;out.exact=true;return out;
-        }
+        // A previously unique source can become ambiguous when a second
+        // matching NGX-SR feature appears. Never grandfather the old pick:
+        // the exact count must be checked on EVERY selection.
         if(exact.size()!=1) {
             out.ambiguous=true;auto_selected_={};
             return out;
+        }
+        if(auto_selected_[0] && auto_selected_==key(*exact.front())) {
+            out.source=auto_selected_;out.exact=true;return out;
         }
         out.source=auto_selected_=key(*exact.front());
         out.exact=true;

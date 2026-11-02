@@ -1,5 +1,5 @@
-name: DuoView v217 NGX Submitted Depth Recovery
-run-name: DuoView v217 NGX submitted depth recovery (${{ github.run_number }})
+name: DuoView v218 NGX Depth Correctness Hardening
+run-name: DuoView v218 NGX source selection and raw-depth correctness (${{ github.run_number }})
 on:
   push:
     branches:
@@ -22,6 +22,7 @@ on:
       - fix/v215-ngx-output-provenance-20261102
       - fix/v216-ngx-submission-ticket-20261102
       - fix/v217-ngx-ordered-depth-20261102
+      - fix/v218-depth-source-ambiguity-20261102
   pull_request:
     branches:
       - build-182
@@ -240,6 +241,7 @@ jobs:
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
+          v218: Revalidated NGX exact candidate uniqueness on every automatic selection, added GPU depth endpoint 0/1 coverage and fixed valid near/sky depth incorrectly rendered pink, and bounded the legacy output-identity fallback to fresh submissions. Independent tests cover ambiguity/recovery and raw endpoint visualization.
           v217: A selected foveal depth snapshot can be consumed once when it was actually GPU-submitted on the SAME game queue within the last 100 ms, even when Unreal does not expose a matching RHI packet tag or identical pre/post-tonemap resource. This is a bounded ordered-source fallback, not proof of frame identity; fast-motion discrepancies remain possible until headset verification.
           v216: Live optional distance-dependent foveal sharpening from original NGX DLSS-SR depth input. First preference: exact immutable UE producer key on NGX call or matching submitted D3D12 command list; fallback requires exact original NGX Output identity == fused foveal color resource, correct game GPU queue and non-replayed capture. Raw depth preview 1, distance ramp preview 2; missing depth stays explicitly magenta. HEADSET UNVERIFIED, NOT guaranteed every game uses a directly matching NGX Output.
           v208 foundation: FOVEAL SHARPENING RANGE 0..5, fixed sharpening unchanged when depth is unavailable. Default 1.0, 0 disables.
@@ -298,16 +300,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-Mono-v217-OrderedDepth-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-Mono-v218-DepthHardening-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-Mono-v217-OrderedDepth-${{ github.run_number }}
+          name: UEVR-DuoView-Mono-v218-DepthHardening-${{ github.run_number }}
           path: |
-            UEVR-DuoView-Mono-v217-OrderedDepth-*.zip
-            UEVR-DuoView-Mono-v217-OrderedDepth-*.zip.sha256
+            UEVR-DuoView-Mono-v218-DepthHardening-*.zip
+            UEVR-DuoView-Mono-v218-DepthHardening-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -322,7 +324,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-DuoView-v217-Evidence-${{ github.run_number }}
+          name: UEVR-DuoView-v218-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
