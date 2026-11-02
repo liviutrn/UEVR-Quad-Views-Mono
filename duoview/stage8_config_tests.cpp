@@ -30,7 +30,7 @@ int main() {
     assert(!latch.for_frame({5,12},3000,3000,{-1.f,.5f}));
     auto invalid=modified;invalid.feather_fraction=2.f;
     assert(!latch.set_settings(invalid));
-    invalid=modified;invalid.sharpen_strength=3.f;
+    invalid=modified;invalid.sharpen_strength=5.5f;
     assert(!latch.set_settings(invalid));
     auto partial=d::reconcile_ui_settings(invalid,modified);
     assert((partial.rejected & d::reject_sharpen)!=0 && near(partial.settings.sharpen_strength,.4f));
@@ -42,5 +42,9 @@ int main() {
     assert(!latch.for_frame({5,12},3000,3000,{.5f,.5f}));
     auto fresh=latch.for_frame({6,1},3000,3000,{.5f,.5f});
     assert(fresh && fresh->key.generation==6);
+    // Upper limit 5.0 is accepted on its own latch so the revision sequence above is unchanged.
+    d::ConfigLatch limit;
+    auto at_limit=modified;at_limit.sharpen_strength=5.f;
+    assert(limit.set_settings(at_limit));
     std::cout<<"DuoView immutable per-frame config/gaze tests passed\n";
 }
