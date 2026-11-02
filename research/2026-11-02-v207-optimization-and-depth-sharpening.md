@@ -297,3 +297,17 @@ actual fovea; current runtime diagnostics do not prove exact per-source successf
 NR invocations per produced game frame. NR-only performance work should focus
 on processing dimensions/working scale, codec/copy cost and retained NR caches,
 plus the independent Unreal/DuoView allocation and render-family costs.
+
+## v208 final Windows result
+
+**CI-verified:** Build #215, run 41452078775, source commit
+`93c2d11ccee71d173ea06e2da07c5ab4ee42deca`, completed successfully.
+https://github.com/liviutrn/UEVR-Quad-Views-Mono/actions/runs/41452078775
+Pinned production suite: 5/5; independent CPU/GPU suite: 6/6; original Joey
+compatibility suite: 41/41. Real fxc shader compilation, backend/auxiliary DLLs,
+frontend and final source integrity/package checks all passed.
+Artifact: `UEVR-DuoView-Mono-v208-Sharpen-0-5-215`, ID `13147060302`.
+Download: https://github.com/liviutrn/UEVR-Quad-Views-Mono/actions/runs/41452078775/artifacts/13147060302
+**headset-verified:** pending for v208. No FPS or VRAM saving measured/claimed.
+Distance-based sharpening and renderer/NR memory optimizations remain pending;
+this is the isolated fixed-strength range build, not completion of those stages.
