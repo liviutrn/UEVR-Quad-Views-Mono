@@ -52,6 +52,20 @@ def apply(root,source):
       'Future smooth transition (OFF = linear)':'Smooth transition (OFF = linear)'
     }
     for k,value in labels.items(): v=one(v,k,value,str(vrc))
+    # The game previously repeated reject_sharpen_distance (bit 20) every 5s.
+    # Keep both the loaded profile and interactive near/far sliders valid.
+    v=one(v,'                m_duo_far_distance->draw("Far sharpness begins at distance (meters; must exceed near)");',
+        '                m_duo_far_distance->draw("Far sharpness begins at distance (meters; must exceed near)");\n'
+        '                if (m_duo_near_distance->value() >= m_duo_far_distance->value()) {\n'
+        '                    const float near_m=std::clamp(m_duo_near_distance->value(),0.f,999.9f);\n'
+        '                    m_duo_near_distance->value()=near_m;\n'
+        '                    m_duo_far_distance->value()=std::max(m_duo_far_distance->value(),near_m+.1f);\n'
+        '                }',str(vrc))
+    v=one(v,'        .sharpen_near_m=m_duo_near_distance->value(),',
+        '        .sharpen_near_m=std::clamp(m_duo_near_distance->value(),0.f,999.9f),',str(vrc))
+    v=one(v,'        .sharpen_far_m=m_duo_far_distance->value(),',
+        '        .sharpen_far_m=std::clamp(m_duo_far_distance->value(),\n'
+        '            std::clamp(m_duo_near_distance->value(),0.f,999.9f)+.1f,1000.f),',str(vrc))
     v=one(v,'                m_duo_distance_smooth->draw("Smooth transition (OFF = linear)");',
         '                m_duo_distance_smooth->draw("Smooth transition (OFF = linear)");\n'
         '                m_duo_depth_reverse->draw("DLSS depth reversed Z (UE5 default)");\n'
@@ -87,6 +101,22 @@ def apply(root,source):
         '        if (g_framework && g_framework->get_d3d12_hook())\n'
         '            ngx_depth_browser.install_queue(g_framework->get_d3d12_hook()->get_command_queue());\n'
         '    }',str(dx))
+    # Expose a periodic runtime health signal in log.txt when live depth is
+    # requested but nothing has reached the native compositor.
+    d=one(d,
+        '            ngx_depth_browser.install_queue(g_framework->get_d3d12_hook()->get_command_queue());',
+        '            ngx_depth_browser.install_queue(g_framework->get_d3d12_hook()->get_command_queue());\n'
+        '        if (vr->duoview_depth_requested() && uevr::duoview::ngx::depth_snapshots().used()==0) {\n'
+        '            SPDLOG_WARNING_EVERY_N_SEC(8,\n'
+        '                "[DuoView][NGX] unavailable: eval={} qualified={} no_rhi={} hooks={} queue_hook={} captured={} submitted={} used={} skipped={}",\n'
+        '                ngx_depth_browser.calls(),ngx_depth_browser.candidates_seen(),\n'
+        '                ngx_depth_browser.missing_rhi_ticket(),ngx_depth_browser.installed_evaluators(),\n'
+        '                ngx_depth_browser.queue_hook_installed(),\n'
+        '                uevr::duoview::ngx::depth_snapshots().captures(),\n'
+        '                uevr::duoview::ngx::depth_snapshots().submits(),\n'
+        '                uevr::duoview::ngx::depth_snapshots().used(),\n'
+        '                uevr::duoview::ngx::depth_snapshots().skips());\n'
+        '        }',str(dx))
     d=one(d,'                                        packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0);',
         '                                        packet_frame->config.settings.gpu_timing ? compositor.timing_frequency() : 0,\n'
         '                                        g_framework->get_d3d12_hook()->get_command_queue());',str(dx))
