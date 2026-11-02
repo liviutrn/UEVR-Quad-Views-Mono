@@ -113,7 +113,7 @@ class ManualNgxObserver final {
         const auto pick=candidates().choose();
         if(pick.source!=std::array<uintptr_t,3>{feature_id,out_width,out_height} ||
            (!pick.exact && !pick.manual)) return;
-        const auto vr=vrmod::VR::get();
+        const auto vr=::VR::get();
         if(!vr || !vr->is_duoview_renderer_active())return;
         const auto key=vr->duoview_producer_key();
         const auto frozen=vr->duoview_state().snapshot(key);
