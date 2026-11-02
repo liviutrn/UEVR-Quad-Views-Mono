@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include "../DuoViewNgxManualDepth.hpp"
 #include "../DuoViewNgxDepthCapture.hpp"
+#include "../DuoViewNgxRhiTicket.hpp"
 
 namespace uevr::duoview::ngx {
 struct NgxParameters {
@@ -63,7 +64,7 @@ class ManualNgxObserver final {
     struct Feature {uint32_t kind{};bool created{};};
     std::unordered_map<uintptr_t,Feature> features_;
     std::atomic<bool> active_{false};
-    std::atomic<uint64_t> eval_count_{},qualified_{},errors_{};
+    std::atomic<uint64_t> eval_count_{},qualified_{},errors_{},missing_rhi_ticket_{};
     static inline thread_local unsigned nested_calls_{};
     struct Guard {
         bool outer{nested_calls_++==0};
@@ -115,7 +116,8 @@ class ManualNgxObserver final {
            (!pick.exact && !pick.manual)) return;
         const auto vr=::VR::get();
         if(!vr || !vr->is_duoview_renderer_active())return;
-        const auto key=vr->duoview_producer_key();
+        const auto key=current_rhi_producer_key;
+        if(!key.generation || !key.frame) {++missing_rhi_ticket_;return;}
         const auto frozen=vr->duoview_state().snapshot(key);
         if(!frozen || frozen->config.key!=key ||
            (!pick.manual &&
@@ -241,5 +243,14 @@ public:
     uint64_t calls()const{return eval_count_.load();}
     uint64_t candidates_seen()const{return qualified_.load();}
     uint64_t errors()const{return errors_.load();}
+    uint64_t missing_rhi_ticket()const{return missing_rhi_ticket_.load();}
+    uint32_t installed_evaluators() const {
+        std::scoped_lock guard(mutex_);
+        return static_cast<uint32_t>(std::count(eval_ok_.begin(),eval_ok_.end(),true));
+    }
+    bool queue_hook_installed() const {
+        std::scoped_lock guard(mutex_);
+        return execute_ok_;
+    }
 };
 } // namespace uevr::duoview::ngx
