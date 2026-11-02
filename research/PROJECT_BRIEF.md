@@ -1,7 +1,7 @@
 # DuoView project brief (team handoff)
 
 Canonical copy: https://github.com/liviutrn/UEVR-Quad-Views-Mono/blob/claude/team-brief/research/PROJECT_BRIEF.md
-Last update: 2 Nov 2026, 03:10 (Claude). Any team member may update it: keep it current, factual and short.
+Last update: 2 Nov 2026, 14:45 (Claude). Any team member may update it: keep it current, factual and short.
 
 ## How we work (all models, one team)
 - Liviu (owner) is not a programmer: plain words, few steps, at most three precise test
@@ -14,7 +14,12 @@ Last update: 2 Nov 2026, 03:10 (Claude). Any team member may update it: keep it 
 - One build per hypothesis or stage. Before every build: replay the patch scripts locally and get
   an independent fresh-eyes review; send the reviewer the order BEFORE pushing.
 
-## Current goal: Tri-View built from Joey's Native Stereo (decided by Liviu, 1 Nov 2026)
+## PARKED 2 Nov 2026 (Liviu): Tri-View stopped - periphery still trembles (S6-11). DuoView Mono v207 stays the product.
+Proven: own periphery target at (0,0), identical camera for all 3 views (0.02 deg), ~0.2 deg alignment, steady ~40 fps.
+Open lead (untested): temporal processing (DLSS/TAA/TSR/motion blur or a DLSS add-on) on the extra view.
+Details: PROGRESS.md on claude/triview-s3-gaze-20261102.
+
+## Former goal: Tri-View built from Joey's Native Stereo (decided by Liviu, 1 Nov 2026)
 Fastest CORRECT tri-view test build. Base: v207 backend (Joey 5ac7edc). New rendering method ID 7
 next to DuoView ID 6 (modes 0-6 unchanged), built on Joey's Native Stereo + Native Fix (each eye
 its own correctly projected render on 2.10), NOT on DuoView's mono machinery.
