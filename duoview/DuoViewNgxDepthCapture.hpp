@@ -31,14 +31,15 @@ struct DepthSnapshot {
     bool pending{}, submitted{};
 };
 class DepthSnapshotPool final {
-    static constexpr size_t MaxLeases=12;
+    static constexpr size_t MaxLeases=6;
+    static constexpr uint64_t MaxOwnedDepthBytes=256ull*1024ull*1024ull;
     mutable std::mutex lock_;
     ComPtr<ID3D12CommandQueue> producer_;
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12Fence> fence_;
     std::vector<std::shared_ptr<DepthSnapshot>> leases_;
     uint64_t signal_{};
-    std::atomic<uint64_t> captures_{}, skips_{}, submits_{};
+    std::atomic<uint64_t> captures_{}, skips_{}, submits_{}, used_{};
     bool enabled_{};
     static bool depth_format(DXGI_FORMAT f) noexcept {
         return f==DXGI_FORMAT_R32_FLOAT || f==DXGI_FORMAT_D32_FLOAT ||
@@ -87,7 +88,7 @@ public:
         const bool full=(desc.Flags&D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)!=0;
         const uint32_t w=full?uint32_t(desc.Width):c.render_width;
         const uint32_t h=full?desc.Height:c.render_height;
-        if(!w || !h || w>16384 || h>16384) {++skips_;return;}
+        if(!w || !h || w>16384 || h>16384 || uint64_t(w)*h*4ull>MaxOwnedDepthBytes) {++skips_;return;}
         ComPtr<ID3D12Device> dev;
         if(FAILED(depth->GetDevice(IID_PPV_ARGS(&dev)))) {++skips_;return;}
         std::scoped_lock guard(lock_);
@@ -106,6 +107,12 @@ public:
         const auto existing=slot->texture ? slot->texture->GetDesc():D3D12_RESOURCE_DESC{};
         if(!slot->texture || existing.Width!=w || existing.Height!=h ||
            existing.Format!=DXGI_FORMAT_R32_TYPELESS) {
+            uint64_t resident=0;
+            for(const auto& lease:leases_) if(lease.get()!=slot.get() && lease->texture) {
+                const auto d=lease->texture->GetDesc();
+                resident+=uint64_t(d.Width)*d.Height*4ull;
+            }
+            if(resident+uint64_t(w)*h*4ull>MaxOwnedDepthBytes) {++skips_;return;}
             // Safe: slot is not in use, and its last GPU producer fence retired.
             slot->texture.Reset();
             D3D12_RESOURCE_DESC td=desc;
@@ -176,6 +183,8 @@ public:
         }
         return {};
     }
+    void note_used()noexcept {++used_;}
+    uint64_t used()const{return used_.load();}
     uint64_t captures()const{return captures_.load();}
     uint64_t skips()const{return skips_.load();}
     uint64_t submits()const{return submits_.load();}
