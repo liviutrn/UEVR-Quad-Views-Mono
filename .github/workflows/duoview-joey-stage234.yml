@@ -1,5 +1,5 @@
-name: DuoView v212 Live DLSS Depth-Based Fovea Sharpening
-run-name: DuoView v212 DLSS depth sharpening (${{ github.run_number }})
+name: DuoView v213 DLSS Depth Producer Ticket Repair
+run-name: DuoView v213 DLSS depth producer ticket repair (${{ github.run_number }})
 on:
   push:
     branches:
@@ -18,6 +18,7 @@ on:
       - experiment/v211-live-distance-sharpen-20261102
       - experiment/v211-warp-depth-proof-20261102
       - fix/v212-depth-sharpen-release-20261102
+      - fix/v213-live-depth-correct-queue-20261102
   pull_request:
     branches:
       - build-182
@@ -156,6 +157,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'v211 failed exact-source activation' }
           python workspace/duoview/joey_stage1/test_v211_live_depth.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'v211 native DLSS snapshot, shader or controls contract failure' }
+          python workspace/duoview/joey_stage1/test_v213_live_contract.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'v213 real queue, RHI ticket or settings integration is incomplete' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Patched backend contains whitespace errors' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
@@ -277,6 +280,7 @@ jobs:
           Experimental: Source/test/CI passing cannot prove exact game GPU producer completion or headset stability.
           NEVER overwrite 30-minute-proven Build3! Extract this ZIP into a SEPARATE TEST DIRECTORY.
           Built-in gaze freshness/age counters are read from the UI; no smoothing/deadzone forced.
+          v213: NGX Eval now receives the immutable owner frame key from the executing RHI command, not the current viewport draw. Live diagnostics warn when depth is requested but not used, and invalid near/far slider values are clamped. REAL STALKER 2 DEPTH NOT YET VERIFIED; STOP TESTING IF NO VISIBLE PREVIEW.
           v211: EXPERIMENTAL LIVE FOVEA DEPTH-BASED SHARPENING. Optional game-native NGX-SR depth GPU snapshot, manual/auto pin, same-render-frame and D3D12 queue validation, in-HMD raw/metric preview, configurable near/far 0-5 strength. OFF or unknown depth preserves fixed-strength sharpening. Requires headset verification: not yet confirmed working in STALKER 2.
           v210: Native DLSS-SR depth source metadata browser and manual source pinning are active in DuoView ID6. Expected fovea output size comes from the frozen source packet. Source selection does NOT yet copy depth pixels or enable distance sharpening. No synthetic stereo.
           v209: Distance sharpening controls are staged only. DLSS depth is NOT connected. The original fixed-strength Glamarye shader remains active even if the staged toggle is ON.
@@ -289,16 +293,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-Mono-v212-Depth-Sharpen-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-Mono-v213-RhiDepth-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-Mono-v212-Depth-Sharpen-${{ github.run_number }}
+          name: UEVR-DuoView-Mono-v213-RhiDepth-${{ github.run_number }}
           path: |
-            UEVR-DuoView-Mono-v212-Depth-Sharpen-*.zip
-            UEVR-DuoView-Mono-v212-Depth-Sharpen-*.zip.sha256
+            UEVR-DuoView-Mono-v213-RhiDepth-*.zip
+            UEVR-DuoView-Mono-v213-RhiDepth-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -313,7 +317,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-DuoView-v211-Evidence-${{ github.run_number }}
+          name: UEVR-DuoView-v213-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
