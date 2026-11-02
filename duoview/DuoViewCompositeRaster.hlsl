@@ -28,7 +28,12 @@ float4 PSMain(VertexOut i) : SV_TARGET0 {
     if (weight > 0.0 && DebugViewMode != 1) {
         const float2 foveaUV = (fullUv - CropUv.xy) / (CropUv.zw - CropUv.xy);
         const float2 foveaSample = AtlasSampleUV(FoveaRect, foveaUV);
-        const float4 foveaColor = SourceAtlas.SampleLevel(LinearClamp, foveaSample, 0.0);
+        float4 foveaColor = SourceAtlas.SampleLevel(LinearClamp, foveaSample, 0.0);
+        // This legacy gather route has no native DLSS depth binding.
+        // Show an unmistakable failure marker when preview is requested.
+        // Preview OFF is exactly the original Mono compositor behavior.
+        if (((DepthFlags >> 4u) & 3u) != 0u)
+            foveaColor.rgb = float3(1.0, 0.0, 1.0);
         result = DebugViewMode == 2 ? foveaColor : lerp(peripheralColor, foveaColor, weight);
     }
     if (DebugBorder && weight > 0.01 && weight < 0.1) {
