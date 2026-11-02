@@ -15,10 +15,12 @@ if mode=="--capture":
 elif mode=="--verify":
     old,new=json.loads(evidence.read_text()),snapshot(backend)
     changed={p for p in old.keys()|new.keys() if old.get(p)!=new.get(p)}
-    allowed={"src/mods/VR.cpp","src/mods/vr/D3D12Component.cpp",
+    allowed={"src/mods/VR.hpp","src/mods/VR.cpp","src/mods/vr/D3D12Component.cpp",
              "src/mods/vr/DuoViewNgxManualDepth.hpp",
              "src/mods/vr/d3d12/DuoViewNgxManualObserver.hpp"}
     assert changed==allowed,f"Unexpected path diff: {changed^allowed}"
+    header=(backend/"src/mods/VR.hpp").read_text(encoding="utf-8-sig")
+    assert "DuoViewNgxDepthBrowser" in header
     dx=(backend/"src/mods/vr/D3D12Component.cpp").read_text(encoding="utf-8-sig")
     assert "ngx_depth_browser.install();" in dx
     assert "candidates().set_expected(" in dx
