@@ -222,10 +222,11 @@ public:
         if(!active_.load(std::memory_order_acquire) || !queue)return;
         std::scoped_lock lock(mutex_);
         if(!execute_ok_) {
-            // ID3D12CommandQueue vtable index 10 = ExecuteCommandLists.
+            // ID3D12CommandQueue vtable index 11 = ExecuteCommandLists.
+            // 9 UpdateTileMappings, 10 CopyTileMappings: hooking 10 is unsafe.
             auto* vtbl=*reinterpret_cast<void***>(queue);
-            if(!vtbl || !vtbl[10])return;
-            auto hook=safetyhook::create_inline(vtbl[10],
+            if(!vtbl || !vtbl[11])return;
+            auto hook=safetyhook::create_inline(vtbl[11],
                 reinterpret_cast<void*>(&execute_commands),
                 safetyhook::InlineHook::StartDisabled);
             if(hook) {
