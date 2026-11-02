@@ -39,3 +39,12 @@ its rect; XR edges non-black in both eyes; seam inside/outside means close (shad
 - MinGW syntax check of the compositor + WARP test: OK. WARP pixel test (3 textures, decoy pixels in the
   old right-half spot and outside the periphery rect must never show; capture ZIP written) runs in CI.
 - Independent Sonnet review: see PROGRESS.md.
+
+## Results (2 Nov 2026, ~03:00)
+- [CI-verified] S2 run 41368098590 (Tri-View-S2-7) and S3 run 41368117534 (Tri-View-S3-8): compiled, all
+  Tri-View tests (geometry incl. gaze windows, capture writer, WARP compositor + capture ZIP) and Joey's
+  41 compatibility tests passed. Not headset-tested.
+- [source-read] Independent Sonnet review: no blockers; 5 fixes applied (see PROGRESS.md).
+- Still unverified until the first capture: periphery target state after the engine render (assumed
+  RENDER_TARGET exactly like Joey's capture), that the periphery lands at (0,0) of its own target,
+  and the centre camera's temporal history (flicker?).

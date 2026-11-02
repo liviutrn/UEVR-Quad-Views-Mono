@@ -16,23 +16,31 @@ Started 2 Nov 2026 02:00 (Claude, overnight). Base: claude/triview-stage1-fixes-
 - Compositor samples three textures: main (left fovea at 0,0), capture (right fovea at 0,0), periphery (0,0).
 - Automatic GPU capture: a ZIP next to the UEVR log with the three sources + the XR image + numbers.
 
-## Builds
-- S2 (fix only): branch claude/triview-s2-20261102, commit 11e2e71, CI run 41366522141 (artifact Tri-View-S2-5).
-  Local replay OK, CPU tests OK, MinGW syntax check OK, WARP pixel + capture test passed in CI (step 11).
-- S3 (S2 + eye-tracked foveas): branch claude/triview-s3-gaze-20261102 (local first, pushed after S2 compiles).
-  Fovea windows follow PSVR2 gaze (DuoView's reader + crop stability + DuoView's gaze offset/smoothing
-  settings), per-eye windows (same gaze direction in each eye), "Fovea size" slider 0.3-0.8 (default 0.5),
-  one layout per engine frame so engine crop and compositor always agree.
+## Builds (CI-verified = compiled + all tests in GitHub Actions; NOT headset-tested yet)
+- S2 (fix only): branch claude/triview-s2-20261102, commit d8365de, run 41368098590, artifact Tri-View-S2-7.
+- S3 (S2 + eye-tracked foveas): branch claude/triview-s3-gaze-20261102, commit 7e67c14, run 41368117534,
+  artifact Tri-View-S3-8. Fovea windows follow PSVR2 gaze (DuoView's reader + crop stability, DuoView's gaze
+  offset/smoothing settings), per-eye windows (same gaze direction in each eye), "Fovea size" 0.3-0.8 (default
+  0.5), one layout per engine frame so engine crop and compositor agree. Menu: "Eye-tracked fovea" OFF = S2 behaviour.
+- Both: Tri-View geometry, capture-writer and WARP compositor tests passed; Joey compatibility suite (41) passed.
+- First CI run failed only on SPDLOG_WARNING (not a macro) -> SPDLOG_WARN.
+- Sonnet review: no blockers; fixed: texture-array submit bypassing the compositor, attempt counter per
+  generation, rebuild on size change, third-render guards reset per generation, readback Map range.
 
 ## Status
-- [x] code S2  - [x] local replay  - [ ] review (Sonnet, running)  - [ ] CI  - [ ] headset (Liviu)
+- [x] code  - [x] local replay  - [x] review  - [x] CI (S2, S3)  - [ ] headset (Liviu)
+- v207 features: XYZ head scaling and hotkeys are global (work in ID7). Manual/auto FOV fix is DuoView-only
+  (ID6 gate); Native Stereo uses the headset projections directly, so it is probably not needed [estimated].
+- Checker for capture ZIPs: duoview/triview/analyze_triview_capture.py (placement, edges, geometry, seams).
 
-## Test checklist for Liviu (S2 first; S3 only if S2 looks right)
+## Test checklist for Liviu (S3 first; if the picture is wrong, S2 tells whether eye tracking is to blame)
 1. New folder, inject, pick "Tri-View (Experimental)" directly.
 2. Play ~2 minutes, close the game.
 3. Send log.txt + TriView_Capture_1.zip + TriView_Capture_2.zip (same folder as the UEVR log).
    Optional: fps vs Native Stereo at the same resolution, and "picture right / wrong".
 
 ## Next
-- If S2 captures show a correct picture: S3 (eye tracking), then FPS tuning (fovea size, periphery scale).
-- Known limitation: hands/near objects can double at the fovea edge (periphery is from the centre camera).
+- Read the capture ZIPs with analyze_triview_capture.py; fix whatever FAILs.
+- FPS: compare with Native Stereo at the same resolution; tune fovea size / periphery scale.
+- Periphery is mono from the centre camera: near objects (hands) can shift up to ~5 deg at the fovea edge.
+  Next quality step = per-eye depth reprojection of the periphery (Liviu's plan: cheap synthetic stereo only there).
