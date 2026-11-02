@@ -5,6 +5,20 @@ Working branch: `experiment/v208-depth-sharpen-optimization-20261102`.
 Status: source audit + v208 range-only implementation. Distance mode is NOT
 implemented by v208. No optimization speedup or VRAM saving is measured here.
 
+## Active user configuration (clarified during this work)
+
+**Liviu report, 2 Nov:** Cheeky is used ONLY for Neural Rendering (NR) on the
+DuoView fovea. Cheeky's SR/foveated-SR processing is never used.
+Treat this as the active configuration. The source discussion of Cheeky's
+optional peripheral DLAA/SR below is background capability, NOT an explanation
+of current performance. Do not propose disabling a feature he already disables.
+The remaining audit priorities are: correct NR-only foveal source selection,
+once-per-produced-frame NR invocation, NR resolution/working buffers and cache
+retirement, and UEVR/Unreal source target and compositor allocation costs.
+The game's original DLSS SR/depth path is distinct from Cheeky's disabled SR.
+Runtime source identity/invocation counts still need evidence; intended foveal
+selection is not itself proof that the current source mapping is correct.
+
 ## Evidence labels
 
 - **source-read**: inspected source, not a measurement of the running game.
@@ -260,3 +274,26 @@ Runtime export names `CheekyRuntime_Snapshot` / `CheekyUEVR_Snapshot` expose JSO
 not depth. The existing UI path is **Cheeky Foveated DLSS > Support > Create
 support ZIP only**. Its ZIP contains diagnostics.json, settings.ini and logs.
 It can establish the installed version and settings relevant to the next stage.
+
+## NR-only path verification after user clarification (source-read)
+
+Independent Luna source review plus root source inspection found that the r13
+EyeProcessingMode gate is evaluated before NR setup and independently of SR's
+Enabled setting. With Enabled=false, NrEnabled=true, an unselected source calls
+the original game DLSS without Cheeky NR. Selected source follows the explicit
+NR-only before-upscaling or after-upscaling path. The private SR/peripheral-DLAA
+path exits immediately while Enabled=false (`hooks.cpp:4800 onward`).
+
+Before-order NR prepares/substitutes the input once; its after-DLSS callback
+performs only optional border work, not a second NR evaluation. After-order
+prepares no NR input first and evaluates NR after successful game DLSS instead.
+Streamline suppresses nested native processing; generic D3D12 interception uses
+an outermost-call guard. No duplicate NR evaluation was found for a SINGLE outer
+DLSS evaluation in the audited native DX12, C and Streamline paths. This is not
+runtime proof of exactly one outer evaluation per produced DuoView frame.
+
+Remaining live verification: the selected source-role must match DuoView's
+actual fovea; current runtime diagnostics do not prove exact per-source successful
+NR invocations per produced game frame. NR-only performance work should focus
+on processing dimensions/working scale, codec/copy cost and retained NR caches,
+plus the independent Unreal/DuoView allocation and render-family costs.
