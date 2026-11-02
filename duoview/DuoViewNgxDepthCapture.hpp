@@ -41,7 +41,7 @@ class DepthSnapshotPool final {
     ComPtr<ID3D12Fence> fence_;
     std::vector<std::shared_ptr<DepthSnapshot>> leases_;
     uint64_t signal_{}, next_capture_sequence_{}, last_unkeyed_used_sequence_{};
-    std::atomic<uint64_t> captures_{}, skips_{}, submits_{}, used_{}, unkeyed_captures_{}, output_matches_{};
+    std::atomic<uint64_t> captures_{}, skips_{}, submits_{}, used_{}, unkeyed_captures_{}, output_matches_{}, late_tickets_{};
     bool enabled_{};
     static bool depth_format(DXGI_FORMAT f) noexcept {
         return f==DXGI_FORMAT_R32_FLOAT || f==DXGI_FORMAT_D32_FLOAT ||
@@ -157,7 +157,8 @@ public:
     }
     // Called immediately AFTER actual ExecuteCommandLists on the original
     // producer queue. Queue::Signal is GPU ordered after the NGX depth copy.
-    void submitted(ID3D12CommandQueue* queue,UINT count,ID3D12CommandList* const* lists) {
+    void submitted(ID3D12CommandQueue* queue,UINT count,ID3D12CommandList* const* lists,
+                   FrameKey executing_rhi_key={}) {
         if(!queue || !count || !lists)return;
         std::scoped_lock guard(lock_);
         if(queue!=producer_.Get() || !enabled_ || !fence_)return;
@@ -173,6 +174,14 @@ public:
             ++skips_;return;
         }
         for(auto* slot:matched){
+            // The NGX evaluate callback has no RHI ticket on this game.
+            // The exact command-list's ExecuteCommandLists may have one.
+            // Never accept a ticket from a different list or partial key.
+            if(!slot->key.generation && !slot->key.frame &&
+               executing_rhi_key.generation && executing_rhi_key.frame) {
+                slot->key=executing_rhi_key;
+                ++late_tickets_;
+            }
             slot->pending=false;slot->submitted=true;slot->producer_fence=next;
         }
         submits_+=matched.size();
@@ -221,6 +230,7 @@ public:
     uint64_t captures()const{return captures_.load();}
     uint64_t unkeyed_captures()const{return unkeyed_captures_.load();}
     uint64_t output_matches()const{return output_matches_.load();}
+    uint64_t late_tickets()const{return late_tickets_.load();}
     uint64_t skips()const{return skips_.load();}
     uint64_t submits()const{return submits_.load();}
 };

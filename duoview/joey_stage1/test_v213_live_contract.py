@@ -15,6 +15,11 @@ sharpen=read("src/mods/vr/DuoViewConfig.hpp")
 native=read("src/mods/vr/DuoViewD3D12.hpp")
 
 checks={
+  "Submission-time ticket is tied to actual NGX command list": (
+      "depth_snapshots().submitted(queue,count,lists,current_rhi_producer_key);" in observer and
+      "slot->key=executing_rhi_key;" in read("src/mods/vr/DuoViewNgxDepthCapture.hpp") and
+      "slot->producer_list)==lists[i]" in read("src/mods/vr/DuoViewNgxDepthCapture.hpp") and
+      "depth_snapshots().late_tickets()" in dx),
   "Output identity fallback is strict and single-use": (
       "depth_snapshots().capture(cmd,depth,sample,{},output);" in observer and
       "slot->output_identity=output_proof?" in read("src/mods/vr/DuoViewNgxDepthCapture.hpp") and

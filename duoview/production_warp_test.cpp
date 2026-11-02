@@ -283,6 +283,23 @@ int main() try {
     if(pool.find_by_output(device.Get(),queue.Get(),native_fovea.Get(),
            candidate.feature,candidate.output_width,candidate.output_height))
         throw std::runtime_error("Old NGX Output snapshot was replayed");
+    // Simulate a missing Eval ticket but an EXACT per-command-list RHI
+    // packet found on actual ExecuteCommandLists. Physical output differs.
+    check(allocator->Reset());check(cmd->Reset(allocator.Get(),nullptr));
+    const auto prior_late=pool.late_tickets();
+    pool.capture(cmd.Get(),raw_depth.Get(),candidate,{},native_periphery.Get());
+    check(cmd->Close());queue->ExecuteCommandLists(1,lists);
+    const uevr::duoview::FrameKey late_key{1,6};
+    pool.submitted(queue.Get(),1,lists,late_key);
+    if(pool.late_tickets()!=prior_late+1)
+        throw std::runtime_error("Actual NGX command-list late ticket was not attached");
+    if(pool.find(device.Get(),queue.Get(),{1,7},
+       candidate.feature,candidate.output_width,candidate.output_height))
+        throw std::runtime_error("Late ticket accepted wrong render frame");
+    nativeFrame.config.key=late_key;
+    const int late_grey=depth_draw(1,11);
+    if(late_grey<120 || late_grey>136)
+        throw std::runtime_error("NGX submit-time producer ticket did not reach the shader");
     // The legacy atlas/gather compositor is a possible source-format
     // fallback. It must show magenta for requested depth preview rather than
     // silently displaying normal image when NGX is unavailable.
@@ -296,9 +313,9 @@ int main() try {
     transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_SOURCE);
     cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
     check(cmd->Close());queue->ExecuteCommandLists(1,lists);
-    check(queue->Signal(fence.Get(),10));
+    check(queue->Signal(fence.Get(),12));
     event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
-    check(fence->SetEventOnCompletion(10,event));
+    check(fence->SetEventOnCompletion(12,event));
     if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
         throw std::runtime_error("Legacy missing-depth preview GPU timeout");
     CloseHandle(event);

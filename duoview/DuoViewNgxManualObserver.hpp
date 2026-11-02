@@ -185,7 +185,10 @@ class ManualNgxObserver final {
         instance.execute_.call<void>(queue,count,lists);
         // Publish only if the actual producer list was submitted on the
         // original game's DIRECT queue. No CPU or GPU blocking.
-        depth_snapshots().submitted(queue,count,lists);
+        // Submission, unlike Evaluate, can execute inside UE's scoped
+        // immutable RHI producer packet. Join only on the SAME command-list
+        // pointer submitted by the game's original direct queue.
+        depth_snapshots().submitted(queue,count,lists,current_rhi_producer_key);
     }
     static void install_group(Hooks& hooks,std::array<bool,4>& installed,
         std::array<const char*,2> exports,std::array<void*,4> callbacks) {
