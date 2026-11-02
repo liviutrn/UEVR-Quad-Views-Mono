@@ -3,7 +3,7 @@
 def apply(changed, edit):
     hook='src/mods/vr/FFakeStereoRenderingHook.cpp'
     header='src/mods/vr/FFakeStereoRenderingHook.hpp'
-    edit(header,'#include "DuoViewState.hpp"','#include "DuoViewState.hpp"\n#include "DuoViewDelivery.hpp"')
+    edit(header,'#include "DuoViewState.hpp"','#include "DuoViewState.hpp"\n#include "DuoViewDelivery.hpp"\n#include "DuoViewNgxRhiTicket.hpp"')
     edit(header,'        bool duoview_pose_valid{};','        bool duoview_pose_valid{};\n        sdk::FRenderTarget* duoview_secondary_target{};')
     edit(header,'    bool is_nascar_native_ready() const {', '''    using DuoDelivery = uevr::duoview::Delivery<NativeStereoFramePacket>;
     mutable DuoDelivery duoview_delivery{};
@@ -86,7 +86,14 @@ def apply(changed, edit):
         const auto source_it = duo_command_sources.find(cmd);
         const auto duo_command = source_it != duo_command_sources.end()
             ? source_it->second : FFakeStereoRenderingHook::DuoDelivery::Command{};
-        const auto duo_source = duo_command.owner();''')
+        const auto duo_source = duo_command.owner();
+        // Precisely scope the packet to this RHI execution interval. NGX-SR
+        // may run behind viewport Draw; never infer its identity from current
+        // game-thread or Present state.
+        const auto rhi_depth_key = duo_source.packet && duo_source.packet->duoview_frame
+            ? duo_source.packet->duoview_frame->config.key
+            : uevr::duoview::FrameKey{};
+        uevr::duoview::ngx::ScopedRhiProducerKey rhi_depth_scope{rhi_depth_key};''')
     edit(hook,'''                runtime->enqueue_render_poses(frame_count);
                 if (g_hook != nullptr) { g_hook->note_nascar25_render_pose_handoff(frame_count); }''',
     '''                if (!duo_source || (vr->is_duoview_renderer_active() && duo_source.generation==vr->mono_generation()))
