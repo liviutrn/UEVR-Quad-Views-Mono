@@ -25,17 +25,18 @@ int main() {
     assert(choice.source[0]==0x202 && choice.exact && !choice.manual);
     assert((c.expected()==std::array<uint32_t,4>{800,600,320,240}));
 
-    // A new equally sized SR feature is ambiguous, not secretly chosen by
-    // evaluation order. A valid already pinned auto source may remain stable.
+    // An automatically chosen feature is NOT permanently trusted: when a
+    // second equal-size DLSS-SR source appears, even an earlier auto pick
+    // must be invalidated until the user pins one explicitly.
     auto extra=fovea;extra.feature=0x303;
     c.observe(extra);
-    assert(c.choose().source[0]==0x202); // sticky auto
+    assert(c.choose().ambiguous && !c.choose().source[0]);
     assert(c.pin(0x303,800,600));
     choice=c.choose();
     assert(choice.source[0]==0x303 && choice.manual);
     c.released(0x303);
     assert(!c.selected()[0]);
-    c.set_expected(800,600,320,240); // old sticky auto still retained
+    c.set_expected(800,600,320,240); // unambiguous after release
     assert(c.choose().source[0]==0x202);
     c.set_expected(802,600,320,240); // resizing invalidates automatic binding
     assert(!c.choose().source[0]);
