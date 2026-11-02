@@ -231,10 +231,13 @@ public:
         // Require the same frozen producer key, selected NGX SR feature and queue.
         std::shared_ptr<uevr::duoview::ngx::DepthSnapshot> depth{};
         const float clip_m=frame.projection[14]*0.01f; // Unreal near in centimeters.
+        const bool valid_clip=std::isfinite(clip_m) && clip_m>=0.001f && clip_m<=2.f;
         const auto pick=uevr::duoview::ngx::candidates().choose();
+        // Raw preview is a direct read of NGX input depth. Unlike a distance
+        // curve it requires no validated near-plane/projection metadata.
         if((frame.config.settings.distance_sharpen_enabled ||
             frame.config.settings.depth_preview_mode!=0u) &&
-            std::isfinite(clip_m) && clip_m>=0.001f && clip_m<=2.f &&
+            (valid_clip || frame.config.settings.depth_preview_mode==1u) &&
             (pick.exact || pick.manual) && pick.source[0]) {
             depth=uevr::duoview::ngx::depth_snapshots().find(
                 device,source_queue,frame.config.key,pick.source[0],
@@ -251,7 +254,7 @@ public:
             constants.depth_far_strength=frame.config.settings.sharpen_far_strength;
             constants.depth_near_m=frame.config.settings.sharpen_near_m;
             constants.depth_far_m=frame.config.settings.sharpen_far_m;
-            constants.depth_nearclip_m=clip_m;
+            constants.depth_nearclip_m=valid_clip?clip_m:0.f;
             constants.depth_flags=1u |
                 (frame.config.settings.distance_sharpen_enabled?2u:0u) |
                 (frame.config.settings.sharpen_distance_smooth?4u:0u) |
