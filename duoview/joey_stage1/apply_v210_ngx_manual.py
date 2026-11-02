@@ -23,11 +23,11 @@ def apply(root, source):
     old_vrh = vrh.read_text(encoding="utf-8-sig")
     new_vrh = only_once(old_vrh,
         '    bool duoview_gaze_active() const {',
-        '    bool duoview_ngx_browser_enabled() const { return m_duo_ngx_browser->value(); }\\n    bool duoview_gaze_active() const {',
+        '    bool duoview_ngx_browser_enabled() const { return m_duo_ngx_browser->value(); }\n    bool duoview_gaze_active() const {',
         "VR.hpp")
     new_vrh = only_once(new_vrh,
         '    const ModToggle::Ptr m_duo_distance_smooth{ModToggle::create(generate_name("DuoViewDistanceSmoothstep"), true)};',
-        '    const ModToggle::Ptr m_duo_distance_smooth{ModToggle::create(generate_name("DuoViewDistanceSmoothstep"), true)};\\n    const ModToggle::Ptr m_duo_ngx_browser{ModToggle::create(generate_name("DuoViewNgxDepthBrowser"), false)};',
+        '    const ModToggle::Ptr m_duo_distance_smooth{ModToggle::create(generate_name("DuoViewDistanceSmoothstep"), true)};\n    const ModToggle::Ptr m_duo_ngx_browser{ModToggle::create(generate_name("DuoViewNgxDepthBrowser"), false)};',
         "VR.hpp")
     new_vrh = only_once(new_vrh,
         '            *m_duo_far_distance, *m_duo_distance_smooth, *m_duo_gaze,',
