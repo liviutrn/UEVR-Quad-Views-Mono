@@ -58,3 +58,17 @@ Started 2 Nov 2026 02:00 (Claude, overnight). Base: claude/triview-stage1-fixes-
   head rotation) and union projection into view 2's init options, like Joey's SceneView-compat path does for eyes;
   logs "[TriView][ctor]" with the engine's original values. Entering Tri-View restarts Native Fix once
   (automatic version of the detour). D3D12 logs which submit path runs if Tri-View is selected but not composited.
+
+## Test 2 (Liviu, 2 Nov 11:47, S4-9) and S5
+- [headset-reported] Periphery still bad / head tracking not good / trembling / artefacts; eye tracking shakes badly.
+- [log-verified] Entering Tri-View restarted Native Fix by itself and the picture came up (no black start reported).
+- [log-verified] The engine's own view 2 already had our union projection (m00 0.7736, m21 0.187) and our centre
+  position; only its rotation was wrong. S4 overwrote the rotation.
+- [capture-verified, SIFT] Periphery now within ~2 deg of the foveas (was ~18 deg). The remaining offset is the
+  same in both eyes (dx +10, dy -4 periphery px) = gaze-window mismatch between render and composite.
+- [source-read] Eye-tracked windows shook because Tri-View built DuoView settings with stabilize_crop = false
+  (default) -> raw gaze every frame.
+- [capture-verified] 138 of 737 frames were not composited (OpenXR copy returned early, e.g. GPU still busy
+  with that swapchain slot -> try_wait failed). Same code path as Joey's Native Stereo; worth measuring there.
+- S5 (d15b518): stabilisation always on (DuoView's lock-until-saccade, guard, pixel snap, hold/reacquire);
+  the packet carries the window each eye's projection hook really applied.
