@@ -1,5 +1,5 @@
-name: DuoView v213 DLSS Depth Producer Ticket Repair
-run-name: DuoView v213 DLSS depth producer ticket repair (${{ github.run_number }})
+name: DuoView v214 NGX Ownership Trace
+run-name: DuoView v214 NGX ownership trace (${{ github.run_number }})
 on:
   push:
     branches:
@@ -293,16 +293,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-Mono-v213-RhiDepth-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-Mono-v214-NgxTrace-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-Mono-v213-RhiDepth-${{ github.run_number }}
+          name: UEVR-DuoView-Mono-v214-NgxTrace-${{ github.run_number }}
           path: |
-            UEVR-DuoView-Mono-v213-RhiDepth-*.zip
-            UEVR-DuoView-Mono-v213-RhiDepth-*.zip.sha256
+            UEVR-DuoView-Mono-v214-NgxTrace-*.zip
+            UEVR-DuoView-Mono-v214-NgxTrace-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -317,7 +317,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-DuoView-v213-Evidence-${{ github.run_number }}
+          name: UEVR-DuoView-v214-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 

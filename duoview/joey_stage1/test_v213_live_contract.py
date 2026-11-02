@@ -15,6 +15,12 @@ sharpen=read("src/mods/vr/DuoViewConfig.hpp")
 native=read("src/mods/vr/DuoViewD3D12.hpp")
 
 checks={
+  "NGX selected-source diagnostics distinguish missing owner from capture": (
+     all(s in observer for s in ["++selected_count_", "++inactive_renderer_", "++stale_packet_", "++capture_attempts_",
+                                  "last_output_w_.store", "last_command_type_.store"]) and
+     all(s in dx for s in ["ngx_depth_browser.selected_calls()", "ngx_depth_browser.capture_attempts()",
+                           "ngx_depth_browser.last_command_type()",
+                           "ngx_depth_browser.last_selected_thread()"])),
   "Observer consumes immutable RHI ticket": "const auto key=current_rhi_producer_key;" in observer
      and "const auto key=vr->duoview_producer_key();" not in observer,
   "RHI execution scope carries the producer packet": "ScopedRhiProducerKey rhi_depth_scope{rhi_depth_key};" in rhi

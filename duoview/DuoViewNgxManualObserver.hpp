@@ -65,6 +65,9 @@ class ManualNgxObserver final {
     std::unordered_map<uintptr_t,Feature> features_;
     std::atomic<bool> active_{false};
     std::atomic<uint64_t> eval_count_{},qualified_{},errors_{},missing_rhi_ticket_{};
+    std::atomic<uint64_t> selected_count_{},inactive_renderer_{},stale_packet_{},capture_attempts_{};
+    std::atomic<uint32_t> last_output_w_{},last_output_h_{},last_render_w_{},last_render_h_{},
+        last_depth_format_{},last_command_type_{},last_selected_thread_{};
     static inline thread_local unsigned nested_calls_{};
     struct Guard {
         bool outer{nested_calls_++==0};
@@ -114,15 +117,24 @@ class ManualNgxObserver final {
         const auto pick=candidates().choose();
         if(pick.source!=std::array<uintptr_t,3>{feature_id,out_width,out_height} ||
            (!pick.exact && !pick.manual)) return;
+        ++selected_count_;
+        last_output_w_.store(out_width,std::memory_order_relaxed);
+        last_output_h_.store(out_height,std::memory_order_relaxed);
+        last_render_w_.store(sample.render_width,std::memory_order_relaxed);
+        last_render_h_.store(sample.render_height,std::memory_order_relaxed);
+        last_depth_format_.store(sample.format,std::memory_order_relaxed);
+        last_command_type_.store(static_cast<uint32_t>(cmd->GetType()),std::memory_order_relaxed);
+        last_selected_thread_.store(GetCurrentThreadId(),std::memory_order_relaxed);
         const auto vr=::VR::get();
-        if(!vr || !vr->is_duoview_renderer_active())return;
+        if(!vr || !vr->is_duoview_renderer_active()) {++inactive_renderer_;return;}
         const auto key=current_rhi_producer_key;
         if(!key.generation || !key.frame) {++missing_rhi_ticket_;return;}
         const auto frozen=vr->duoview_state().snapshot(key);
         if(!frozen || frozen->config.key!=key ||
            (!pick.manual &&
             (frozen->config.layout.fovea.width!=out_width ||
-             frozen->config.layout.fovea.height!=out_height)))return;
+             frozen->config.layout.fovea.height!=out_height))) {++stale_packet_;return;}
+        ++capture_attempts_;
         depth_snapshots().capture(cmd,depth,sample,key);
     }
     template<unsigned N> static uint32_t __cdecl evaluate(
@@ -244,6 +256,17 @@ public:
     uint64_t candidates_seen()const{return qualified_.load();}
     uint64_t errors()const{return errors_.load();}
     uint64_t missing_rhi_ticket()const{return missing_rhi_ticket_.load();}
+    uint64_t selected_calls()const{return selected_count_.load();}
+    uint64_t inactive_renderer()const{return inactive_renderer_.load();}
+    uint64_t stale_packet()const{return stale_packet_.load();}
+    uint64_t capture_attempts()const{return capture_attempts_.load();}
+    uint32_t last_output_w()const{return last_output_w_.load();}
+    uint32_t last_output_h()const{return last_output_h_.load();}
+    uint32_t last_render_w()const{return last_render_w_.load();}
+    uint32_t last_render_h()const{return last_render_h_.load();}
+    uint32_t last_depth_format()const{return last_depth_format_.load();}
+    uint32_t last_command_type()const{return last_command_type_.load();}
+    uint32_t last_selected_thread()const{return last_selected_thread_.load();}
     uint32_t installed_evaluators() const {
         std::scoped_lock guard(mutex_);
         return static_cast<uint32_t>(std::count(eval_ok_.begin(),eval_ok_.end(),true));
