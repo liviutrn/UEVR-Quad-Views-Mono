@@ -56,9 +56,9 @@ def apply(root,source):
         '                m_duo_distance_smooth->draw("Smooth transition (OFF = linear)");\n'
         '                m_duo_depth_reverse->draw("DLSS depth reversed Z (UE5 default)");\n'
         '                m_duo_depth_preview->draw("Depth preview: 0 off / 1 raw / 2 distance ramp");\n'
-        '                ImGui::Text("Depth GPU: captured=%llu submitted=%llu skipped=%llu",\n'
+        '                ImGui::Text("Depth GPU: captured=%llu submitted=%llu USED=%llu skipped=%llu",\n'
         '                    static_cast<unsigned long long>(uevr::duoview::ngx::depth_snapshots().captures()),\n'
-        '                    static_cast<unsigned long long>(uevr::duoview::ngx::depth_snapshots().submits()),\n'
+        '                    static_cast<unsigned long long>(uevr::duoview::ngx::depth_snapshots().submits()),\n'                    static_cast<unsigned long long>(uevr::duoview::ngx::depth_snapshots().used()),\n''
         '                    static_cast<unsigned long long>(uevr::duoview::ngx::depth_snapshots().skips()));',str(vrc))
     v=one(v,'Native NGX-SR depth sources are now OBSERVED and can be manually pinned. This browser does not yet copy or sample the depth pixels. Distance sharpening still uses fixed strength until matching the producing fovea is proven.',
         'Native NGX-SR depth sources can be selected or pinned. The v211 shader samples an owned GPU copy only when the same render packet and queue match. Visualize raw depth and the near/far distance ramp before trusting the effect.',str(vrc))
