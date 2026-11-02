@@ -30,10 +30,12 @@ int main() {
     assert(!latch.for_frame({5,12},3000,3000,{-1.f,.5f}));
     auto invalid=modified;invalid.feather_fraction=2.f;
     assert(!latch.set_settings(invalid));
-    invalid=modified;invalid.sharpen_strength=3.f;
+    invalid=modified;invalid.sharpen_strength=6.f; // v208+ range now 0..5
     assert(!latch.set_settings(invalid));
     auto partial=d::reconcile_ui_settings(invalid,modified);
     assert((partial.rejected & d::reject_sharpen)!=0 && near(partial.settings.sharpen_strength,.4f));
+    invalid=modified;invalid.sharpen_strength=5.f;
+    assert(latch.set_settings(invalid)); // upper endpoint is valid.
     invalid=modified;invalid.sharpen_strength=std::nanf("");
     assert(!latch.set_settings(invalid));
     auto still=latch.for_frame({5,12},3000,3000,{.5f,.5f});
