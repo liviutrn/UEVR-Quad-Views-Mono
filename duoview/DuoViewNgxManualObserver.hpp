@@ -112,14 +112,15 @@ class ManualNgxObserver final {
         // exact output rectangle and already-submitted original game queue.
         const auto pick=candidates().choose();
         if(pick.source!=std::array<uintptr_t,3>{feature_id,out_width,out_height} ||
-           !pick.exact) return;
+           (!pick.exact && !pick.manual)) return;
         const auto vr=vrmod::VR::get();
         if(!vr || !vr->is_duoview_renderer_active())return;
         const auto key=vr->duoview_producer_key();
         const auto frozen=vr->duoview_state().snapshot(key);
         if(!frozen || frozen->config.key!=key ||
-           frozen->config.layout.fovea.width!=out_width ||
-           frozen->config.layout.fovea.height!=out_height)return;
+           (!pick.manual &&
+            (frozen->config.layout.fovea.width!=out_width ||
+             frozen->config.layout.fovea.height!=out_height)))return;
         depth_snapshots().capture(cmd,depth,sample,key);
     }
     template<unsigned N> static uint32_t __cdecl evaluate(
