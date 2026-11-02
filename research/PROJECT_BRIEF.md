@@ -1,7 +1,7 @@
 # DuoView project brief (team handoff)
 
 Canonical copy: https://github.com/liviutrn/UEVR-Quad-Views-Mono/blob/claude/team-brief/research/PROJECT_BRIEF.md
-Last update: 1 Nov 2026, 19:10 (Claude). Any team member may update it: keep it current, factual and short.
+Last update: 2 Nov 2026, 03:10 (Claude). Any team member may update it: keep it current, factual and short.
 
 ## How we work (all models, one team)
 - Liviu (owner) is not a programmer: plain words, few steps, at most three precise test
@@ -23,9 +23,20 @@ its own correctly projected render on 2.10), NOT on DuoView's mono machinery.
   eyes. Each eye = periphery underneath + own fovea on top. Menu switch turns the third view off.
   Accepted: near objects tear at the fovea border. Measure fps at 3.8k x 3.1k vs Native Stereo (24).
 - Later: depth-synthesized stereo periphery, eye tracking, FOV fix and other v207 features.
-- Builder: Claude, branch claude/triview-stage1-20261101; design research/2026-11-01-triview-stage1-decision.md.
-  Found (source-read): Joey's stereo hooks treat any view index 2 as "one-based eyes" and then skip
-  the left eye's HMD pose forever; tri-view handles index 2 before that code.
+- Stage 1 (claude/triview-stage1-*) headset: foveas right, periphery black (test 1), then periphery on top
+  of the left eye + black edges (test 2).
+- ROOT CAUSE (2 Nov, Build 52 GPU capture by Liviu + Sol): on STALKER 2.10 (UE 5.5.4) a singleton
+  view-family render lands at (0,0) of its target whatever the view rect says. Build 40/51 (atlas
+  offsets) and Stage 1 (periphery at x = W of the main target) broke for that reason.
+- FIX = Tri-View S2/S3 (Claude, 2 Nov): periphery has its OWN render target (made like Joey's Native Fix
+  capture target), rect (0,0); compositor reads 3 textures at origin; automatic GPU capture writes
+  TriView_Capture_1/2.zip next to the UEVR log (checker: duoview/triview/analyze_triview_capture.py).
+  S3 adds PSVR2 eye-tracked fovea windows (DuoView's gaze reader + smoothing settings) and a fovea size
+  setting. Builds: S2 run 41368098590 (Tri-View-S2-7), S3 run 41368117534 (Tri-View-S3-8): CI-verified,
+  NOT headset-tested. Notes: research/2026-11-02-triview-s2-own-periphery-target.md, PROGRESS.md on
+  claude/triview-s3-gaze-20261102.
+- Next: read the capture ZIPs; fps vs Native Stereo; per-eye depth reprojection of the periphery
+  (near objects shift up to ~5 deg at the fovea edge because the periphery is from the centre camera).
 
 ## ABANDONED 1 Nov 2026: DuoView AFW
 Headset test of AFW: fps fine, image quality rejected (flicker, motion inconsistencies, less smooth
@@ -111,6 +122,8 @@ Not required: letmein-vr Lua hands/IK mod compatibility, PIP scopes.
   PIP scopes crash under AFW).
 
 ## Lessons
+- After a game/engine update, re-check WHERE each render physically lands (GPU readback), not only
+  that it ran: masks, logs and debug colours all looked fine in Build 51 while pixels were at x = 0.
 - Measure exact FPS at a fixed resolution (tiny res isolates fixed costs) before architecture work.
 - A geometry change needs a pixel-level test or one-frame debug view before headset time.
 - Check the real source, not release notes, before ruling something out.
