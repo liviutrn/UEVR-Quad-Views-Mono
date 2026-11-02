@@ -12,7 +12,8 @@ capture, history, flow, synthesis and output swapchains exist once. Every frame
 sent to the runtime (SubmitRuntimeFrame: real, generated, held, 1x pass-through)
 gets view 1 back: the same image, view 1's own pose offset and field of view
 (so UEVR's Mono Eye Alignment is kept). Any frame that is not shareable goes
-through unchanged as normal stereo, immediately. Disable with the environment
+through unchanged as normal stereo, immediately. Frames without a projection layer leave the
+mono state unchanged. All FG modes collapse, Extrapolate included (no depth path). Disable with the environment
 variable VECTORXR_MONO_FRAMEGEN=0.
 
 Touches: layer/include/depthxr/openxr_layer.h, layer/src/openxr_layer.cpp,
@@ -133,6 +134,10 @@ replace(C, "XrResult OpenXrLayer::TraceRuntimeEndFrame(XrSession session, const 
             state.session = session;
         }
         if (!state.enabled) return info;
+        // No game image this frame (loading, dashboard, shouldRender false): nothing to
+        // collapse and nothing to judge, so keep the mono state as it is (avoids a costly
+        // stereo->mono rebuild cycle after a single empty frame).
+        if (!source) return info;
         if (reason) {
             // Never collapse a frame whose eyes differ; leave at once.
             if (state.active) {
