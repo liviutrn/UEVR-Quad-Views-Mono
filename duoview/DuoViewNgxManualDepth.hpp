@@ -22,11 +22,82 @@ class ManualDepthCandidates final {
     std::vector<DepthCandidate> observed_;
     std::array<uintptr_t,3> selected_{}; // handle, output width, output height
     uint64_t next_serial_{};
+    std::array<uint32_t,4> expected_{}; // Fovea W/H, periphery W/H from immutable DuoView packet.
+    std::array<uintptr_t,3> auto_selected_{};
+    static std::array<uintptr_t,3> key(const DepthCandidate& c) {
+        return {c.feature,c.output_width,c.output_height};
+    }
+    static bool usable(const DepthCandidate& c, uint64_t t) {
+        return c.depth_present && c.color_present && c.render_width && c.render_height &&
+            !(!c.create_observed ? false : c.feature_kind!=1u) &&
+            uint64_t(c.depth_x)+c.render_width<=c.depth_width &&
+            uint64_t(c.depth_y)+c.render_height<=c.depth_height &&
+            t>=c.last_seen_ms && t-c.last_seen_ms<=3000;
+    }
     static uint64_t now_ms() {
         return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
     }
 public:
+    // Expected dimensions are gathered from the actual frozen packet in the
+    // OpenXR compositor, never from assumed HMD scale or max texture allocation.
+    void set_expected(uint32_t fw, uint32_t fh, uint32_t pw, uint32_t ph) {
+        std::scoped_lock guard(lock_);
+        const std::array<uint32_t,4> next{fw,fh,pw,ph};
+        if (next!=expected_) {
+            expected_=next;
+            auto_selected_={}; // resolution or crop change requires fresh match
+            if(selected_[0] && (selected_[1]!=fw || selected_[2]!=fh))selected_={};
+        }
+    }
+    std::array<uint32_t,4> expected() const {
+        std::scoped_lock guard(lock_);
+        return expected_;
+    }
+    struct Pick {
+        std::array<uintptr_t,3> source{};
+        bool manual{}, exact{}, ambiguous{}, fallback_largest{};
+        uint32_t candidates{};
+    };
+    Pick choose() {
+        std::scoped_lock guard(lock_);
+        Pick out{};
+        const auto now=now_ms();
+        std::vector<const DepthCandidate*> live;
+        for(const auto& c:observed_)if(usable(c,now))live.push_back(&c);
+        out.candidates=uint32_t(live.size());
+        for(const auto* c:live)if(selected_==key(*c)) {
+            out.source=selected_;out.manual=true;
+            out.exact=c->output_width==expected_[0] && c->output_height==expected_[1];
+            return out;
+        }
+        // Manual locks are never silently replaced by auto; release/resize
+        // invalidates them explicitly so the user can see the loss.
+        if(selected_[0])return out;
+        if(!expected_[0] || !expected_[1])return out;
+        if(expected_[0]==expected_[2] && expected_[1]==expected_[3]) {
+            out.ambiguous=true;return out; // equal-size fovea/periphery
+        }
+        std::vector<const DepthCandidate*> exact;
+        for(const auto* c:live)
+            if(c->output_width==expected_[0] && c->output_height==expected_[1])
+                exact.push_back(c);
+        if(exact.empty()) {
+            // Biggest texture is only a suggestion without verified shape.
+            // Do not automatically apply a heuristic to the sharpening shader.
+            return out;
+        }
+        if(auto_selected_[0])for(const auto* c:exact)if(key(*c)==auto_selected_) {
+            out.source=auto_selected_;out.exact=true;return out;
+        }
+        if(exact.size()!=1) {
+            out.ambiguous=true;auto_selected_={};
+            return out;
+        }
+        out.source=auto_selected_=key(*exact.front());
+        out.exact=true;
+        return out;
+    }
     void observe(DepthCandidate x) {
         if (!x.feature || !x.output_width || !x.output_height || !x.depth_present ||
             !x.depth_width || !x.depth_height) return;
@@ -48,6 +119,7 @@ public:
                 if(oldest!=observed_.end()) {
                     if(selected_==std::array<uintptr_t,3>{oldest->feature,oldest->output_width,oldest->output_height})
                         selected_={};
+                    if(auto_selected_==key(*oldest))auto_selected_={};
                     observed_.erase(oldest);
                 }
             }
@@ -57,6 +129,7 @@ public:
     void released(uintptr_t feature) {
         std::scoped_lock guard(lock_);
         if(selected_[0]==feature)selected_={};
+        if(auto_selected_[0]==feature)auto_selected_={};
         observed_.erase(std::remove_if(observed_.begin(),observed_.end(),
             [=](const auto& c){return c.feature==feature;}),observed_.end());
     }
@@ -78,10 +151,11 @@ public:
         if(i==observed_.end() || now_ms()-i->last_seen_ms>3000 ||
            (i->create_observed && i->feature_kind!=1u)) return false;
         selected_={feature,w,h};
+        auto_selected_={};
         return true;
     }
-    void clear() {std::scoped_lock guard(lock_);selected_={};}
-    void reset() {std::scoped_lock guard(lock_);observed_.clear();selected_={};}
+    void clear() {std::scoped_lock guard(lock_);selected_={};auto_selected_={};}
+    void reset() {std::scoped_lock guard(lock_);observed_.clear();selected_={};auto_selected_={};expected_={};}
     std::array<uintptr_t,3> selected() const {
         std::scoped_lock guard(lock_);return selected_;
     }
