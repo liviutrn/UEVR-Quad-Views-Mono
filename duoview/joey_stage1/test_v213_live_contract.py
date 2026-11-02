@@ -15,6 +15,11 @@ sharpen=read("src/mods/vr/DuoViewConfig.hpp")
 native=read("src/mods/vr/DuoViewD3D12.hpp")
 
 checks={
+  "Output identity fallback is strict and single-use": (
+      "depth_snapshots().capture(cmd,depth,sample,{},output);" in observer and
+      "slot->output_identity=output_proof?" in read("src/mods/vr/DuoViewNgxDepthCapture.hpp") and
+      "find_by_output" in read("src/mods/vr/DuoViewD3D12.hpp") and
+      "last_unkeyed_used_sequence_" in read("src/mods/vr/DuoViewNgxDepthCapture.hpp")),
   "NGX selected-source diagnostics distinguish missing owner from capture": (
      all(s in observer for s in ["++selected_count_", "++inactive_renderer_", "++stale_packet_", "++capture_attempts_",
                                   "last_output_w_.store", "last_command_type_.store"]) and

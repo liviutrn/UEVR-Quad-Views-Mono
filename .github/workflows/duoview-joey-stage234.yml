@@ -1,5 +1,5 @@
-name: DuoView v214 NGX Ownership Trace
-run-name: DuoView v214 NGX ownership trace (${{ github.run_number }})
+name: DuoView v215 Live DLSS Output Provenance Repair
+run-name: DuoView v215 live NGX output proof (${{ github.run_number }})
 on:
   push:
     branches:
@@ -19,6 +19,7 @@ on:
       - experiment/v211-warp-depth-proof-20261102
       - fix/v212-depth-sharpen-release-20261102
       - fix/v213-live-depth-correct-queue-20261102
+      - fix/v215-ngx-output-provenance-20261102
   pull_request:
     branches:
       - build-182
@@ -293,16 +294,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-Mono-v214-NgxTrace-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-Mono-v215-OutputProof-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-Mono-v214-NgxTrace-${{ github.run_number }}
+          name: UEVR-DuoView-Mono-v215-OutputProof-${{ github.run_number }}
           path: |
-            UEVR-DuoView-Mono-v214-NgxTrace-*.zip
-            UEVR-DuoView-Mono-v214-NgxTrace-*.zip.sha256
+            UEVR-DuoView-Mono-v215-OutputProof-*.zip
+            UEVR-DuoView-Mono-v215-OutputProof-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -317,7 +318,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-DuoView-v214-Evidence-${{ github.run_number }}
+          name: UEVR-DuoView-v215-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 

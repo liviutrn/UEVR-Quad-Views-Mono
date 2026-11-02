@@ -23,6 +23,8 @@ struct DepthSnapshot {
     ComPtr<ID3D12Resource> texture;
     ComPtr<ID3D12Resource> source_reference; // source must survive GPU copy until producer fence
     FrameKey key{};
+    uintptr_t output_identity{}; // borrowed NGX Output identity, comparison ONLY
+    uint64_t sequence{};
     uintptr_t feature{};
     uint32_t out_w{}, out_h{}, tex_w{}, tex_h{}, input_w{}, input_h{};
     uint32_t base_x{}, base_y{};
@@ -38,8 +40,8 @@ class DepthSnapshotPool final {
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12Fence> fence_;
     std::vector<std::shared_ptr<DepthSnapshot>> leases_;
-    uint64_t signal_{};
-    std::atomic<uint64_t> captures_{}, skips_{}, submits_{}, used_{};
+    uint64_t signal_{}, next_capture_sequence_{}, last_unkeyed_used_sequence_{};
+    std::atomic<uint64_t> captures_{}, skips_{}, submits_{}, used_{}, unkeyed_captures_{}, output_matches_{};
     bool enabled_{};
     static bool depth_format(DXGI_FORMAT f) noexcept {
         return f==DXGI_FORMAT_R32_FLOAT || f==DXGI_FORMAT_D32_FLOAT ||
@@ -75,9 +77,13 @@ public:
         return true;
     }
     void capture(ID3D12GraphicsCommandList* cmd,ID3D12Resource* depth,
-                 const DepthCandidate& c,FrameKey key) {
+                 const DepthCandidate& c,FrameKey key,ID3D12Resource* ngx_output=nullptr) {
+        // Allow either immutable UE RHI packet identity OR the physical
+        // NGX output itself, validated against the foveal color resource.
+        const bool keyed=key.generation && key.frame;
+        const bool output_proof=!key.generation && !key.frame && ngx_output;
         if(!cmd || !depth || cmd->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT ||
-           !key.generation || !key.frame || !c.render_width || !c.render_height ||
+           (!keyed && !output_proof) || !c.render_width || !c.render_height ||
            !c.output_width || !c.output_height) return;
         const auto desc=depth->GetDesc();
         if(desc.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
@@ -137,13 +143,17 @@ public:
         transition(cmd,slot->texture.Get(),D3D12_RESOURCE_STATE_COPY_DEST,read);
         transition(cmd,depth,D3D12_RESOURCE_STATE_COPY_SOURCE,read);
         slot->source_reference=depth; // producer lifetime, never sample this borrowed input
-        slot->key=key;slot->feature=c.feature;
+        slot->key=key;
+        slot->output_identity=output_proof?reinterpret_cast<uintptr_t>(ngx_output):0;
+        slot->sequence=++next_capture_sequence_;
+        slot->feature=c.feature;
         slot->out_w=c.output_width;slot->out_h=c.output_height;
         slot->tex_w=w;slot->tex_h=h;slot->input_w=c.render_width;slot->input_h=c.render_height;
         slot->base_x=full?c.depth_x:0;slot->base_y=full?c.depth_y:0;
         slot->producer_list=cmd;slot->pending=true;slot->submitted=false;
         slot->producer_fence=0;
         ++captures_;
+        if(output_proof)++unkeyed_captures_;
     }
     // Called immediately AFTER actual ExecuteCommandLists on the original
     // producer queue. Queue::Signal is GPU ordered after the NGX depth copy.
@@ -183,9 +193,34 @@ public:
         }
         return {};
     }
+    // Only the SAME physical NGX Output used by the fused compositor's
+    // native fovea can recover a depth snapshot without a UE RHI ticket.
+    // Require the game's exact queue/fence and consume each sequence once.
+    std::shared_ptr<DepthSnapshot> find_by_output(ID3D12Device* device,
+        ID3D12CommandQueue* queue,ID3D12Resource* fovea,
+        uintptr_t feature,uint32_t w,uint32_t h) {
+        std::scoped_lock guard(lock_);
+        if(!enabled_ || !device || device!=device_.Get() ||
+           !queue || queue!=producer_.Get() || !fovea || !feature)return {};
+        const auto identity=reinterpret_cast<uintptr_t>(fovea);
+        for(auto i=leases_.rbegin();i!=leases_.rend();++i) {
+            auto& slot=*i;
+            if(slot->submitted && !slot->pending && !slot->key.generation &&
+               !slot->key.frame && slot->output_identity==identity &&
+               slot->producer_fence && slot->sequence>last_unkeyed_used_sequence_ &&
+               slot->feature==feature && slot->out_w==w && slot->out_h==h) {
+                last_unkeyed_used_sequence_=slot->sequence;
+                ++output_matches_;
+                return slot;
+            }
+        }
+        return {};
+    }
     void note_used()noexcept {++used_;}
     uint64_t used()const{return used_.load();}
     uint64_t captures()const{return captures_.load();}
+    uint64_t unkeyed_captures()const{return unkeyed_captures_.load();}
+    uint64_t output_matches()const{return output_matches_.load();}
     uint64_t skips()const{return skips_.load();}
     uint64_t submits()const{return submits_.load();}
 };

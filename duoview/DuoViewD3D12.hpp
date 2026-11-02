@@ -242,6 +242,14 @@ public:
             depth=uevr::duoview::ngx::depth_snapshots().find(
                 device,source_queue,frame.config.key,pick.source[0],
                 static_cast<uint32_t>(pick.source[1]),static_cast<uint32_t>(pick.source[2]));
+            if(!depth) {
+                // Repair the missing-RHI-ticket case only if the real NGX
+                // Output resource IS the original compositor fovea resource.
+                // Never accept only dimensional similarity or recent time.
+                depth=uevr::duoview::ngx::depth_snapshots().find_by_output(
+                    device,source_queue,fovea,pick.source[0],
+                    static_cast<uint32_t>(pick.source[1]),static_cast<uint32_t>(pick.source[2]));
+            }
         }
         if(depth && depth->texture) {
             constants.depth_tex_size[0]=depth->tex_w;

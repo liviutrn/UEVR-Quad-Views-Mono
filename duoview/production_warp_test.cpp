@@ -260,6 +260,29 @@ int main() try {
     if(raw_no_near<120 || raw_no_near>136)
         throw std::runtime_error("Raw NGX preview incorrectly required a metric near plane");
     nativeFrame.projection[14]=10.f;
+    // Real game NGX can run outside UE's RHI-command ticket. This full GPU
+    // regression exercises repair only with matching physical NGX Output.
+    check(allocator->Reset());
+    check(cmd->Reset(allocator.Get(),nullptr));
+    const auto prior_unkeyed=pool.unkeyed_captures();
+    pool.capture(cmd.Get(),raw_depth.Get(),candidate,{},native_fovea.Get());
+    if(pool.unkeyed_captures()!=prior_unkeyed+1)
+        throw std::runtime_error("Unscoped NGX Output depth not captured");
+    check(cmd->Close());queue->ExecuteCommandLists(1,lists);
+    pool.submitted(queue.Get(),1,lists);
+    if(pool.find_by_output(device.Get(),queue.Get(),native_periphery.Get(),
+           candidate.feature,candidate.output_width,candidate.output_height))
+        throw std::runtime_error("Non-foveal NGX Output accepted");
+    if(pool.find_by_output(device.Get(),nullptr,native_fovea.Get(),
+           candidate.feature,candidate.output_width,candidate.output_height))
+        throw std::runtime_error("NGX Output without original queue accepted");
+    nativeFrame.config.key={1,5}; // intentionally NOT the RHI depth key
+    const int output_proven_raw=depth_draw(1,9);
+    if(output_proven_raw<120 || output_proven_raw>136 || pool.output_matches()==0)
+        throw std::runtime_error("Physical NGX Output failed foveal depth preview");
+    if(pool.find_by_output(device.Get(),queue.Get(),native_fovea.Get(),
+           candidate.feature,candidate.output_width,candidate.output_height))
+        throw std::runtime_error("Old NGX Output snapshot was replayed");
     // The legacy atlas/gather compositor is a possible source-format
     // fallback. It must show magenta for requested depth preview rather than
     // silently displaying normal image when NGX is unavailable.
@@ -273,9 +296,9 @@ int main() try {
     transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_SOURCE);
     cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
     check(cmd->Close());queue->ExecuteCommandLists(1,lists);
-    check(queue->Signal(fence.Get(),8));
+    check(queue->Signal(fence.Get(),10));
     event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
-    check(fence->SetEventOnCompletion(8,event));
+    check(fence->SetEventOnCompletion(10,event));
     if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
         throw std::runtime_error("Legacy missing-depth preview GPU timeout");
     CloseHandle(event);

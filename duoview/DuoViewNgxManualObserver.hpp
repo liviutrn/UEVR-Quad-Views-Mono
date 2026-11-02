@@ -128,7 +128,15 @@ class ManualNgxObserver final {
         const auto vr=::VR::get();
         if(!vr || !vr->is_duoview_renderer_active()) {++inactive_renderer_;return;}
         const auto key=current_rhi_producer_key;
-        if(!key.generation || !key.frame) {++missing_rhi_ticket_;return;}
+        if(!key.generation || !key.frame) {
+            ++missing_rhi_ticket_;
+            // NGX may execute outside UE's hooked RHI scope. Capture here
+            // with *actual NGX Output identity*, NOT guessed frame identity.
+            // Only a same-queue, submitted, output-identity match may consume it.
+            ++capture_attempts_;
+            depth_snapshots().capture(cmd,depth,sample,{},output);
+            return;
+        }
         const auto frozen=vr->duoview_state().snapshot(key);
         if(!frozen || frozen->config.key!=key ||
            (!pick.manual &&
