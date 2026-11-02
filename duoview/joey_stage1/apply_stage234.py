@@ -1094,7 +1094,11 @@ OpenXR::PipelineState OpenXR::get_submit_state() {
                  "DuoViewMonoCopyD3D12.hpp"):
         target=root/"src/mods/vr"/name
         if target.exists(): raise RuntimeError("Refusing to overwrite prior source: "+str(target))
-        text=(src/name).read_text(encoding="utf-8")
+        # The checked-in modern Config drives independent WARP tests. Backend
+        # patch order still starts from the byte-for-byte v207 settings layout:
+        # v209/v211 append their settings with protected exact-anchor edits.
+        config_source="DuoViewConfigBaseline.hpp" if name=="DuoViewConfig.hpp" else name
+        text=(src/config_source).read_text(encoding="utf-8")
         if name=="DuoViewConfig.hpp":
             text=replace(text,
                 '        cached_.reset();\n    }',
