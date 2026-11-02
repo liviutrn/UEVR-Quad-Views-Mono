@@ -116,7 +116,7 @@ void D3D12Component::triview_take_capture(d3d12::CommandContext& commands, ID3D1
         SPDLOG_INFO("[TriView] Automatic capture {} queued: {}", taken + 1, path.string());
     } else {
         vr->m_triview_captures.fetch_add(1, std::memory_order_acq_rel);
-        SPDLOG_WARNING("[TriView] Automatic capture {} could not be recorded", taken + 1);
+        SPDLOG_WARN("[TriView] Automatic capture {} could not be recorded", taken + 1);
     }
 } catch (...) {
     SPDLOG_WARNING_EVERY_N_SEC(10, "[TriView] Automatic capture failed with an exception");
@@ -263,7 +263,7 @@ void VRRenderTargetManager_Base::build_triview_target(uint64_t generation, uint3
     RenderThreadWorker::ConditionalJobFunc job = [this, owner, generation, width, height, release_building]() mutable -> bool {
         if (generation != scene_capture_generation.load(std::memory_order_acquire)) { return true; }
         if (!owner->texture.valid()) {
-            SPDLOG_WARNING("[TriView] Periphery texture disappeared before validation; will retry");
+            SPDLOG_WARN("[TriView] Periphery texture disappeared before validation; will retry");
             release_building();
             return true;
         }
