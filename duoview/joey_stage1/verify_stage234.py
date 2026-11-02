@@ -14,6 +14,7 @@ EDITED_BACKEND = {
 }
 ADDED_BACKEND = {
  "src/mods/vr/DuoViewDelivery.hpp",
+ "src/mods/vr/DuoViewNgxRhiTicket.hpp",
  "src/mods/vr/DuoViewGeometry.hpp", "src/mods/vr/DuoViewGaze.hpp",
  "src/mods/vr/DuoViewPSVR2Gaze.hpp", "src/mods/vr/DuoViewCropStability.hpp",
  "src/mods/vr/DuoViewFrame.hpp", "src/mods/vr/DuoViewConfig.hpp",
