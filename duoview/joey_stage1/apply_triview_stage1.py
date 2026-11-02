@@ -87,7 +87,7 @@ void D3D12Component::triview_take_capture(d3d12::CommandContext& commands, ID3D1
         {"xr_both_eyes", destination, static_cast<uint32_t>(dd.Width), tall, xr_regions}};
     char text[2048];
     std::snprintf(text, sizeof(text),
-        "Tri-View automatic capture %u (build: Tri-View S3, own periphery target, eye-tracked foveas)\n"
+        "Tri-View automatic capture %u (build: Tri-View S5)\n"
         "eye %ux%u, XR image %llux%u, fovea %ux%u, window L u %.4f..%.4f v %.4f..%.4f R u %.4f..%.4f v %.4f..%.4f, periphery %ux%u\n"
         "eye L tans l %.5f r %.5f t %.5f b %.5f | eye R tans l %.5f r %.5f t %.5f b %.5f\n"
         "periphery union tans l %.5f r %.5f t %.5f b %.5f\n"
@@ -417,6 +417,15 @@ BACKEND = {
    '    std::atomic<uint64_t> m_triview_ctor_overrides{};\n'
    '    // Entering Tri-View from another method: restart Native Fix once (fresh capture + pair learning).\n'
    '    bool triview_fresh_start_due();\n'
+   '    // The fovea window each eye was really rendered with (projection hook), carried by the packet.\n'
+   '    void triview_note_applied_window(int eye, const uevr::triview::Window& window) {\n'
+   '        std::scoped_lock lock{m_triview_layout_mutex};\n'
+   '        m_triview_applied_window[eye != 0 ? 1 : 0] = window;\n'
+   '    }\n'
+   '    std::optional<uevr::triview::Window> triview_applied_window(int eye) {\n'
+   '        std::scoped_lock lock{m_triview_layout_mutex};\n'
+   '        return m_triview_applied_window[eye != 0 ? 1 : 0];\n'
+   '    }\n'
    '    std::optional<uevr::triview::Layout> triview_layout();\n'
    '    void triview_note_eye_pose(int32_t index, const double* rotation, const double* position);\n'
    '    bool triview_centre_pose(double* rotation, double* position) const;\n'
@@ -444,6 +453,7 @@ BACKEND = {
    '    uevr::duoview::CropStability m_triview_stability{};\n'
    '    std::atomic<bool> m_triview_gaze_live{false};\n'
    '    uint64_t m_triview_fresh_generation{UINT64_MAX}; // game thread\n'
+   '    std::array<std::optional<uevr::triview::Window>, 2> m_triview_applied_window{};\n'
    '    const ModToggle::Ptr m_triview_border{ModToggle::create(generate_name("TriViewDebugBorder"), false)};\n'
 
    '    std::atomic<bool> m_triview_owns_index_two{false};\n'
@@ -649,6 +659,7 @@ BACKEND = {
    '        if (vr->is_triview_active() && g_hook->m_has_double_precision && (view_index == 0 || view_index == 1)) {\n'
    '            if (const auto layout = vr->triview_layout()) {\n'
    '                uevr::triview::apply_fovea_projection(double_matrix, *layout, static_cast<int>(true_index));\n'
+   '                vr->triview_note_applied_window(static_cast<int>(true_index), layout->window[true_index != 0 ? 1 : 0]);\n'
    '            }\n'
    '        }\n'
    '        if (duo_fovea || duo_full) {'),
@@ -767,7 +778,11 @@ BACKEND = {
    '            packet->render_frame = vr->m_render_frame_count;\n        }\n'
    '        if (vr->is_triview_active()) {\n'
    '            if (const auto layout = vr->triview_layout()) {\n'
-   '                packet->triview = uevr::triview::PacketLayout{*layout, true, triview_rendered};\n'
+   '                auto rendered_layout = *layout;\n'
+   '                for (int eye = 0; eye < 2; ++eye) {\n'
+   '                    if (const auto applied = vr->triview_applied_window(eye)) { rendered_layout.window[eye] = *applied; }\n'
+   '                }\n'
+   '                packet->triview = uevr::triview::PacketLayout{rendered_layout, true, triview_rendered};\n'
    '                packet->triview_target = triview_rendered ? triview_used_target : nullptr;\n'
    '                (triview_rendered ? vr->m_triview_third_renders : vr->m_triview_pair_only)\n'
    '                    .fetch_add(1, std::memory_order_relaxed);\n'
@@ -923,7 +938,13 @@ std::optional<uevr::triview::Layout> VR::triview_layout() {
         settings.gaze_breakout_radius = m_duo_breakout->value();
         settings.gaze_still_radius = m_duo_stillness->value();
         settings.gaze_relock_samples = static_cast<uint32_t>(m_duo_relock->value());
-        settings.gaze_quant_pixels = 0;
+        // Test 2: without stabilisation the window followed raw gaze every frame (shaking). Use DuoView's
+        // lock-until-saccade stabilisation, noise guard and pixel-grid snapping, always on for Tri-View.
+        settings.stabilize_crop = true;
+        settings.guard_fraction = m_duo_guard->value();
+        settings.gaze_quant_pixels = static_cast<uint32_t>(m_duo_quant->value());
+        settings.gaze_hold_ms = m_duo_hold->value();
+        settings.gaze_reacquire_samples = m_duo_reacquire->value();
         const auto centre = m_triview_stability.update(uevr::duoview::FrameKey{1, frame}, get_hmd_width(),
             get_hmd_height(), settings, sample, GetTickCount64());
         if (sample.has_value() || centre.u != .5f || centre.v != .5f) {
