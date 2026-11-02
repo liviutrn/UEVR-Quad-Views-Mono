@@ -208,6 +208,7 @@ replace(D12, "#include <d3dcompiler.h>\n", "#include <d3dcompiler.h>\n#include <
 replace(D12, "vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {\n", r'''// v208: live video-memory readout for DuoView, once per second. Uses the game
 // swap chain's own DXGI factory (no new factory, no proxy-DLL interaction).
 static void sample_duoview_vram(VR* vr) {
+    if (vr == nullptr || !vr->is_using_duoview_mono()) { return; } // v208 review: DuoView only
     static std::chrono::steady_clock::time_point next_sample{};
     static Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter{};
     static LUID adapter_luid{};
@@ -305,6 +306,8 @@ replace(VRH, "    void note_duoview_source_extents(uint64_t packed) {\n"
         "    }\n")
 
 VRC = "src/mods/VR.cpp"
+replace(VRC, "                    m_duo_sharp_periphery->value()=true;\n",
+        "                    m_duo_sharp_periphery->value()=true;\n                    m_duo_shared_eye->value()=false; // v208\n")
 replace(VRC, "        .sharp_periphery=m_duo_sharp_periphery->value()};\n",
         "        .sharp_periphery=m_duo_sharp_periphery->value(),\n"
         "        .shared_eye_image=m_duo_shared_eye->value()};\n")
