@@ -26,7 +26,7 @@ float3 GlamReadFovea(float2 fullUv, float2 pixelOffset) {
     float2 coords = NativeSampleUV(local, FoveaRect.zw, NativeFoveaDimensions);
     return GlamDecode(SourceAtlas.SampleLevel(LinearClamp, coords, 0.0).rgb);
 }
-float3 GlamSharpenNativeFovea(float2 fullUv, float3 center) {
+float3 GlamSharpenNativeFovea(float2 fullUv, float3 center, float strength) {
     // Called only when SharpenStrength > 0 and the foveal view contributes.
     float3 c = GlamDecode(center);
     const bool bigger = (SharpenFlags & 2u) != 0u;
@@ -66,7 +66,7 @@ float3 GlamSharpenNativeFovea(float2 fullUv, float3 center) {
     float3 possible = min(smoothed, c * 0.5);
     possible = min(possible, 1.0 - max(smoothed, c));
     possible = clamp(possible, 0.00001, SharpenMaxChange);
-    float3 change = diff / (1.0 / max(SharpenStrength, 0.00001) + abs(diff) / possible);
+    float3 change = diff / (1.0 / max(strength, 0.00001) + abs(diff) / possible);
     if ((SharpenFlags & 1u) != 0u) change *= (1.0 - edgeRatio);
     return GlamEncode(c + change);
 }
