@@ -253,6 +253,34 @@ int main() try {
     // reversed Z 0.5 with 10 cm near => 0.20 m. Ramp [.10,.50] -> 0.25.
     if(distance_grey<56 || distance_grey>72)
         throw std::runtime_error("Metric depth blend should be 0.25 (64 grey), got "+std::to_string(distance_grey));
+    // The legacy atlas/gather compositor is a possible source-format
+    // fallback. It must show magenta for requested depth preview rather than
+    // silently displaying normal image when NGX is unavailable.
+    check(allocator->Reset());
+    check(cmd->Reset(allocator.Get(),nullptr));
+    frame.settings.depth_preview_mode=1;
+    transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_RENDER_TARGET);
+    if(!compositor.record(device.Get(),cmd.Get(),atlas.Get(),stereo.Get(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,frame,frequency))
+        throw std::runtime_error("Legacy depth-unavailable preview raster failed: "+compositor.error());
+    transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_SOURCE);
+    cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+    check(cmd->Close());queue->ExecuteCommandLists(1,lists);
+    check(queue->Signal(fence.Get(),7));
+    event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    check(fence->SetEventOnCompletion(7,event));
+    if(WaitForSingleObject(event,30000)!=WAIT_OBJECT_0)
+        throw std::runtime_error("Legacy missing-depth preview GPU timeout");
+    CloseHandle(event);
+    check(readback->Map(0,&read,&mapped));
+    const auto missing=sample(24,16); // inside the moved fovea
+    if(missing[0]<245 || missing[1]>8 || missing[2]<245)
+        throw std::runtime_error("Legacy preview silently hid missing NGX depth instead of magenta");
+    for(UINT y=0;y<32;++y)for(UINT x=0;x<32;++x)
+        if(std::memcmp(sample(x,y),sample(x+32,y),4))
+            throw std::runtime_error("Legacy missing-depth preview broke Mono duplication");
+    readback->Unmap(0,nullptr);
+    frame.settings.depth_preview_mode=0;
     if(pool.used()<2)throw std::runtime_error("Depth was copied but never used by the compositor");
     std::cout<<"v212 NGX GPU copy, negative-provenance checks, compositor usage, raw/metric preview: PASS\\n";
     std::cout << "Native fused Glamarye WARP path, focus-only, no duplicate full XR pass: PASS\\n";
