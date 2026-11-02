@@ -188,6 +188,11 @@ void VRRenderTargetManager_Base::build_triview_target(uint64_t generation, uint3
         current != nullptr && current->generation == generation && current->width == width && current->height == height) {
         return;
     }
+    if (triview_target_attempts_generation != generation) {
+        triview_target_attempts_generation = generation;
+        triview_target_attempts = 0;
+        triview_target_retry_after_ms = 0;
+    }
     if (triview_target_building == generation || steady_clock_milliseconds() < triview_target_retry_after_ms) { return; }
     if (!stalker2_uses_validated_ue55_native_fix_capture_layout()) {
         vr->m_triview_target_status.store("unavailable: not the validated STALKER 2 UE5.5 capture layout");
@@ -290,6 +295,7 @@ void VRRenderTargetManager_Base::build_triview_target(uint64_t generation, uint3
         snapshot->owner = owner;
         triview_target_snapshot.store(std::move(snapshot), std::memory_order_release);
         VR::get()->m_triview_target_status.store("ready");
+        release_building();   // a later size change in the same generation may build again
         SPDLOG_INFO("[TriView] Periphery target ready: FRenderTarget {:x}, D3D12 {:x}, {}x{}, generation {}",
             reinterpret_cast<uintptr_t>(chain->render_target), reinterpret_cast<uintptr_t>(chain->native_resource.Get()),
             width, height, generation);
@@ -347,6 +353,9 @@ BACKEND = {
    '        if (is_duoview_renderer_active()) { return true; }\n'
    '        if (is_triview_active()) { return true; } // Tri-View ID7 forces Native Fix on\n\n'
    '        return m_native_stereo_fix->value() &&'),
+  ('        return m_native_stereo_fix_texture_array_submit->value() &&\n',
+   '        if (is_triview_selected()) { return false; } // Tri-View composes its own XR image\n'
+   '        return m_native_stereo_fix_texture_array_submit->value() &&\n'),
   ('    bool is_duoview_renderer_active() const;\n',
    '    bool is_duoview_renderer_active() const;\n'
    '    // Tri-View Stage 1 (ID 7): Native Stereo + Native Fix + one centre periphery view.\n'
@@ -470,7 +479,8 @@ BACKEND = {
    '    std::atomic_bool triview_target_requested{};\n'
    '    uint64_t triview_target_building{};          // generation being validated (game thread)\n'
    '    uint64_t triview_target_retry_after_ms{};    // game thread\n'
-   '    uint32_t triview_target_attempts{};          // game thread, capped\n'),
+   '    uint32_t triview_target_attempts{};          // game thread, capped per capture generation\n'
+   '    uint64_t triview_target_attempts_generation{}; // game thread\n'),
  ],
  # ---- engine side: view count, index-2 hooks, third render -------------------------------------
  "src/mods/vr/FFakeStereoRenderingHook.cpp": [
@@ -624,6 +634,11 @@ BACKEND = {
    '        // Joey\'s restore guard puts views/count/target back afterwards.\n'
    '        static bool triview_skip_decrement{}, triview_disabled{}, triview_last_rendered{};\n'
    '        static uint32_t triview_last_frame{};\n'
+   '        static uint64_t triview_statics_generation{};\n'
+   '        if (rtm != nullptr && triview_statics_generation != rtm->get_scene_capture_generation()) {\n'
+   '            triview_statics_generation = rtm->get_scene_capture_generation();\n'
+   '            triview_skip_decrement = triview_disabled = triview_last_rendered = false;\n'
+   '        }\n'
    '        const size_t frame_offset = SceneViewExtensionAnalyzer::frame_count_offset;\n'
    '        auto* const family_bytes = reinterpret_cast<uint8_t*>(view_family);\n'
    '        uint32_t frame_before{};\n'

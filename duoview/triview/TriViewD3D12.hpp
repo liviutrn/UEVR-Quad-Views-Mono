@@ -368,8 +368,7 @@ private:
         std::string stats;
         for (auto& item : job.items) {
             void* mapped{};
-            const D3D12_RANGE all{0, size_t(item.footprint.Footprint.RowPitch) * item.height};
-            if (FAILED(item.buffer->Map(0, &all, &mapped)) || mapped == nullptr) { stats += item.name + ": map failed\n"; continue; }
+            if (FAILED(item.buffer->Map(0, nullptr, &mapped)) || mapped == nullptr) { stats += item.name + ": map failed\n"; continue; }
             const capture::View view{static_cast<const uint8_t*>(mapped) + item.footprint.Offset,
                 item.footprint.Footprint.RowPitch, item.width, item.height, item.bgra};
             stats += capture::format_stats(item.name, {"whole", 0, 0, item.width, item.height},
