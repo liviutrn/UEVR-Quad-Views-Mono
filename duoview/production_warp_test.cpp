@@ -194,6 +194,9 @@ int main() try {
     queue->ExecuteCommandLists(1,lists);
     pool.submitted(queue.Get(),1,lists);
     if(pool.submits()==0)throw std::runtime_error("Depth producer submission was not verified");
+    if(pool.find(device.Get(),queue.Get(),{1,5},candidate.feature,candidate.output_width,candidate.output_height) ||
+       pool.find(device.Get(),nullptr,depth_key,candidate.feature,candidate.output_width,candidate.output_height))
+        throw std::runtime_error("Unproven producer frame or missing queue improperly accepted");
     check(queue->Signal(fence.Get(),4));
     event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
     check(fence->SetEventOnCompletion(4,event));
@@ -204,6 +207,7 @@ int main() try {
     nativeFrame.config.key=depth_key;
     nativeFrame.projection[14]=10.f; // 10 cm near plane -> 0.10 metres
     nativeFrame.config.settings.distance_sharpen_enabled=true;
+    nativeFrame.config.settings.sharpen_strength=0.f; // depth curve must still use the single Mono raster
     nativeFrame.config.settings.sharpen_near_strength=5.f;
     nativeFrame.config.settings.sharpen_far_strength=1.f;
     nativeFrame.config.settings.sharpen_near_m=.10f;
@@ -220,6 +224,8 @@ int main() try {
                 D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
                 nativeFrame,{},frequency,queue.Get()))
             throw std::runtime_error("v211 WARP depth compositor rejected: "+compositor.error());
+        if(compositor.last_native_direct_xr())
+            throw std::runtime_error("Distance sharpening mistakenly rasterized twice to XR");
         transition(cmd.Get(),stereo.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_SOURCE);
         cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
         check(cmd->Close());queue->ExecuteCommandLists(1,lists);
@@ -247,7 +253,8 @@ int main() try {
     // reversed Z 0.5 with 10 cm near => 0.20 m. Ramp [.10,.50] -> 0.25.
     if(distance_grey<56 || distance_grey>72)
         throw std::runtime_error("Metric depth blend should be 0.25 (64 grey), got "+std::to_string(distance_grey));
-    std::cout<<"v211 NGX GPU copy, same-queue fence, raw and metric depth visualization WARP: PASS\\n";
+    if(pool.used()<2)throw std::runtime_error("Depth was copied but never used by the compositor");
+    std::cout<<"v212 NGX GPU copy, negative-provenance checks, compositor usage, raw/metric preview: PASS\\n";
     std::cout << "Native fused Glamarye WARP path, focus-only, no duplicate full XR pass: PASS\\n";
     std::cout << "Production shader, BGRA8 raster, moved gaze, retired-slot reuse, GPU timestamps: 2048 exact pixel pairs PASS\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n';return 1; }
