@@ -23,7 +23,7 @@ int main() {
     c.observe(fovea);
     auto choice=c.choose();
     assert(choice.source[0]==0x202 && choice.exact && !choice.manual);
-    assert(c.expected()==std::array<uint32_t,4>{800,600,320,240});
+    assert((c.expected()==std::array<uint32_t,4>{800,600,320,240}));
 
     // A new equally sized SR feature is ambiguous, not secretly chosen by
     // evaluation order. A valid already pinned auto source may remain stable.
