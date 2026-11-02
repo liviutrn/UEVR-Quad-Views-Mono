@@ -46,5 +46,33 @@ int main() {
     d::ConfigLatch limit;
     auto at_limit=modified;at_limit.sharpen_strength=5.f;
     assert(limit.set_settings(at_limit));
+    // v208b: sharpen max change per pixel (0.05..0.30, default 0.10 = unchanged output).
+    d::Settings defaults{};
+    assert(near(defaults.sharpen_max_change,.10f));
+    auto ui_max=modified;
+    ui_max.sharpen_max_change=.20f;
+    auto ok_max=d::reconcile_ui_settings(ui_max,modified);
+    assert(ok_max.rejected==0 && near(ok_max.settings.sharpen_max_change,.20f));
+    ui_max.sharpen_max_change=.30f;
+    assert(near(d::reconcile_ui_settings(ui_max,modified).settings.sharpen_max_change,.30f));
+    ui_max.sharpen_max_change=.05f;
+    assert(near(d::reconcile_ui_settings(ui_max,modified).settings.sharpen_max_change,.05f));
+    for (float bad : {.04f, .31f, std::nanf("")}) {
+        ui_max.sharpen_max_change=bad;
+        auto r=d::reconcile_ui_settings(ui_max,modified);
+        assert((r.rejected & d::reject_sharpen_max)!=0);
+        assert(near(r.settings.sharpen_max_change,.10f)); // keeps previous value (modified keeps default)
+        assert(r.rejected==d::reject_sharpen_max);
+    }
+    auto max_latch_bad=modified;
+    max_latch_bad.sharpen_max_change=.04f;
+    d::ConfigLatch max_latch;
+    assert(!max_latch.set_settings(max_latch_bad));
+    max_latch_bad.sharpen_max_change=.31f;
+    assert(!max_latch.set_settings(max_latch_bad));
+    max_latch_bad.sharpen_max_change=std::nanf("");
+    assert(!max_latch.set_settings(max_latch_bad));
+    max_latch_bad.sharpen_max_change=.30f;
+    assert(max_latch.set_settings(max_latch_bad));
     std::cout<<"DuoView immutable per-frame config/gaze tests passed\n";
 }

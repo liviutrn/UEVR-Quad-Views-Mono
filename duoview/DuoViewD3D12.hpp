@@ -208,7 +208,7 @@ public:
             {static_cast<uint32_t>(fd.Width),fd.Height},
             {static_cast<uint32_t>(vd.Width),vd.Height},
             {0u,0u},
-            frame.config.settings.sharpen_strength, 0.10f, 0.02f,
+            frame.config.settings.sharpen_strength, frame.config.settings.sharpen_max_change, 0.02f,
             3u | (srgb_ ? 0u : 4u) | // larger radius, edge protection, SDR conversion
                 (frame.config.settings.sharp_periphery ? 8u : 0u) // v207 Catmull-Rom periphery
         };
