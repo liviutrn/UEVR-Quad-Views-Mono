@@ -20,6 +20,8 @@ ADDED_BACKEND = {
  "src/mods/vr/DuoViewState.hpp", "src/mods/vr/DuoViewD3D12.hpp",
  "src/mods/vr/DuoViewMonoCopyD3D12.hpp", "src/mods/vr/DuoViewShaderSource.hpp",
  "src/mods/vr/DuoViewDistanceCurve.hpp",
+ "src/mods/vr/DuoViewNgxManualDepth.hpp",
+ "src/mods/vr/d3d12/DuoViewNgxManualObserver.hpp",
 }
 EDITED_FRONTEND = {"UEVR/RenderingModeOptions.cs", "tests/RenderingModes/Program.cs"}
 GENERATED_FRONTEND = {"UEVR/FilteredExecutables.json"}
