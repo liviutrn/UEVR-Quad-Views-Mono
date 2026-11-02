@@ -75,9 +75,9 @@ float4 PSNativeMain(VertexOut i) : SV_TARGET0 {
         float depthMeters=0.0;
         float depthBlend=0.0;
         bool validDepth=false;
+        bool validMetricDepth=false;
         if ((DepthFlags & 1u)!=0u && all(DepthActiveSize>0u) &&
-            all(DepthTexSize>0u) && DepthFarMeters>DepthNearMeters &&
-            DepthNearClipMeters>0.0) {
+            all(DepthTexSize>0u)) {
             uint2 p=uint2(saturate(localFovea)*float2(DepthActiveSize));
             p=min(p,DepthActiveSize-1u)+DepthBase;
             p=min(p,DepthTexSize-1u);
@@ -86,7 +86,9 @@ float4 PSNativeMain(VertexOut i) : SV_TARGET0 {
             // previous fixed-strength sharpening for this pixel.
             validDepth=isfinite(depthRaw) && depthRaw>0.000001 &&
                        depthRaw<0.999999;
-            if(validDepth) {
+            if(validDepth && DepthFarMeters>DepthNearMeters &&
+               DepthNearClipMeters>0.0 && isfinite(DepthNearClipMeters)) {
+                validMetricDepth=true;
                 const float div=(DepthFlags&8u)!=0u ? depthRaw : (1.0-depthRaw);
                 depthMeters=DepthNearClipMeters/max(div,0.000001);
                 depthBlend=saturate((depthMeters-DepthNearMeters)/
@@ -102,7 +104,7 @@ float4 PSNativeMain(VertexOut i) : SV_TARGET0 {
             // Magenta means NO valid live depth for this pixel, not a
             // grayscale scene. Never silently display normal sharpness
             // when the user explicitly requests a depth preview.
-            if(validDepth) {
+            if(validDepth && (preview==1u || validMetricDepth)) {
                 const float intensity=preview==1u?depthRaw:depthBlend;
                 fovea.rgb=float3(intensity,intensity,intensity);
             } else {
