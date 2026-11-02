@@ -16,6 +16,7 @@ on:
       - experiment/v209-distance-sharpen-curve-20261102
       - experiment/v210-ngx-manual-depth-20261102
       - experiment/v211-live-distance-sharpen-20261102
+      - experiment/v211-warp-depth-fixture-20261102
   pull_request:
     branches:
       - build-182
