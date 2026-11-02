@@ -147,6 +147,8 @@ public:
         // when fused sharpening is enabled; leave v182 behavior otherwise.
         const bool direct_xr=frame.config.settings.direct_xr_output &&
             frame.config.settings.sharpen_strength <= 0.0f &&
+            !frame.config.settings.distance_sharpen_enabled &&
+            frame.config.settings.depth_preview_mode==0u &&
             xrd.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
             xrd.Width==static_cast<uint64_t>(width_)*2 && xrd.Height==height_ &&
             xrd.DepthOrArraySize==1 && xrd.MipLevels==1 &&
@@ -320,6 +322,8 @@ public:
             timing_pending_=true; pending_direct_xr_=direct_xr;
         }
         if (!copied) return reject("Direct Native blend succeeded but Mono XR output validation failed");
+        if(depth_reference_ && depth_reference_->texture)
+            uevr::duoview::ngx::depth_snapshots().note_used();
         return true;
     }
     // Fallback for capture resources that cannot be sampled as SRVs.
