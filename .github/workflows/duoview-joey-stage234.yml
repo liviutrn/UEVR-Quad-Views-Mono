@@ -1,5 +1,5 @@
-name: DuoView v205 Confirmed FOV + Two Configurable Recovery Hotkeys
-run-name: UEVR Quad Views Mono exact SDK (${{ github.run_number }})
+name: DuoView v208 Foveal Sharpening 0-5
+run-name: DuoView v208 sharpening 0-5 (${{ github.run_number }})
 on:
   push:
     branches:
@@ -12,6 +12,7 @@ on:
       - fix/v165-manual-fov-authoritative-mpc-20261027
       - feature/v205-duoview-fov-and-runtime-hotkeys-20261027
       - claude/**
+      - experiment/v208-depth-sharpen-optimization-20261102
   pull_request:
     branches:
       - build-182
@@ -128,8 +129,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Keybind patch changed proven #205 logic or unrelated rendering code' }
           python workspace/duoview/joey_stage1/apply_v207_auto_fov_after_load.py backend
           if ($LASTEXITCODE -ne 0) { throw 'v207 automatic FOV recovery patch failed its exact anchors' }
+          python workspace/duoview/joey_stage1/test_v208_sharpen_range.py --capture backend evidence/v208-source-before.json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot capture exact v207 source before v208' }
+          python workspace/duoview/joey_stage1/apply_v208_sharpen_range.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'v208 strength range anchors did not match' }
+          python workspace/duoview/joey_stage1/test_v208_sharpen_range.py --verify backend evidence/v208-source-before.json
+          if ($LASTEXITCODE -ne 0) { throw 'v208 changed source outside the strength UI and validation' }
           git -C backend diff --check
-          if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling patch contains whitespace errors' }
+          if ($LASTEXITCODE -ne 0) { throw 'Patched backend contains whitespace errors' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
       - name: Verify pinned production geometry and pair-state contracts
@@ -206,6 +213,7 @@ jobs:
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
           @'
+          v208: FOVEAL SHARPENING RANGE 0..5. Based on v207 4020a44. Default remains 1.0; 0 disables. Shader, depth, rendering, resolutions and GPU allocations unchanged. This build has NO distance-based sharpening.
           DUOVIEW NATIVE STEREO FIX v22 — ORIGINAL PRIMARY + SECONDARY SOURCES, MONO OUTPUT. HEADSET UNVERIFIED.
           Backend: exact Joey 5ac7edc207866569334175e4ed8a7517971547f6 + guarded DuoView modifications.
           Restricted SDK unchanged: joeyhodge/UESDK 3cffbc82429b6165ceec2714f0f0d9ae48f55596.
@@ -257,16 +265,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'warmup keeps the XR transition loop live') { throw 'Stale Native Fix warmup instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-Mono-v208-Sharpen-0-5-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-${{ github.run_number }}
+          name: UEVR-DuoView-Mono-v208-Sharpen-0-5-${{ github.run_number }}
           path: |
-            UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-*.zip
-            UEVR-Quad-Views-Mono-v205-FOV-Runtime-Hotkeys-*.zip.sha256
+            UEVR-DuoView-Mono-v208-Sharpen-0-5-*.zip
+            UEVR-DuoView-Mono-v208-Sharpen-0-5-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -281,7 +289,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UEVR-v205-FOV-Runtime-Hotkeys-Evidence-${{ github.run_number }}
+          name: UEVR-DuoView-v208-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
