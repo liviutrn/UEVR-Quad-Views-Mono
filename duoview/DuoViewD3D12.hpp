@@ -219,6 +219,10 @@ public:
             3u | (srgb_ ? 0u : 4u) | // larger radius, edge protection, SDR conversion
                 (frame.config.settings.sharp_periphery ? 8u : 0u) // v207 Catmull-Rom periphery
         };
+        // A requested preview must remain visibly diagnostic even when NGX
+        // capture is unavailable. Otherwise preview OFF and capture FAILED
+        // look identical in the headset and conceal broken depth delivery.
+        constants.depth_flags=(frame.config.settings.depth_preview_mode&3u)<<4;
         // Captured on the producing NGX command list; never retain game Depth.
         // Require the same frozen producer key, selected NGX SR feature and queue.
         std::shared_ptr<uevr::duoview::ngx::DepthSnapshot> depth{};
