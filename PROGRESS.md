@@ -102,3 +102,10 @@ Started 2 Nov 2026 02:00 (Claude, overnight). Base: claude/triview-stage1-fixes-
   Note: research/2026-11-03-triview-third-view-proof.md. Status: see commit messages / CI run; NOT headset-tested.
 - 3 Nov 12:54 headset (Liviu, proof build 1): third OFF = identical to Native Stereo+Fix head tracking; third ON = whole image unstable, "head-tracked theater screen ~2 m". Capture: third view image == second view (corr 0.97, 2 px shift), own history ("separate"). Log: view 2 built with stereo pass 1 = PRIMARY (get_view_pass_for_index_hook: even index -> PRIMARY); the second view is SECONDARY (and goes through Joey's same-pass/hidden-list constructor path).
 - Hypothesis H-pass: third view must be SECONDARY like the second. Build 2: TriViewThirdIsSecondary toggle (default ON). CI/headset: see run.
+
+## 2026-11-03 (Claude, claude/triview-proof-20261103) - build 2 failed, third-eye design v2
+- Build 2 (third view labelled SECONDARY): headset still broken. Label was not the cause. [HEADSET: Liviu]
+- Build-2 log, steady state: pose/projection per view are consistent every frame (view 0/1/2 same rotation, origins ~1-4 cm apart). So pose math looks right. [LOG]
+- Joey Native Fix rejects submit packets 2-3 engine frames old ("Refusing stale submit packet", 6 logged, rate-limited to 1 per 2 s so the real count is unknown). [LOG]
+- Helper inventory of Joey two-eye assumptions: see research/2026-11-03-third-eye-design-v2.md. Main idea: engine keeps 2 views, third eye = third renderer call in Joey's own Native Fix sequence. Blocker: private UESDK not readable locally (can a view's scene state be swapped after creation?). Not built.
+- A docs-only push triggered a full CI build by accident (workflow triggers on every push to this branch); cancelled. Push docs with [skip ci] from now on.
