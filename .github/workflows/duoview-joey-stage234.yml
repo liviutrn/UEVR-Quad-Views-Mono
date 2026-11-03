@@ -132,6 +132,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'v208 same-image / shared compose / VRAM patch failed its exact anchors' }
           python workspace/duoview/joey_stage1/apply_v208b_sharpen_max_change.py backend
           if ($LASTEXITCODE -ne 0) { throw 'v208b sharpen max change patch failed its exact anchors' }
+          python workspace/duoview/joey_stage1/apply_v208d_vram_options.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'v208d optional VRAM options patch failed its exact anchors' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling patch contains whitespace errors' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
