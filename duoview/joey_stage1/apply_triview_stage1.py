@@ -134,6 +134,13 @@ TRIVIEW_CTOR = r'''    // Tri-View ID7 (S4): test 1 capture showed the engine bu
         const auto layout = vr->triview_layout();
         auto* const family = init_options->get_view_family();
         const auto rtm = g_hook->get_render_target_manager();
+        // PROOF storage: the second eye view's init data (game thread; constructors run in order 0, 1, 2).
+        static decltype(init_options_ue5->view_rotation_matrix) proof_rotation{};
+        static decltype(init_options_ue5->projection_matrix) proof_projection{};
+        static double proof_origin[3]{};
+        static uintptr_t proof_state{};
+        static uint64_t proof_frame{};
+        static bool proof_valid{};
         FIntRect current{};
         std::memcpy(current.bounds, &init_options_ue5->view_rect, sizeof(current.bounds));
         const bool is_periphery = layout.has_value() && family != nullptr && rtm != nullptr &&
@@ -159,6 +166,16 @@ TRIVIEW_CTOR = r'''    // Tri-View ID7 (S4): test 1 capture showed the engine bu
             for (int i = 0; i < 3; ++i) for (int k = 0; k < 3; ++k) m[i * 3 + k] = engine_rotation[i][k];
             dg::eye_rotation_valid[dg::eye_views_seen] = true;
             ++dg::eye_views_seen;
+            if (dg::eye_views_seen == 2) {
+                // PROOF: remember everything the engine gave the SECOND eye view, so view 2 can be its exact clone.
+                proof_rotation = init_options_ue5->view_rotation_matrix;
+                proof_projection = init_options_ue5->projection_matrix;
+                const auto* origin_src = reinterpret_cast<const double*>(&init_options_ue5->view_origin);
+                for (int i = 0; i < 3; ++i) proof_origin[i] = origin_src[i];
+                proof_state = reinterpret_cast<uintptr_t>(init_options->get_scene_state());
+                proof_frame = g_frame_count;
+                proof_valid = true;
+            }
         }
         if (dg::armed.load()) {
             const auto* pm = reinterpret_cast<const double*>(&init_options_ue5->projection_matrix);
@@ -170,7 +187,28 @@ TRIVIEW_CTOR = r'''    // Tri-View ID7 (S4): test 1 capture showed the engine bu
                 family != nullptr && rtm != nullptr && family->get_render_target() == rtm->get_view_family_render_target());
         }
         double rotation[3]{}, position[3]{};
-        if (is_periphery && vr->triview_centre_pose(rotation, position)) {
+        if (is_periphery && layout->proof) {
+            // PROOF: view 2 gets EXACTLY what the second eye view got (rotation, origin, projection). Only its
+            // scene state (own temporal history) and its render target / rect (2 px narrower) differ.
+            if (proof_valid && proof_frame == g_frame_count) {
+                const auto state2 = reinterpret_cast<uintptr_t>(init_options->get_scene_state());
+                init_options_ue5->view_rotation_matrix = proof_rotation;
+                init_options_ue5->projection_matrix = proof_projection;
+                auto* const origin_dst = reinterpret_cast<double*>(&init_options_ue5->view_origin);
+                for (int i = 0; i < 3; ++i) origin_dst[i] = proof_origin[i];
+                vr->m_triview_ctor_overrides.fetch_add(1, std::memory_order_relaxed);
+                static uint64_t proof_logs{};
+                if (dg::armed.load() || proof_logs++ % 900 == 0) {
+                    SPDLOG_INFO("[TriProof] view 2 = clone of eye view 1: frame {} origin {:.2f} {:.2f} {:.2f} rect {}x{} (eye rect {}x{}); scene state view1 {:x} view2 {:x} ({})",
+                        g_frame_count, proof_origin[0], proof_origin[1], proof_origin[2], current.bounds[2], current.bounds[3],
+                        layout->eye_width, layout->eye_height, proof_state, state2,
+                        proof_state == state2 ? "SHARED history" : "separate history");
+                }
+            } else {
+                SPDLOG_WARNING_EVERY_N_SEC(2, "[TriProof] view 2 constructed but the second eye view was not seen this frame (valid {} frame {} now {}); engine camera kept",
+                    proof_valid, proof_frame, g_frame_count);
+            }
+        } else if (is_periphery && vr->triview_centre_pose(rotation, position)) {
             const auto* before = reinterpret_cast<const double*>(&init_options_ue5->projection_matrix);
             const auto* origin_before = reinterpret_cast<const double*>(&init_options_ue5->view_origin);
             static uint64_t triview_ctor_logs{};
@@ -472,6 +510,7 @@ BACKEND = {
    '    }\n'
    '    bool is_triview_active() const;\n'
    '    bool triview_third_view_enabled() const { return m_triview_third_view->value(); }\n'
+   '    bool triview_proof_enabled() const { return m_triview_proof->value(); }\n'
    '    unsigned triview_debug_mode() const { return m_triview_border->value() ? 1u : 0u; }\n'
    '    // Periphery render-target status for the menu and the capture report (string literals only).\n'
    '    std::atomic<const char*> m_triview_target_status{"not requested"};\n'
@@ -518,13 +557,14 @@ BACKEND = {
    '    uint64_t m_triview_fresh_generation{UINT64_MAX}; // game thread\n'
    '    std::array<std::optional<uevr::triview::Window>, 2> m_triview_applied_window{};\n'
    '    const ModToggle::Ptr m_triview_border{ModToggle::create(generate_name("TriViewDebugBorder"), false)};\n'
+   '    const ModToggle::Ptr m_triview_proof{ModToggle::create(generate_name("TriViewProofThirdViewClone"), true)};\n'
 
    '    std::atomic<bool> m_triview_owns_index_two{false};\n'
    '    std::array<std::array<double, 6>, 2> m_triview_eye_pose{}; // game thread only\n'
    '    std::array<bool, 2> m_triview_eye_seen{};\n'),
   ('            *m_duo_sharp_periphery,',
    '            *m_duo_sharp_periphery,\n'
-   '            *m_triview_third_view, *m_triview_periphery_scale, *m_triview_border, *m_triview_eye_tracked, *m_triview_fovea_size,'),
+   '            *m_triview_third_view, *m_triview_proof, *m_triview_periphery_scale, *m_triview_border, *m_triview_eye_tracked, *m_triview_fovea_size,'),
  ],
  "src/mods/VR.cpp": [
   ('bool VR::should_force_native_stereo_fix_same_pass() const {\n    if (is_duoview_renderer_active()) {',
@@ -545,6 +585,10 @@ BACKEND = {
    '                    ? "Tri-View active: both eyes render their centre half (Native Fix), plus one low-res full-view periphery from the centre camera."\n'
    '                    : "Tri-View inactive (needs STALKER 2, D3D12, OpenXR, no AFR / 2D screen): rendering plain Native Stereo.");\n'
    '                m_triview_third_view->draw("Third view (periphery). OFF = cropped stereo windows only");\n'
+   '                m_triview_proof->draw("PROOF: third view = exact clone of the right eye (second view), tinted red");\n'
+   '                if (m_triview_proof->value()) {\n'
+   '                    ImGui::TextWrapped("PROOF ON: eyes are NOT cropped (plain Native Stereo + Fix). Right eye: left half = real second view, right half = THIRD view (clone of the second, red tint), black seam between. Left eye = real first view. Fovea size / periphery scale / eye tracking are ignored.");\n'
+   '                }\n'
    '                m_triview_periphery_scale->draw("Periphery resolution scale");\n'
    '                m_triview_eye_tracked->draw("Eye-tracked fovea (PSVR2; uses DuoView\'s gaze offset / smoothing settings)");\n'
    '                m_triview_fovea_size->draw("Fovea size (fraction of each eye)");\n'
@@ -738,8 +782,9 @@ BACKEND = {
    '    if (view_index == 2 && out != nullptr && vr->triview_owns_view_index_two()) {\n'
    '        if (g_hook->m_has_double_precision) {\n'
    '            auto& matrix = *(Matrix4x4d*)out;\n'
-   '            matrix = vr->get_projection_matrix(VRRuntime::Eye::LEFT);\n'
-   '            if (const auto layout = vr->triview_layout()) {\n'
+   '            const auto layout_for_eye = vr->triview_layout();\n'
+   '            matrix = vr->get_projection_matrix(layout_for_eye && layout_for_eye->periphery_eye != 0 ? VRRuntime::Eye::RIGHT : VRRuntime::Eye::LEFT);\n'
+   '            if (const auto layout = layout_for_eye) {\n'
    '                uevr::triview::apply_periphery_projection(matrix, *layout);\n'
    '                if (uevr::triview::diag::armed.load()) {\n'
    '                    SPDLOG_INFO("[TriDiag] StereoProjection index 2 -> m00 {:.5f} m20 {:.5f} m11 {:.5f} m21 {:.5f} m32 {:.4f}",\n'
@@ -1106,7 +1151,7 @@ std::optional<uevr::triview::Layout> VR::triview_layout() {
         m_triview_gaze_live.store(false, std::memory_order_relaxed);
     }
     m_triview_layout_cached = uevr::triview::make_layout(get_hmd_width(), get_hmd_height(), *left, *right,
-        m_triview_periphery_scale->value(), m_triview_fovea_size->value(), gaze);
+        m_triview_periphery_scale->value(), m_triview_fovea_size->value(), gaze, m_triview_proof->value());
     m_triview_layout_frame = frame;
     return m_triview_layout_cached;
 }

@@ -146,6 +146,49 @@ int main() try {
         readback->Unmap(0, nullptr);
     }
 
+    // PROOF mode: third view = clone of the right eye. Left eye = main target, right eye left half = capture target
+    // (second view), right half = periphery target (third view) tinted red, 2 px black seam, no magenta ever.
+    {
+        const auto proof_layout = tv::make_layout(W, H, {-1.30f, 1.05f, 1.25f, -1.30f}, {-1.05f, 1.30f, 1.25f, -1.30f}, .5f, .5f, std::nullopt, true);
+        if (!proof_layout || !proof_layout->proof || proof_layout->periphery_width != W - 2) throw std::runtime_error("proof layout");
+        const auto& pl = *proof_layout;
+        const std::array<uint8_t, 4> white{255, 255, 255, 255};
+        auto pm = make(g.device.Get(), tex(2 * W, H, DXGI_FORMAT_B8G8R8A8_TYPELESS, rt), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+        auto pc = make(g.device.Get(), tex(W, H, DXGI_FORMAT_B8G8R8A8_TYPELESS, rt), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+        auto pp = make(g.device.Get(), tex(W, H, DXGI_FORMAT_B8G8R8A8_TYPELESS, rt), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+        ComPtr<ID3D12Resource> u1, u2, u3;
+        fill(g, pm.Get(), {{{0, 0, LONG(W), LONG(H)}, red}, {{LONG(W), 0, LONG(2 * W), LONG(H)}, magenta}}, u1);
+        fill(g, pc.Get(), {{{0, 0, LONG(W), LONG(H)}, blue}}, u2);
+        fill(g, pp.Get(), {{{0, 0, LONG(W), LONG(H)}, magenta}, {{0, 0, LONG(pl.periphery_width), LONG(pl.periphery_height)}, white}}, u3);
+        tv::PacketLayout pframe{pl, true, true};
+        for (const bool third : {true, false}) {
+            pframe.third = third;
+            if (!compositor.record(g.device.Get(), g.cmd.Get(), pm.Get(), pc.Get(), pp.Get(), xr.Get(), pframe, 0))
+                throw std::runtime_error("proof record rejected: " + compositor.error());
+            barrier(g.cmd.Get(), xr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            D3D12_TEXTURE_COPY_LOCATION from{xr.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX}; from.SubresourceIndex = 0;
+            D3D12_TEXTURE_COPY_LOCATION to{readback.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT}; to.PlacedFootprint = foot;
+            g.cmd->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+            barrier(g.cmd.Get(), xr.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            g.run();
+            uint8_t* p{}; D3D12_RANGE all{0, size_t(bytes)}; check(readback->Map(0, &all, reinterpret_cast<void**>(&p)), "map");
+            const auto px = [&](UINT x, UINT y) { return p + y * foot.Footprint.RowPitch + x * 4; };
+            const auto is = [&](UINT x, UINT y, std::array<uint8_t, 4> c) {
+                const auto* v = px(x, y);
+                return std::abs(v[0] - c[0]) < 8 && std::abs(v[1] - c[1]) < 8 && std::abs(v[2] - c[2]) < 8;
+            };
+            const std::array<uint8_t, 4> tinted{89, 89, 255, 255}, black{0, 0, 0, 255}; // B, G, R: white * (1, .35, .35)
+            if (!is(1, 1, red) || !is(W / 2, H / 2, red) || !is(W - 2, H - 2, red)) throw std::runtime_error("proof: left eye is not the whole first view");
+            if (!is(W + 8, H / 2, blue) || !is(W + 28, 3, blue)) throw std::runtime_error("proof: right eye left half is not the second view");
+            if (!is(W + 40, H / 2, third ? tinted : black) || !is(2 * W - 3, H - 3, third ? tinted : black))
+                throw std::runtime_error(third ? "proof: right eye right half is not the tinted third view" : "proof: third view OFF is not black");
+            if (!is(W + W / 2, H / 2, black)) throw std::runtime_error("proof: seam missing");
+            for (UINT y = 0; y < H; y += 3) for (UINT x = 0; x < 2 * W; x += 3)
+                if (is(x, y, magenta)) throw std::runtime_error("proof: a pixel came from outside a rendered image");
+            readback->Unmap(0, nullptr);
+        }
+    }
+
     // Automatic capture: copies four images after a composite, then writes the ZIP synchronously.
     frame.third = true;
     if (!compositor.record(g.device.Get(), g.cmd.Get(), main_rt.Get(), capture.Get(), periphery.Get(), xr.Get(), frame, 0))

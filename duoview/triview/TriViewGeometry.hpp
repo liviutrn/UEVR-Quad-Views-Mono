@@ -31,6 +31,10 @@ struct Layout {
     Window window[2]{};                           // left / right eye fovea windows
     Tans eye[2]{};                                // left / right eye frusta
     Tans periphery{};                             // union frustum rendered by view 2
+    // Third-view PROOF mode: eyes uncropped (windows 0..1), view 2 = a clone of the RIGHT eye (second view),
+    // shown tinted in the right half of the right eye. periphery_eye says which eye view 2 is based on.
+    bool proof{};
+    int periphery_eye{};
 };
 
 // What a published Native Fix packet carries to the compositor.
@@ -85,10 +89,12 @@ inline Window window_around(float cu, float cv, float size) {
 // (each eye's own UV of the same direction), otherwise each eye's UV centre (Stage 1 behaviour).
 inline std::optional<Layout> make_layout(uint32_t eye_width, uint32_t eye_height,
                                          const Tans& left, const Tans& right, float periphery_scale,
-                                         float fovea_size = .5f, std::optional<GazeTan> gaze = std::nullopt) {
+                                         float fovea_size = .5f, std::optional<GazeTan> gaze = std::nullopt,
+                                         bool proof = false) {
+    if (proof) { fovea_size = 1.f; periphery_scale = 1.f; gaze.reset(); }
     if (eye_width < 64 || eye_height < 64 || eye_width > 16384 || eye_height > 16384 ||
         !std::isfinite(periphery_scale) || periphery_scale < .1f || periphery_scale > 1.f ||
-        !std::isfinite(fovea_size) || fovea_size < .3f || fovea_size > .8f) return {};
+        !std::isfinite(fovea_size) || fovea_size < .3f || fovea_size > (proof ? 1.f : .8f)) return {};
     if (gaze && (!std::isfinite(gaze->x) || !std::isfinite(gaze->y))) gaze.reset();
     for (const auto* t : {&left, &right}) {
         if (!std::isfinite(t->left) || !std::isfinite(t->right) || !std::isfinite(t->top) ||
@@ -104,6 +110,20 @@ inline std::optional<Layout> make_layout(uint32_t eye_width, uint32_t eye_height
         const float cu = gaze ? (gaze->x - t.left) / (t.right - t.left) : .5f;
         const float cv = gaze ? (t.top - gaze->y) / (t.top - t.bottom) : .5f;
         l.window[e] = window_around(cu, cv, fovea_size);
+    }
+    if (proof) {
+        // Uncropped native eyes + view 2 = the right eye's own frustum. View 2 must differ from the eye rect
+        // (engine hooks recognise it by its rect): 2 pixels narrower, a 0.1% stretch.
+        l.window[0] = l.window[1] = {0.f, 0.f, 1.f, 1.f};
+        l.fovea_width = eye_width;
+        l.fovea_height = eye_height;
+        l.periphery = {right.left, right.right, right.top, right.bottom};
+        l.periphery_width = eye_width - 2;
+        l.periphery_height = eye_height;
+        l.periphery_x = 0;
+        l.proof = true;
+        l.periphery_eye = 1;
+        return l;
     }
     // Both eyes render the same fovea size (window size is identical; only its position differs).
     l.fovea_width = static_cast<uint32_t>(std::lround(eye_width * fovea_size));
@@ -133,10 +153,10 @@ void apply_fovea_projection(Matrix& m, const Layout& l, int eye) {
     apply_uv_window(m, w.u0, w.u1, w.v0, w.v1);
 }
 
-// View 2: widen the LEFT eye projection to the union frustum (centre camera, left-eye rotation).
+// View 2: widen the projection of eye `periphery_eye` (LEFT normally) to the periphery frustum (union).
 template <typename Matrix>
 void apply_periphery_projection(Matrix& left_eye_projection, const Layout& l) {
-    const auto& e = l.eye[0];
+    const auto& e = l.eye[l.periphery_eye != 0 ? 1 : 0];
     const auto& p = l.periphery;
     const double w = e.right - e.left, h = e.top - e.bottom;
     apply_uv_window(left_eye_projection, (p.left - e.left) / w, (p.right - e.left) / w,

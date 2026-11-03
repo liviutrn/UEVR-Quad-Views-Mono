@@ -47,6 +47,29 @@ float4 PSMain(VertexOut i) : SV_TARGET0 {
     const bool rightEye = i.pos.x >= eyeSize.x;
     const float2 uv = float2(rightEye ? i.pos.x - eyeSize.x : i.pos.x, i.pos.y) / eyeSize;
 
+    // PROOF mode (debug bit 2): third view = clone of the right eye. Left eye = real left view; right eye, left half
+    // = real second view (Native Fix capture), right half = THIRD view tinted red; a 2 px black seam between them.
+    if (((uint)(Params.z + 0.5) & 2u) != 0u) {
+        const float2 texelOwn = ActiveTexel(uv, EyeAndFovea.zw);
+        float4 proof;
+        if (!rightEye) {
+            proof = MainSource.SampleLevel(LinearClamp, texelOwn / SourceSizes.xy, 0.0);
+        } else if (uv.x < 0.5) {
+            proof = CaptureSource.SampleLevel(LinearClamp, texelOwn / SourceSizes.zw, 0.0);
+        } else {
+            proof = float4(0.0, 0.0, 0.0, 1.0);
+            if (Params.y > 0.5) {
+                proof = PeripherySource.SampleLevel(LinearClamp, ActiveTexel(uv, PeriphRect.xy) / PeriphRect.zw, 0.0);
+            }
+            proof.rgb *= float3(1.0, 0.35, 0.35);
+        }
+        if (rightEye && abs(i.pos.x - eyeSize.x - eyeSize.x * 0.5) < 1.0) proof.rgb = float3(0.0, 0.0, 0.0);
+        if (Params.w > 1.5) proof.rgb = LinearToSrgb(saturate(proof.rgb));
+        else if (Params.w > 0.5) proof.rgb = SrgbToLinear(saturate(proof.rgb));
+        proof.a = 1.0;
+        return proof;
+    }
+
     float4 periphery = float4(0.0, 0.0, 0.0, 1.0);
     if (Params.y > 0.5) {
         const float4 m = rightEye ? PeriphMapR : PeriphMapL;

@@ -113,6 +113,30 @@ int main() try {
     const auto full = tv::make_layout(2000, 2040, left, right, 1.f);
     expect(full && full->periphery_width == 2000 && full->periphery_height == 2040,
            "periphery never exceeds the free half of the main target");
+    // Third-view PROOF layout: uncropped eyes, view 2 = the right eye's own frustum, rect differs from the eye rect.
+    const auto proof = tv::make_layout(2000, 2040, left, right, .3f, .5f, tv::GazeTan{1.f, 1.f}, true);
+    expect(proof && proof->proof && proof->periphery_eye == 1, "proof layout flags");
+    expect(proof->fovea_width == 2000 && proof->fovea_height == 2040, "proof: eyes uncropped");
+    expect(proof->periphery_width == 1998 && proof->periphery_height == 2040, "proof: view 2 rect 2 px narrower than the eye");
+    for (int e = 0; e < 2; ++e) {
+        const auto& w = proof->window[e];
+        expect(approx(w.u0, 0) && approx(w.v0, 0) && approx(w.u1, 1) && approx(w.v1, 1), "proof: full windows, gaze ignored");
+    }
+    expect(approx(proof->periphery.left, right.left) && approx(proof->periphery.right, right.right) &&
+           approx(proof->periphery.top, right.top) && approx(proof->periphery.bottom, right.bottom), "proof: view 2 frustum = right eye");
+    {
+        auto m = joey_projection(right);
+        tv::apply_periphery_projection(m, *proof);
+        const auto ref = joey_projection(right);
+        for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r)
+            expect(approx(m[c][r], ref[c][r], 1e-9), "proof: view 2 projection == right eye projection exactly");
+        const auto map = tv::periphery_map(*proof, 1);
+        expect(approx(map.ax, 1) && approx(map.bx, 0) && approx(map.ay, 1) && approx(map.by, 0), "proof: identity map for the right eye");
+    }
+    {
+        const auto normal = tv::make_layout(2000, 2040, left, right, .5f);
+        expect(normal && !normal->proof && normal->periphery_eye == 0, "normal layout is not proof");
+    }
     std::puts("Tri-View geometry tests passed.");
     return 0;
 } catch (const std::exception& e) {

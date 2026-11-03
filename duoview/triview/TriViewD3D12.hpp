@@ -126,7 +126,7 @@ public:
             {mr.ax, mr.bx, mr.ay, mr.by},
             {float(l.periphery_width), float(l.periphery_height), float(pd.Width), float(pd.Height)},
             {float(md.Width), float(md.Height), float(cd.Width), float(cd.Height)},
-            {0.08f, periphery ? 1.f : 0.f, static_cast<float>(debug_bits & 1u), convert}};
+            {0.08f, periphery ? 1.f : 0.f, static_cast<float>((debug_bits & 1u) | (l.proof ? 2u : 0u)), convert}};
 
         transition(cmd, main, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         transition(cmd, capture, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

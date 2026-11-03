@@ -94,3 +94,9 @@ Started 2 Nov 2026 02:00 (Claude, overnight). Base: claude/triview-stage1-fixes-
   processing for the extra view (DLSS / TAA / TSR / motion blur history), or a DLSS add-on (Cheeky foveated
   DLSS NR) treating view 2 wrongly. Quick checks never run: add-on removed, upscaler off, motion blur off.
 - Latest code: branch claude/triview-s3-gaze-20261102 (S6 = f2ff31e, run 41442278608, artifact Tri-View-S6-11).
+
+## 3 Nov 2026 - third-view PROOF (branch claude/triview-proof-20261103)
+- Liviu: prove a third view is possible with exactly the second view's plumbing (Native Stereo + Fix as is).
+- Implemented on top of S6 (f2ff31e, 972f305 notes): PROOF toggle (default ON): uncropped eyes, view 2 = exact clone of
+  the second eye view (constructor copy), compositor shows it tinted red in the right half of the right eye.
+  Note: research/2026-11-03-triview-third-view-proof.md. Status: see commit messages / CI run; NOT headset-tested.
