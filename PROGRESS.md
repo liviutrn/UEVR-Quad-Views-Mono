@@ -100,3 +100,5 @@ Started 2 Nov 2026 02:00 (Claude, overnight). Base: claude/triview-stage1-fixes-
 - Implemented on top of S6 (f2ff31e, 972f305 notes): PROOF toggle (default ON): uncropped eyes, view 2 = exact clone of
   the second eye view (constructor copy), compositor shows it tinted red in the right half of the right eye.
   Note: research/2026-11-03-triview-third-view-proof.md. Status: see commit messages / CI run; NOT headset-tested.
+- 3 Nov 12:54 headset (Liviu, proof build 1): third OFF = identical to Native Stereo+Fix head tracking; third ON = whole image unstable, "head-tracked theater screen ~2 m". Capture: third view image == second view (corr 0.97, 2 px shift), own history ("separate"). Log: view 2 built with stereo pass 1 = PRIMARY (get_view_pass_for_index_hook: even index -> PRIMARY); the second view is SECONDARY (and goes through Joey's same-pass/hidden-list constructor path).
+- Hypothesis H-pass: third view must be SECONDARY like the second. Build 2: TriViewThirdIsSecondary toggle (default ON). CI/headset: see run.

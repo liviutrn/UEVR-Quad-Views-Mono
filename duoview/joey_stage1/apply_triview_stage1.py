@@ -511,6 +511,7 @@ BACKEND = {
    '    bool is_triview_active() const;\n'
    '    bool triview_third_view_enabled() const { return m_triview_third_view->value(); }\n'
    '    bool triview_proof_enabled() const { return m_triview_proof->value(); }\n'
+   '    bool triview_third_is_secondary() const { return m_triview_third_secondary->value(); }\n'
    '    unsigned triview_debug_mode() const { return m_triview_border->value() ? 1u : 0u; }\n'
    '    // Periphery render-target status for the menu and the capture report (string literals only).\n'
    '    std::atomic<const char*> m_triview_target_status{"not requested"};\n'
@@ -558,13 +559,14 @@ BACKEND = {
    '    std::array<std::optional<uevr::triview::Window>, 2> m_triview_applied_window{};\n'
    '    const ModToggle::Ptr m_triview_border{ModToggle::create(generate_name("TriViewDebugBorder"), false)};\n'
    '    const ModToggle::Ptr m_triview_proof{ModToggle::create(generate_name("TriViewProofThirdViewClone"), true)};\n'
+   '    const ModToggle::Ptr m_triview_third_secondary{ModToggle::create(generate_name("TriViewThirdIsSecondary"), true)};\n'
 
    '    std::atomic<bool> m_triview_owns_index_two{false};\n'
    '    std::array<std::array<double, 6>, 2> m_triview_eye_pose{}; // game thread only\n'
    '    std::array<bool, 2> m_triview_eye_seen{};\n'),
   ('            *m_duo_sharp_periphery,',
    '            *m_duo_sharp_periphery,\n'
-   '            *m_triview_third_view, *m_triview_proof, *m_triview_periphery_scale, *m_triview_border, *m_triview_eye_tracked, *m_triview_fovea_size,'),
+   '            *m_triview_third_view, *m_triview_proof, *m_triview_third_secondary, *m_triview_periphery_scale, *m_triview_border, *m_triview_eye_tracked, *m_triview_fovea_size,'),
  ],
  "src/mods/VR.cpp": [
   ('bool VR::should_force_native_stereo_fix_same_pass() const {\n    if (is_duoview_renderer_active()) {',
@@ -586,6 +588,7 @@ BACKEND = {
    '                    : "Tri-View inactive (needs STALKER 2, D3D12, OpenXR, no AFR / 2D screen): rendering plain Native Stereo.");\n'
    '                m_triview_third_view->draw("Third view (periphery). OFF = cropped stereo windows only");\n'
    '                m_triview_proof->draw("PROOF: third view = exact clone of the right eye (second view), tinted red");\n'
+   '                m_triview_third_secondary->draw("Third view is built as a SECONDARY view, like the right eye (OFF = old behaviour: PRIMARY like the left eye; takes effect on the next frame)");\n'
    '                if (m_triview_proof->value()) {\n'
    '                    ImGui::TextWrapped("PROOF ON: eyes are NOT cropped (plain Native Stereo + Fix). Right eye: left half = real second view, right half = THIRD view (clone of the second, red tint), black seam between. Left eye = real first view. Fovea size / periphery scale / eye tracking are ignored.");\n'
    '                }\n'
@@ -663,6 +666,14 @@ BACKEND = {
  ],
  # ---- engine side: view count, index-2 hooks, third render -------------------------------------
  "src/mods/vr/FFakeStereoRenderingHook.cpp": [
+  # Joey labels every even view index PRIMARY (the left eye's pass). The proof log showed view 2 built with pass 1 =
+  # PRIMARY, unlike the second view (SECONDARY). Build it exactly like the second view.
+  ('    return view_index % 2 == 0 ? EStereoscopicPass::eSSP_PRIMARY : EStereoscopicPass::eSSP_SECONDARY;\n}',
+   '    if (view_index == 2 && VR::get()->triview_owns_view_index_two() && VR::get()->triview_third_is_secondary()) {\n'
+   '        SPDLOG_INFO_ONCE("[TriProof] view index 2 gets stereo pass SECONDARY (same as the second view)");\n'
+   '        return EStereoscopicPass::eSSP_SECONDARY;\n'
+   '    }\n'
+   '    return view_index % 2 == 0 ? EStereoscopicPass::eSSP_PRIMARY : EStereoscopicPass::eSSP_SECONDARY;\n}'),
   # GetDesiredNumberOfViews: third engine view (only after all Native Fix readiness checks).
   ('        SPDLOG_INFO_EVERY_N_SEC(2, "[Avowed][NativeStereoFix] Returning two views for native stereo fix");\n'
    '    }\n\n    return 2;\n}',
