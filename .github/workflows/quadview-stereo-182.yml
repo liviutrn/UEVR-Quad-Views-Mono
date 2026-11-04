@@ -1,8 +1,8 @@
-name: Experimental Stereo Quad Views from Build182
-run-name: Quad Views Stereo ID7 (${{ github.run_number }})
+name: QuadView Build51 local-origin fix for STALKER 2.10
+run-name: QuadView 2.10 source-coordinate fix (${{ github.run_number }})
 on:
   push:
-    branches: [quadview/stereo-182, quadview/stereo-182-build, quadview/stereo-182-build-next, codex/quadview-id7-v1861-20261020, experiment/id7-stereo-v1861-20261020]
+    branches: [experiment/quadview-210-source-local-origin-20261104]
     paths: ['quadview/**', '.github/workflows/quadview-stereo-182.yml']
   workflow_dispatch:
 permissions:
