@@ -450,8 +450,10 @@ int main(int argc, char** argv) try {
             if (!sharpened || !inside) {
                 for (unsigned channel = 0; channel < 4; ++channel) {
                     if (std::abs(int(pixel[channel]) - int(expected[channel])) > 1)
-                        throw std::runtime_error("Stereo shader mismatch mode=" + std::to_string(mode) +
-                            " x=" + std::to_string(x) + " y=" + std::to_string(y));
+                        throw std::runtime_error("Stereo shader mismatch pass=" + std::to_string(pass) +
+                            " mode=" + std::to_string(mode) + " x=" + std::to_string(x) + " y=" + std::to_string(y) +
+                            " chan=" + std::to_string(channel) + " actual=" + std::to_string(pixel[channel]) +
+                            " expected=" + std::to_string(expected[channel]));
                 }
             } else {
                 const auto* baseline = baseline_focus.data() + y * footprint.Footprint.RowPitch + x * 4;
