@@ -1,8 +1,8 @@
-name: QuadView Build51 local-origin fix for STALKER 2.10
-run-name: QuadView 2.10 source-coordinate fix (${{ github.run_number }})
+name: QuadView Build51 complete + STALKER 2.10 local-origin repair
+run-name: Build51 + local texture coordinates / STALKER 2.10 (${{ github.run_number }})
 on:
   push:
-    branches: [experiment/quadview-210-source-local-origin-20261104]
+    branches: [experiment/quadview-b51-local-origin-210-20261104]
     paths: ['quadview/**', '.github/workflows/quadview-stereo-182.yml']
   workflow_dispatch:
 permissions:
@@ -95,6 +95,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Four-source Native Stereo Fix delivery overlay failed' }
           python workspace/quadview/apply_quadview_native_retirement.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Fenced native target retirement overlay failed' }
+          python workspace/quadview/apply_quadview_recovery.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Engine-only bootstrap/shared-tail recovery overlay failed' }
+          python workspace/quadview/apply_quadview_role_frames.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Exact singleton frame binding overlay failed' }
+          python workspace/quadview/apply_quadview_hook_trace.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Hook trace overlay failed' }
+          python workspace/quadview/apply_quadview_hook_output_trace.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Hook output trace overlay failed' }
+          python workspace/quadview/apply_quadview_present_setup.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Presentation retirement scope patch failed' }
+          python workspace/quadview/apply_quadview_target_lifetime.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Engine-owned native target lifetime patch failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -194,22 +206,45 @@ jobs:
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
           Copy-Item evidence/quadview-source.json package/
           Copy-Item evidence/quadview-source-generated.json package/
-          @{ baseline='Build182'; baselineSource='7486fc59890b14673cd50770b0dafeb692576716'; overlay=$env:GITHUB_SHA; run=$env:GITHUB_RUN_ID; mode='ID7 stereo quad views'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
-          $needed=@('UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
+          Copy-Item workspace/quadview/BUILD46_FINDINGS_STATUS.md package/BUILD46_FINDINGS_STATUS.md
+          Copy-Item workspace/quadview/BUILD48_FINDINGS_STATUS.md package/BUILD48_FINDINGS_STATUS.md
+          Copy-Item workspace/quadview/BUILD49_FINDINGS_STATUS.md package/BUILD49_FINDINGS_STATUS.md
+          Copy-Item workspace/quadview/BUILD50_FINDINGS_STATUS.md package/
+          Copy-Item workspace/quadview/quadview_hook_trace_summary.py package/
+          Copy-Item workspace/quadview/quadview_log_regression.py package/quadview_log_regression.py
+          Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
+          Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
+          Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
+          @{ build='51+2.10'; diagnosticOnly=$true; sourceLocalOrigins=$true; baseline='Complete Build51 overlay order plus 2.10 source-local compositor'; baselineSource='7486fc59890b14673cd50770b0dafeb692576716'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
+          if (!$pdb) { throw 'Missing exact backend debug symbols' }
+          @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
+          @'
+          Build51 + STALKER 2.10 local-origin fix - Quad Views Stereo ID7 - experimental test candidate
+          Start a fresh game process and inject this complete package.
+          Enable Quad Views Stereo (ID7). Keep the same settings as the Build50 test initially.
+          Full 10-step Build51 patch chain (recovery, role frames, hook traces, presentation setup and target lifetime) plus STALKER 2.10 compositor reads each independent source at local (0,0).
+          Working DuoView source is preserved. Not headset-verified. Four engine views still have logical atlas rectangles; only isolated GPU source sampling is corrected.
+          Test output first, then 60 seconds of head and eye movement. Check seams, stereo, brightness and FOV.
+          If output works, test one ID7 -> ID0 -> ID7 transition and a loading screen.
+          Send the complete new UEVR log and any crash bundle, including QUADVIEW_BUILD.json and BUILD51_BINARY_IDENTITY.json.
+          Exact backend symbols are retained with the matching CI run.
+          '@ | Set-Content package/READ_FIRST.txt
+          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-QuadViews-Stereo-182base-${{ github.run_number }}.zip"
+          $zip="UEVR-QuadViews-B51-STALKER210-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-QuadViews-Stereo-182base-${{ github.run_number }}
+          name: UEVR-QuadViews-B51-STALKER210-${{ github.run_number }}
           path: |
-            UEVR-QuadViews-Stereo-182base-*.zip
-            UEVR-QuadViews-Stereo-182base-*.zip.sha256
+            UEVR-QuadViews-B51-STALKER210-*.zip
+            UEVR-QuadViews-B51-STALKER210-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Preserve compiled outputs if packaging fails
