@@ -251,6 +251,15 @@ jobs:
             UEVR-QuadViews-B51-STALKER210-WarmStart-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: steps.build_backend.outcome == 'success'
+        with:
+          name: QuadView-B51-STALKER210-Backend-Symbols-${{ github.run_number }}
+          path: |
+            backend/build/**/UEVRBackend.pdb
+            backend/build/**/UEVRBackend.dll
+          if-no-files-found: error
+          retention-days: 90
       - name: Preserve compiled outputs if packaging fails
         if: failure() && steps.build_backend.outcome == 'success' && steps.build_frontend.outcome == 'success'
         uses: actions/upload-artifact@v4
