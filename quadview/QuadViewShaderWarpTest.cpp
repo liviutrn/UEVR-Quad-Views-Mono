@@ -157,8 +157,9 @@ int main(int argc, char** argv) try {
     commands->CopyTextureRegion(&atlas_location, 0, 0, 0, &upload_location, nullptr);
     transition(commands.Get(), atlas.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    // Each native target contains only its own rectangle; every other region is
-    // poison. Binding the wrong eye/level SRV therefore fails the pixel checks.
+    // STALKER 2.10 Build 52 captured ALL four independent target images at
+    // LOCAL (0,0), regardless of each view's logical atlas origin.
+    // Poison all other pixels so atlas-offset sampling fails the GPU assertions.
     std::array<ComPtr<ID3D12Resource>, 4> native_targets, native_uploads;
     for (unsigned view = 0; view != 4; ++view) {
         native_targets[view] = resource(device.Get(), texture(AW, H, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
@@ -170,8 +171,8 @@ int main(int argc, char** argv) try {
         const auto& rect = layout->views[view];
         for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < AW; ++x) {
             Color color{255, 0, 255, 255};
-            if (x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height)
-                color = source_color(view, x - rect.x, y - rect.y);
+            if (x < rect.width && y < rect.height)
+                color = source_color(view, x, y);
             std::memcpy(static_cast<uint8_t*>(mapped) + y * footprint.Footprint.RowPitch + x * 4, color.data(), 4);
         }
         native_uploads[view]->Unmap(0, nullptr);
