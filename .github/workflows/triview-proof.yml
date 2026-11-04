@@ -1,10 +1,10 @@
 # Third-view PROOF build: Native Stereo + Native Fix, plus a third view that is an exact clone of the second view (tinted).
-name: Tri-View PROOF (third view = clone of the second view)
-run-name: Tri-View PROOF (${{ github.run_number }})
+name: Tri-View 2-engine-view proof (third independent render call)
+run-name: Two-eye engine / three GPU render calls (${{ github.run_number }})
 on:
   push:
     branches:
-      - claude/triview-proof-20261103
+      - experiment/triview-two-engine-views-third-render-20261104
   workflow_dispatch:
 permissions:
   contents: read
@@ -129,6 +129,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tri-View Stage 1 anchors did not match the exact v207 source' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Tri-View Stage 1 patch contains whitespace errors' }
+      - name: Convert to exactly two engine views plus a third native renderer call
+        shell: pwsh
+        run: |
+          python workspace/duoview/joey_stage1/apply_triview_two_engine_views.py backend evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Two-eye renderer-call rewrite failed its exact anchors' }
+          python workspace/duoview/joey_stage1/apply_triview_two_engine_views.py --verify backend evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Two-eye renderer-call contract failed' }
+          git -C backend diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Third-render source has whitespace errors' }
       - name: Tri-View geometry and compositor WARP pixel tests
         shell: pwsh
         run: |
@@ -205,7 +214,9 @@ jobs:
         shell: pwsh
         run: |
           python workspace/duoview/joey_stage1/apply_triview_stage1.py --verify backend evidence
-          if ($LASTEXITCODE -ne 0) { throw 'v207 + Tri-View Stage 1 source changed during the build' }
+          if ($LASTEXITCODE -ne 0) { throw 'v207 + Tri-View two-eye source changed during the build' }
+          python workspace/duoview/joey_stage1/apply_triview_two_engine_views.py --verify backend evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Two-eye renderer-call source changed during the build' }
           Copy-Item backend/build/bin/uevr/*.dll package/
           Copy-Item backend/build/bin/vr-plugin-nullifier/UEVRPluginNullifier.dll package/
           Copy-Item backend/build/bin/LuaVR/LuaVR.dll package/
@@ -215,6 +226,7 @@ jobs:
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
           Copy-Item evidence/triview-stage1-hashes.json package/
+          Copy-Item evidence/triview-two-engine-third-render.json package/
           @'
           TRI-VIEW PROOF - EXPERIMENTAL. Compiled in GitHub Actions only. NOT tested in a headset yet.
           Question this build answers: can a THIRD view be rendered with exactly the same plumbing as the second view?
@@ -222,10 +234,10 @@ jobs:
           Rendering method 7, "Tri-View (Experimental)". STALKER 2, DX12, OpenXR only.
           With "PROOF" ON (default; Menu > Rendering Method > Tri-View - settings and status):
           - Both eyes are NOT cropped: it is plain Native Stereo + Native Fix.
-          - The engine also renders a third view that is an exact copy of the second (right-eye) view.
+          - Unreal constructs EXACTLY TWO views; the real right-eye scene is rendered a THIRD TIME into its own target.
           - LEFT eye: the real first view.
           - RIGHT eye: left half = the real second view; right half = the THIRD view with a RED tint; thin black seam.
-          If the third view works, the red half looks exactly like the left half (just red), with no trembling,
+          This validates a third RENDER CALL, not yet an independent third-camera view. The red half should match the normal half without trembling,
           no shift at the seam and no lag when you turn your head.
 
           TEST (3 short checks):
@@ -234,22 +246,22 @@ jobs:
              Does the red half tremble, lag, or flicker compared with the normal half?
           3. Close the game. Send log.txt and TriView_Capture_1.zip / TriView_Capture_2.zip
              from %APPDATA%\UnrealVRMod\<game folder> (same folder as the UEVR log).
-          Optional: untick PROOF in the menu to get the old cropped Tri-View back.
+          Keep PROOF ON for this test. Third View OFF must leave Native Stereo Fix head tracking stable.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','duoview-stage234-hashes.json','triview-stage1-hashes.json','exact-baseline-source.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="Tri-View-Proof-${{ github.run_number }}.zip"
+          $zip="TriView-TwoEngine-Proof-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: Tri-View-Proof-${{ github.run_number }}
+          name: TriView-TwoEngine-Proof-${{ github.run_number }}
           path: |
-            Tri-View-Proof-*.zip
-            Tri-View-Proof-*.zip.sha256
+            TriView-TwoEngine-Proof-*.zip
+            TriView-TwoEngine-Proof-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - name: Record public source and dependency provenance
@@ -264,7 +276,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Tri-View-Stage1-Evidence-${{ github.run_number }}
+          name: TriView-TwoEngine-Evidence-${{ github.run_number }}
           path: evidence/
           if-no-files-found: error
 
