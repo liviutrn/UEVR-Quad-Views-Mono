@@ -111,6 +111,46 @@ def apply(backend, evidence):
         vr->triview_third_view_enabled()) {""",
         "Third renderer enable guard")
 
+    # Native Fix clones the OpenXR pose queue +1 for the second renderer call.
+    # Without the +2 clone, the third renderer advances without a valid HMD pose
+    # assignment; that can appear in-headset as a tracked floating screen.
+    # Use the SAME source runtime_frame_count and mutex, immediately before call 3.
+    hook = replace_exact(hook,
+        """            render_secondary_view();
+            triview_rendered = true;""",
+        """            // A third engine renderer call consumes one further XR pose slot.
+            // Copy the validated +1 slot into +2 before dispatching it.
+            if (runtime == nullptr || !runtime->is_openxr()) {
+                vr->m_triview_third_skipped.fetch_add(1, std::memory_order_relaxed);
+                SPDLOG_WARNING_EVERY_N_SEC(2, "[TriView] Third render requires OpenXR pose queue");
+            } else {
+                auto* const openxr = static_cast<runtimes::OpenXR*>(runtime);
+                {
+                    std::scoped_lock lock{openxr->sync_assignment_mtx};
+                    const auto second_slot = (runtime_frame_count + 1) % runtimes::OpenXR::QUEUE_SIZE;
+                    const auto third_slot = (runtime_frame_count + 2) % runtimes::OpenXR::QUEUE_SIZE;
+                    openxr->pipeline_states[third_slot] = openxr->pipeline_states[second_slot];
+                    openxr->pipeline_states[third_slot].frame_count = third_slot;
+                }
+                render_secondary_view();
+                triview_rendered = true;
+                triview_used_target = std::move(target);
+                triview_last_rendered = true;
+            }
+            // Hold the source target in the packet only if an actual third call occurred.
+            // Note: the old post-call assignments were folded inside the OpenXR guard.
+            // ORIGINAL POST-CALL ASSIGNMENTS REMOVED BELOW""",
+        "Third call OpenXR pose-slot clone")
+    hook = replace_exact(hook,
+        """            // ORIGINAL POST-CALL ASSIGNMENTS REMOVED BELOW
+            triview_used_target = std::move(target);
+            triview_last_rendered = true;""",
+        """            // The target lease is captured inside the successful third-render branch.""",
+        "Third call resource lease and completion")
+    # Reuse the existing Native Fix render-frame packet, but never fake a third frame.
+    # Prevent publish/composition until the additional call has actually completed.
+    # Do not alter the engine's two-view metadata, which is its validated baseline.
+
     # Prevent incomplete file writes if any anchor fails.
     hook_file.write_text(hook, encoding="utf-8", newline="")
     vr_file.write_text(vr, encoding="utf-8", newline="")
