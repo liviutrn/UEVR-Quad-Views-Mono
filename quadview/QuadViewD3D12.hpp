@@ -215,10 +215,22 @@ public:
         ShaderConstants constants{};
         constants.eye_and_atlas[0] = layout.eye_width; constants.eye_and_atlas[1] = layout.eye_height;
         constants.eye_and_atlas[2] = layout.atlas_width; constants.eye_and_atlas[3] = layout.atlas_height;
+        // STALKER 2.10 source-local render origins (Build 52 GPU evidence; port of 1c8f275):
+        // when the four sources are independent textures, each singleton UE render
+        // is physically written at its OWN (0,0), even though its FIntRect still
+        // encodes an offset in the logical 2W atlas. Do not apply that atlas offset
+        // in the compositor. The legacy shared-atlas path (all four sources alias
+        // one texture) keeps its offsets. On 2.06 every offset used here is either
+        // already 0 (shared centre context) or a focus offset that 2.06 honoured,
+        // so 2.06 changes too: this build targets 2.10.
+        const bool isolated_sources = sources[0] != sources[1] && sources[0] != sources[2] &&
+            sources[0] != sources[3] && sources[1] != sources[2] &&
+            sources[1] != sources[3] && sources[2] != sources[3];
         for (unsigned view = 0; view < 4; ++view) {
             // Tri-view: both eyes read the one shared centre context (view 0).
             const auto& rect = layout.views[view == 1 && layout.shared_context ? 0 : view];
-            constants.rectangles[view][0] = rect.x; constants.rectangles[view][1] = rect.y;
+            constants.rectangles[view][0] = isolated_sources ? 0u : rect.x;
+            constants.rectangles[view][1] = isolated_sources ? 0u : rect.y;
             constants.rectangles[view][2] = rect.width; constants.rectangles[view][3] = rect.height;
         }
         for (unsigned eye = 0; eye != 2; ++eye) {

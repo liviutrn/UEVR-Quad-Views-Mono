@@ -224,7 +224,7 @@ jobs:
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          Tri-view B1 (Build51 base) - Quad Views Stereo ID7 - test candidate
+          Tri-view B4 for STALKER 2.10 (B3 + local-origin compositor) - Quad Views Stereo ID7 - test candidate
           Start a fresh game process and inject this complete package.
           Enable Quad Views Stereo (ID7). Keep the same settings as the Build50 test initially.
           This build changes all four source texture owners and unblocks D3D12 presentation setup.
