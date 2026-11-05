@@ -98,15 +98,31 @@ int main() {
             for (size_t j=0;j!=i;++j) assert(!(local.views[i]==local.views[j]));
         }
         assert(local.focus_crops==layout->focus_crops);
-        // equal context and focus sizes must still give four distinct rectangles
+        // equal requested context and focus sizes must still give four distinct
+        // rectangles; since B11 make_layout also makes the context 7 % smaller
+        // so the periphery's DLSS output size is unique.
         auto same=uevr::quadview::make_layout(1000,1000,.2f,.2f,.2f,1.f,.5f,.5f);
-        assert(same && same->views[0].width==same->views[2].width);
+        assert(same && same->views[2].width==200 && same->views[0].width==186);
         assert(uevr::quadview::apply_native_local(*same));
         for (size_t i=0;i!=4;++i) for (size_t j=0;j!=i;++j) assert(!(same->views[i]==same->views[j]));
     }
     {   // Tri-view B7: periphery depth selection and shift
         using uevr::quadview::ngx::matches_periphery;
-        assert(matches_periphery(812,646,812,646) && matches_periphery(760,600,812,646));
+        assert(matches_periphery(812,646,812,646) && matches_periphery(816,642,812,646) && matches_periphery(830,660,812,646));
+        assert(!matches_periphery(760,600,812,646)); // B11: 6 % off is another view
+        {   // B11: the context is never the size of a fovea (unique DLSS identity)
+            using uevr::quadview::ngx::focus_conflicts_context;
+            for (float ctx : {.2f, .3f, .4f, .45f, .5f}) for (float crop : {.3f, .4f, .45f, .5f, .55f}) for (float dens : {.8f, 1.f}) {
+                const auto l=uevr::quadview::make_layout(4060,3228,crop,crop,ctx,dens);
+                if (!l) continue;
+                const auto& c=l->views[0]; const auto& f=l->views[2];
+                assert(!focus_conflicts_context(f.width,f.height,c.width,c.height));
+                assert(!matches_periphery(f.width,f.height,c.width,c.height));
+                assert(matches_periphery(c.width,c.height,c.width,c.height));
+            }
+            const auto equal=uevr::quadview::make_layout(4000,3200,.5f,.5f,.5f,1.f); // 2000x1600 both
+            assert(equal && equal->views[2].width==2000 && equal->views[0].width==1860 && equal->views[0].height==1488);
+        }
         assert(!matches_periphery(2030,1614,812,646) && !matches_periphery(0,646,812,646) && !matches_periphery(812,646,0,0));
         auto tri=uevr::quadview::make_layout(4060,3228,.5f,.5f,.2f,1.f,.5f,.5f);
         assert(tri);

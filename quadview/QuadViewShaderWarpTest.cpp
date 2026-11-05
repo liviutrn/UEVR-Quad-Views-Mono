@@ -386,6 +386,8 @@ int main(int argc, char** argv) try {
     D3D12_RESOURCE_STATES atlas_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     std::vector<uint8_t> baseline_focus;
     std::vector<uint8_t> strength_one_focus;
+    std::filesystem::path snapshot_dir;
+    uint32_t snapshots_before = 0;
     for (unsigned pass = 0; pass < 21; ++pass) { // 12-14: B6 compact; 15-16: B8 independent eye sharpening
         const unsigned mode = pass >= 15 ? 2u : (pass < 6 || pass >= 9 ? pass % 3 : 2u);
         if (pass != 0) {
@@ -432,6 +434,16 @@ int main(int argc, char** argv) try {
             depth.texture = pass == 17 ? nullptr : synthetic_depth.Get();
             depth.rect[2] = pass == 18 ? 2u : 1u;
             depth.rect[3] = 1u;
+            if (pass == 20) {
+                // B11 proof snapshot: readback copies of the final eyes, the
+                // sources and the depth must record legally (debug layer) and
+                // be written after explicit slot retirement.
+                snapshot_dir = std::filesystem::temp_directory_path() / ("quadview_snapshot_test_" + std::to_string(GetCurrentProcessId()));
+                std::filesystem::remove_all(snapshot_dir);
+                uevr::quadview::dx12::set_snapshot_directory(snapshot_dir);
+                snapshots_before = uevr::quadview::dx12::snapshots_written().load();
+                uevr::quadview::dx12::snapshot_requested().store(true);
+            }
             if (!production.record_sources(commands.Get(), {native_targets[0].Get(), native_targets[1].Get(),
                     native_targets[2].Get(), native_targets[3].Get()}, output.Get(), diagnostic_layout,
                     diagnostic_settings, D3D12_RESOURCE_STATE_RENDER_TARGET, output_state,
@@ -605,8 +617,24 @@ int main(int argc, char** argv) try {
                 throw std::runtime_error("Fence-retired QuadView GPU timestamp result unavailable");
             if (!packet_lifetime.expired()) throw std::runtime_error("Production packet owner leaked after retirement");
         }
+        if (pass == 20) {
+            if (uevr::quadview::dx12::snapshot_requested().load()) throw std::runtime_error("B11 snapshot request was not consumed");
+            for (int i = 0; i < 200 && uevr::quadview::dx12::snapshots_written().load() == snapshots_before; ++i) Sleep(50);
+            if (uevr::quadview::dx12::snapshots_written().load() == snapshots_before) throw std::runtime_error("B11 snapshot files were not written");
+            unsigned images = 0; bool depth_file = false, eyes_file = false, info_file = false;
+            for (const auto& entry : std::filesystem::directory_iterator(snapshot_dir)) {
+                const auto name = entry.path().filename().string();
+                if (entry.path().extension() == ".dds" && entry.file_size() > 148) ++images;
+                depth_file = depth_file || name.find("periphery_depth") != std::string::npos;
+                eyes_file = eyes_file || name.find("eyes_final") != std::string::npos;
+                info_file = info_file || name.find("_info.txt") != std::string::npos;
+            }
+            if (images != 5 || !depth_file || !eyes_file || !info_file)
+                throw std::runtime_error("B11 snapshot wrote " + std::to_string(images) + " of 5 images: " + uevr::quadview::dx12::last_snapshot_message());
+            std::error_code ignored; std::filesystem::remove_all(snapshot_dir, ignored);
+        }
     }
-    std::cout << "QuadView WARP: four independent native target SRVs, B6 compact, B8 right/left-only sharpening, B9 missing/rejected/non-shared/known-depth whole-eye diagnostics, stereo isolation, off-center ROI, crop bounds, diagnostic modes, 0/1/2 Glamarye focus strength and slot ownership passed.\n";
+    std::cout << "QuadView WARP: four independent native target SRVs, B6 compact, B8 right/left-only sharpening, B9 missing/rejected/non-shared/known-depth whole-eye diagnostics, B11 proof snapshot readback, stereo isolation, off-center ROI, crop bounds, diagnostic modes, 0/1/2 Glamarye focus strength and slot ownership passed.\n";
     return 0;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

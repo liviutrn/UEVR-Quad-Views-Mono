@@ -1,12 +1,16 @@
 #pragma once
-// Tri-view B7: capture the DLSS depth input of the PERIPHERY render every frame.
+// Tri-view B11: capture the DLSS depth input of the PERIPHERY render every frame.
 // Hooks (safetyhook, inline): NVSDK_NGX_D3D12_EvaluateFeature(_C) and
 // Create/ReleaseFeature(_C) in nvngx_dlss.dll / _nvngx.dll, plus
 // ID3D12CommandQueue::ExecuteCommandLists (vtable slot 10) to know when the
 // game's command list holding our copy has been submitted. Never interferes
 // with DLSS: inputs are restored before the original Evaluate; result is unchanged.
-// Selection requires an exact authenticated role-0 source owner; dimensions
-// only sanity-check that owner, never supply provenance.
+// Identity = DLSS output size: make_layout() keeps the periphery size distinct
+// from both foveas (QuadViewNgxSelect.hpp), so only the periphery can match.
+// Ordering: the copy is recorded on the game's DIRECT list and the compositor
+// draws on the same DIRECT queue later, so a copy whose list was SUBMITTED
+// before the compositor's own submission is complete when the GPU reads it.
+// Slot reuse still waits for a producer fence and for every compositor lease.
 // The depth subrect is copied on the game's own DIRECT command list before
 // Evaluate into an owned R32 texture (ALL_SHADER_RESOURCE between uses).
 #include <Windows.h>
@@ -85,10 +89,7 @@ public:
     void set_expected(uint32_t w, uint32_t h) {
         want_w_.store(w, std::memory_order_relaxed); want_h_.store(h, std::memory_order_relaxed);
     }
-    // B9 stability gate: no NGX copy recording until exact producer identity,
-    // producer completion and consumer retirement are validated together.
-    // Existing saved settings and the depth-debug toggle cannot bypass this.
-    static constexpr bool capture_supported() noexcept { return false; }
+    static constexpr bool capture_supported() noexcept { return true; }
     void set_enabled(bool on) { enabled_.store(on && capture_supported(), std::memory_order_release); }
 
     // Present thread: install hooks lazily (only while Tri-view depth is on).
@@ -121,31 +122,46 @@ public:
              reinterpret_cast<void*>(&release<4>), reinterpret_cast<void*>(&release<5>)});
     }
 
-    // Exact identity is mandatory. Cross-queue reads are exposed only after
-    // producer completion; the consumer retains the shared snapshot until its fence.
-    std::shared_ptr<const DepthSnapshot> for_source(const DepthOwner& owner) {
-        if (!enabled_.load(std::memory_order_acquire) || !owner.valid()) return {};
+    // Present thread: newest periphery copy whose list was submitted (same
+    // queue as the compositor => ordered on the GPU), at most 250 ms old. The
+    // compositor keeps the returned snapshot alive until its own slot retires.
+    std::shared_ptr<const DepthSnapshot> latest() {
+        const auto w = want_w_.load(std::memory_order_relaxed), h = want_h_.load(std::memory_order_relaxed);
+        if (!enabled_.load(std::memory_order_acquire) || !w || !h) { ++missed_; return {}; }
+        const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(mutex_);
-        const uint64_t completed=fence_ ? fence_->GetCompletedValue() : 0;
+        const uint64_t completed = fence_ ? fence_->GetCompletedValue() : 0;
         std::shared_ptr<DepthSnapshot> best;
         for (const auto& slot : pool_) {
-            if (slot->submitted && depth_copy_complete(completed,slot->producer_fence_value))
+            if (slot->submitted && depth_copy_complete(completed, slot->producer_fence_value))
                 slot->source_reference.Reset();
-            if (slot->submitted && slot->valid_evaluation && slot->texture && slot->owner.same_source(owner) &&
-                depth_copy_complete(completed,slot->producer_fence_value) && (!best || slot->sequence>best->sequence)) best=slot;
+            if (slot->submitted && slot->valid_evaluation && slot->texture && matches_periphery(slot->out_w, slot->out_h, w, h) &&
+                now - slot->submitted_at < std::chrono::milliseconds(250) && (!best || slot->sequence > best->sequence)) best = slot;
         }
-        if(best) ++used_; else ++missed_;
+        if (best) { ++used_; last_used_age_us_.store(uint32_t(std::chrono::duration_cast<std::chrono::microseconds>(now - best->submitted_at).count()), std::memory_order_relaxed); }
+        else ++missed_;
         return best;
     }
-    // Compatibility deliberately refuses the old size/age-only selection.
-    std::shared_ptr<const DepthSnapshot> latest() { ++missed_; return {}; }
 
-    struct Stats { uint64_t evaluations, matches, captures, submits, used, missed, skips; uint32_t last_out_w, last_out_h, last_in_w, last_in_h, last_format, hooks; bool queue_hook; };
+    // Why the last DLSS evaluation was not captured (shown in the menu and log).
+    enum Reason : uint32_t { None, NoExpectedSize, OtherSize, NotSuperResolution, NoDepthParameter, BadDepthFormat,
+                             OtherDevice, PoolFull, AllocationFailed, NoFence, Exception };
+    static const char* reason_name(uint32_t r) {
+        static const char* names[]{"none", "periphery size unknown (not TriView / layout pending)", "other size (fovea or other pass)",
+            "not DLSS super resolution", "no Depth parameter", "unsupported depth format/rect", "other D3D12 device",
+            "all 8 depth slots busy", "texture allocation failed", "no fence", "exception"};
+        return r < std::size(names) ? names[r] : "?";
+    }
+
+    struct Stats { uint64_t evaluations, matches, captures, submits, used, missed, skips; uint32_t last_out_w, last_out_h, last_in_w, last_in_h, last_format, hooks;
+                   bool queue_hook; uint32_t want_w, want_h, other_w, other_h, reason, used_age_us, slots; bool jitter_valid; float jitter_x, jitter_y; uint64_t foreign_queue_submits; };
     Stats stats() const {
-        uint32_t hooks = 0; bool queue_hook = false;
-        { std::scoped_lock lock(mutex_); for (bool b : eval_ok_) hooks += b; queue_hook = execute_ok_; }
+        uint32_t hooks = 0, slots = 0; bool queue_hook = false;
+        { std::scoped_lock lock(mutex_); for (bool b : eval_ok_) hooks += b; queue_hook = execute_ok_; slots = uint32_t(pool_.size()); }
         return {evaluations_.load(), matches_.load(), captures_.load(), submits_.load(), used_.load(), missed_.load(), skips_.load(),
-                last_out_w_.load(), last_out_h_.load(), last_in_w_.load(), last_in_h_.load(), last_format_.load(), hooks, queue_hook};
+                last_out_w_.load(), last_out_h_.load(), last_in_w_.load(), last_in_h_.load(), last_format_.load(), hooks, queue_hook,
+                want_w_.load(), want_h_.load(), other_w_.load(), other_h_.load(), last_reason_.load(), last_used_age_us_.load(), slots,
+                last_jitter_valid_.load(), last_jitter_x_.load(), last_jitter_y_.load(), foreign_queue_submits_.load()};
     }
 
 private:
@@ -154,8 +170,7 @@ private:
     mutable std::mutex mutex_;
     ComPtr<ID3D12CommandQueue> queue_;
     ComPtr<ID3D12Device> device_;
-    safetyhook::InlineHook execute_{}, reset_{};
-    std::unordered_map<uintptr_t,uint64_t> list_epochs_;
+    safetyhook::InlineHook execute_{};
     bool execute_ok_{};
     Hooks evals_{}, creates_{}, releases_{};
     std::array<bool, 6> eval_ok_{}, create_ok_{}, release_ok_{};
@@ -166,6 +181,14 @@ private:
     uint64_t next_sequence_{};
     std::atomic<bool> enabled_{false};
     std::atomic<uint32_t> want_w_{}, want_h_{}, last_out_w_{}, last_out_h_{}, last_in_w_{}, last_in_h_{}, last_format_{};
+    std::atomic<uint32_t> other_w_{}, other_h_{}, last_reason_{}, last_used_age_us_{};
+    std::atomic<bool> last_jitter_valid_{};
+    std::atomic<uint64_t> foreign_queue_submits_{};
+    std::atomic<float> last_jitter_x_{}, last_jitter_y_{};
+    // A recorded copy whose list never reached our queue (discarded, or sent to
+    // another queue) is reusable after this long; it was never or long ago executed.
+    static constexpr auto AbandonAfter = std::chrono::seconds(2);
+    void reject(Reason r) { last_reason_.store(r, std::memory_order_relaxed); ++skips_; }
     std::atomic<uint64_t> evaluations_{}, matches_{}, captures_{}, submits_{}, used_{}, missed_{}, skips_{};
     static inline thread_local unsigned nested_{};
     struct Guard { bool outer{nested_++ == 0}; ~Guard() { --nested_; } };
@@ -181,18 +204,23 @@ private:
         if (!enabled_.load(std::memory_order_acquire) || !cmd || !feature || !p ||
             cmd->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) return {};
         ++evaluations_;
-        const auto* authenticated=DepthOwnerScope::current();
-        if (!authenticated || !authenticated->valid()) { ++skips_; return {}; }
-        const auto owner=*authenticated;
+        const auto want_w = want_w_.load(std::memory_order_relaxed), want_h = want_h_.load(std::memory_order_relaxed);
         const auto out_w = ngx_uint(p, "OutWidth"), out_h = ngx_uint(p, "OutHeight");
-        if (!matches_periphery(out_w, out_h, owner.output_width, owner.output_height)) return {};
+        if (!want_w || !want_h) { last_reason_.store(NoExpectedSize, std::memory_order_relaxed); return {}; }
+        if (!matches_periphery(out_w, out_h, want_w, want_h)) {
+            other_w_.store(out_w, std::memory_order_relaxed); other_h_.store(out_h, std::memory_order_relaxed);
+            last_reason_.store(OtherSize, std::memory_order_relaxed);
+            return {};
+        }
         {
             std::scoped_lock lock(mutex_);
             const auto found = feature_kind_.find(reinterpret_cast<uintptr_t>(feature));
-            if (found != feature_kind_.end() && found->second != 1u) return {}; // only DLSS Super Resolution
+            // Handles created before our hooks are unknown; the unique periphery
+            // size is the identity, the kind only filters known non-SR features.
+            if (found != feature_kind_.end() && found->second != 1u) { reject(NotSuperResolution); return {}; }
         }
         auto* depth = ngx_resource(p, "Depth");
-        if (!depth) return {};
+        if (!depth) { reject(NoDepthParameter); return {}; }
         auto in_w = ngx_uint(p, "DLSS.Render.Subrect.Dimensions.Width");
         auto in_h = ngx_uint(p, "DLSS.Render.Subrect.Dimensions.Height");
         if (!in_w) in_w = ngx_uint(p, "Width");
@@ -206,7 +234,7 @@ private:
                                desc.Format == DXGI_FORMAT_R32_TYPELESS;
         if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 || desc.DepthOrArraySize != 1 ||
             desc.MipLevels != 1 || !format_ok || !in_w || !in_h || desc.Width > 16384 || desc.Height > 16384 ||
-            uint64_t(base_x) + in_w > desc.Width || uint64_t(base_y) + in_h > desc.Height) { ++skips_; return {}; }
+            uint64_t(base_x) + in_w > desc.Width || uint64_t(base_y) + in_h > desc.Height) { reject(BadDepthFormat); return {}; }
         ++matches_;
         last_out_w_.store(out_w, std::memory_order_relaxed); last_out_h_.store(out_h, std::memory_order_relaxed);
         last_in_w_.store(in_w, std::memory_order_relaxed); last_in_h_.store(in_h, std::memory_order_relaxed);
@@ -215,31 +243,21 @@ private:
         const auto copy_format = planar ? DXGI_FORMAT_R32G8X24_TYPELESS : DXGI_FORMAT_R32_TYPELESS;
         const uint32_t w = full ? uint32_t(desc.Width) : in_w, h = full ? desc.Height : in_h;
         ComPtr<ID3D12Device> dev;
-        if (FAILED(depth->GetDevice(IID_PPV_ARGS(&dev)))) { ++skips_; return {}; }
+        if (FAILED(depth->GetDevice(IID_PPV_ARGS(&dev)))) { reject(OtherDevice); return {}; }
         std::scoped_lock lock(mutex_);
-        if (!device_ || dev.Get() != device_.Get()) { ++skips_; return {}; }
+        if (!device_ || dev.Get() != device_.Get()) { reject(OtherDevice); return {}; }
         const auto now = std::chrono::steady_clock::now();
-        auto* table=*reinterpret_cast<void***>(cmd);
-        if (!table || !table[10]) { ++skips_; return {}; }
-        if (!reset_) {
-            reset_=safetyhook::create_inline(table[10],reinterpret_cast<void*>(&reset_commands),
-                safetyhook::InlineHook::StartDisabled);
-            if (!reset_ || !reset_.enable()) { reset_.reset(); ++skips_; return {}; }
-        }
-        if(reset_.target()!=reinterpret_cast<uint8_t*>(table[10])) { ++skips_; return {}; }
-        const auto list_id=reinterpret_cast<uintptr_t>(cmd);
-        if(list_epochs_.size()>=128 && !list_epochs_.contains(list_id)) { ++skips_; return {}; }
-        auto& epoch=list_epochs_[list_id];if(!epoch) epoch=1;
-        if (!fence_) { ++skips_; return {}; }
+        if (!fence_) { reject(NoFence); return {}; }
         const auto completed=fence_->GetCompletedValue();
         std::shared_ptr<DepthSnapshot> slot;
         for (auto& candidate : pool_) {
-            if (!depth_slot_reusable(candidate->pending,candidate->submitted,completed,
+            const bool abandoned = candidate->pending && candidate.use_count()==1 && now - candidate->recorded > AbandonAfter;
+            if (!abandoned && !depth_slot_reusable(candidate->pending,candidate->submitted,completed,
                     candidate->producer_fence_value,candidate.use_count())) continue;
             if (!slot || candidate->sequence<slot->sequence) slot=candidate;
         }
         if (!slot) {
-            if (pool_.size() >= MaxSlots) { ++skips_; return {}; }
+            if (pool_.size() >= MaxSlots) { reject(PoolFull); return {}; }
             slot = std::make_shared<DepthSnapshot>(); pool_.push_back(slot);
         }
         constexpr auto read = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
@@ -254,7 +272,7 @@ private:
             td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN; td.Flags = D3D12_RESOURCE_FLAG_NONE;
             D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
             if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, read, nullptr, IID_PPV_ARGS(&slot->texture)))) {
-                ++skips_; return {};
+                reject(AllocationFailed); return {};
             }
             slot->texture->SetName(L"QuadView::PeripheryNGXDepth");
         }
@@ -271,7 +289,7 @@ private:
         transition(cmd, slot->texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, read);
         transition(cmd, depth, D3D12_RESOURCE_STATE_COPY_SOURCE, ngx_state);
         slot->source_reference = depth;
-        slot->owner=owner; slot->list_epoch=epoch; slot->producer_fence_value=0; slot->valid_evaluation=false;
+        slot->producer_fence_value=0; slot->valid_evaluation=false;
         float jitter_x{},jitter_y{};
         // NVIDIA guide 3.7.3: offsets are actual viewport displacement in
         // render-resolution pixels, screen axes (+right,+down). To sample a
@@ -281,6 +299,8 @@ private:
             std::isfinite(jitter_x) && std::isfinite(jitter_y) &&
             std::abs(jitter_x)<=0.5f && std::abs(jitter_y)<=0.5f;
         slot->jitter_pixels=slot->jitter_valid ? std::array<float,2>{jitter_x,jitter_y} : std::array<float,2>{};
+        last_jitter_valid_.store(slot->jitter_valid, std::memory_order_relaxed);
+        last_jitter_x_.store(slot->jitter_pixels[0], std::memory_order_relaxed); last_jitter_y_.store(slot->jitter_pixels[1], std::memory_order_relaxed);
         slot->jitter_uv={slot->jitter_pixels[0]/in_w,slot->jitter_pixels[1]/in_h};
         slot->producer_list = cmd;
         slot->sequence = ++next_sequence_;
@@ -289,24 +309,33 @@ private:
         slot->srv_format = planar ? DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS : DXGI_FORMAT_R32_FLOAT;
         slot->rect[0] = full ? base_x : 0; slot->rect[1] = full ? base_y : 0; slot->rect[2] = in_w; slot->rect[3] = in_h;
         slot->pending = true; slot->submitted = false;
+        last_reason_.store(None, std::memory_order_relaxed);
         ++captures_;
         return slot;
     }
 
     void submitted(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists) {
-        if (!count || !lists) return;
-        if (queue != queue_.Get() || !fence_) return;
-        bool matched=false;
-        for(const auto& slot:pool_) if(slot->pending && list_epochs_[reinterpret_cast<uintptr_t>(slot->producer_list)]==slot->list_epoch)
-            for(UINT i=0;i<count;++i) if(static_cast<void*>(lists[i])==static_cast<void*>(slot->producer_list)) matched=true;
-        if(!matched) return;
-        const auto value=++next_fence_value_;
-        // Failure retains all resources and pending slots; time is never retirement proof.
-        if(FAILED(queue->Signal(fence_.Get(),value))) { ++skips_; return; }
-        for(auto& slot:pool_) if(slot->pending && list_epochs_[reinterpret_cast<uintptr_t>(slot->producer_list)]==slot->list_epoch) for(UINT i=0;i<count;++i) {
-            if(static_cast<void*>(lists[i])!=static_cast<void*>(slot->producer_list)) continue;
-            slot->pending=false;slot->submitted=true;slot->producer_fence_value=value;
-            slot->submitted_at=std::chrono::steady_clock::now();++submits_;break;
+        if (!count || !lists || !queue || !fence_) return;
+        const auto matches = [&](const DepthSnapshot& slot) {
+            if (!slot.pending) return false;
+            for (UINT i = 0; i < count; ++i) if (static_cast<void*>(lists[i]) == static_cast<void*>(slot.producer_list)) return true;
+            return false;
+        };
+        bool any = false;
+        for (const auto& slot : pool_) any = any || matches(*slot);
+        if (!any) return;
+        // UE has one graphics queue. The game may reach it through a wrapper
+        // (e.g. Streamline), so the pointer can differ from the swapchain queue
+        // UEVR knows; any DIRECT queue of this device is that same queue.
+        if (queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT) { reject(OtherDevice); return; }
+        if (queue != queue_.Get()) ++foreign_queue_submits_;
+        const auto value = ++next_fence_value_;
+        // Signal failure keeps the slot pending: reused only after AbandonAfter.
+        if (FAILED(queue->Signal(fence_.Get(), value))) { ++skips_; return; }
+        const auto now = std::chrono::steady_clock::now();
+        for (auto& slot : pool_) if (matches(*slot)) {
+            slot->pending = false; slot->submitted = true; slot->producer_fence_value = value;
+            slot->submitted_at = now; ++submits_;
         }
     }
 
@@ -315,7 +344,7 @@ private:
         std::shared_ptr<DepthSnapshot> capture;
         // NVIDIA DLSS Programming Guide section 3.4: input depth is
         // NON_PIXEL_SHADER_RESOURCE at API entry. Restore it before NGX executes.
-        if(guard.outer) { try { capture=s.inspect(cmd,feature,p); } catch(...) { ++s.skips_; } }
+        if(guard.outer) { try { capture=s.inspect(cmd,feature,p); } catch(...) { s.reject(Exception); } }
         const auto result=s.evals_[N].unsafe_call<uint32_t>(cmd,feature,p,cb);
         if(capture) { std::scoped_lock lock(s.mutex_);capture->valid_evaluation=ngx_success(result); }
         return result;
@@ -338,21 +367,12 @@ private:
     }
     static void __stdcall execute_commands(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists) {
         auto& s = self();
-        std::scoped_lock lock(s.mutex_);
+        // The game's submission is never serialised behind our lock. A copy is
+        // marked submitted only after the original call queued its list, so the
+        // compositor's later submission on this queue is ordered after it.
         s.execute_.unsafe_call<void>(queue, count, lists);
+        std::scoped_lock lock(s.mutex_);
         s.submitted(queue, count, lists);
-    }
-    static HRESULT __stdcall reset_commands(ID3D12GraphicsCommandList* cmd,ID3D12CommandAllocator* allocator,ID3D12PipelineState* pipeline) {
-        auto& s=self();std::scoped_lock lock(s.mutex_);
-        const auto result=s.reset_.unsafe_call<HRESULT>(cmd,allocator,pipeline);
-        if(SUCCEEDED(result)) {
-            const auto id=reinterpret_cast<uintptr_t>(cmd);
-            if(s.list_epochs_.contains(id)) ++s.list_epochs_[id];
-            // A pending capture from a previous recording is intentionally retained:
-            // it cannot be submitted by pointer reuse, recycled by elapsed time, or
-            // freed without an independently observed discard proof.
-        }
-        return result;
     }
     static void install_group(Hooks& hooks, std::array<bool, 6>& installed, std::array<const char*, 2> exports,
                               std::array<void*, 6> callbacks) {

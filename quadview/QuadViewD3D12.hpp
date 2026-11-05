@@ -5,12 +5,24 @@
 #include <wrl/client.h>
 #include "QuadViewGeometry.hpp"
 #include "QuadViewSettings.hpp"
+#include "QuadViewSnapshot.hpp"
 #include "QuadViewShaderBytecode.hpp"
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <memory>
 #include <utility>
+#include <chrono>
+#include <ctime>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <vector>
 
 namespace uevr::quadview::dx12 {
 
@@ -38,6 +50,50 @@ static_assert(sizeof(ShaderConstants) == 400); // B8: 512-byte constant buffer
 
 // B7: optional periphery depth for reprojection. texture is R32_TYPELESS and
 // stays in D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE between uses.
+
+struct SnapshotItem {
+    Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT rows{};
+    UINT64 row_bytes{};
+    std::string name;
+};
+
+// Concrete DXGI format for a viewer (typeless -> the view format we sample with).
+inline DXGI_FORMAT snapshot_file_format(DXGI_FORMAT f) {
+    switch (f) {
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS: return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case DXGI_FORMAT_B8G8R8A8_TYPELESS: return DXGI_FORMAT_B8G8R8A8_UNORM;
+    case DXGI_FORMAT_R10G10B10A2_TYPELESS: return DXGI_FORMAT_R10G10B10A2_UNORM;
+    case DXGI_FORMAT_R16G16B16A16_TYPELESS: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    case DXGI_FORMAT_R32_TYPELESS: return DXGI_FORMAT_R32_FLOAT;
+    default: return f;
+    }
+}
+
+inline bool write_snapshot_dds(const std::filesystem::path& file, const SnapshotItem& item) {
+    void* data{};
+    const D3D12_RANGE range{0, SIZE_T(item.footprint.Offset + UINT64(item.footprint.Footprint.RowPitch) * item.rows)};
+    if (FAILED(item.buffer->Map(0, &range, &data)) || !data) return false;
+    std::ofstream out(file, std::ios::binary);
+    uint32_t header[32]{};
+    header[0] = 124; header[1] = 0x1 | 0x2 | 0x4 | 0x8 | 0x1000; // caps|height|width|pitch|pixelformat
+    header[2] = item.footprint.Footprint.Height; header[3] = item.footprint.Footprint.Width;
+    header[4] = uint32_t(item.row_bytes);
+    header[18] = 32; header[19] = 0x4; header[20] = 0x30315844; // DDPF_FOURCC 'DX10'
+    header[26] = 0x1000;
+    const uint32_t dx10[5]{uint32_t(snapshot_file_format(item.footprint.Footprint.Format)), 3u, 0u, 1u, 0u};
+    out.write("DDS ", 4);
+    out.write(reinterpret_cast<const char*>(header), 124);
+    out.write(reinterpret_cast<const char*>(dx10), sizeof(dx10));
+    const auto* bytes = static_cast<const char*>(data) + item.footprint.Offset;
+    for (UINT row = 0; row < item.rows; ++row)
+        out.write(bytes + UINT64(row) * item.footprint.Footprint.RowPitch, std::streamsize(item.row_bytes));
+    const D3D12_RANGE no_write{0, 0};
+    item.buffer->Unmap(0, &no_write);
+    return bool(out);
+}
+
 struct DepthInput {
     ID3D12Resource* texture{};
     DXGI_FORMAT srv_format{DXGI_FORMAT_R32_FLOAT}; // R32_FLOAT or R32_FLOAT_X8X24_TYPELESS
@@ -190,6 +246,7 @@ public:
         // Call only after the owning command-context fence proves every query
         // and resource reference in this slot has completed.
         read_timing();
+        flush_snapshot();
         owner_.reset();
         depth_keepalive_.reset();
         for (auto& source : sources_) source.Reset();
@@ -279,6 +336,7 @@ public:
         // produce the explicit diagnostic, including non-shared layouts.
         constants.depth_options[1] = depth && depth->show ? 1u : 0u;
         bool depth_bound = false;
+        if (depth && (depth->reproject || depth->show) && !depth->texture) last_depth_state().store(3u, std::memory_order_relaxed);
         if (depth && depth->texture && layout.shared_context && (depth->reproject || depth->show)) {
             const auto d = depth->texture->GetDesc();
             const bool finite = std::isfinite(depth->shift[0]) && std::isfinite(depth->shift[1]) &&
@@ -289,16 +347,20 @@ public:
                 depth->rect[2] && depth->rect[3] && finite &&
                 uint64_t(depth->rect[0]) + depth->rect[2] <= d.Width && uint64_t(depth->rect[1]) + depth->rect[3] <= d.Height) {
                 for (unsigned i = 0; i != 4; ++i) { constants.depth_shift[i] = depth->shift[i]; constants.depth_rect[i] = depth->rect[i]; }
-                const bool jitter_ok=depth->jitter_valid && std::isfinite(depth->jitter_uv[0]) && std::isfinite(depth->jitter_uv[1]);
-                constants.depth_options[0] = depth->reproject && layout.depth_geometry_valid && jitter_ok ? 1u : 0u;
+                // B11: missing jitter is treated as zero (sub-texel error on the
+                // low-resolution periphery depth) instead of silently disabling the warp.
+                const bool jitter_ok=depth->jitter_valid && std::isfinite(depth->jitter_uv[0]) && std::isfinite(depth->jitter_uv[1]) &&
+                    std::abs(depth->jitter_uv[0]) < 0.25f && std::abs(depth->jitter_uv[1]) < 0.25f;
+                constants.depth_options[0] = depth->reproject && layout.depth_geometry_valid ? 1u : 0u;
+                last_depth_state().store(!depth->reproject ? 4u : layout.depth_geometry_valid ? 1u : 2u, std::memory_order_relaxed);
                 for (unsigned eye=0;eye<2;++eye) for (unsigned axis=0;axis<4;++axis)
                     constants.depth_eye_origin[eye][axis]=layout.depth_eye_origin[eye][axis];
                 for (unsigned axis=0;axis<4;++axis) {
                     constants.depth_projection[axis]=layout.depth_projection[axis];
                     constants.depth_coefficients[axis]=layout.depth_coefficients[axis];
                 }
-                constants.depth_jitter[0]=depth->jitter_uv[0];
-                constants.depth_jitter[1]=depth->jitter_uv[1];
+                constants.depth_jitter[0]=jitter_ok ? depth->jitter_uv[0] : 0.f;
+                constants.depth_jitter[1]=jitter_ok ? depth->jitter_uv[1] : 0.f;
                 constants.depth_options[2] = 1u; // validated depth is bound
                 depth_bound = true;
             }
@@ -359,6 +421,8 @@ public:
             commands->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,2,timestamps_.Get(),0);
             timing_pending_=true;
         }
+        if (snapshot_.empty() && snapshot_requested().exchange(false))
+            capture_snapshot(commands, active, destination, depth_bound ? depth : nullptr, layout, constants);
         for (size_t i = 0; i != 4; ++i) {
             bool duplicate = false;
             for (size_t j = 0; j < i; ++j) duplicate = duplicate || active[j] == active[i];
@@ -372,6 +436,90 @@ public:
 
 private:
     bool fail(const char* message) { error_ = message; return false; }
+
+    template <typename Constants>
+    void capture_snapshot(ID3D12GraphicsCommandList* commands, const std::array<ID3D12Resource*, 4>& active,
+                          ID3D12Resource* destination, const DepthInput* depth, const Layout& layout, const Constants& constants) {
+        struct Source { ID3D12Resource* resource; D3D12_RESOURCE_STATES state; const char* name; };
+        std::vector<Source> list{{destination, D3D12_RESOURCE_STATE_RENDER_TARGET, "eyes_final"},
+                                 {active[0], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, "src0_periphery"},
+                                 {active[2], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, "src2_fovea_left"},
+                                 {active[3], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, "src3_fovea_right"}};
+        if (depth && depth->texture) list.push_back({depth->texture, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, "periphery_depth"});
+        std::ostringstream info;
+        info << "TriView B11 snapshot\neye " << layout.eye_width << "x" << layout.eye_height
+             << " shared_context " << layout.shared_context << " native_local " << layout.native_local
+             << " context_scale " << layout.context_scale << "\n";
+        for (size_t i = 0; i != 4; ++i)
+            info << "view" << i << " x " << layout.views[i].x << " y " << layout.views[i].y << " w " << layout.views[i].width << " h " << layout.views[i].height << "\n";
+        for (size_t e = 0; e != 2; ++e) {
+            const auto& c = layout.focus_crops[e];
+            info << "focus_crop" << e << " " << c.u0 << " " << c.v0 << " " << c.u1 << " " << c.v1 << "\ncontext_h" << e;
+            for (float v : layout.context_h[e]) info << " " << v;
+            info << "\ndepth_eye_origin" << e;
+            for (float v : layout.depth_eye_origin[e]) info << " " << v;
+            info << "\n";
+        }
+        info << "context_projection"; for (double v : layout.context_projection) info << " " << v;
+        info << "\ndepth_geometry_valid " << layout.depth_geometry_valid << "\ndepth_projection";
+        for (float v : layout.depth_projection) info << " " << v;
+        info << "\ndepth_coefficients"; for (float v : layout.depth_coefficients) info << " " << v;
+        info << "\nshader depth_options"; for (auto v : constants.depth_options) info << " " << v;
+        info << "\nshader depth_rect"; for (auto v : constants.depth_rect) info << " " << v;
+        info << "\nshader depth_jitter"; for (auto v : constants.depth_jitter) info << " " << v;
+        info << "\nsource_format " << int(source_format_) << " output_format " << int(output_format_) << "\n";
+        D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_READBACK; heap.CreationNodeMask = heap.VisibleNodeMask = 1;
+        std::vector<SnapshotItem> items;
+        for (const auto& source : list) {
+            if (!source.resource) continue;
+            const auto desc = source.resource->GetDesc();
+            SnapshotItem item{}; UINT64 total{};
+            device_->GetCopyableFootprints(&desc, 0, 1, 0, &item.footprint, &item.rows, &item.row_bytes, &total);
+            if (!total || total > (UINT64(1) << 31)) continue;
+            D3D12_RESOURCE_DESC buffer{};
+            buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; buffer.Width = total;
+            buffer.Height = buffer.DepthOrArraySize = buffer.MipLevels = 1; buffer.SampleDesc.Count = 1;
+            buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COPY_DEST,
+                    nullptr, IID_PPV_ARGS(&item.buffer)))) continue;
+            item.name = source.name;
+            info << source.name << " format " << int(desc.Format) << " " << desc.Width << "x" << desc.Height << "\n";
+            barrier(commands, source.resource, source.state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            D3D12_TEXTURE_COPY_LOCATION from{}, to{};
+            from.pResource = source.resource; from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; from.SubresourceIndex = 0;
+            to.pResource = item.buffer.Get(); to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; to.PlacedFootprint = item.footprint;
+            commands->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+            barrier(commands, source.resource, D3D12_RESOURCE_STATE_COPY_SOURCE, source.state);
+            items.push_back(std::move(item));
+        }
+        snapshot_ = std::move(items);
+        snapshot_text_ = info.str();
+    }
+
+    // Slot retired => the readback copies completed. Files are written off-thread.
+    void flush_snapshot() {
+        if (snapshot_.empty()) return;
+        auto items = std::move(snapshot_); snapshot_.clear();
+        auto text = std::move(snapshot_text_);
+        const auto dir = snapshot_directory();
+        std::thread([items = std::move(items), text = std::move(text), dir]() {
+            std::error_code ec;
+            const auto base = dir.empty() ? std::filesystem::path{"."} : dir;
+            std::filesystem::create_directories(base, ec);
+            char stamp[32]{};
+            const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            std::tm local{}; localtime_s(&local, &now);
+            std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
+            unsigned ok = 0;
+            for (const auto& item : items) ok += write_snapshot_dds(base / (std::string("triview_") + stamp + "_" + item.name + ".dds"), item);
+            std::ofstream(base / (std::string("triview_") + stamp + "_info.txt")) << text;
+            snapshots_written().fetch_add(1);
+            std::scoped_lock l(snapshot_mutex());
+            last_snapshot_message_storage() = std::string(stamp) + ": " + std::to_string(ok) + "/" + std::to_string(items.size()) +
+                " images saved to " + base.string();
+        }).detach();
+    }
+
     void read_timing() {
         if (!timing_pending_ || !timestamps_ || !frequency_) return;
         gpu_ms_=-1.f;
@@ -463,6 +611,8 @@ private:
     void* mapped_{};
     std::shared_ptr<const void> depth_keepalive_{};
     std::shared_ptr<const void> owner_;
+    std::vector<SnapshotItem> snapshot_;
+    std::string snapshot_text_;
     DXGI_FORMAT source_format_{DXGI_FORMAT_UNKNOWN}, output_format_{DXGI_FORMAT_UNKNOWN};
     const char* error_{"Compositor not prewarmed"};
     bool recorded_{};

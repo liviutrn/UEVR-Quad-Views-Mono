@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <utility>
+#include "QuadViewNgxSelect.hpp"
 
 namespace uevr::quadview {
 
@@ -190,14 +191,21 @@ inline std::optional<Layout> make_layout(
     const auto rounded = [](float value) {
         return static_cast<uint32_t>((std::max)(1.0f, std::round(value)));
     };
-    const auto context_width = rounded(eye_width * context_scale);
-    const auto context_height = rounded(eye_height * context_scale);
+    auto context_width = rounded(eye_width * context_scale);
+    auto context_height = rounded(eye_height * context_scale);
     const auto focus_width = rounded(eye_width * crop_width * focus_density);
     const auto focus_height = rounded(eye_height * crop_height * focus_density);
     // The pair is packed horizontally within each eye's existing half of the
     // 2W x H render target. The crops preserve each source rectangle's aspect.
     if (uint64_t(context_width) + focus_width > eye_width ||
         context_height > eye_height || focus_height > eye_height) return {};
+    // Tri-view B11 (after the fit check, so accepted settings are unchanged): the periphery's DLSS depth is recognised by its output size,
+    // so the context must never have (almost) the same size as a fovea. Only in
+    // that case it is made slightly smaller (same aspect, same field of view).
+    if (const float k = ngx::unique_context_factor(focus_width, focus_height, context_width, context_height); k != 1.f) {
+        context_width = rounded(float(context_width) * k);
+        context_height = rounded(float(context_height) * k);
+    }
 
     Layout result{};
     result.eye_width = eye_width;

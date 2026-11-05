@@ -1,6 +1,6 @@
-name: Tri-view B10 depth foundation validation Windows DLL
+name: Tri-view B11 depth reprojection, cold start and proof snapshots Windows DLL
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: Tri-view B10 depth foundation validation compiled Windows DLL (${{ github.run_number }})
+run-name: Tri-view B11 depth + cold start + snapshots compiled Windows DLL (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -136,12 +136,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B9 independent startup overlay failed its exact anchors' }
           python workspace/quadview/test_triview_bootstrap.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B9 bootstrap control-flow regression failed' }
+          python workspace/quadview/apply_triview_coldstart.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B11 ID7 cold-start bootstrap overlay failed' }
           python workspace/quadview/apply_triview_depth_geometry.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B10 exact camera geometry overlay failed' }
-          python workspace/quadview/apply_triview_depth_owner.py backend workspace/quadview
-          if ($LASTEXITCODE -ne 0) { throw 'B10 depth ownership overlay failed' }
-          python workspace/quadview/test_triview_depth_owner.py backend
-          if ($LASTEXITCODE -ne 0) { throw 'B10 depth ownership source contracts failed' }
+          python workspace/quadview/apply_triview_depth_live.py backend workspace/quadview
+          if ($LASTEXITCODE -ne 0) { throw 'B11 depth consumer overlay failed' }
+          python workspace/quadview/test_triview_depth_live.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B11 depth source contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -236,6 +238,7 @@ jobs:
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
           Copy-Item workspace/quadview/B9_STABILITY_NOTES.md package/B9_STABILITY_NOTES.md
+          Copy-Item workspace/quadview/B11_NOTES.md package/B11_NOTES.md
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
@@ -250,12 +253,12 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B10-depth-foundation'; diagnosticOnly=$false; depthCaptureSupported=$false; baseline='Exact tested B8; Build51 lifetime and presentation'; baselineSource='275d6134adf2fbb7a6a80443718d876592a8fc75'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B11-depth-coldstart-snapshots'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='Exact tested B8; Build51 lifetime and presentation'; baselineSource='275d6134adf2fbb7a6a80443718d876592a8fc75'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          Tri-view B10 depth foundation - Quad Views Stereo ID7 - test candidate, NOT headset-verified
+          Tri-view B11 depth reprojection + cold start + proof snapshots - Quad Views Stereo ID7 - test candidate, NOT headset-verified
           Exact camera reprojection and fenced depth ownership code is included for validation.
           Capture remains blocked: NGX callback coverage is unproven. This is NOT an all-fixed build.
           New: independent LocalPlayer bootstrap before ID7 projection; family layout validation before
@@ -275,16 +278,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B10-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B11-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B10-Stability-${{ github.run_number }}
+          name: UEVR-TriView-B11-Stability-${{ github.run_number }}
           path: |
-            UEVR-TriView-B10-*.zip
-            UEVR-TriView-B10-*.zip.sha256
+            UEVR-TriView-B11-*.zip
+            UEVR-TriView-B11-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4

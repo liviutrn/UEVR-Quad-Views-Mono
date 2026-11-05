@@ -1,9 +1,12 @@
 #include "QuadViewGeometry.hpp"
 #include <stdexcept>
 #include <iostream>
-#include <source_location>
+#include <string>
 using namespace uevr::quadview;
-void check(bool b, std::source_location loc=std::source_location::current()) { if(!b) throw std::runtime_error("Depth geometry assertion at line "+std::to_string(loc.line())); }
+// B11: MSVC C2512 on the std::source_location default argument (run 21). A plain
+// line-number macro is portable.
+static void check_at(bool b, int line) { if(!b) throw std::runtime_error(std::string("Depth geometry assertion at line ")+std::to_string(line)); }
+#define check(b) check_at((b), __LINE__)
 int main() {
     Layout l{}; l.shared_context=true;
     for(double far_plane : {0.,10000.}) {
