@@ -72,10 +72,11 @@ float PeripheryDepthAt(float2 uv) {
 }
 
 float2 WarpContextUv(uint eye, float2 contextUv) {
-    [branch] if (DepthOptions.x == 0u) return contextUv;
-    const float2 k = eye == 0 ? DepthShift.xy : DepthShift.zw;
-    float2 uv = contextUv;
-    [unroll] for (uint i = 0; i < 3; ++i) uv = contextUv + k * PeripheryDepthAt(uv);
+    float2 uv = contextUv; // single exit: fxc /WX rejects early returns here (X4000)
+    [branch] if (DepthOptions.x != 0u) {
+        const float2 k = eye == 0 ? DepthShift.xy : DepthShift.zw;
+        [unroll] for (uint i = 0; i < 3; ++i) uv = contextUv + k * PeripheryDepthAt(uv);
+    }
     return uv;
 }
 
@@ -165,11 +166,14 @@ float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv
 
 float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 contextUv) {
     const float2 uv = WarpContextUv(eye, contextUv);
+    float4 color = float4(0.0, 0.0, 0.0, 1.0);
     [branch] if (DepthOptions.y != 0u) {
         const float v = pow(PeripheryDepthAt(uv), 0.25);
-        return float4(v, v, v, 1.0);
+        color = float4(v, v, v, 1.0);
+    } else {
+        color = ReadSource(contextSource, AtlasUv(contextSource, contextRect, uv));
     }
-    return ReadSource(contextSource, AtlasUv(contextSource, contextRect, uv));
+    return color;
 }
 
 float4 CompositePixel(VertexOut input) {
