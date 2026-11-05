@@ -44,6 +44,13 @@ struct Layout {
     bool native_local{};
     // Tri-view B7: periphery depth reprojection shift per eye (see periphery_depth_shift).
     std::array<float, 4> depth_shift{};
+    // Exact perspective reprojection: eye origins expressed in the frozen
+    // context camera basis and units. Homographies supply each rotated eye ray.
+    bool depth_geometry_valid{};
+    std::array<std::array<float,4>,2> depth_eye_origin{};
+    std::array<float,4> depth_projection{}; // ax,bx,ay,by
+    std::array<float,4> depth_coefficients{}; // A=m22,B=m32,C=m23,strength
+
     // Per eye: 3x3 homography (rows padded to 4) from eye uv to context uv:
     // h = H * (u, v, 1), context uv = h.xy / h.z. Identity for four views.
     std::array<std::array<float, 12>, 2> context_h{{{1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f},
@@ -226,6 +233,42 @@ inline std::array<float, 4> periphery_depth_shift(const Layout& layout, double n
     const double k = 0.5 * m00 * half_ipd_units / near_units * strength;
     if (!std::isfinite(k) || std::abs(k) > 4.0) return {};
     return {static_cast<float>(-k), 0.f, static_cast<float>(k), 0.f};
+}
+
+// Freeze the actual render projection and eye origins, never infer an IPD.
+// Supports the standard UE perspective form, including finite/infinite far
+// planes and asymmetric frusta. Refuse unsupported skew/oblique projections.
+inline bool configure_depth_geometry(Layout& layout, const std::array<double,16>& p,
+        const std::array<std::array<double,3>,2>& eye_origins, double strength=1.) {
+    layout.depth_geometry_valid=false;
+    if (!layout.shared_context || !std::isfinite(strength)) return false;
+    for (double v:p) if (!std::isfinite(v)) return false;
+    for (unsigned i:{1u,2u,3u,4u,6u,7u,12u,13u,15u})
+        if (std::abs(p[i])>1.e-9) return false;
+    if (std::abs(p[0])<1.e-9 || std::abs(p[5])<1.e-9 || p[14]<=0. || p[11]<=0.) return false;
+    for (size_t eye=0;eye<2;++eye) for (size_t axis=0;axis<3;++axis) {
+        const double v=eye_origins[eye][axis];
+        if (!std::isfinite(v) || std::abs(v)>1.e6) return false;
+        layout.depth_eye_origin[eye][axis]=static_cast<float>(v);
+    }
+    layout.depth_projection={float(p[0]/p[11]),float(p[8]/p[11]),float(p[5]/p[11]),float(p[9]/p[11])};
+    layout.depth_coefficients={float(p[10]),float(p[14]),float(p[11]),float(strength)};
+    layout.depth_geometry_valid=true;
+    return true;
+}
+
+// Reference for shader validation. infinity_uv comes from the existing exact
+// eye-to-context homography. Device depth is sampled at the iterated source UV.
+inline std::array<double,2> reproject_context_ray(const Layout& l, unsigned eye,
+        std::array<double,2> infinity_uv, double device_depth) {
+    if (!l.depth_geometry_valid || eye>1 || !std::isfinite(device_depth)) return infinity_uv;
+    const auto& p=l.depth_projection; const auto& c=l.depth_coefficients;
+    const auto& t=l.depth_eye_origin[eye];
+    const double inverse_z=(c[2]*device_depth-c[0])/c[1];
+    const double rx=(2.*infinity_uv[0]-1.-p[1])/p[0];
+    const double ry=(1.-2.*infinity_uv[1]-p[3])/p[2];
+    return {infinity_uv[0]+.5*p[0]*(t[0]-rx*t[2])*inverse_z*c[3],
+            infinity_uv[1]-.5*p[2]*(t[1]-ry*t[2])*inverse_z*c[3]};
 }
 
 // Tri-view B6 compact sources. Width/height of each role's native target.

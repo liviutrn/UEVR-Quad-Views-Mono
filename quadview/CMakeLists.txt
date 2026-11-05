@@ -194,3 +194,8 @@ elseif(WIN32)
 else()
   message(STATUS "Pinned Dear ImGui path not provided: status panel test unavailable")
 endif()
+
+add_executable(QuadViewDepthIdentityTests DepthIdentityTests.cpp)
+add_test(NAME quadview-depth-owner-fence-contract COMMAND QuadViewDepthIdentityTests)
+add_executable(QuadViewDepthGeometryTests DepthGeometryTests.cpp)
+add_test(NAME quadview-depth-exact-camera-geometry COMMAND QuadViewDepthGeometryTests)

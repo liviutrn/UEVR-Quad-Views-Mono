@@ -29,8 +29,12 @@ struct alignas(16) ShaderConstants {
     float depth_shift[4]{};     // B7
     uint32_t depth_rect[4]{};   // B7
     uint32_t depth_options[4]{}; // B7
+    float depth_eye_origin[2][4]{};
+    float depth_projection[4]{};
+    float depth_coefficients[4]{};
+    float depth_jitter[4]{};
 };
-static_assert(sizeof(ShaderConstants) == 320); // B8: 512-byte constant buffer
+static_assert(sizeof(ShaderConstants) == 400); // B8: 512-byte constant buffer
 
 // B7: optional periphery depth for reprojection. texture is R32_TYPELESS and
 // stays in D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE between uses.
@@ -40,6 +44,10 @@ struct DepthInput {
     uint32_t rect[4]{};
     float shift[4]{};
     bool reproject{}, show{};
+    // Offset from unjittered context color UV to the matching depth sample UV.
+    // Capture must provide the NGX jitter sign/normalization; unknown disables warp.
+    float jitter_uv[2]{};
+    bool jitter_valid{};
     std::shared_ptr<const void> keepalive{};
 };
 
@@ -281,7 +289,16 @@ public:
                 depth->rect[2] && depth->rect[3] && finite &&
                 uint64_t(depth->rect[0]) + depth->rect[2] <= d.Width && uint64_t(depth->rect[1]) + depth->rect[3] <= d.Height) {
                 for (unsigned i = 0; i != 4; ++i) { constants.depth_shift[i] = depth->shift[i]; constants.depth_rect[i] = depth->rect[i]; }
-                constants.depth_options[0] = depth->reproject ? 1u : 0u;
+                const bool jitter_ok=depth->jitter_valid && std::isfinite(depth->jitter_uv[0]) && std::isfinite(depth->jitter_uv[1]);
+                constants.depth_options[0] = depth->reproject && layout.depth_geometry_valid && jitter_ok ? 1u : 0u;
+                for (unsigned eye=0;eye<2;++eye) for (unsigned axis=0;axis<4;++axis)
+                    constants.depth_eye_origin[eye][axis]=layout.depth_eye_origin[eye][axis];
+                for (unsigned axis=0;axis<4;++axis) {
+                    constants.depth_projection[axis]=layout.depth_projection[axis];
+                    constants.depth_coefficients[axis]=layout.depth_coefficients[axis];
+                }
+                constants.depth_jitter[0]=depth->jitter_uv[0];
+                constants.depth_jitter[1]=depth->jitter_uv[1];
                 constants.depth_options[2] = 1u; // validated depth is bound
                 depth_bound = true;
             }

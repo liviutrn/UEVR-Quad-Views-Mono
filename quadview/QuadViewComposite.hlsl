@@ -22,6 +22,10 @@ cbuffer QuadViewConstants : register(b0) {
     float4 DepthShift;       // B7: context-uv shift per unit reversed-Z depth (left u, v, right u, v)
     uint4 DepthRect;         // B7: depth texel rectangle of the periphery render (x, y, w, h)
     uint4 DepthOptions;      // B9: x = reproject, y = show requested, z = validated depth bound
+    float4 DepthEyeOrigin[2];
+    float4 DepthProjection;
+    float4 DepthCoefficients;
+    float4 DepthJitter;
 };
 
 struct VertexOut {
@@ -63,11 +67,10 @@ float2 ContextUv(uint eye, float2 eyeUv) {
     return h.xy / max(h.z, 1.0e-4);
 }
 
-// B7: symmetric half-IPD reprojection of the shared centre periphery. An eye
-// at offset t sees context direction tan_inf + t / Z; with reversed-Z d = near / Z
-// that is a context-uv shift of K * d. Backward warp by fixed-point iteration.
+// Source depth is matched to this context frame. Jitter converts unjittered
+// DLSS color UV into the corresponding raw depth sample location.
 float PeripheryDepthAt(float2 uv) {
-    const float2 p = float2(DepthRect.xy) + saturate(uv) * float2(DepthRect.zw);
+    const float2 p = float2(DepthRect.xy) + saturate(uv + DepthJitter.xy) * float2(DepthRect.zw);
     const uint2 last = DepthRect.xy + max(DepthRect.zw, 1u) - 1u;
     return saturate(PeripheryDepth.Load(int3(min(uint2(p), last), 0)));
 }
@@ -75,8 +78,18 @@ float PeripheryDepthAt(float2 uv) {
 float2 WarpContextUv(uint eye, float2 contextUv) {
     float2 uv = contextUv; // single exit: fxc /WX rejects early returns here (X4000)
     [branch] if (DepthOptions.x != 0u) {
-        const float2 k = eye == 0 ? DepthShift.xy : DepthShift.zw;
-        [unroll] for (uint i = 0; i < 3; ++i) uv = contextUv + k * PeripheryDepthAt(uv);
+        const float3 t = DepthEyeOrigin[eye].xyz;
+        const float2 ray = float2((2.0 * contextUv.x - 1.0 - DepthProjection.y) / DepthProjection.x,
+                                 (1.0 - 2.0 * contextUv.y - DepthProjection.w) / DepthProjection.z);
+        // A full context-space ray translation, including vertical/forward eye
+        // origin components and arbitrary optical cant in ContextUv's homography.
+        [unroll] for (uint i = 0; i < 4; ++i) {
+            const float d = PeripheryDepthAt(uv);
+            const float inverseZ = (DepthCoefficients.z * d - DepthCoefficients.x) / DepthCoefficients.y;
+            const float2 delta = float2(0.5 * DepthProjection.x, -0.5 * DepthProjection.z) *
+                                 (t.xy - ray * t.z) * inverseZ * DepthCoefficients.w;
+            uv = contextUv + delta;
+        }
     }
     return uv;
 }

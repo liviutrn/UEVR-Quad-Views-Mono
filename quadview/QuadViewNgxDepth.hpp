@@ -4,10 +4,10 @@
 // Create/ReleaseFeature(_C) in nvngx_dlss.dll / _nvngx.dll, plus
 // ID3D12CommandQueue::ExecuteCommandLists (vtable slot 10) to know when the
 // game's command list holding our copy has been submitted. Never interferes
-// with DLSS: the original Evaluate runs first and its result is returned as is.
-// Selection: the one DLSS-SR evaluation whose OUTPUT size is within 1/8 of the
-// periphery view size (the periphery is ~0.2 x eye; foveas are ~2.5x larger).
-// The depth subrect is copied on the game's own DIRECT command list right after
+// with DLSS: inputs are restored before the original Evaluate; result is unchanged.
+// Selection requires an exact authenticated role-0 source owner; dimensions
+// only sanity-check that owner, never supply provenance.
+// The depth subrect is copied on the game's own DIRECT command list before
 // Evaluate into an owned R32 texture (ALL_SHADER_RESOURCE between uses).
 #include <Windows.h>
 #include <d3d11.h>
@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -24,6 +25,7 @@
 #include <utility>
 #include <vector>
 #include "QuadViewNgxSelect.hpp"
+#include "QuadViewDepthIdentity.hpp"
 
 namespace uevr::quadview::ngx {
 using Microsoft::WRL::ComPtr;
@@ -62,9 +64,13 @@ inline ID3D12Resource* ngx_resource(const NgxParameters* p, const char* k) noexc
 
 struct DepthSnapshot {
     ComPtr<ID3D12Resource> texture;          // owned R32_TYPELESS copy
-    ComPtr<ID3D12Resource> source_reference; // game depth kept alive until our copy is submitted
+    ComPtr<ID3D12Resource> source_reference; // retained through producer GPU completion
     ID3D12GraphicsCommandList* producer_list{}; // comparison only
-    uint64_t sequence{};
+    uint64_t sequence{}, producer_fence_value{}, list_epoch{};
+    std::array<float,2> jitter_pixels{}, jitter_uv{};
+    bool jitter_valid{};
+    DepthOwner owner{};
+    bool valid_evaluation{};
     std::chrono::steady_clock::time_point recorded{}, submitted_at{};
     uint32_t out_w{}, out_h{}, rect[4]{};
     DXGI_FORMAT srv_format{DXGI_FORMAT_R32_FLOAT}; // R32_FLOAT or R32_FLOAT_X8X24_TYPELESS (plane 0)
@@ -100,6 +106,7 @@ public:
             }
         }
         if (!execute_ok_) return; // never capture without submission tracking
+        if (!fence_ && FAILED(device_->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence_)))) return;
         install_group(evals_, eval_ok_, {"NVSDK_NGX_D3D12_EvaluateFeature", "NVSDK_NGX_D3D12_EvaluateFeature_C"},
             {reinterpret_cast<void*>(&evaluate<0>), reinterpret_cast<void*>(&evaluate<1>),
              reinterpret_cast<void*>(&evaluate<2>), reinterpret_cast<void*>(&evaluate<3>),
@@ -114,20 +121,24 @@ public:
              reinterpret_cast<void*>(&release<4>), reinterpret_cast<void*>(&release<5>)});
     }
 
-    // Present thread: newest submitted capture for the current periphery size,
-    // at most 250 ms old. The compositor keeps it alive until its slot retires.
-    std::shared_ptr<const DepthSnapshot> latest() {
-        const auto w = want_w_.load(std::memory_order_relaxed), h = want_h_.load(std::memory_order_relaxed);
-        if (!enabled_.load(std::memory_order_acquire) || !w || !h) return {};
-        const auto now = std::chrono::steady_clock::now();
+    // Exact identity is mandatory. Cross-queue reads are exposed only after
+    // producer completion; the consumer retains the shared snapshot until its fence.
+    std::shared_ptr<const DepthSnapshot> for_source(const DepthOwner& owner) {
+        if (!enabled_.load(std::memory_order_acquire) || !owner.valid()) return {};
         std::scoped_lock lock(mutex_);
+        const uint64_t completed=fence_ ? fence_->GetCompletedValue() : 0;
         std::shared_ptr<DepthSnapshot> best;
-        for (const auto& s : pool_)
-            if (s->submitted && s->texture && matches_periphery(s->out_w, s->out_h, w, h) &&
-                now - s->submitted_at < std::chrono::milliseconds(250) && (!best || s->sequence > best->sequence)) best = s;
-        if (best) ++used_; else ++missed_;
+        for (const auto& slot : pool_) {
+            if (slot->submitted && depth_copy_complete(completed,slot->producer_fence_value))
+                slot->source_reference.Reset();
+            if (slot->submitted && slot->valid_evaluation && slot->texture && slot->owner.same_source(owner) &&
+                depth_copy_complete(completed,slot->producer_fence_value) && (!best || slot->sequence>best->sequence)) best=slot;
+        }
+        if(best) ++used_; else ++missed_;
         return best;
     }
+    // Compatibility deliberately refuses the old size/age-only selection.
+    std::shared_ptr<const DepthSnapshot> latest() { ++missed_; return {}; }
 
     struct Stats { uint64_t evaluations, matches, captures, submits, used, missed, skips; uint32_t last_out_w, last_out_h, last_in_w, last_in_h, last_format, hooks; bool queue_hook; };
     Stats stats() const {
@@ -143,11 +154,13 @@ private:
     mutable std::mutex mutex_;
     ComPtr<ID3D12CommandQueue> queue_;
     ComPtr<ID3D12Device> device_;
-    safetyhook::InlineHook execute_{};
+    safetyhook::InlineHook execute_{}, reset_{};
+    std::unordered_map<uintptr_t,uint64_t> list_epochs_;
     bool execute_ok_{};
     Hooks evals_{}, creates_{}, releases_{};
     std::array<bool, 6> eval_ok_{}, create_ok_{}, release_ok_{};
-    std::vector<std::pair<ComPtr<ID3D12Resource>, std::chrono::steady_clock::time_point>> graveyard_{}; // resized textures, released after 1 s
+    ComPtr<ID3D12Fence> fence_;
+    uint64_t next_fence_value_{};
     std::unordered_map<uintptr_t, uint32_t> feature_kind_{};
     std::vector<std::shared_ptr<DepthSnapshot>> pool_{};
     uint64_t next_sequence_{};
@@ -164,19 +177,22 @@ private:
         cmd->ResourceBarrier(1, &barrier);
     }
 
-    void inspect(ID3D12GraphicsCommandList* cmd, void* feature, const NgxParameters* p) {
+    std::shared_ptr<DepthSnapshot> inspect(ID3D12GraphicsCommandList* cmd, void* feature, const NgxParameters* p) {
         if (!enabled_.load(std::memory_order_acquire) || !cmd || !feature || !p ||
-            cmd->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) return;
+            cmd->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) return {};
         ++evaluations_;
+        const auto* authenticated=DepthOwnerScope::current();
+        if (!authenticated || !authenticated->valid()) { ++skips_; return {}; }
+        const auto owner=*authenticated;
         const auto out_w = ngx_uint(p, "OutWidth"), out_h = ngx_uint(p, "OutHeight");
-        if (!matches_periphery(out_w, out_h, want_w_.load(std::memory_order_relaxed), want_h_.load(std::memory_order_relaxed))) return;
+        if (!matches_periphery(out_w, out_h, owner.output_width, owner.output_height)) return {};
         {
             std::scoped_lock lock(mutex_);
             const auto found = feature_kind_.find(reinterpret_cast<uintptr_t>(feature));
-            if (found != feature_kind_.end() && found->second != 1u) return; // only DLSS Super Resolution
+            if (found != feature_kind_.end() && found->second != 1u) return {}; // only DLSS Super Resolution
         }
         auto* depth = ngx_resource(p, "Depth");
-        if (!depth) return;
+        if (!depth) return {};
         auto in_w = ngx_uint(p, "DLSS.Render.Subrect.Dimensions.Width");
         auto in_h = ngx_uint(p, "DLSS.Render.Subrect.Dimensions.Height");
         if (!in_w) in_w = ngx_uint(p, "Width");
@@ -190,7 +206,7 @@ private:
                                desc.Format == DXGI_FORMAT_R32_TYPELESS;
         if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 || desc.DepthOrArraySize != 1 ||
             desc.MipLevels != 1 || !format_ok || !in_w || !in_h || desc.Width > 16384 || desc.Height > 16384 ||
-            uint64_t(base_x) + in_w > desc.Width || uint64_t(base_y) + in_h > desc.Height) { ++skips_; return; }
+            uint64_t(base_x) + in_w > desc.Width || uint64_t(base_y) + in_h > desc.Height) { ++skips_; return {}; }
         ++matches_;
         last_out_w_.store(out_w, std::memory_order_relaxed); last_out_h_.store(out_h, std::memory_order_relaxed);
         last_in_w_.store(in_w, std::memory_order_relaxed); last_in_h_.store(in_h, std::memory_order_relaxed);
@@ -199,31 +215,38 @@ private:
         const auto copy_format = planar ? DXGI_FORMAT_R32G8X24_TYPELESS : DXGI_FORMAT_R32_TYPELESS;
         const uint32_t w = full ? uint32_t(desc.Width) : in_w, h = full ? desc.Height : in_h;
         ComPtr<ID3D12Device> dev;
-        if (FAILED(depth->GetDevice(IID_PPV_ARGS(&dev)))) { ++skips_; return; }
+        if (FAILED(depth->GetDevice(IID_PPV_ARGS(&dev)))) { ++skips_; return {}; }
         std::scoped_lock lock(mutex_);
-        if (!device_ || dev.Get() != device_.Get()) { ++skips_; return; }
+        if (!device_ || dev.Get() != device_.Get()) { ++skips_; return {}; }
         const auto now = std::chrono::steady_clock::now();
-        std::erase_if(graveyard_, [&](const auto& g) { return now - g.second > std::chrono::seconds(1); });
-        uint64_t newest_submitted = 0;
-        for (const auto& s : pool_) if (s->submitted && s->sequence > newest_submitted) newest_submitted = s->sequence;
+        auto* table=*reinterpret_cast<void***>(cmd);
+        if (!table || !table[10]) { ++skips_; return {}; }
+        if (!reset_) {
+            reset_=safetyhook::create_inline(table[10],reinterpret_cast<void*>(&reset_commands),
+                safetyhook::InlineHook::StartDisabled);
+            if (!reset_ || !reset_.enable()) { reset_.reset(); ++skips_; return {}; }
+        }
+        if(reset_.target()!=reinterpret_cast<uint8_t*>(table[10])) { ++skips_; return {}; }
+        const auto list_id=reinterpret_cast<uintptr_t>(cmd);
+        if(list_epochs_.size()>=128 && !list_epochs_.contains(list_id)) { ++skips_; return {}; }
+        auto& epoch=list_epochs_[list_id];if(!epoch) epoch=1;
+        if (!fence_) { ++skips_; return {}; }
+        const auto completed=fence_->GetCompletedValue();
         std::shared_ptr<DepthSnapshot> slot;
-        for (auto& s : pool_) {
-            // Free: not leased by a compositor slot, not waiting for submission (a list
-            // recorded but never submitted is abandoned after 5 s) and not the newest
-            // submitted capture (so latest() never loses its only usable depth).
-            if (s.use_count() != 1 || (s->submitted && s->sequence == newest_submitted)) continue;
-            if (s->pending && now - s->recorded < std::chrono::seconds(5)) continue;
-            if (!slot || s->sequence < slot->sequence) slot = s;
+        for (auto& candidate : pool_) {
+            if (!depth_slot_reusable(candidate->pending,candidate->submitted,completed,
+                    candidate->producer_fence_value,candidate.use_count())) continue;
+            if (!slot || candidate->sequence<slot->sequence) slot=candidate;
         }
         if (!slot) {
-            if (pool_.size() >= MaxSlots) { ++skips_; return; }
+            if (pool_.size() >= MaxSlots) { ++skips_; return {}; }
             slot = std::make_shared<DepthSnapshot>(); pool_.push_back(slot);
         }
         constexpr auto read = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
         const auto have = slot->texture ? slot->texture->GetDesc() : D3D12_RESOURCE_DESC{};
         if (!slot->texture || have.Width != w || have.Height != h || have.Format != copy_format) {
-            // The GPU may still be copying into the old texture for a few frames.
-            if (slot->texture) graveyard_.emplace_back(std::move(slot->texture), now);
+            // Reallocation only after producer completion and every consumer lease retired.
+            slot->texture.Reset();
             D3D12_RESOURCE_DESC td{};
             td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
             td.Width = w; td.Height = h; td.DepthOrArraySize = 1; td.MipLevels = 1;
@@ -231,7 +254,7 @@ private:
             td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN; td.Flags = D3D12_RESOURCE_FLAG_NONE;
             D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
             if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, read, nullptr, IID_PPV_ARGS(&slot->texture)))) {
-                ++skips_; return;
+                ++skips_; return {};
             }
             slot->texture->SetName(L"QuadView::PeripheryNGXDepth");
         }
@@ -248,6 +271,17 @@ private:
         transition(cmd, slot->texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, read);
         transition(cmd, depth, D3D12_RESOURCE_STATE_COPY_SOURCE, ngx_state);
         slot->source_reference = depth;
+        slot->owner=owner; slot->list_epoch=epoch; slot->producer_fence_value=0; slot->valid_evaluation=false;
+        float jitter_x{},jitter_y{};
+        // NVIDIA guide 3.7.3: offsets are actual viewport displacement in
+        // render-resolution pixels, screen axes (+right,+down). To sample a
+        // jittered depth input for an unjittered color ray, add that displacement.
+        slot->jitter_valid=ngx_success(p->Get("Jitter.Offset.X",&jitter_x)) &&
+            ngx_success(p->Get("Jitter.Offset.Y",&jitter_y)) &&
+            std::isfinite(jitter_x) && std::isfinite(jitter_y) &&
+            std::abs(jitter_x)<=0.5f && std::abs(jitter_y)<=0.5f;
+        slot->jitter_pixels=slot->jitter_valid ? std::array<float,2>{jitter_x,jitter_y} : std::array<float,2>{};
+        slot->jitter_uv={slot->jitter_pixels[0]/in_w,slot->jitter_pixels[1]/in_h};
         slot->producer_list = cmd;
         slot->sequence = ++next_sequence_;
         slot->recorded = now;
@@ -256,28 +290,34 @@ private:
         slot->rect[0] = full ? base_x : 0; slot->rect[1] = full ? base_y : 0; slot->rect[2] = in_w; slot->rect[3] = in_h;
         slot->pending = true; slot->submitted = false;
         ++captures_;
+        return slot;
     }
 
     void submitted(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists) {
         if (!count || !lists) return;
-        std::scoped_lock lock(mutex_);
-        if (queue != queue_.Get()) return;
-        const auto now = std::chrono::steady_clock::now();
-        for (auto& s : pool_) {
-            if (!s->pending) continue;
-            for (UINT i = 0; i != count; ++i) {
-                if (static_cast<void*>(lists[i]) != static_cast<void*>(s->producer_list)) continue;
-                s->pending = false; s->submitted = true; s->submitted_at = now; s->source_reference.Reset();
-                ++submits_;
-                break;
-            }
+        if (queue != queue_.Get() || !fence_) return;
+        bool matched=false;
+        for(const auto& slot:pool_) if(slot->pending && list_epochs_[reinterpret_cast<uintptr_t>(slot->producer_list)]==slot->list_epoch)
+            for(UINT i=0;i<count;++i) if(static_cast<void*>(lists[i])==static_cast<void*>(slot->producer_list)) matched=true;
+        if(!matched) return;
+        const auto value=++next_fence_value_;
+        // Failure retains all resources and pending slots; time is never retirement proof.
+        if(FAILED(queue->Signal(fence_.Get(),value))) { ++skips_; return; }
+        for(auto& slot:pool_) if(slot->pending && list_epochs_[reinterpret_cast<uintptr_t>(slot->producer_list)]==slot->list_epoch) for(UINT i=0;i<count;++i) {
+            if(static_cast<void*>(lists[i])!=static_cast<void*>(slot->producer_list)) continue;
+            slot->pending=false;slot->submitted=true;slot->producer_fence_value=value;
+            slot->submitted_at=std::chrono::steady_clock::now();++submits_;break;
         }
     }
 
     template <unsigned N> static uint32_t __cdecl evaluate(ID3D12GraphicsCommandList* cmd, void* feature, NgxParameters* p, void* cb) {
-        auto& s = self(); Guard g;
-        const auto result = s.evals_[N].unsafe_call<uint32_t>(cmd, feature, p, cb);
-        if (g.outer && ngx_success(result)) { try { s.inspect(cmd, feature, p); } catch (...) { ++s.skips_; } }
+        auto& s=self(); Guard guard;
+        std::shared_ptr<DepthSnapshot> capture;
+        // NVIDIA DLSS Programming Guide section 3.4: input depth is
+        // NON_PIXEL_SHADER_RESOURCE at API entry. Restore it before NGX executes.
+        if(guard.outer) { try { capture=s.inspect(cmd,feature,p); } catch(...) { ++s.skips_; } }
+        const auto result=s.evals_[N].unsafe_call<uint32_t>(cmd,feature,p,cb);
+        if(capture) { std::scoped_lock lock(s.mutex_);capture->valid_evaluation=ngx_success(result); }
         return result;
     }
     template <unsigned N> static uint32_t __cdecl create(ID3D12GraphicsCommandList* cmd, uint32_t kind, const NgxParameters* p, void** feature) {
@@ -298,8 +338,21 @@ private:
     }
     static void __stdcall execute_commands(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists) {
         auto& s = self();
+        std::scoped_lock lock(s.mutex_);
         s.execute_.unsafe_call<void>(queue, count, lists);
         s.submitted(queue, count, lists);
+    }
+    static HRESULT __stdcall reset_commands(ID3D12GraphicsCommandList* cmd,ID3D12CommandAllocator* allocator,ID3D12PipelineState* pipeline) {
+        auto& s=self();std::scoped_lock lock(s.mutex_);
+        const auto result=s.reset_.unsafe_call<HRESULT>(cmd,allocator,pipeline);
+        if(SUCCEEDED(result)) {
+            const auto id=reinterpret_cast<uintptr_t>(cmd);
+            if(s.list_epochs_.contains(id)) ++s.list_epochs_[id];
+            // A pending capture from a previous recording is intentionally retained:
+            // it cannot be submitted by pointer reuse, recycled by elapsed time, or
+            // freed without an independently observed discard proof.
+        }
+        return result;
     }
     static void install_group(Hooks& hooks, std::array<bool, 6>& installed, std::array<const char*, 2> exports,
                               std::array<void*, 6> callbacks) {

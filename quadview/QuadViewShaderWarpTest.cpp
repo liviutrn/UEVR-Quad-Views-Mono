@@ -83,8 +83,12 @@ struct alignas(16) Constants {
     float depth_shift[4]{};
     uint32_t depth_rect[4]{};
     uint32_t depth_options[4]{};
+    float depth_eye_origin[2][4]{};
+    float depth_projection[4]{};
+    float depth_coefficients[4]{};
+    float depth_jitter[4]{};
 };
-static_assert(sizeof(Constants) == 320);
+static_assert(sizeof(Constants) == 400);
 
 using Color = std::array<uint8_t, 4>;
 static Color source_color(unsigned view, unsigned x, unsigned y) {
@@ -420,7 +424,7 @@ int main(int argc, char** argv) try {
             diagnostic_layout.shared_context = pass != 19;
             uevr::quadview::Settings diagnostic_settings{};
             diagnostic_settings.diagnostic_view = 3;
-            diagnostic_settings.sharpen_strength = 7.f;
+            diagnostic_settings.sharpen_strength = 2.f;
             auto owner = std::make_shared<unsigned>(pass);
             packet_lifetime = owner;
             uevr::quadview::dx12::DepthInput depth{};
