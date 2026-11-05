@@ -1,6 +1,6 @@
-name: Tri-view B1 (Build51 base, 3 renders) Windows DLL [B7 depth]
+name: Tri-view B1 (Build51 base, 3 renders) Windows DLL [B8 per-eye sharpening]
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: Tri-view B7 MSVC six-slot fix compiled Windows DLL (${{ github.run_number }})
+run-name: Tri-view B8 per-eye sharpening compiled Windows DLL (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -128,6 +128,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tri-view B6 compact source patch failed its exact anchors' }
           python workspace/quadview/apply_triview_depth.py backend workspace/quadview
           if ($LASTEXITCODE -ne 0) { throw 'Tri-view B7 periphery depth patch failed its exact anchors' }
+          python workspace/quadview/apply_triview_eye_sharpen.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Tri-view B8 per-eye sharpening patch failed its exact anchors' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -254,7 +256,7 @@ jobs:
             writes a [QuadViews][VRAM] line every 10 s.
           B5 features: FOV fix in ID7 (auto MPC override, "Reapply FOV (DuoView/Tri-view)" button, auto
           reapply after loading), Head XYZ scaling + keys, Reapply FOV / Reinitialize Runtime keys,
-          sharpening 0-5 + max change, ID7 settings saved.
+          per-eye sharpening 0-10 + 0.05-0.30 max change, ID7 settings saved.
           Send the complete UEVR log if anything goes wrong.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
