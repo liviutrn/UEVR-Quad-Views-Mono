@@ -60,11 +60,11 @@ edit("src/mods/VR.cpp", [
     ("            // Tri-view B6: use compact per-role targets for this draw only when a\n",
      "            // Tri-view B7: periphery depth reprojection shift, frozen with the draw.\n"
      "            // near = UE near plane (projection m[3][2], cm); IPD from the runtime eye offsets\n"
-     "            // (metres) x 100 (UE world-to-meters) x UEVR World Scale.\n"
+     "            // (metres) x get_world_to_meters() (includes World Scale).\n"
      "            candidate->depth_shift=uevr::quadview::periphery_depth_shift(*candidate,\n"
      "                draw_config.base_projection_valid ? double(draw_config.projections[0][14]) : 0.0,\n"
      "                0.5*std::abs(double(get_eye_offset(VRRuntime::Eye::RIGHT).x)-double(get_eye_offset(VRRuntime::Eye::LEFT).x))*\n"
-     "                    100.0*double(m_world_scale->value()),\n"
+     "                    double(get_world_to_meters()),\n"
      "                double(m_quadview_depth_strength->value()));\n"
      "            // Tri-view B6: use compact per-role targets for this draw only when a\n"),
     ("    if (layout->native_local && !native_target_ready)\n",
@@ -81,11 +81,11 @@ edit("src/mods/VR.cpp", [
      '                m_quadview_depth_show->draw("Show periphery depth (debug, grey = near is bright)");\n'
      '                {\n'
      '                    const auto s=uevr::quadview::ngx::PeripheryDepth::self().stats();\n'
-     '                    ImGui::Text("Periphery depth: hooks %u/4, queue hook %s; DLSS calls %llu, periphery %llu, copied %llu, submitted %llu, used %llu, missing %llu, skipped %llu",\n'
+     '                    ImGui::Text("Periphery depth: hooks %u/6, queue hook %s; DLSS calls %llu, periphery %llu, copied %llu, submitted %llu, used %llu, missing %llu, skipped %llu",\n'
      '                        s.hooks, s.queue_hook ? "on" : "off", (unsigned long long)s.evaluations, (unsigned long long)s.matches,\n'
      '                        (unsigned long long)s.captures, (unsigned long long)s.submits, (unsigned long long)s.used,\n'
      '                        (unsigned long long)s.missed, (unsigned long long)s.skips);\n'
-     '                    ImGui::Text("Last periphery DLSS: output %ux%u, depth %ux%u", s.last_out_w, s.last_out_h, s.last_in_w, s.last_in_h);\n'
+     '                    ImGui::Text("Last periphery DLSS: output %ux%u, depth %ux%u, depth format %u", s.last_out_w, s.last_out_h, s.last_in_w, s.last_in_h, s.last_format);\n'
      '                }\n'),
 ])
 
@@ -109,6 +109,7 @@ edit("src/mods/vr/D3D12Component.cpp", [
      "                            if (frozen->layout.shared_context && (vr->quadview_depth_reproject() || vr->quadview_depth_show())) {\n"
      "                                if (const auto snapshot=uevr::quadview::ngx::PeripheryDepth::self().latest()) {\n"
      "                                    depth_input.texture=snapshot->texture.Get();\n"
+     "                                    depth_input.srv_format=snapshot->srv_format;\n"
      "                                    for (size_t i=0; i!=4; ++i) { depth_input.rect[i]=snapshot->rect[i]; depth_input.shift[i]=frozen->layout.depth_shift[i]; }\n"
      "                                    depth_input.reproject=vr->quadview_depth_reproject();\n"
      "                                    depth_input.show=vr->quadview_depth_show();\n"

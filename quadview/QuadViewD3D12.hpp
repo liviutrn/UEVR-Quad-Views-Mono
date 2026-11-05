@@ -35,6 +35,7 @@ static_assert(sizeof(ShaderConstants) == 304); // B7: 512-byte constant buffer
 // stays in D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE between uses.
 struct DepthInput {
     ID3D12Resource* texture{};
+    DXGI_FORMAT srv_format{DXGI_FORMAT_R32_FLOAT}; // R32_FLOAT or R32_FLOAT_X8X24_TYPELESS
     uint32_t rect[4]{};
     float shift[4]{};
     bool reproject{}, show{};
@@ -264,7 +265,9 @@ public:
             const auto d = depth->texture->GetDesc();
             const bool finite = std::isfinite(depth->shift[0]) && std::isfinite(depth->shift[1]) &&
                 std::isfinite(depth->shift[2]) && std::isfinite(depth->shift[3]);
-            if (d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && d.Format == DXGI_FORMAT_R32_TYPELESS &&
+            const bool format_ok = (d.Format == DXGI_FORMAT_R32_TYPELESS && depth->srv_format == DXGI_FORMAT_R32_FLOAT) ||
+                (d.Format == DXGI_FORMAT_R32G8X24_TYPELESS && depth->srv_format == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS);
+            if (d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && format_ok &&
                 depth->rect[2] && depth->rect[3] && finite &&
                 uint64_t(depth->rect[0]) + depth->rect[2] <= d.Width && uint64_t(depth->rect[1]) + depth->rect[3] <= d.Height) {
                 for (unsigned i = 0; i != 4; ++i) { constants.depth_shift[i] = depth->shift[i]; constants.depth_rect[i] = depth->rect[i]; }
@@ -290,7 +293,8 @@ public:
             descriptor.ptr += stride;
         }
         D3D12_SHADER_RESOURCE_VIEW_DESC depth_srv = srv;
-        depth_srv.Format = DXGI_FORMAT_R32_FLOAT;
+        depth_srv.Format = depth_bound ? depth->srv_format : DXGI_FORMAT_R32_FLOAT;
+        depth_srv.Texture2D.PlaneSlice = 0;
         device_->CreateShaderResourceView(depth_bound ? depth->texture : nullptr, &depth_srv, descriptor);
         depth_keepalive_ = depth_bound ? depth->keepalive : nullptr;
         D3D12_RENDER_TARGET_VIEW_DESC rtv_description{};

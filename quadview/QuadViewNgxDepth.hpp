@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include "QuadViewNgxSelect.hpp"
 
@@ -66,6 +67,7 @@ struct DepthSnapshot {
     uint64_t sequence{};
     std::chrono::steady_clock::time_point recorded{}, submitted_at{};
     uint32_t out_w{}, out_h{}, rect[4]{};
+    DXGI_FORMAT srv_format{DXGI_FORMAT_R32_FLOAT}; // R32_FLOAT or R32_FLOAT_X8X24_TYPELESS (plane 0)
     bool pending{}, submitted{};
 };
 
@@ -96,13 +98,16 @@ public:
         if (!execute_ok_) return; // never capture without submission tracking
         install_group(evals_, eval_ok_, {"NVSDK_NGX_D3D12_EvaluateFeature", "NVSDK_NGX_D3D12_EvaluateFeature_C"},
             {reinterpret_cast<void*>(&evaluate<0>), reinterpret_cast<void*>(&evaluate<1>),
-             reinterpret_cast<void*>(&evaluate<2>), reinterpret_cast<void*>(&evaluate<3>)});
+             reinterpret_cast<void*>(&evaluate<2>), reinterpret_cast<void*>(&evaluate<3>),
+             reinterpret_cast<void*>(&evaluate<4>), reinterpret_cast<void*>(&evaluate<5>)});
         install_group(creates_, create_ok_, {"NVSDK_NGX_D3D12_CreateFeature", "NVSDK_NGX_D3D12_CreateFeature_C"},
             {reinterpret_cast<void*>(&create<0>), reinterpret_cast<void*>(&create<1>),
-             reinterpret_cast<void*>(&create<2>), reinterpret_cast<void*>(&create<3>)});
+             reinterpret_cast<void*>(&create<2>), reinterpret_cast<void*>(&create<3>),
+             reinterpret_cast<void*>(&create<4>), reinterpret_cast<void*>(&create<5>)});
         install_group(releases_, release_ok_, {"NVSDK_NGX_D3D12_ReleaseFeature", "NVSDK_NGX_D3D12_ReleaseFeature_C"},
             {reinterpret_cast<void*>(&release<0>), reinterpret_cast<void*>(&release<1>),
-             reinterpret_cast<void*>(&release<2>), reinterpret_cast<void*>(&release<3>)});
+             reinterpret_cast<void*>(&release<2>), reinterpret_cast<void*>(&release<3>),
+             reinterpret_cast<void*>(&release<4>), reinterpret_cast<void*>(&release<5>)});
     }
 
     // Present thread: newest submitted capture for the current periphery size,
@@ -120,16 +125,16 @@ public:
         return best;
     }
 
-    struct Stats { uint64_t evaluations, matches, captures, submits, used, missed, skips; uint32_t last_out_w, last_out_h, last_in_w, last_in_h, hooks; bool queue_hook; };
+    struct Stats { uint64_t evaluations, matches, captures, submits, used, missed, skips; uint32_t last_out_w, last_out_h, last_in_w, last_in_h, last_format, hooks; bool queue_hook; };
     Stats stats() const {
         uint32_t hooks = 0; bool queue_hook = false;
         { std::scoped_lock lock(mutex_); for (bool b : eval_ok_) hooks += b; queue_hook = execute_ok_; }
         return {evaluations_.load(), matches_.load(), captures_.load(), submits_.load(), used_.load(), missed_.load(), skips_.load(),
-                last_out_w_.load(), last_out_h_.load(), last_in_w_.load(), last_in_h_.load(), hooks, queue_hook};
+                last_out_w_.load(), last_out_h_.load(), last_in_w_.load(), last_in_h_.load(), last_format_.load(), hooks, queue_hook};
     }
 
 private:
-    using Hooks = std::array<safetyhook::InlineHook, 4>;
+    using Hooks = std::array<safetyhook::InlineHook, 6>; // 3 DLLs x 2 exports
     static constexpr size_t MaxSlots = 8;
     mutable std::mutex mutex_;
     ComPtr<ID3D12CommandQueue> queue_;
@@ -137,12 +142,13 @@ private:
     safetyhook::InlineHook execute_{};
     bool execute_ok_{};
     Hooks evals_{}, creates_{}, releases_{};
-    std::array<bool, 4> eval_ok_{}, create_ok_{}, release_ok_{};
+    std::array<bool, 6> eval_ok_{}, create_ok_{}, release_ok_{};
+    std::vector<std::pair<ComPtr<ID3D12Resource>, std::chrono::steady_clock::time_point>> graveyard_{}; // resized textures, released after 1 s
     std::unordered_map<uintptr_t, uint32_t> feature_kind_{};
     std::vector<std::shared_ptr<DepthSnapshot>> pool_{};
     uint64_t next_sequence_{};
     std::atomic<bool> enabled_{false};
-    std::atomic<uint32_t> want_w_{}, want_h_{}, last_out_w_{}, last_out_h_{}, last_in_w_{}, last_in_h_{};
+    std::atomic<uint32_t> want_w_{}, want_h_{}, last_out_w_{}, last_out_h_{}, last_in_w_{}, last_in_h_{}, last_format_{};
     std::atomic<uint64_t> evaluations_{}, matches_{}, captures_{}, submits_{}, used_{}, missed_{}, skips_{};
     static inline thread_local unsigned nested_{};
     struct Guard { bool outer{nested_++ == 0}; ~Guard() { --nested_; } };
@@ -173,7 +179,10 @@ private:
         if (!in_h) in_h = ngx_uint(p, "Height");
         const auto base_x = ngx_uint(p, "DLSS.Input.Depth.Subrect.Base.X"), base_y = ngx_uint(p, "DLSS.Input.Depth.Subrect.Base.Y");
         const auto desc = depth->GetDesc();
-        const bool format_ok = desc.Format == DXGI_FORMAT_R32_FLOAT || desc.Format == DXGI_FORMAT_D32_FLOAT ||
+        last_format_.store(static_cast<uint32_t>(desc.Format), std::memory_order_relaxed);
+        // UE depth is usually D32 + stencil (R32G8X24, two planes): copy and read plane 0 only.
+        const bool planar = desc.Format == DXGI_FORMAT_R32G8X24_TYPELESS || desc.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+        const bool format_ok = planar || desc.Format == DXGI_FORMAT_R32_FLOAT || desc.Format == DXGI_FORMAT_D32_FLOAT ||
                                desc.Format == DXGI_FORMAT_R32_TYPELESS;
         if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 || desc.DepthOrArraySize != 1 ||
             desc.MipLevels != 1 || !format_ok || !in_w || !in_h || desc.Width > 16384 || desc.Height > 16384 ||
@@ -182,18 +191,23 @@ private:
         last_out_w_.store(out_w, std::memory_order_relaxed); last_out_h_.store(out_h, std::memory_order_relaxed);
         last_in_w_.store(in_w, std::memory_order_relaxed); last_in_h_.store(in_h, std::memory_order_relaxed);
         // Depth-stencil resources only allow whole-subresource copies.
-        const bool full = (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) != 0;
+        const bool full = planar || (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) != 0;
+        const auto copy_format = planar ? DXGI_FORMAT_R32G8X24_TYPELESS : DXGI_FORMAT_R32_TYPELESS;
         const uint32_t w = full ? uint32_t(desc.Width) : in_w, h = full ? desc.Height : in_h;
         ComPtr<ID3D12Device> dev;
         if (FAILED(depth->GetDevice(IID_PPV_ARGS(&dev)))) { ++skips_; return; }
         std::scoped_lock lock(mutex_);
         if (!device_ || dev.Get() != device_.Get()) { ++skips_; return; }
         const auto now = std::chrono::steady_clock::now();
+        std::erase_if(graveyard_, [&](const auto& g) { return now - g.second > std::chrono::seconds(1); });
+        uint64_t newest_submitted = 0;
+        for (const auto& s : pool_) if (s->submitted && s->sequence > newest_submitted) newest_submitted = s->sequence;
         std::shared_ptr<DepthSnapshot> slot;
         for (auto& s : pool_) {
-            // Free: not leased by a compositor slot and not waiting for submission
-            // (a list recorded but never submitted is abandoned after 5 s).
-            if (s.use_count() != 1) continue;
+            // Free: not leased by a compositor slot, not waiting for submission (a list
+            // recorded but never submitted is abandoned after 5 s) and not the newest
+            // submitted capture (so latest() never loses its only usable depth).
+            if (s.use_count() != 1 || (s->submitted && s->sequence == newest_submitted)) continue;
             if (s->pending && now - s->recorded < std::chrono::seconds(5)) continue;
             if (!slot || s->sequence < slot->sequence) slot = s;
         }
@@ -203,12 +217,13 @@ private:
         }
         constexpr auto read = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
         const auto have = slot->texture ? slot->texture->GetDesc() : D3D12_RESOURCE_DESC{};
-        if (!slot->texture || have.Width != w || have.Height != h) {
-            slot->texture.Reset();
+        if (!slot->texture || have.Width != w || have.Height != h || have.Format != copy_format) {
+            // The GPU may still be copying into the old texture for a few frames.
+            if (slot->texture) graveyard_.emplace_back(std::move(slot->texture), now);
             D3D12_RESOURCE_DESC td{};
             td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
             td.Width = w; td.Height = h; td.DepthOrArraySize = 1; td.MipLevels = 1;
-            td.Format = DXGI_FORMAT_R32_TYPELESS; td.SampleDesc.Count = 1;
+            td.Format = copy_format; td.SampleDesc.Count = 1;
             td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN; td.Flags = D3D12_RESOURCE_FLAG_NONE;
             D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
             if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, read, nullptr, IID_PPV_ARGS(&slot->texture)))) {
@@ -218,6 +233,7 @@ private:
         }
         // NGX requires its inputs in NON_PIXEL_SHADER_RESOURCE at Evaluate.
         constexpr auto ngx_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        // Plane 0 (depth) only; subresource 0 is the depth plane for every accepted format.
         transition(cmd, depth, ngx_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
         transition(cmd, slot->texture.Get(), read, D3D12_RESOURCE_STATE_COPY_DEST);
         D3D12_TEXTURE_COPY_LOCATION from{}, to{};
@@ -232,6 +248,7 @@ private:
         slot->sequence = ++next_sequence_;
         slot->recorded = now;
         slot->out_w = out_w; slot->out_h = out_h;
+        slot->srv_format = planar ? DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS : DXGI_FORMAT_R32_FLOAT;
         slot->rect[0] = full ? base_x : 0; slot->rect[1] = full ? base_y : 0; slot->rect[2] = in_w; slot->rect[3] = in_h;
         slot->pending = true; slot->submitted = false;
         ++captures_;
@@ -255,7 +272,7 @@ private:
 
     template <unsigned N> static uint32_t __cdecl evaluate(ID3D12GraphicsCommandList* cmd, void* feature, NgxParameters* p, void* cb) {
         auto& s = self(); Guard g;
-        const auto result = s.evals_[N].call<uint32_t>(cmd, feature, p, cb);
+        const auto result = s.evals_[N].unsafe_call<uint32_t>(cmd, feature, p, cb);
         if (g.outer && ngx_success(result)) { try { s.inspect(cmd, feature, p); } catch (...) { ++s.skips_; } }
         return result;
     }
@@ -277,13 +294,13 @@ private:
     }
     static void __stdcall execute_commands(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists) {
         auto& s = self();
-        s.execute_.call<void>(queue, count, lists);
+        s.execute_.unsafe_call<void>(queue, count, lists);
         s.submitted(queue, count, lists);
     }
     static void install_group(Hooks& hooks, std::array<bool, 4>& installed, std::array<const char*, 2> exports,
-                              std::array<void*, 4> callbacks) {
-        static const wchar_t* dlls[]{L"nvngx_dlss.dll", L"_nvngx.dll"};
-        for (unsigned dll = 0; dll != 2; ++dll) {
+                              std::array<void*, 6> callbacks) {
+        static const wchar_t* dlls[]{L"nvngx_dlss.dll", L"_nvngx.dll", L"nvngx.dll"};
+        for (unsigned dll = 0; dll != 3; ++dll) {
             HMODULE module = GetModuleHandleW(dlls[dll]);
             if (!module) continue;
             for (unsigned e = 0; e != 2; ++e) {
@@ -292,7 +309,7 @@ private:
                 void* address = reinterpret_cast<void*>(GetProcAddress(module, exports[e]));
                 if (!address) continue;
                 bool duplicate = false;
-                for (unsigned k = 0; k != 4; ++k)
+                for (unsigned k = 0; k != 6; ++k)
                     if (installed[k] && hooks[k].target() == reinterpret_cast<uint8_t*>(address)) duplicate = true;
                 if (duplicate) continue;
                 HMODULE pinned{};
