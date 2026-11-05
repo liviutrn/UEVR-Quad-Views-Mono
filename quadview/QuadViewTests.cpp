@@ -83,8 +83,14 @@ int main() {
         assert(uevr::quadview::apply_native_local(local) && local.native_local);
         const auto e=uevr::quadview::source_extents(local);
         assert(e[0]==e[1] && e[2]==e[3]);
-        assert(e[0][0]==layout->views[0].width+8 && e[0][1]==layout->views[0].height+8);
-        assert(e[2][0]==layout->views[2].width+8 && e[2][1]==layout->views[2].height+8);
+        assert(e[0][0]>=layout->views[0].width+8 && e[0][0]<layout->views[0].width+8+64 && e[0][0]%64==0);
+        assert(e[0][1]>=layout->views[0].height && e[0][1]<layout->views[0].height+64 && e[0][1]%64==0);
+        assert(e[2][0]>=layout->views[2].width+24 && e[2][0]<layout->views[2].width+24+64 && e[2][1]%64==0);
+        assert(e[0][0]*e[0][1]+e[2][0]*e[2][1] < 8120u*3228u/2);
+        for (size_t i=0;i!=4;++i) assert(local.views[i].y==0);
+        // a small slider step keeps the same extents (no target rebuild)
+        auto nudged=uevr::quadview::make_layout(4060,3228,.505f,.5f,.2f,1.f,.3f,.7f);
+        assert(nudged && uevr::quadview::apply_native_local(*nudged) && uevr::quadview::source_extents(*nudged)==e);
         for (size_t i=0;i!=4;++i) {
             assert(local.views[i].width==layout->views[i].width && local.views[i].height==layout->views[i].height);
             assert(local.views[i].x+local.views[i].width<=e[i][0] && local.views[i].y+local.views[i].height<=e[i][1]);

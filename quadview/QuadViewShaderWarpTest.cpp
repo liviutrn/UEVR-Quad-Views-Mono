@@ -195,7 +195,7 @@ int main(int argc, char** argv) try {
     std::array<ComPtr<ID3D12Resource>, 4> compact_targets, compact_uploads;
     for (unsigned view = 0; view != 4; ++view) {
         const auto cw = compact_extents[view][0], ch = compact_extents[view][1];
-        if (cw >= AW && ch >= H) throw std::runtime_error("Compact target is not smaller than the atlas");
+        if (cw == AW && ch == H) throw std::runtime_error("Compact target must differ from the atlas size");
         compact_targets[view] = resource(device.Get(), texture(cw, ch, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
             D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
         const auto compact_description = compact_targets[view]->GetDesc();

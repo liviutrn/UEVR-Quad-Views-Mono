@@ -132,15 +132,15 @@ edit("src/mods/VR.cpp", [
     ("            layout=m_quadview_layout_latch.freeze(key.generation,key.draw_serial,*candidate);\n",
      "            // Tri-view B6: use compact per-role targets for this draw only when a\n"
      "            // matching live set is already published; otherwise keep the atlas layout.\n"
+     "            // Only READ the published set here (lock-free): ensure() may spawn actors and\n"
+     "            // flush rendering and must not run under m_quadview_layout_mutex. The request\n"
+     "            // and the liveness check happen after the freeze, outside the lock.\n"
      "            if (m_quadview_compact_targets->value()) {\n"
      "                auto compact=*candidate;\n"
      "                const auto compact_rtm=m_fake_stereo_hook->get_render_target_manager();\n"
      "                if (uevr::quadview::apply_native_local(compact) && compact_rtm && is_quadview_supported_title()) {\n"
-     "                    const auto compact_extents=uevr::quadview::source_extents(compact);\n"
-     "                    if (compact_rtm->ensure_quadview_native_target_set(compact_extents)) {\n"
-     "                        const auto set=compact_rtm->get_quadview_native_target_set();\n"
-     "                        if (set && set->extents==compact_extents && set->complete()) *candidate=compact;\n"
-     "                    }\n"
+     "                    const auto set=compact_rtm->get_quadview_native_target_set();\n"
+     "                    if (set && set->extents==uevr::quadview::source_extents(compact) && set->complete()) *candidate=compact;\n"
      "                }\n"
      "            }\n"
      "            layout=m_quadview_layout_latch.freeze(key.generation,key.draw_serial,*candidate);\n"),
@@ -185,6 +185,8 @@ edit("src/mods/VR.cpp", [
      '                } else ImGui::TextUnformatted("Source textures: not published yet");\n'
      '            }\n'
      '            if (ImGui::TreeNode("Quad Views Stereo'),
+    ("Context and focus views keep independent histories; the existing full 2W\u00d7H target allocation remains.",
+     "Context and focus views keep independent histories; with Compact source textures each source texture is sized to its own view."),
     ('                m_quadview_context_scale->draw("Context resolution scale");\n',
      '                m_quadview_context_scale->draw("Context resolution scale");\n'
      '                m_quadview_compact_targets->draw("Compact source textures (saves video memory; OFF = B5 full-size textures)");\n'),

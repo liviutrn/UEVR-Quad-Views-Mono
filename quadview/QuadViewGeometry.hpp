@@ -212,11 +212,13 @@ inline std::optional<Layout> make_layout(
 
 // Tri-view B6 compact sources. Width/height of each role's native target.
 using SourceExtents = std::array<std::array<uint32_t, 2>, 4>;
-// Distinct 8-px origins keep all four engine view rectangles unique for every
-// setting (the producer identifies a constructed view by its exact rectangle):
-// context pair (0,0) / (8,8), focus pair (8,0) / (0,8). Each pair shares one
-// target extent of (w + 8) x (h + 8).
+// Distinct x-only origins keep all four engine view rectangles unique for every
+// setting (the producer identifies a constructed view by its exact rectangle)
+// while every rectangle keeps y = 0 like the proven atlas layout:
+// context pair x = 0 / 8, focus pair x = 16 / 24. Extents are rounded up to
+// 64 px so small slider steps reuse the same targets instead of rebuilding.
 inline constexpr uint32_t compact_source_margin = 8;
+inline constexpr uint32_t compact_source_granularity = 64;
 
 inline SourceExtents source_extents(const Layout& layout) {
     SourceExtents extents{};
@@ -226,7 +228,11 @@ inline SourceExtents source_extents(const Layout& layout) {
             continue;
         }
         const auto& size_from = layout.views[i < 2 ? 0 : 2];
-        extents[i] = {size_from.width + compact_source_margin, size_from.height + compact_source_margin};
+        const auto pad = i < 2 ? compact_source_margin : 3 * compact_source_margin;
+        const auto up = [](uint64_t v) {
+            return static_cast<uint32_t>((v + compact_source_granularity - 1) / compact_source_granularity * compact_source_granularity);
+        };
+        extents[i] = {up(uint64_t(size_from.width) + pad), up(size_from.height)};
     }
     return extents;
 }
@@ -241,12 +247,11 @@ inline bool apply_native_local(Layout& layout) {
     if (!context.width || !context.height || !focus.width || !focus.height ||
         layout.views[1].width != context.width || layout.views[1].height != context.height ||
         layout.views[3].width != focus.width || layout.views[3].height != focus.height ||
-        uint64_t(context.width) + m > layout.atlas_width || uint64_t(context.height) + m > layout.atlas_height ||
-        uint64_t(focus.width) + m > layout.atlas_width || uint64_t(focus.height) + m > layout.atlas_height) return false;
+        uint64_t(context.width) + m > layout.atlas_width || uint64_t(focus.width) + 3 * m > layout.atlas_width) return false;
     layout.views[0] = {0, 0, context.width, context.height};
-    layout.views[1] = {m, m, context.width, context.height};
-    layout.views[2] = {m, 0, focus.width, focus.height};
-    layout.views[3] = {0, m, focus.width, focus.height};
+    layout.views[1] = {m, 0, context.width, context.height};
+    layout.views[2] = {2 * m, 0, focus.width, focus.height};
+    layout.views[3] = {3 * m, 0, focus.width, focus.height};
     layout.native_local = true;
     return true;
 }
