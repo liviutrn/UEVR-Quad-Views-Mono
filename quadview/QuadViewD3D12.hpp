@@ -22,6 +22,7 @@ struct alignas(16) ShaderConstants {
     float crops[2][4]{};
     float options[4]{};
     float sharpen[4]{};
+    float sharpen_eye[4]{}; // left/right strength, left/right change limiter
     float context_h[2][12]{{1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f},
                            {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f}};
     uint32_t context_source[4]{0, 1, 0, 0};
@@ -29,7 +30,7 @@ struct alignas(16) ShaderConstants {
     uint32_t depth_rect[4]{};   // B7
     uint32_t depth_options[4]{}; // B7
 };
-static_assert(sizeof(ShaderConstants) == 304); // B7: 512-byte constant buffer
+static_assert(sizeof(ShaderConstants) == 320); // B8: 512-byte constant buffer
 
 // B7: optional periphery depth for reprojection. texture is R32_TYPELESS and
 // stays in D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE between uses.
@@ -260,6 +261,12 @@ public:
         constants.sharpen[1] = 1.f + 2.f + (encoded_unorm ? 4.f : 0.f);
         constants.sharpen[2] = .10f;
         constants.sharpen[3] = .02f;
+        // B8: initial stereo-matched defaults for portable compositor tests.
+        // The post-B7 B8 backend patch replaces these with independent saved eye settings.
+        constants.sharpen_eye[0] = settings.sharpen_strength;
+        constants.sharpen_eye[1] = settings.sharpen_strength;
+        constants.sharpen_eye[2] = .10f;
+        constants.sharpen_eye[3] = .10f;
         bool depth_bound = false;
         if (depth && depth->texture && layout.shared_context && (depth->reproject || depth->show)) {
             const auto d = depth->texture->GetDesc();
