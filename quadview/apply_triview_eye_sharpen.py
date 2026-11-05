@@ -23,10 +23,10 @@ edit("src/mods/VR.hpp", [
     ('ModSlider::create(generate_name("QuadViewSharpen"), 0.f, 5.f, 1.f)',
      'ModSlider::create(generate_name("QuadViewSharpen"), 0.f, 10.f, 1.f)'),
     ('    const ModSlider::Ptr m_quadview_sharpen_max{ModSlider::create(generate_name("QuadViewSharpenMaxChange"), 0.05f, 0.30f, 0.10f)};\n',
-     '    const ModSlider::Ptr m_quadview_sharpen_max{ModSlider::create(generate_name("QuadViewSharpenMaxChange"), 0.05f, 0.30f, 0.10f)};\n'
+     '    const ModSlider::Ptr m_quadview_sharpen_max{ModSlider::create(generate_name("QuadViewSharpenMaxChange"), 0.05f, 0.40f, 0.10f)};\n'
      '    const ModToggle::Ptr m_quadview_sharpen_link{ModToggle::create(generate_name("QuadViewSharpenLinkEyes"), true)};\n'
      '    const ModSlider::Ptr m_quadview_sharpen_right{ModSlider::create(generate_name("QuadViewSharpenRight"), 0.f, 10.f, 1.f)};\n'
-     '    const ModSlider::Ptr m_quadview_sharpen_right_max{ModSlider::create(generate_name("QuadViewSharpenRightMaxChange"), 0.05f, 0.30f, 0.10f)};\n'),
+     '    const ModSlider::Ptr m_quadview_sharpen_right_max{ModSlider::create(generate_name("QuadViewSharpenRightMaxChange"), 0.05f, 0.40f, 0.10f)};\n'),
     ('            *m_quadview_sharpen, *m_quadview_sharpen_max, *m_quadview_eye_tracking,\n',
      '            *m_quadview_sharpen, *m_quadview_sharpen_max, *m_quadview_sharpen_link,\n'
      '            *m_quadview_sharpen_right, *m_quadview_sharpen_right_max, *m_quadview_eye_tracking,\n')
@@ -36,11 +36,11 @@ edit("src/mods/VR.cpp", [
     ('                m_quadview_sharpen->draw("Fused focus sharpening strength (0-5, default 1)");\n'
      '                m_quadview_sharpen_max->draw("Sharpening max change per pixel (default 0.10; higher = stronger on hard edges, more halo risk)");\n',
      '                m_quadview_sharpen->draw("Left fovea sharpening strength (0-10)");\n'
-     '                m_quadview_sharpen_max->draw("Left fovea max change per pixel (0.05-0.30; more halo risk at high values)");\n'
+     '                m_quadview_sharpen_max->draw("Left fovea max change per pixel (0.05-0.40; more halo risk at high values)");\n'
      '                m_quadview_sharpen_link->draw("Link right fovea sharpening to left (default ON)");\n'
      '                if (!m_quadview_sharpen_link->value()) {\n'
      '                    m_quadview_sharpen_right->draw("Right fovea sharpening strength (0-10)");\n'
-     '                    m_quadview_sharpen_right_max->draw("Right fovea max change per pixel (0.05-0.30)");\n'
+     '                    m_quadview_sharpen_right_max->draw("Right fovea max change per pixel (0.05-0.40)");\n'
      '                }\n'),
     ('            requested.sharpen_max_change=m_quadview_sharpen_max->value();\n',
      '            requested.sharpen_max_change=m_quadview_sharpen_max->value();\n'
@@ -68,8 +68,8 @@ edit("src/mods/vr/QuadViewSettings.hpp", [
      'scalar(requested.sharpen_strength,0.f,10.f,reject_sharpen,&Settings::sharpen_strength);\n'
      '    scalar(requested.sharpen_right_strength,0.f,10.f,reject_sharpen_right,&Settings::sharpen_right_strength);'),
     ('    scalar(requested.sharpen_max_change,.05f,.30f,reject_sharpen_max,&Settings::sharpen_max_change);\n',
-     '    scalar(requested.sharpen_max_change,.05f,.30f,reject_sharpen_max,&Settings::sharpen_max_change);\n'
-     '    scalar(requested.sharpen_right_max_change,.05f,.30f,reject_sharpen_right_max,&Settings::sharpen_right_max_change);\n'),
+     '    scalar(requested.sharpen_max_change,.05f,.40f,reject_sharpen_max,&Settings::sharpen_max_change);\n'
+     '    scalar(requested.sharpen_right_max_change,.05f,.40f,reject_sharpen_right_max,&Settings::sharpen_right_max_change);\n'),
     ('a.sharpen_strength==b.sharpen_strength && a.sharpen_max_change==b.sharpen_max_change &&',
      'a.sharpen_strength==b.sharpen_strength && a.sharpen_max_change==b.sharpen_max_change &&\n'
      '        a.sharpen_link_right==b.sharpen_link_right &&\n'
@@ -87,4 +87,4 @@ edit("src/mods/vr/QuadViewD3D12.hpp", [
      '        constants.sharpen_eye[2] = settings.sharpen_max_change;\n'
      '        constants.sharpen_eye[3] = settings.sharpen_link_right ? settings.sharpen_max_change : settings.sharpen_right_max_change;\n')
 ])
-print("B8 per-eye sharpen overlay applied: 0-10 strength, 0.05-0.30 max change, linked by default.")
+print("B8 per-eye sharpen overlay applied: 0-10 strength, 0.05-0.40 max change, linked by default.")
