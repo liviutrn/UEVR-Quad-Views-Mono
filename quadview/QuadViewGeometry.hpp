@@ -38,6 +38,10 @@ struct Layout {
     bool shared_context{};
     // Projection entries written into view 0: m[0][0], m[2][0], m[1][1], m[2][1].
     std::array<double, 4> context_projection{};
+    // Tri-view B6 compact sources: every role renders into its OWN small native
+    // target and `views` hold target-local rectangles (see apply_native_local).
+    // false = the original shared 2W x H atlas rectangles.
+    bool native_local{};
     // Per eye: 3x3 homography (rows padded to 4) from eye uv to context uv:
     // h = H * (u, v, 1), context uv = h.xy / h.z. Identity for four views.
     std::array<std::array<float, 12>, 2> context_h{{{1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f},
@@ -204,6 +208,47 @@ inline std::optional<Layout> make_layout(
         result.views[eye + 2] = {base_x + context_width, 0, focus_width, focus_height};
     }
     return result;
+}
+
+// Tri-view B6 compact sources. Width/height of each role's native target.
+using SourceExtents = std::array<std::array<uint32_t, 2>, 4>;
+// Distinct 8-px origins keep all four engine view rectangles unique for every
+// setting (the producer identifies a constructed view by its exact rectangle):
+// context pair (0,0) / (8,8), focus pair (8,0) / (0,8). Each pair shares one
+// target extent of (w + 8) x (h + 8).
+inline constexpr uint32_t compact_source_margin = 8;
+
+inline SourceExtents source_extents(const Layout& layout) {
+    SourceExtents extents{};
+    for (size_t i = 0; i != 4; ++i) {
+        if (!layout.native_local) {
+            extents[i] = {layout.atlas_width, layout.atlas_height};
+            continue;
+        }
+        const auto& size_from = layout.views[i < 2 ? 0 : 2];
+        extents[i] = {size_from.width + compact_source_margin, size_from.height + compact_source_margin};
+    }
+    return extents;
+}
+
+// Converts an atlas layout (from make_layout, optionally tri-view) into
+// target-local rectangles. Sizes, crops and homographies are unchanged: the
+// homographies map eye uv to context uv, which is rectangle-relative.
+inline bool apply_native_local(Layout& layout) {
+    if (layout.native_local) return true;
+    const auto context = layout.views[0], focus = layout.views[2];
+    const auto m = compact_source_margin;
+    if (!context.width || !context.height || !focus.width || !focus.height ||
+        layout.views[1].width != context.width || layout.views[1].height != context.height ||
+        layout.views[3].width != focus.width || layout.views[3].height != focus.height ||
+        uint64_t(context.width) + m > layout.atlas_width || uint64_t(context.height) + m > layout.atlas_height ||
+        uint64_t(focus.width) + m > layout.atlas_width || uint64_t(focus.height) + m > layout.atlas_height) return false;
+    layout.views[0] = {0, 0, context.width, context.height};
+    layout.views[1] = {m, m, context.width, context.height};
+    layout.views[2] = {m, 0, focus.width, focus.height};
+    layout.views[3] = {0, m, focus.width, focus.height};
+    layout.native_local = true;
+    return true;
 }
 
 // Compatibility convenience for center/single-point callers and the geometry

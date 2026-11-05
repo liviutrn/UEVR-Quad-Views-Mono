@@ -30,8 +30,19 @@ VertexOut VSMain(uint vertexId : SV_VertexID) {
     return result;
 }
 
-float2 AtlasUv(uint4 rectangle, float2 uv) {
-    const float2 atlasSize = float2(EyeAndAtlas.zw);
+// B6: every source is normalised by its OWN texture size (compact per-role
+// targets); for the shared atlas or full-size targets this equals EyeAndAtlas.zw.
+float2 SourceSize(uint sourceIndex) {
+    uint width = 1u, height = 1u;
+    [branch] if (sourceIndex == 0u) ContextLeftSource.GetDimensions(width, height);
+    else if (sourceIndex == 1u) ContextRightSource.GetDimensions(width, height);
+    else if (sourceIndex == 2u) FocusLeftSource.GetDimensions(width, height);
+    else FocusRightSource.GetDimensions(width, height);
+    return float2(max(width, 1u), max(height, 1u));
+}
+
+float2 AtlasUv(uint sourceIndex, uint4 rectangle, float2 uv) {
+    const float2 atlasSize = SourceSize(sourceIndex);
     const float2 origin = float2(rectangle.xy);
     const float2 extent = float2(rectangle.zw);
     const float2 texel = clamp(origin + saturate(uv) * extent,
@@ -88,7 +99,7 @@ float3 ReadFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float
     // clamps each tap to this eye's focus rectangle, so eyes never bleed.
     const float2 shifted = fullUv + pixelOffset / float2(EyeAndAtlas.xy);
     const float2 local = (shifted - crop.xy) / (crop.zw - crop.xy);
-    return GlamDecode(ReadSource(sourceIndex, AtlasUv(rect, local)).rgb);
+    return GlamDecode(ReadSource(sourceIndex, AtlasUv(sourceIndex, rect, local)).rgb);
 }
 
 float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float3 center) {
@@ -153,19 +164,19 @@ float4 CompositePixel(VertexOut input) {
     // 50% crop this skips a texture fetch for most focused pixels, including
     // pixels using the fused Glamarye filter. Keep diagnostics exact.
     if (debugMode == 1)
-        return ReadSource(contextSource, AtlasUv(contextRect, contextUv));
+        return ReadSource(contextSource, AtlasUv(contextSource, contextRect, contextUv));
     if (weight <= 0.0) {
         if (debugMode == 2) return float4(0.04, 0.04, 0.04, 1.0);
-        return ReadSource(contextSource, AtlasUv(contextRect, contextUv));
+        return ReadSource(contextSource, AtlasUv(contextSource, contextRect, contextUv));
     }
 
     const float2 focusUv = (eyeUv - crop.xy) / (crop.zw - crop.xy);
-    float4 focus = ReadSource(2u + eye, AtlasUv(focusRect, focusUv));
+    float4 focus = ReadSource(2u + eye, AtlasUv(2u + eye, focusRect, focusUv));
     [branch] if (Sharpen.x > 0.0)
         focus.rgb = GlamSharpenFocus(2u + eye, focusRect, crop, eyeUv, focus.rgb);
     float4 output = focus;
     [branch] if (debugMode != 2 && weight < 1.0) {
-        const float4 context = ReadSource(contextSource, AtlasUv(contextRect, contextUv));
+        const float4 context = ReadSource(contextSource, AtlasUv(contextSource, contextRect, contextUv));
         output = lerp(context, focus, weight);
     }
     if (Options.w > 0.5) {

@@ -199,11 +199,14 @@ public:
         if (!valid_layout(layout) || checked_settings.rejected || !same_settings(checked_settings.settings, settings))
             return fail("Invalid QuadView layout or debug controls");
         const auto output = destination->GetDesc();
-        for (auto* source : sources) {
+        // B6: compact sources have per-role extents; atlas layouts keep 2W x H for all four.
+        const auto extents = source_extents(layout);
+        for (size_t index = 0; index != sources.size(); ++index) {
+            auto* source = sources[index];
             if (source == destination) return fail("Source aliases the compositor destination");
             const auto input = source->GetDesc();
             if (input.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || output.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
-                input.Width != layout.atlas_width || input.Height != layout.atlas_height ||
+                input.Width != extents[index][0] || input.Height != extents[index][1] ||
                 output.Width != layout.eye_width * 2ull || output.Height != layout.eye_height ||
                 input.SampleDesc.Count != 1 || output.SampleDesc.Count != 1 ||
                 input.DepthOrArraySize != 1 || output.DepthOrArraySize != 1 ||
@@ -362,6 +365,12 @@ private:
             const auto& rect = layout.views[i];
             if (!rect.width || !rect.height || uint64_t(rect.x) + rect.width > layout.atlas_width ||
                 uint64_t(rect.y) + rect.height > layout.atlas_height) return false;
+            if (layout.native_local) {
+                // B6: each rectangle lives in its own target; it must fit that target.
+                const auto extents = source_extents(layout);
+                if (uint64_t(rect.x) + rect.width > extents[i][0] || uint64_t(rect.y) + rect.height > extents[i][1]) return false;
+                continue;
+            }
             for (unsigned j = 0; j < i; ++j) {
                 const auto& other = layout.views[j];
                 if (uint64_t(rect.x) < uint64_t(other.x) + other.width && uint64_t(other.x) < uint64_t(rect.x) + rect.width &&

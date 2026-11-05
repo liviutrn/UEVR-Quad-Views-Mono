@@ -36,4 +36,24 @@ inline bool valid_native_target_quartet(const std::array<NativeTargetIdentity, 4
     return true;
 }
 
+// Tri-view B6: same contract as the quartet, but each role has its own
+// expected extent (compact sources). Equal extents == the quartet rule.
+inline bool valid_native_target_roles(const std::array<NativeTargetIdentity, 4>& targets,
+                                      const std::array<std::array<uint32_t, 2>, 4>& extents) {
+    const auto& first = targets[0];
+    if (!first.target_set_generation || !first.format) return false;
+    for (size_t i = 0; i != targets.size(); ++i) {
+        const auto& target = targets[i];
+        if (!target.owner_texture || !target.render_target || !target.rhi_texture || !target.native_resource ||
+            !extents[i][0] || !extents[i][1] || target.width != extents[i][0] || target.height != extents[i][1] ||
+            target.target_set_generation != first.target_set_generation || target.format != first.format) return false;
+        for (size_t j = 0; j < i; ++j) {
+            const auto& prior = targets[j];
+            if (target.owner_texture == prior.owner_texture || target.render_target == prior.render_target ||
+                target.rhi_texture == prior.rhi_texture || target.native_resource == prior.native_resource) return false;
+        }
+    }
+    return true;
+}
+
 } // namespace uevr::quadview

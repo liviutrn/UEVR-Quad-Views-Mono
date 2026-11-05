@@ -1,6 +1,6 @@
-name: Tri-view B1 (Build51 base, 3 renders) Windows DLL [B5 parity]
+name: Tri-view B1 (Build51 base, 3 renders) Windows DLL [B6 compact]
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: Tri-view B5 parity compiled Windows DLL (${{ github.run_number }})
+run-name: Tri-view B6 compact compiled Windows DLL (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**']
@@ -124,6 +124,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tri-view overlay failed its exact anchors' }
           python workspace/quadview/apply_triview_parity.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Tri-view B5 parity patch failed its exact anchors' }
+          python workspace/quadview/apply_triview_compact.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Tri-view B6 compact source patch failed its exact anchors' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -232,20 +234,21 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B5-parity'; diagnosticOnly=$false; baseline='Build47; authenticated engine-only recovery; accepted geometry lineage Build40'; baselineSource='7486fc59890b14673cd50770b0dafeb692576716'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B6-compact'; diagnosticOnly=$false; baseline='Build47; authenticated engine-only recovery; accepted geometry lineage Build40'; baselineSource='7486fc59890b14673cd50770b0dafeb692576716'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          Tri-view B5 (B1-4 + DuoView v208d parity) - Quad Views Stereo ID7 - test candidate, NOT headset-verified
-          For STALKER 2 2.10 on a clean install (B1-4 already works there). Start a fresh game and inject this package.
-          New in B5:
-          - DuoView FOV fix now also in ID7: automatic MPC override, button "Reapply FOV (DuoView/Tri-view)"
-            next to Reinitialize Runtime, automatic reapply after loading a save or level.
-          - Head XYZ scaling (Settings next to World Scale) + its keys (Keybinds > Head Movement XYZ Keys).
-          - Keybinds > Overlay/Runtime Keys: "Reapply FOV Key" and "Reinitialize Runtime Key" (both Unbound by default).
-          - Tri-view sharpening 0-5 and "Sharpening max change per pixel" (default 0.10 = old look).
-          - ID7 menu settings are now saved in the UEVR config (before they reset at every start).
+          Tri-view B6 (B5 + compact source textures + VRAM readout) - Quad Views Stereo ID7 - test candidate, NOT headset-verified
+          For STALKER 2 2.10 on a clean install. Start a fresh game and inject this package.
+          New in B6 (everything from B5 stays):
+          - The three source textures are sized to what is actually drawn (the unused fourth one shrinks
+            to periphery size). Toggle "Compact source textures" in the ID7 controls; OFF = exact B5 textures.
+          - ID7 menu shows "Video memory (whole game process)" and the source texture sizes; the log
+            writes a [QuadViews][VRAM] line every 10 s.
+          B5 features: FOV fix in ID7 (auto MPC override, "Reapply FOV (DuoView/Tri-view)" button, auto
+          reapply after loading), Head XYZ scaling + keys, Reapply FOV / Reinitialize Runtime keys,
+          sharpening 0-5 + max change, ID7 settings saved.
           Send the complete UEVR log if anything goes wrong.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
@@ -253,16 +256,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B5-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B6-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B5-Parity-${{ github.run_number }}
+          name: UEVR-TriView-B6-Compact-${{ github.run_number }}
           path: |
-            UEVR-TriView-B5-*.zip
-            UEVR-TriView-B5-*.zip.sha256
+            UEVR-TriView-B6-*.zip
+            UEVR-TriView-B6-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4

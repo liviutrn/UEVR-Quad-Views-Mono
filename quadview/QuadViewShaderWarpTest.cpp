@@ -187,6 +187,45 @@ int main(int argc, char** argv) try {
             D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 
+    // Tri-view B6: compact per-role targets with target-local rectangles. Same
+    // source content per role; everything outside the role's rectangle is poison.
+    auto compact_layout = *layout;
+    if (!uevr::quadview::apply_native_local(compact_layout)) throw std::runtime_error("Compact layout rejected");
+    const auto compact_extents = uevr::quadview::source_extents(compact_layout);
+    std::array<ComPtr<ID3D12Resource>, 4> compact_targets, compact_uploads;
+    for (unsigned view = 0; view != 4; ++view) {
+        const auto cw = compact_extents[view][0], ch = compact_extents[view][1];
+        if (cw >= AW && ch >= H) throw std::runtime_error("Compact target is not smaller than the atlas");
+        compact_targets[view] = resource(device.Get(), texture(cw, ch, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+            D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+        const auto compact_description = compact_targets[view]->GetDesc();
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT compact_footprint{};
+        uint64_t compact_bytes{};
+        device->GetCopyableFootprints(&compact_description, 0, 1, 0, &compact_footprint, nullptr, nullptr, &compact_bytes);
+        compact_uploads[view] = resource(device.Get(), buffer(compact_bytes), D3D12_HEAP_TYPE_UPLOAD,
+            D3D12_RESOURCE_STATE_GENERIC_READ);
+        require(compact_uploads[view]->Map(0, &no_read, &mapped), "Map compact upload");
+        std::memset(mapped, 0, static_cast<size_t>(compact_bytes));
+        const auto& rect = compact_layout.views[view];
+        for (uint32_t y = 0; y < ch; ++y) for (uint32_t x = 0; x < cw; ++x) {
+            Color color{255, 0, 255, 255};
+            if (x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height)
+                color = source_color(view, x - rect.x, y - rect.y);
+            std::memcpy(static_cast<uint8_t*>(mapped) + y * compact_footprint.Footprint.RowPitch + x * 4, color.data(), 4);
+        }
+        compact_uploads[view]->Unmap(0, nullptr);
+        D3D12_TEXTURE_COPY_LOCATION compact_from{};
+        compact_from.pResource = compact_uploads[view].Get();
+        compact_from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        compact_from.PlacedFootprint = compact_footprint;
+        D3D12_TEXTURE_COPY_LOCATION compact_to{};
+        compact_to.pResource = compact_targets[view].Get();
+        compact_to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        commands->CopyTextureRegion(&compact_to, 0, 0, 0, &compact_from, nullptr);
+        transition(commands.Get(), compact_targets[view].Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_RENDER_TARGET);
+    }
+
     D3D12_DESCRIPTOR_HEAP_DESC heap_description{};
     heap_description.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heap_description.NumDescriptors = 4;
@@ -310,7 +349,7 @@ int main(int argc, char** argv) try {
     D3D12_RESOURCE_STATES atlas_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     std::vector<uint8_t> baseline_focus;
     std::vector<uint8_t> strength_one_focus;
-    for (unsigned pass = 0; pass < 12; ++pass) {
+    for (unsigned pass = 0; pass < 15; ++pass) { // 12-14: B6 compact per-role targets
         const unsigned mode = pass < 6 || pass >= 9 ? pass % 3 : 2u;
         if (pass != 0) {
             require(allocator->Reset(), "Reset allocator");
@@ -361,7 +400,15 @@ int main(int argc, char** argv) try {
                 throw std::runtime_error("Production compositor accepted overlapping atlas regions");
             // GPU timing is opt-in and requires the queue frequency on the actual record call;
             // prewarm alone cannot enable timestamp emission.
-            const bool source_ok = pass >= 9
+            if (pass >= 12 && production.record_sources(commands.Get(), {compact_targets[0].Get(), compact_targets[1].Get(),
+                    compact_targets[2].Get(), compact_targets[3].Get()}, output.Get(), *layout, settings,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET, output_state, owner, timestamp_frequency))
+                throw std::runtime_error("Production compositor accepted compact targets with an atlas layout");
+            const bool source_ok = pass >= 12
+                ? production.record_sources(commands.Get(), {compact_targets[0].Get(), compact_targets[1].Get(),
+                    compact_targets[2].Get(), compact_targets[3].Get()}, output.Get(), compact_layout, settings,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET, output_state, owner, timestamp_frequency)
+                : pass >= 9
                 ? production.record_sources(commands.Get(), {native_targets[0].Get(), native_targets[1].Get(),
                     native_targets[2].Get(), native_targets[3].Get()}, output.Get(), *layout, settings,
                     D3D12_RESOURCE_STATE_RENDER_TARGET, output_state, owner, timestamp_frequency)
@@ -488,7 +535,7 @@ int main(int argc, char** argv) try {
             if (!packet_lifetime.expired()) throw std::runtime_error("Production packet owner leaked after retirement");
         }
     }
-    std::cout << "QuadView WARP: four independent native target SRVs, stereo isolation, off-center ROI, crop bounds, diagnostic modes, 0/1/2 Glamarye focus strength and slot ownership passed.\n";
+    std::cout << "QuadView WARP: four independent native target SRVs, B6 compact per-role targets, stereo isolation, off-center ROI, crop bounds, diagnostic modes, 0/1/2 Glamarye focus strength and slot ownership passed.\n";
     return 0;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

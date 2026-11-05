@@ -62,6 +62,41 @@ int main() {
     auto mismatched_native_generation=native_targets;
     mismatched_native_generation[1].target_set_generation++;
     assert(!uevr::quadview::valid_native_target_quartet(mismatched_native_generation));
+    {   // Tri-view B6: per-role extents (compact sources).
+        std::array<std::array<uint32_t,2>,4> equal{};
+        for (auto& e : equal) e={4096,2048};
+        assert(uevr::quadview::valid_native_target_roles(native_targets,equal));
+        auto compact_targets=native_targets;
+        const std::array<std::array<uint32_t,2>,4> compact{{{820,656},{820,656},{2056,1032},{2056,1032}}};
+        for (size_t i=0;i!=4;++i) { compact_targets[i].width=compact[i][0]; compact_targets[i].height=compact[i][1]; }
+        assert(uevr::quadview::valid_native_target_roles(compact_targets,compact));
+        assert(!uevr::quadview::valid_native_target_quartet(compact_targets));
+        auto wrong_role=compact_targets; wrong_role[3].height++;
+        assert(!uevr::quadview::valid_native_target_roles(wrong_role,compact));
+        assert(!uevr::quadview::valid_native_target_roles(aliased_native_targets,equal));
+        assert(!uevr::quadview::valid_native_target_roles(mismatched_native_generation,equal));
+        auto layout=uevr::quadview::make_layout(4060,3228,.5f,.5f,.2f,1.f,.3f,.7f);
+        assert(layout && !layout->native_local);
+        const auto atlas_extents=uevr::quadview::source_extents(*layout);
+        for (const auto& e : atlas_extents) assert(e[0]==8120 && e[1]==3228);
+        auto local=*layout;
+        assert(uevr::quadview::apply_native_local(local) && local.native_local);
+        const auto e=uevr::quadview::source_extents(local);
+        assert(e[0]==e[1] && e[2]==e[3]);
+        assert(e[0][0]==layout->views[0].width+8 && e[0][1]==layout->views[0].height+8);
+        assert(e[2][0]==layout->views[2].width+8 && e[2][1]==layout->views[2].height+8);
+        for (size_t i=0;i!=4;++i) {
+            assert(local.views[i].width==layout->views[i].width && local.views[i].height==layout->views[i].height);
+            assert(local.views[i].x+local.views[i].width<=e[i][0] && local.views[i].y+local.views[i].height<=e[i][1]);
+            for (size_t j=0;j!=i;++j) assert(!(local.views[i]==local.views[j]));
+        }
+        assert(local.focus_crops==layout->focus_crops);
+        // equal context and focus sizes must still give four distinct rectangles
+        auto same=uevr::quadview::make_layout(1000,1000,.2f,.2f,.2f,1.f,.5f,.5f);
+        assert(same && same->views[0].width==same->views[2].width);
+        assert(uevr::quadview::apply_native_local(*same));
+        for (size_t i=0;i!=4;++i) for (size_t j=0;j!=i;++j) assert(!(same->views[i]==same->views[j]));
+    }
 
     using namespace uevr::quadview;
     // The supported STALKER 2 game must install the BeginRenderViewFamily
