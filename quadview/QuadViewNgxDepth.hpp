@@ -79,7 +79,11 @@ public:
     void set_expected(uint32_t w, uint32_t h) {
         want_w_.store(w, std::memory_order_relaxed); want_h_.store(h, std::memory_order_relaxed);
     }
-    void set_enabled(bool on) { enabled_.store(on, std::memory_order_release); }
+    // B9 stability gate: no NGX copy recording until exact producer identity,
+    // producer completion and consumer retirement are validated together.
+    // Existing saved settings and the depth-debug toggle cannot bypass this.
+    static constexpr bool capture_supported() noexcept { return false; }
+    void set_enabled(bool on) { enabled_.store(on && capture_supported(), std::memory_order_release); }
 
     // Present thread: install hooks lazily (only while Tri-view depth is on).
     void install(ID3D12CommandQueue* queue) {

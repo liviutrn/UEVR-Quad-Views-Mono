@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tri-view B7: periphery depth reprojection from the DLSS depth input.
+"""Tri-view B9: depth diagnostic with unvalidated NGX capture blocked.
 
 Run AFTER apply_triview_compact.py. Portable parts live in quadview/:
   QuadViewNgxSelect.hpp  matches_periphery() (which DLSS output is the periphery)
@@ -12,11 +12,11 @@ This script copies the two NGX headers into the backend and wires them:
 - the depth shift is computed before the layout freeze (frozen with the draw);
 - each draw publishes the expected periphery size (0 when a fovea has the same
   size, so a fovea depth can never be taken for the periphery);
-- hooks are installed lazily from D3D12Component::on_frame while ID7 depth is on;
-- the compositor gets the newest submitted periphery depth (<= 250 ms old) or
-  nothing (then the periphery is exactly B6).
-Menu: "Periphery depth reprojection" (default ON), strength slider (default 1,
-negative flips the direction), "Show periphery depth" debug view, counters.
+- capture is hard-disabled pending exact identity and GPU fence validation;
+- existing saved reprojection settings cannot enable hooks/copies;
+- the compositor receives the show request even when no texture is available.
+Reprojection defaults OFF. Show-depth renders a whole-eye magenta/black checker
+when unavailable, or grayscale when validated synthetic depth is bound.
 """
 from pathlib import Path
 import shutil
@@ -43,7 +43,7 @@ def edit(rel, pairs):
 edit("src/mods/VR.hpp", [
     ('    const ModToggle::Ptr m_quadview_compact_targets{ModToggle::create(generate_name("QuadViewCompactSources"), true)};\n',
      '    const ModToggle::Ptr m_quadview_compact_targets{ModToggle::create(generate_name("QuadViewCompactSources"), true)};\n'
-     '    const ModToggle::Ptr m_quadview_depth_reproject{ModToggle::create(generate_name("QuadViewPeripheryDepth"), true)};\n'
+     '    const ModToggle::Ptr m_quadview_depth_reproject{ModToggle::create(generate_name("QuadViewPeripheryDepth"), false)};\n'
      '    const ModSlider::Ptr m_quadview_depth_strength{ModSlider::create(generate_name("QuadViewPeripheryDepthStrength"), -2.f, 2.f, 1.f)};\n'
      '    const ModToggle::Ptr m_quadview_depth_show{ModToggle::create(generate_name("QuadViewShowPeripheryDepth"), false)};\n'),
     ("            *m_quadview_compact_targets,\n",
@@ -76,9 +76,10 @@ edit("src/mods/VR.cpp", [
      "    if (layout->native_local && !native_target_ready)\n"),
     ('                m_quadview_compact_targets->draw("Compact source textures (saves video memory; OFF = B5 full-size textures)");\n',
      '                m_quadview_compact_targets->draw("Compact source textures (saves video memory; OFF = B5 full-size textures)");\n'
-     '                m_quadview_depth_reproject->draw("Periphery depth reprojection (lines the periphery up with each eye using DLSS depth)");\n'
+     '                ImGui::TextUnformatted("Depth capture disabled: awaiting exact frame identity and GPU fence validation.");\n'
+     '                m_quadview_depth_reproject->draw("Request periphery depth reprojection (unavailable in this build)");\n'
      '                m_quadview_depth_strength->draw("Periphery depth strength (1 = physical; -1 flips the direction)");\n'
-     '                m_quadview_depth_show->draw("Show periphery depth (debug, grey = near is bright)");\n'
+     '                m_quadview_depth_show->draw("Show depth diagnostic (grey = depth; magenta checker = unavailable)");\n'
      '                {\n'
      '                    const auto s=uevr::quadview::ngx::PeripheryDepth::self().stats();\n'
      '                    ImGui::Text("Periphery depth: hooks %u/6, queue hook %s; DLSS calls %llu, periphery %llu, copied %llu, submitted %llu, used %llu, missing %llu, skipped %llu",\n'
@@ -97,6 +98,7 @@ edit("src/mods/vr/D3D12Component.cpp", [
      "        auto& depth=uevr::quadview::ngx::PeripheryDepth::self();\n"
      "        const bool want=vr->is_quadview_mode_selected() && (vr->quadview_depth_reproject() || vr->quadview_depth_show());\n"
      "        depth.set_enabled(want);\n"
+     '        if (want && !depth.capture_supported()) SPDLOG_WARNING_EVERY_N_SEC(30,"[TriView][DepthUnavailable] Capture disabled pending exact frame identity and GPU fence validation; reprojection inactive; show-depth displays no-data checker");\n'
      "        if (want) if (const auto& hook=g_framework->get_d3d12_hook(); hook) depth.install(hook->get_command_queue());\n"
      "    }\n"),
     ("                            bool recorded=false;\n"
@@ -106,6 +108,7 @@ edit("src/mods/vr/D3D12Component.cpp", [
      "                            ID3D12Resource* output=nullptr;\n"
      "                            uintptr_t command_list=0;\n"
      "                            uevr::quadview::dx12::DepthInput depth_input{};\n"
+     "                            depth_input.show=vr->quadview_depth_show();\n"
      "                            if (frozen->layout.shared_context && (vr->quadview_depth_reproject() || vr->quadview_depth_show())) {\n"
      "                                if (const auto snapshot=uevr::quadview::ngx::PeripheryDepth::self().latest()) {\n"
      "                                    depth_input.texture=snapshot->texture.Get();\n"
@@ -120,6 +123,6 @@ edit("src/mods/vr/D3D12Component.cpp", [
      "                                [this,packet,frozen,native_sources,timestamp_frequency,depth_input,&recorded,&output,&command_list](d3d12::CommandContext& commands,ID3D12Resource* destination) {\n"),
     ("                                        frozen->settings.gpu_timing ? timestamp_frequency : 0);\n",
      "                                        frozen->settings.gpu_timing ? timestamp_frequency : 0,\n"
-     "                                        depth_input.texture ? &depth_input : nullptr);\n"),
+     "                                        (depth_input.texture || depth_input.show) ? &depth_input : nullptr);\n"),
 ])
-print("Tri-view B7 periphery depth reprojection applied.")
+print("Tri-view B9 depth safety gate and whole-eye diagnostic applied.")

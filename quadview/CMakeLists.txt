@@ -175,3 +175,22 @@ add_test(NAME quadview-native-render-trace-observation COMMAND QuadViewNativeRen
 
 add_test(NAME quadview-hook-trace-summary COMMAND "${Python3_EXECUTABLE}" -m unittest discover
   -s "${CMAKE_CURRENT_SOURCE_DIR}" -p test_quadview_hook_trace_summary.py -v)
+
+add_executable(QuadViewStatusTests StatusTests.cpp)
+target_link_libraries(QuadViewStatusTests PRIVATE Threads::Threads)
+add_test(NAME quadview-authoritative-submit-status COMMAND QuadViewStatusTests)
+set(QUADVIEW_IMGUI_DIR "" CACHE PATH "Exact pinned backend Dear ImGui source directory")
+if(QUADVIEW_IMGUI_DIR)
+  if(NOT EXISTS "${QUADVIEW_IMGUI_DIR}/imgui.cpp")
+    message(FATAL_ERROR "QUADVIEW_IMGUI_DIR does not contain the pinned Dear ImGui sources")
+  endif()
+  add_executable(QuadViewStatusPanelTests StatusPanelTests.cpp
+    "${QUADVIEW_IMGUI_DIR}/imgui.cpp" "${QUADVIEW_IMGUI_DIR}/imgui_draw.cpp"
+    "${QUADVIEW_IMGUI_DIR}/imgui_widgets.cpp" "${QUADVIEW_IMGUI_DIR}/imgui_tables.cpp")
+  target_include_directories(QuadViewStatusPanelTests PRIVATE "${QUADVIEW_IMGUI_DIR}")
+  add_test(NAME quadview-fixed-status-panel-hit-testing COMMAND QuadViewStatusPanelTests)
+elseif(WIN32)
+  message(FATAL_ERROR "Windows CI requires QUADVIEW_IMGUI_DIR for production status-panel hit testing")
+else()
+  message(STATUS "Pinned Dear ImGui path not provided: status panel test unavailable")
+endif()

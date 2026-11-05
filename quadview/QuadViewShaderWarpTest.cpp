@@ -164,6 +164,30 @@ int main(int argc, char** argv) try {
     commands->CopyTextureRegion(&atlas_location, 0, 0, 0, &upload_location, nullptr);
     transition(commands.Get(), atlas.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
+    // A known reversed-Z value: fourth root of 1/16 is exactly 1/2.
+    auto depth_description = texture(1, 1, D3D12_RESOURCE_FLAG_NONE);
+    depth_description.Format = DXGI_FORMAT_R32_TYPELESS;
+    auto synthetic_depth = resource(device.Get(), depth_description, D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT depth_footprint{};
+    uint64_t depth_bytes{};
+    device->GetCopyableFootprints(&depth_description, 0, 1, 0, &depth_footprint, nullptr, nullptr, &depth_bytes);
+    auto depth_upload = resource(device.Get(), buffer(depth_bytes), D3D12_HEAP_TYPE_UPLOAD,
+        D3D12_RESOURCE_STATE_GENERIC_READ);
+    require(depth_upload->Map(0, &no_read, &mapped), "Map synthetic depth");
+    const float known_depth = .0625f;
+    std::memcpy(mapped, &known_depth, sizeof(known_depth));
+    depth_upload->Unmap(0, nullptr);
+    D3D12_TEXTURE_COPY_LOCATION depth_from{}, depth_to{};
+    depth_from.pResource = depth_upload.Get();
+    depth_from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    depth_from.PlacedFootprint = depth_footprint;
+    depth_to.pResource = synthetic_depth.Get();
+    depth_to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    commands->CopyTextureRegion(&depth_to, 0, 0, 0, &depth_from, nullptr);
+    transition(commands.Get(), synthetic_depth.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+
     // Each native target contains only its own rectangle; every other region is
     // poison. Binding the wrong eye/level SRV therefore fails the pixel checks.
     std::array<ComPtr<ID3D12Resource>, 4> native_targets, native_uploads;
@@ -358,7 +382,7 @@ int main(int argc, char** argv) try {
     D3D12_RESOURCE_STATES atlas_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     std::vector<uint8_t> baseline_focus;
     std::vector<uint8_t> strength_one_focus;
-    for (unsigned pass = 0; pass < 17; ++pass) { // 12-14: B6 compact; 15-16: B8 independent eye sharpening
+    for (unsigned pass = 0; pass < 21; ++pass) { // 12-14: B6 compact; 15-16: B8 independent eye sharpening
         const unsigned mode = pass >= 15 ? 2u : (pass < 6 || pass >= 9 ? pass % 3 : 2u);
         if (pass != 0) {
             require(allocator->Reset(), "Reset allocator");
@@ -388,7 +412,28 @@ int main(int argc, char** argv) try {
         commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         std::weak_ptr<unsigned> packet_lifetime;
         D3D12_RESOURCE_STATES output_state = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        if (pass < 3 || pass >= 15) {
+        if (pass >= 17) {
+            // Production binding: missing, invalid rectangle, non-shared layout,
+            // and valid synthetic depth. The whole eye must override focus and
+            // other diagnostic modes, not merely the peripheral pixels.
+            auto diagnostic_layout = *layout;
+            diagnostic_layout.shared_context = pass != 19;
+            uevr::quadview::Settings diagnostic_settings{};
+            diagnostic_settings.diagnostic_view = 3;
+            diagnostic_settings.sharpen_strength = 7.f;
+            auto owner = std::make_shared<unsigned>(pass);
+            packet_lifetime = owner;
+            uevr::quadview::dx12::DepthInput depth{};
+            depth.show = true;
+            depth.texture = pass == 17 ? nullptr : synthetic_depth.Get();
+            depth.rect[2] = pass == 18 ? 2u : 1u;
+            depth.rect[3] = 1u;
+            if (!production.record_sources(commands.Get(), {native_targets[0].Get(), native_targets[1].Get(),
+                    native_targets[2].Get(), native_targets[3].Get()}, output.Get(), diagnostic_layout,
+                    diagnostic_settings, D3D12_RESOURCE_STATE_RENDER_TARGET, output_state,
+                    owner, timestamp_frequency, &depth)) throw std::runtime_error(production.error());
+            owner.reset();
+        } else if (pass < 3 || pass >= 15) {
             commands->DrawInstanced(3, 1, 0, 0);
         } else {
             auto owner = std::make_shared<unsigned>(pass);
@@ -508,6 +553,11 @@ int main(int argc, char** argv) try {
                     0.f, float(source_rect.height - 1)));
                 expected = source_color(eye + 2, source_x, source_y);
             }
+            if (pass >= 17) {
+                const bool checker = ((x / 8u) + (y / 8u)) & 1u;
+                expected = pass == 20 ? Color{128, 128, 128, 255} :
+                    checker ? Color{255, 0, 255, 255} : Color{0, 0, 0, 255};
+            }
             const auto* pixel = static_cast<const uint8_t*>(mapped) + y * footprint.Footprint.RowPitch + x * 4;
             if (!sharpened || !inside) {
                 for (unsigned channel = 0; channel < 4; ++channel) {
@@ -544,7 +594,7 @@ int main(int argc, char** argv) try {
             throw std::runtime_error("B8 left-only sharpening changed right eye or failed to change left eye");
         if (pass==7 && (!changed_strength_eye[0] || !changed_strength_eye[1]))
             throw std::runtime_error("Glamarye strengths 1 and 2 produced identical stereo focus images");
-        if (pass >= 3 && pass < 15) {
+        if ((pass >= 3 && pass < 15) || pass >= 17) {
             if (packet_lifetime.expired()) throw std::runtime_error("Production packet owner disappeared before explicit retirement");
             production.on_slot_retired();
             if (pass==3 && (!std::isfinite(production.gpu_milliseconds()) || production.gpu_milliseconds()<0.f))
@@ -552,7 +602,7 @@ int main(int argc, char** argv) try {
             if (!packet_lifetime.expired()) throw std::runtime_error("Production packet owner leaked after retirement");
         }
     }
-    std::cout << "QuadView WARP: four independent native target SRVs, B6 compact, B8 right/left-only sharpening, stereo isolation, off-center ROI, crop bounds, diagnostic modes, 0/1/2 Glamarye focus strength and slot ownership passed.\n";
+    std::cout << "QuadView WARP: four independent native target SRVs, B6 compact, B8 right/left-only sharpening, B9 missing/rejected/non-shared/known-depth whole-eye diagnostics, stereo isolation, off-center ROI, crop bounds, diagnostic modes, 0/1/2 Glamarye focus strength and slot ownership passed.\n";
     return 0;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

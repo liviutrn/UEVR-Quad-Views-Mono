@@ -267,6 +267,9 @@ public:
         constants.sharpen_eye[1] = settings.sharpen_strength;
         constants.sharpen_eye[2] = .10f;
         constants.sharpen_eye[3] = .10f;
+        // Requested and bound are independent: missing/invalid depth must still
+        // produce the explicit diagnostic, including non-shared layouts.
+        constants.depth_options[1] = depth && depth->show ? 1u : 0u;
         bool depth_bound = false;
         if (depth && depth->texture && layout.shared_context && (depth->reproject || depth->show)) {
             const auto d = depth->texture->GetDesc();
@@ -279,7 +282,7 @@ public:
                 uint64_t(depth->rect[0]) + depth->rect[2] <= d.Width && uint64_t(depth->rect[1]) + depth->rect[3] <= d.Height) {
                 for (unsigned i = 0; i != 4; ++i) { constants.depth_shift[i] = depth->shift[i]; constants.depth_rect[i] = depth->rect[i]; }
                 constants.depth_options[0] = depth->reproject ? 1u : 0u;
-                constants.depth_options[1] = depth->show ? 1u : 0u;
+                constants.depth_options[2] = 1u; // validated depth is bound
                 depth_bound = true;
             }
         }

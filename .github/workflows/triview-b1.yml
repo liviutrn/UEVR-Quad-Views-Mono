@@ -1,6 +1,6 @@
-name: Tri-view B1 (Build51 base, 3 renders) Windows DLL [B8 per-eye sharpening]
+name: Tri-view B9 startup and menu stability Windows DLL
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: Tri-view B8 per-eye sharpening compiled Windows DLL (${{ github.run_number }})
+run-name: Tri-view B9 startup and menu stability compiled Windows DLL (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -130,6 +130,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tri-view B7 periphery depth patch failed its exact anchors' }
           python workspace/quadview/apply_triview_eye_sharpen.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Tri-view B8 per-eye sharpening patch failed its exact anchors' }
+          python workspace/quadview/apply_triview_stability.py backend workspace/quadview
+          if ($LASTEXITCODE -ne 0) { throw 'B9 stable status panel overlay failed its exact anchors' }
+          python workspace/quadview/apply_triview_bootstrap.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B9 independent startup overlay failed its exact anchors' }
+          python workspace/quadview/test_triview_bootstrap.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B9 bootstrap control-flow regression failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -139,7 +145,7 @@ jobs:
       - name: Test QuadView contracts, asynchronous delivery, and production GPU compositor
         shell: pwsh
         run: |
-          cmake -S workspace/quadview -B quad_tests -G 'Visual Studio 17 2022' -A x64 -DQUADVIEW_REQUIRE_DUOVIEW_TESTS=ON *> evidence/quad-configure.log
+          cmake -S workspace/quadview -B quad_tests -G 'Visual Studio 17 2022' -A x64 -DQUADVIEW_REQUIRE_DUOVIEW_TESTS=ON "-DQUADVIEW_IMGUI_DIR=$((Resolve-Path backend/dependencies/submodules/imgui).Path)" *> evidence/quad-configure.log
           $code=$LASTEXITCODE; Get-Content evidence/quad-configure.log | Select-Object -Last 40
           if ($code -ne 0) { throw 'QuadView tests configuration failed' }
           cmake --build quad_tests --config Release --parallel 2 *> evidence/quad-build.log
@@ -223,7 +229,7 @@ jobs:
           Copy-Item evidence/duoview-stage1-edits.json package/
           Copy-Item evidence/duoview-stage1-source-hashes.json package/
           Copy-Item evidence/duoview-stage234-hashes.json package/
-          Copy-Item workspace/quadview/READ_FIRST.txt package/READ_FIRST.txt
+          Copy-Item workspace/quadview/B9_STABILITY_NOTES.md package/B9_STABILITY_NOTES.md
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
@@ -238,42 +244,39 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B7-depth'; diagnosticOnly=$false; baseline='Build47; authenticated engine-only recovery; accepted geometry lineage Build40'; baselineSource='7486fc59890b14673cd50770b0dafeb692576716'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B9-stability'; diagnosticOnly=$false; depthCaptureSupported=$false; baseline='Exact tested B8; Build51 lifetime and presentation'; baselineSource='275d6134adf2fbb7a6a80443718d876592a8fc75'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          Tri-view B7 (B6 + periphery depth reprojection) - Quad Views Stereo ID7 - test candidate, NOT headset-verified
-          New in B7: the shared periphery is shifted per eye using the DLSS depth of the periphery render, so it
-          lines up with each eye's fovea. ID7 controls: "Periphery depth reprojection" (ON), "Periphery depth
-          strength" (1; try -1 if near objects get WORSE at the seam), "Show periphery depth" (debug).
-          The menu line "Periphery depth" shows hooks, DLSS calls, periphery copies and how often depth was used.
-          For STALKER 2 2.10 on a clean install. Start a fresh game and inject this package.
-          New in B6 (everything from B5 stays):
-          - The three source textures are sized to what is actually drawn (the unused fourth one shrinks
-            to periphery size). Toggle "Compact source textures" in the ID7 controls; OFF = exact B5 textures.
-          - ID7 menu shows "Video memory (whole game process)" and the source texture sizes; the log
-            writes a [QuadViews][VRAM] line every 10 s.
-          B5 features: FOV fix in ID7 (auto MPC override, "Reapply FOV (DuoView/Tri-view)" button, auto
-          reapply after loading), Head XYZ scaling + keys, Reapply FOV / Reinitialize Runtime keys,
-          per-eye sharpening 0-10 + 0.05-0.40 max change, ID7 settings saved.
-          Send the complete UEVR log if anything goes wrong.
+          Tri-view B9 stability - Quad Views Stereo ID7 - test candidate, NOT headset-verified
+          New: independent LocalPlayer bootstrap before ID7 projection; family layout validation before
+          ID7 constructor reads; fixed-height status/diagnostics; generation-scoped output status.
+          Depth reprojection is unavailable in B9 pending exact frame identity and GPU fence validation.
+          Old saved ON values cannot enable the unsafe capture. Show depth diagnostic intentionally
+          displays a full-eye magenta/black checker when no validated depth is available. Turn it OFF
+          to return to the game. This build does not claim to fix near-object mono/stereo seams.
+          Compact textures, true native stereo foveas, FOV controls and independent eye sharpening stay.
+          Test from a fresh game and injection; select ID7 first, without Native Stereo Fix workaround.
+          1. Does ID7 start and track correctly? Switch Native -> ID7 -> Native -> ID7 once.
+          2. Do controls stay stationary while status changes? Does Show depth diagnostic show checker?
+          Return the complete UEVR log if startup fails. No performance gain is claimed by this build.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B7-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B9-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B7-Depth-${{ github.run_number }}
+          name: UEVR-TriView-B9-Stability-${{ github.run_number }}
           path: |
-            UEVR-TriView-B7-*.zip
-            UEVR-TriView-B7-*.zip.sha256
+            UEVR-TriView-B9-*.zip
+            UEVR-TriView-B9-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4

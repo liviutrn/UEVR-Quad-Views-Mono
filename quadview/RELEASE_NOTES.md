@@ -1,3 +1,7 @@
+# B9: startup and menu stability
+
+Independent family/LocalPlayer initialization, fixed-height diagnostics, generation-scoped fresh-submit status, and an explicit missing-depth checker. Unvalidated B7 NGX capture is blocked even for saved ON settings; depth reprojection and seam correction remain unfinished. See `B9_STABILITY_NOTES.md` for verification limits and the two-step headset check.
+
 # Build50 - hook trace diagnostic
 
 Build49 failed actual headset testing. Build50 adds bounded observation only;

@@ -21,7 +21,7 @@ cbuffer QuadViewConstants : register(b0) {
     uint4 ContextSource;     // x left eye, y right eye (tri-view: both 0)
     float4 DepthShift;       // B7: context-uv shift per unit reversed-Z depth (left u, v, right u, v)
     uint4 DepthRect;         // B7: depth texel rectangle of the periphery render (x, y, w, h)
-    uint4 DepthOptions;      // B7: x 1 = reproject, y 1 = show depth
+    uint4 DepthOptions;      // B9: x = reproject, y = show requested, z = validated depth bound
 };
 
 struct VertexOut {
@@ -185,6 +185,16 @@ float4 CompositePixel(VertexOut input) {
     const uint4 contextRect = eye == 0 ? ContextLeft : ContextRight;
     const uint contextSource = eye == 0 ? ContextSource.x : ContextSource.y;
     const float2 contextUv = ContextUv(eye, eyeUv);
+    // Whole-eye diagnostic precedes focus blending and all other debug modes.
+    // No depth Load occurs when the SRV is missing or rejected.
+    [branch] if (DepthOptions.y != 0u) {
+        if (DepthOptions.z == 0u) {
+            const uint checker = ((uint(input.position.x) / 8u) + (uint(input.position.y) / 8u)) & 1u;
+            return checker != 0u ? float4(1, 0, 1, 1) : float4(0, 0, 0, 1);
+        }
+        const float v = pow(PeripheryDepthAt(contextUv), 0.25);
+        return float4(v, v, v, 1);
+    }
     const uint4 focusRect = eye == 0 ? FocusLeft : FocusRight;
     const float4 crop = eye == 0 ? CropUvLeft : CropUvRight;
     const uint debugMode = (uint)Options.y;
