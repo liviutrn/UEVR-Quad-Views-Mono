@@ -14,7 +14,8 @@ cbuffer QuadViewConstants : register(b0) {
     float4 CropUvLeft;
     float4 CropUvRight;
     float4 Options;
-    float4 Sharpen; // strength, flags, maximum filter-space change, FXAA bias
+    float4 Sharpen; // legacy strength, flags, legacy max change, FXAA bias
+    float4 SharpenEye; // left strength, right strength, left max change, right max change
     float4 ContextHLeft[3];  // tri-view: h = H * (uv, 1), context uv = h.xy / h.z (identity for four views)
     float4 ContextHRight[3];
     uint4 ContextSource;     // x left eye, y right eye (tri-view: both 0)
@@ -124,7 +125,8 @@ float3 ReadFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float
     return GlamDecode(ReadSource(sourceIndex, AtlasUv(sourceIndex, rect, local)).rgb);
 }
 
-float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float3 center) {
+float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float3 center,
+                        float strength, float maxChange) {
     // Fused v186.1 Glamarye Bigger-radius four-diagonal filter with its
     // FXAA-style edge guard and maximum-change limiter. No separate pass.
     const float3 c = GlamDecode(center);
@@ -158,8 +160,8 @@ float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv
     const float diff = dot(GlamLuma, diffRGB);
     float3 possible = min(smoothed, c * 0.5);
     possible = min(possible, 1.0 - max(smoothed, c));
-    possible = clamp(possible, 0.00001, Sharpen.z);
-    float3 change = diff / (1.0 / max(Sharpen.x, 0.00001) + abs(diff) / possible);
+    possible = clamp(possible, 0.00001, maxChange);
+    float3 change = diff / (1.0 / max(strength, 0.00001) + abs(diff) / possible);
     change *= (1.0 - edgeRatio);
     return GlamEncode(c + change);
 }
@@ -206,8 +208,10 @@ float4 CompositePixel(VertexOut input) {
 
     const float2 focusUv = (eyeUv - crop.xy) / (crop.zw - crop.xy);
     float4 focus = ReadSource(2u + eye, AtlasUv(2u + eye, focusRect, focusUv));
-    [branch] if (Sharpen.x > 0.0)
-        focus.rgb = GlamSharpenFocus(2u + eye, focusRect, crop, eyeUv, focus.rgb);
+    const float eyeStrength = eye == 0u ? SharpenEye.x : SharpenEye.y;
+    const float eyeMaxChange = eye == 0u ? SharpenEye.z : SharpenEye.w;
+    [branch] if (eyeStrength > 0.0)
+        focus.rgb = GlamSharpenFocus(2u + eye, focusRect, crop, eyeUv, focus.rgb, eyeStrength, eyeMaxChange);
     float4 output = focus;
     [branch] if (debugMode != 2 && weight < 1.0) {
         const float4 context = ReadContext(eye, contextSource, contextRect, contextUv);
