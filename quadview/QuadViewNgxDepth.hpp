@@ -297,7 +297,7 @@ private:
         s.execute_.unsafe_call<void>(queue, count, lists);
         s.submitted(queue, count, lists);
     }
-    static void install_group(Hooks& hooks, std::array<bool, 4>& installed, std::array<const char*, 2> exports,
+    static void install_group(Hooks& hooks, std::array<bool, 6>& installed, std::array<const char*, 2> exports,
                               std::array<void*, 6> callbacks) {
         static const wchar_t* dlls[]{L"nvngx_dlss.dll", L"_nvngx.dll", L"nvngx.dll"};
         for (unsigned dll = 0; dll != 3; ++dll) {
