@@ -1,6 +1,6 @@
-name: Tri-view B1 (Build51 base, 3 renders) Windows DLL
+name: Tri-view B1 (Build51 base, 3 renders) Windows DLL [B5 parity]
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: Tri-view B1 compiled Windows DLL (${{ github.run_number }})
+run-name: Tri-view B5 parity compiled Windows DLL (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**']
@@ -86,6 +86,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 source anchors did not match original Joey' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
+      - name: Apply DuoView v208d FOV fix, XYZ head scaling and hotkeys (Tri-view B5 port)
+        shell: pwsh
+        run: |
+          # Byte-identical copies of the DuoView v208d scripts, applied at the same
+          # point as in duoview-joey-stage234.yml (right after Stage 2-4).
+          foreach ($s in @('apply_foreground_mpc_minimal','apply_xyz_head_scaling','apply_manual_fov_global_lookup_v165','apply_v205_manual_fov_runtime_hotkeys','apply_v207_auto_fov_after_load')) {
+            python workspace/quadview/duoview_port/$s.py backend
+            if ($LASTEXITCODE -ne 0) { throw "DuoView port script $s failed its anchors" }
+          }
+          python workspace/quadview/duoview_port/test_xyz_head_scaling.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling contract failed' }
       - name: Apply isolated stereo QuadView backend overlay
         shell: pwsh
         run: |
@@ -111,6 +122,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Engine-owned native target lifetime patch failed' }
           python workspace/quadview/apply_quadview_triview.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Tri-view overlay failed its exact anchors' }
+          python workspace/quadview/apply_triview_parity.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Tri-view B5 parity patch failed its exact anchors' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -224,15 +237,16 @@ jobs:
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          Tri-view B1 (Build51 base) - Quad Views Stereo ID7 - test candidate
-          Start a fresh game process and inject this complete package.
-          Enable Quad Views Stereo (ID7). Keep the same settings as the Build50 test initially.
-          This build changes all four source texture owners and unblocks D3D12 presentation setup.
-          Working DuoView source is preserved. This is not headset-verified or production-ready.
-          Test output first, then 60 seconds of head and eye movement. Check seams, stereo, brightness and FOV.
-          If output works, test one ID7 -> ID0 -> ID7 transition and a loading screen.
-          Send the complete new UEVR log and any crash bundle, including QUADVIEW_BUILD.json and BUILD51_BINARY_IDENTITY.json.
-          Exact backend symbols are retained with the matching CI run.
+          Tri-view B5 (B1-4 + DuoView v208d parity) - Quad Views Stereo ID7 - test candidate, NOT headset-verified
+          For STALKER 2 2.10 on a clean install (B1-4 already works there). Start a fresh game and inject this package.
+          New in B5:
+          - DuoView FOV fix now also in ID7: automatic MPC override, button "Reapply FOV (DuoView/Tri-view)"
+            next to Reinitialize Runtime, automatic reapply after loading a save or level.
+          - Head XYZ scaling (Settings next to World Scale) + its keys (Keybinds > Head Movement XYZ Keys).
+          - Keybinds > Overlay/Runtime Keys: "Reapply FOV Key" and "Reinitialize Runtime Key" (both Unbound by default).
+          - Tri-view sharpening 0-5 and "Sharpening max change per pixel" (default 0.10 = old look).
+          - ID7 menu settings are now saved in the UEVR config (before they reset at every start).
+          Send the complete UEVR log if anything goes wrong.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
@@ -245,7 +259,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B1-Compiled-${{ github.run_number }}
+          name: UEVR-TriView-B5-Parity-${{ github.run_number }}
           path: |
             UEVR-TriView-B1-*.zip
             UEVR-TriView-B1-*.zip.sha256
