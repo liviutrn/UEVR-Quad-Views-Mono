@@ -256,7 +256,7 @@ jobs:
             writes a [QuadViews][VRAM] line every 10 s.
           B5 features: FOV fix in ID7 (auto MPC override, "Reapply FOV (DuoView/Tri-view)" button, auto
           reapply after loading), Head XYZ scaling + keys, Reapply FOV / Reinitialize Runtime keys,
-          per-eye sharpening 0-10 + 0.05-0.30 max change, ID7 settings saved.
+          per-eye sharpening 0-10 + 0.05-0.40 max change, ID7 settings saved.
           Send the complete UEVR log if anything goes wrong.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
