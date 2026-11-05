@@ -369,8 +369,8 @@ int main(int argc, char** argv) try {
         constants.sharpen[0] = 0.f; // Exact pixel assertions isolate crop/source selection.
         constants.sharpen_eye[0] = pass == 16 ? 7.f : 0.f;
         constants.sharpen_eye[1] = pass == 15 ? 5.f : 0.f;
-        constants.sharpen_eye[2] = .30f;
-        constants.sharpen_eye[3] = .30f;
+        constants.sharpen_eye[2] = .40f;
+        constants.sharpen_eye[3] = .40f;
         require(constant_buffer->Map(0, &no_read, &mapped), "Map constants");
         std::memcpy(mapped, &constants, sizeof(constants));
         constant_buffer->Unmap(0, nullptr);
