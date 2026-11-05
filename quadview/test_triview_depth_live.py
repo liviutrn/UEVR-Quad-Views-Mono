@@ -31,13 +31,8 @@ class DepthLiveTests(unittest.TestCase):
     def test_game_submission_not_serialised_behind_lock(self):
         body=self.n.split('static void __stdcall execute_commands(',1)[1].split('static void install_group(',1)[0]
         self.assertLess(body.index('unsafe_call'),body.index('scoped_lock'))
-    def test_id7_cold_start_runs_native_fix_bootstrap_until_settled(self):
-        h=(root/'src/mods/vr/FFakeStereoRenderingHook.cpp').read_text()
-        body=h.split('bool stalker2_uses_lazy_synced_viewstates() {',1)[1].split('\n}\n',1)[0]
-        self.assertIn('vr->is_native_stereo_fix_enabled() || qv_cold_bootstrap',body)
-        self.assertIn('!g_hook->is_localplayer_bootstrap_settled()',body)
-        self.assertIn('is_localplayer_bootstrap_settled() const { return m_fixed_localplayer_view_count; }',
-                      (root/'src/mods/vr/FFakeStereoRenderingHook.hpp').read_text())
+    def test_startup_state_logged(self):
+        self.assertIn('[TriView][Startup] selected',self.c)
     def test_replay_rejects_duplicate_application(self):
         with self.assertRaises(RuntimeError): overlay.consumer(self.c)
 

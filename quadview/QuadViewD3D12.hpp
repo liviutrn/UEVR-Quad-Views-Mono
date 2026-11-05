@@ -73,7 +73,8 @@ inline DXGI_FORMAT snapshot_file_format(DXGI_FORMAT f) {
 
 inline bool write_snapshot_dds(const std::filesystem::path& file, const SnapshotItem& item) {
     void* data{};
-    const D3D12_RANGE range{0, SIZE_T(item.footprint.Offset + UINT64(item.footprint.Footprint.RowPitch) * item.rows)};
+    const UINT64 wanted = item.footprint.Offset + UINT64(item.footprint.Footprint.RowPitch) * (item.rows ? item.rows - 1 : 0) + item.row_bytes;
+    const D3D12_RANGE range{0, SIZE_T((std::min)(wanted, item.buffer->GetDesc().Width))};
     if (FAILED(item.buffer->Map(0, &range, &data)) || !data) return false;
     std::ofstream out(file, std::ios::binary);
     uint32_t header[32]{};

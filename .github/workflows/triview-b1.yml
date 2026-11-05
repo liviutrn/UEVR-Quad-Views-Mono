@@ -136,8 +136,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B9 independent startup overlay failed its exact anchors' }
           python workspace/quadview/test_triview_bootstrap.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B9 bootstrap control-flow regression failed' }
-          python workspace/quadview/apply_triview_coldstart.py backend
-          if ($LASTEXITCODE -ne 0) { throw 'B11 ID7 cold-start bootstrap overlay failed' }
           python workspace/quadview/apply_triview_depth_geometry.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B10 exact camera geometry overlay failed' }
           python workspace/quadview/apply_triview_depth_live.py backend workspace/quadview

@@ -79,6 +79,7 @@ struct DepthSnapshot {
     uint32_t out_w{}, out_h{}, rect[4]{};
     DXGI_FORMAT srv_format{DXGI_FORMAT_R32_FLOAT}; // R32_FLOAT or R32_FLOAT_X8X24_TYPELESS (plane 0)
     bool pending{}, submitted{};
+    bool foreign_queue{}; // submitted on a queue other than the compositor's: wait for its fence
 };
 
 class PeripheryDepth final {
@@ -136,6 +137,7 @@ public:
             if (slot->submitted && depth_copy_complete(completed, slot->producer_fence_value))
                 slot->source_reference.Reset();
             if (slot->submitted && slot->valid_evaluation && slot->texture && matches_periphery(slot->out_w, slot->out_h, w, h) &&
+                (!slot->foreign_queue || depth_copy_complete(completed, slot->producer_fence_value)) &&
                 now - slot->submitted_at < std::chrono::milliseconds(250) && (!best || slot->sequence > best->sequence)) best = slot;
         }
         if (best) { ++used_; last_used_age_us_.store(uint32_t(std::chrono::duration_cast<std::chrono::microseconds>(now - best->submitted_at).count()), std::memory_order_relaxed); }
@@ -166,7 +168,7 @@ public:
 
 private:
     using Hooks = std::array<safetyhook::InlineHook, 6>; // 3 DLLs x 2 exports
-    static constexpr size_t MaxSlots = 8;
+    static constexpr size_t MaxSlots = 12;
     mutable std::mutex mutex_;
     ComPtr<ID3D12CommandQueue> queue_;
     ComPtr<ID3D12Device> device_;
@@ -178,6 +180,7 @@ private:
     uint64_t next_fence_value_{};
     std::unordered_map<uintptr_t, uint32_t> feature_kind_{};
     std::vector<std::shared_ptr<DepthSnapshot>> pool_{};
+    std::vector<ComPtr<ID3D12Resource>> graveyard_{};
     uint64_t next_sequence_{};
     std::atomic<bool> enabled_{false};
     std::atomic<uint32_t> want_w_{}, want_h_{}, last_out_w_{}, last_out_h_{}, last_in_w_{}, last_in_h_{}, last_format_{};
@@ -251,10 +254,18 @@ private:
         const auto completed=fence_->GetCompletedValue();
         std::shared_ptr<DepthSnapshot> slot;
         for (auto& candidate : pool_) {
-            const bool abandoned = candidate->pending && candidate.use_count()==1 && now - candidate->recorded > AbandonAfter;
+            const bool abandoned = candidate->pending && candidate.use_count()==1 && now - candidate->recorded > AbandonAfter &&
+                                   graveyard_.size() < 16;
             if (!abandoned && !depth_slot_reusable(candidate->pending,candidate->submitted,completed,
                     candidate->producer_fence_value,candidate.use_count())) continue;
             if (!slot || candidate->sequence<slot->sequence) slot=candidate;
+        }
+        if (slot && slot->pending) {
+            // Abandoned recording: its list might still be submitted late, so its
+            // textures are never freed or rewritten (bounded by 16 entries).
+            graveyard_.push_back(std::move(slot->texture));
+            graveyard_.push_back(std::move(slot->source_reference));
+            slot->pending = false; slot->producer_list = nullptr;
         }
         if (!slot) {
             if (pool_.size() >= MaxSlots) { reject(PoolFull); return {}; }
@@ -328,13 +339,14 @@ private:
         // (e.g. Streamline), so the pointer can differ from the swapchain queue
         // UEVR knows; any DIRECT queue of this device is that same queue.
         if (queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT) { reject(OtherDevice); return; }
-        if (queue != queue_.Get()) ++foreign_queue_submits_;
+        const bool foreign = queue != queue_.Get();
+        if (foreign) ++foreign_queue_submits_;
         const auto value = ++next_fence_value_;
         // Signal failure keeps the slot pending: reused only after AbandonAfter.
         if (FAILED(queue->Signal(fence_.Get(), value))) { ++skips_; return; }
         const auto now = std::chrono::steady_clock::now();
         for (auto& slot : pool_) if (matches(*slot)) {
-            slot->pending = false; slot->submitted = true; slot->producer_fence_value = value;
+            slot->pending = false; slot->submitted = true; slot->producer_fence_value = value; slot->foreign_queue = foreign;
             slot->submitted_at = now; ++submits_;
         }
     }
