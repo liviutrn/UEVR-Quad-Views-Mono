@@ -2,6 +2,7 @@ Texture2D<float4> ContextLeftSource : register(t0);
 Texture2D<float4> ContextRightSource : register(t1);
 Texture2D<float4> FocusLeftSource : register(t2);
 Texture2D<float4> FocusRightSource : register(t3);
+Texture2D<float> PeripheryDepth : register(t4); // B7: DLSS depth input of the periphery render (reversed-Z)
 SamplerState LinearClamp : register(s0);
 
 cbuffer QuadViewConstants : register(b0) {
@@ -17,6 +18,9 @@ cbuffer QuadViewConstants : register(b0) {
     float4 ContextHLeft[3];  // tri-view: h = H * (uv, 1), context uv = h.xy / h.z (identity for four views)
     float4 ContextHRight[3];
     uint4 ContextSource;     // x left eye, y right eye (tri-view: both 0)
+    float4 DepthShift;       // B7: context-uv shift per unit reversed-Z depth (left u, v, right u, v)
+    uint4 DepthRect;         // B7: depth texel rectangle of the periphery render (x, y, w, h)
+    uint4 DepthOptions;      // B7: x 1 = reproject, y 1 = show depth
 };
 
 struct VertexOut {
@@ -56,6 +60,23 @@ float2 ContextUv(uint eye, float2 eyeUv) {
     [flatten] if (eye == 0) h = float3(dot(ContextHLeft[0].xyz, p), dot(ContextHLeft[1].xyz, p), dot(ContextHLeft[2].xyz, p));
     else h = float3(dot(ContextHRight[0].xyz, p), dot(ContextHRight[1].xyz, p), dot(ContextHRight[2].xyz, p));
     return h.xy / max(h.z, 1.0e-4);
+}
+
+// B7: symmetric half-IPD reprojection of the shared centre periphery. An eye
+// at offset t sees context direction tan_inf + t / Z; with reversed-Z d = near / Z
+// that is a context-uv shift of K * d. Backward warp by fixed-point iteration.
+float PeripheryDepthAt(float2 uv) {
+    const float2 p = float2(DepthRect.xy) + saturate(uv) * float2(DepthRect.zw);
+    const uint2 last = DepthRect.xy + max(DepthRect.zw, 1u) - 1u;
+    return saturate(PeripheryDepth.Load(int3(min(uint2(p), last), 0)));
+}
+
+float2 WarpContextUv(uint eye, float2 contextUv) {
+    [branch] if (DepthOptions.x == 0u) return contextUv;
+    const float2 k = eye == 0 ? DepthShift.xy : DepthShift.zw;
+    float2 uv = contextUv;
+    [unroll] for (uint i = 0; i < 3; ++i) uv = contextUv + k * PeripheryDepthAt(uv);
+    return uv;
 }
 
 // Explicit SM5 resource selection keeps each source independent, including sharpening taps.
@@ -142,6 +163,15 @@ float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv
     return GlamEncode(c + change);
 }
 
+float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 contextUv) {
+    const float2 uv = WarpContextUv(eye, contextUv);
+    [branch] if (DepthOptions.y != 0u) {
+        const float v = pow(PeripheryDepthAt(uv), 0.25);
+        return float4(v, v, v, 1.0);
+    }
+    return ReadSource(contextSource, AtlasUv(contextSource, contextRect, uv));
+}
+
 float4 CompositePixel(VertexOut input) {
     const uint eye = min((uint)input.position.x / EyeAndAtlas.x, 1u);
     const float2 eyeUv = float2(input.position.x - eye * EyeAndAtlas.x,
@@ -164,10 +194,10 @@ float4 CompositePixel(VertexOut input) {
     // 50% crop this skips a texture fetch for most focused pixels, including
     // pixels using the fused Glamarye filter. Keep diagnostics exact.
     if (debugMode == 1)
-        return ReadSource(contextSource, AtlasUv(contextSource, contextRect, contextUv));
+        return ReadContext(eye, contextSource, contextRect, contextUv);
     if (weight <= 0.0) {
         if (debugMode == 2) return float4(0.04, 0.04, 0.04, 1.0);
-        return ReadSource(contextSource, AtlasUv(contextSource, contextRect, contextUv));
+        return ReadContext(eye, contextSource, contextRect, contextUv);
     }
 
     const float2 focusUv = (eyeUv - crop.xy) / (crop.zw - crop.xy);
@@ -176,7 +206,7 @@ float4 CompositePixel(VertexOut input) {
         focus.rgb = GlamSharpenFocus(2u + eye, focusRect, crop, eyeUv, focus.rgb);
     float4 output = focus;
     [branch] if (debugMode != 2 && weight < 1.0) {
-        const float4 context = ReadSource(contextSource, AtlasUv(contextSource, contextRect, contextUv));
+        const float4 context = ReadContext(eye, contextSource, contextRect, contextUv);
         output = lerp(context, focus, weight);
     }
     if (Options.w > 0.5) {

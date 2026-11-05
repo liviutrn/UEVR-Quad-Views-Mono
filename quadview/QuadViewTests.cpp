@@ -6,6 +6,7 @@
 #include "QuadViewProducer.hpp"
 #include "QuadViewViewDemand.hpp"
 #include "QuadViewNativeTargets.hpp"
+#include "QuadViewNgxSelect.hpp"
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -102,6 +103,19 @@ int main() {
         assert(same && same->views[0].width==same->views[2].width);
         assert(uevr::quadview::apply_native_local(*same));
         for (size_t i=0;i!=4;++i) for (size_t j=0;j!=i;++j) assert(!(same->views[i]==same->views[j]));
+    }
+    {   // Tri-view B7: periphery depth selection and shift
+        using uevr::quadview::ngx::matches_periphery;
+        assert(matches_periphery(812,646,812,646) && matches_periphery(760,600,812,646));
+        assert(!matches_periphery(2030,1614,812,646) && !matches_periphery(0,646,812,646) && !matches_periphery(812,646,0,0));
+        auto tri=uevr::quadview::make_layout(4060,3228,.5f,.5f,.2f,1.f,.5f,.5f);
+        assert(tri);
+        assert(uevr::quadview::periphery_depth_shift(*tri,10.0,3.6,1.0)==(std::array<float,4>{}));
+        tri->shared_context=true; tri->context_projection={0.5,0.0,0.6,0.0};
+        const auto k=uevr::quadview::periphery_depth_shift(*tri,10.0,3.6,1.0);
+        assert(k[0]<0.f && k[2]>0.f && k[0]==-k[2] && k[1]==0.f && std::abs(k[2]-0.09f)<1e-5f);
+        assert(uevr::quadview::periphery_depth_shift(*tri,0.0,3.6,1.0)==(std::array<float,4>{}));
+        assert(uevr::quadview::periphery_depth_shift(*tri,10.0,3.6,-1.0)[0]>0.f);
     }
 
     using namespace uevr::quadview;

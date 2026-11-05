@@ -79,8 +79,11 @@ struct alignas(16) Constants {
     float context_h[2][12]{{1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f},
                            {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f}};
     uint32_t context_source[4]{0, 1, 0, 0};
+    float depth_shift[4]{};
+    uint32_t depth_rect[4]{};
+    uint32_t depth_options[4]{};
 };
-static_assert(sizeof(Constants) == 256);
+static_assert(sizeof(Constants) == 304);
 
 using Color = std::array<uint8_t, 4>;
 static Color source_color(unsigned view, unsigned x, unsigned y) {
@@ -135,7 +138,7 @@ int main(int argc, char** argv) try {
     device->GetCopyableFootprints(&atlas_description, 0, 1, 0, &footprint, nullptr, nullptr, &byte_count);
     auto upload = resource(device.Get(), buffer(byte_count), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
     auto readback = resource(device.Get(), buffer(byte_count), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
-    auto constant_buffer = resource(device.Get(), buffer(256), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+    auto constant_buffer = resource(device.Get(), buffer(512), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
     void* mapped{};
     D3D12_RANGE no_read{0, 0};
     require(upload->Map(0, &no_read, &mapped), "Map upload");
@@ -228,7 +231,7 @@ int main(int argc, char** argv) try {
 
     D3D12_DESCRIPTOR_HEAP_DESC heap_description{};
     heap_description.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heap_description.NumDescriptors = 4;
+    heap_description.NumDescriptors = 5;
     heap_description.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> srv_heap;
     require(device->CreateDescriptorHeap(&heap_description, IID_PPV_ARGS(&srv_heap)), "Create SRV heap");
@@ -243,6 +246,11 @@ int main(int argc, char** argv) try {
         device->CreateShaderResourceView(atlas.Get(), &srv, source_descriptor);
         source_descriptor.ptr += source_stride;
     }
+    {   // B7: null periphery-depth SRV (t4); depth options stay 0 in these passes.
+        auto depth_srv = srv;
+        depth_srv.Format = DXGI_FORMAT_R32_FLOAT;
+        device->CreateShaderResourceView(nullptr, &depth_srv, source_descriptor);
+    }
     heap_description.NumDescriptors = 1;
     heap_description.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     heap_description.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
@@ -256,7 +264,7 @@ int main(int argc, char** argv) try {
 
     D3D12_DESCRIPTOR_RANGE range{};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    range.NumDescriptors = 4;
+    range.NumDescriptors = 5;
     D3D12_ROOT_PARAMETER parameters[2]{};
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;

@@ -25,8 +25,21 @@ struct alignas(16) ShaderConstants {
     float context_h[2][12]{{1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f},
                            {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f}};
     uint32_t context_source[4]{0, 1, 0, 0};
+    float depth_shift[4]{};     // B7
+    uint32_t depth_rect[4]{};   // B7
+    uint32_t depth_options[4]{}; // B7
 };
-static_assert(sizeof(ShaderConstants) == 256); // fills the 256-byte constant buffer
+static_assert(sizeof(ShaderConstants) == 304); // B7: 512-byte constant buffer
+
+// B7: optional periphery depth for reprojection. texture is R32_TYPELESS and
+// stays in D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE between uses.
+struct DepthInput {
+    ID3D12Resource* texture{};
+    uint32_t rect[4]{};
+    float shift[4]{};
+    bool reproject{}, show{};
+    std::shared_ptr<const void> keepalive{};
+};
 
 // Each instance belongs to one fence-retired OpenXR command slot. Descriptor
 // and upload storage cannot be reused until the owning slot's fence retires.
@@ -78,7 +91,7 @@ public:
 
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 4;
+        range.NumDescriptors = 5; // 4 sources + B7 periphery depth
         D3D12_ROOT_PARAMETER parameters[2]{};
         parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -132,7 +145,7 @@ public:
             return fail("Could not create QuadView raster pipeline");
 
         D3D12_DESCRIPTOR_HEAP_DESC heap{};
-        heap.NumDescriptors = 4;
+        heap.NumDescriptors = 5;
         heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&srv_heap_)))) return fail("Could not create QuadView SRV heap");
@@ -145,7 +158,7 @@ public:
         upload.CreationNodeMask = upload.VisibleNodeMask = 1;
         D3D12_RESOURCE_DESC buffer{};
         buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        buffer.Width = 256;
+        buffer.Width = 512;
         buffer.Height = buffer.DepthOrArraySize = buffer.MipLevels = 1;
         buffer.SampleDesc.Count = 1;
         buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -168,6 +181,7 @@ public:
         // and resource reference in this slot has completed.
         read_timing();
         owner_.reset();
+        depth_keepalive_.reset();
         for (auto& source : sources_) source.Reset();
         destination_.Reset();
         recorded_ = false;
@@ -188,7 +202,8 @@ public:
                 const std::array<ID3D12Resource*, 4>& sources, ID3D12Resource* destination,
                 const Layout& layout, const Settings& settings,
                 D3D12_RESOURCE_STATES source_state, D3D12_RESOURCE_STATES destination_state,
-                std::shared_ptr<const void> owner, UINT64 timestamp_frequency = 0) {
+                std::shared_ptr<const void> owner, UINT64 timestamp_frequency = 0,
+                const DepthInput* depth = nullptr) {
         recorded_ = false;
         if (!prepared() || !commands || !destination || !sources[0] || !sources[1] || !sources[2] || !sources[3] || !owner)
             return fail("Unprepared compositor or invalid source/destination ownership");
@@ -244,6 +259,20 @@ public:
         constants.sharpen[1] = 1.f + 2.f + (encoded_unorm ? 4.f : 0.f);
         constants.sharpen[2] = .10f;
         constants.sharpen[3] = .02f;
+        bool depth_bound = false;
+        if (depth && depth->texture && layout.shared_context && (depth->reproject || depth->show)) {
+            const auto d = depth->texture->GetDesc();
+            const bool finite = std::isfinite(depth->shift[0]) && std::isfinite(depth->shift[1]) &&
+                std::isfinite(depth->shift[2]) && std::isfinite(depth->shift[3]);
+            if (d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && d.Format == DXGI_FORMAT_R32_TYPELESS &&
+                depth->rect[2] && depth->rect[3] && finite &&
+                uint64_t(depth->rect[0]) + depth->rect[2] <= d.Width && uint64_t(depth->rect[1]) + depth->rect[3] <= d.Height) {
+                for (unsigned i = 0; i != 4; ++i) { constants.depth_shift[i] = depth->shift[i]; constants.depth_rect[i] = depth->rect[i]; }
+                constants.depth_options[0] = depth->reproject ? 1u : 0u;
+                constants.depth_options[1] = depth->show ? 1u : 0u;
+                depth_bound = true;
+            }
+        }
         std::memcpy(mapped_, &constants, sizeof(constants));
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format = source_format_;
@@ -260,6 +289,10 @@ public:
             device_->CreateShaderResourceView(source, &srv, descriptor);
             descriptor.ptr += stride;
         }
+        D3D12_SHADER_RESOURCE_VIEW_DESC depth_srv = srv;
+        depth_srv.Format = DXGI_FORMAT_R32_FLOAT;
+        device_->CreateShaderResourceView(depth_bound ? depth->texture : nullptr, &depth_srv, descriptor);
+        depth_keepalive_ = depth_bound ? depth->keepalive : nullptr;
         D3D12_RENDER_TARGET_VIEW_DESC rtv_description{};
         rtv_description.Format = output_format_;
         rtv_description.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
@@ -397,6 +430,7 @@ private:
     std::array<ComPtr<ID3D12Resource>, 4> sources_;
     ComPtr<ID3D12QueryHeap> queries_;
     void* mapped_{};
+    std::shared_ptr<const void> depth_keepalive_{};
     std::shared_ptr<const void> owner_;
     DXGI_FORMAT source_format_{DXGI_FORMAT_UNKNOWN}, output_format_{DXGI_FORMAT_UNKNOWN};
     const char* error_{"Compositor not prewarmed"};

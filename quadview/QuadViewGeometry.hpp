@@ -42,6 +42,8 @@ struct Layout {
     // target and `views` hold target-local rectangles (see apply_native_local).
     // false = the original shared 2W x H atlas rectangles.
     bool native_local{};
+    // Tri-view B7: periphery depth reprojection shift per eye (see periphery_depth_shift).
+    std::array<float, 4> depth_shift{};
     // Per eye: 3x3 homography (rows padded to 4) from eye uv to context uv:
     // h = H * (u, v, 1), context uv = h.xy / h.z. Identity for four views.
     std::array<std::array<float, 12>, 2> context_h{{{1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f},
@@ -208,6 +210,22 @@ inline std::optional<Layout> make_layout(
         result.views[eye + 2] = {base_x + context_width, 0, focus_width, focus_height};
     }
     return result;
+}
+
+// Tri-view B7: context-uv shift per unit of reversed-Z device depth for each
+// eye seeing the shared centre periphery (layout.context_projection = m00, m20,
+// m11, m21). An eye at lateral offset t (same units as near) sees context
+// direction tan_inf + t / Z; Z = near / d gives du = 0.5 * m00 * t * d / near.
+// Returns {left u, left v, right u, right v}; zero when inputs are invalid.
+inline std::array<float, 4> periphery_depth_shift(const Layout& layout, double near_units,
+                                                  double half_ipd_units, double strength) {
+    const double m00 = layout.context_projection[0];
+    if (!layout.shared_context || !std::isfinite(near_units) || !std::isfinite(half_ipd_units) ||
+        !std::isfinite(strength) || !std::isfinite(m00) || near_units <= 0.0 || half_ipd_units < 0.0 || m00 <= 0.0)
+        return {};
+    const double k = 0.5 * m00 * half_ipd_units / near_units * strength;
+    if (!std::isfinite(k) || std::abs(k) > 4.0) return {};
+    return {static_cast<float>(-k), 0.f, static_cast<float>(k), 0.f};
 }
 
 // Tri-view B6 compact sources. Width/height of each role's native target.
