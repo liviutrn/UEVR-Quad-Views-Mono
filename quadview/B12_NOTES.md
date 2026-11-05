@@ -27,6 +27,15 @@ Status: CI only until the headset test. NOT headset-verified.
 4. Gaze menu identical to DuoView v218 (labels, help texts, guard only with Stable crop, defaults button);
    PSVR2 reader retry backoff 0.5 s -> 30 s as in DuoView v207. Gaze algorithms were already shared code.
 
+5. apply_triview_vram.py: no OpenXR depth swapchain while TriView is active/requested/warming up (ID7 never
+   submits depth): -240 MiB at 2568x2040 per eye, -768 MiB at 4096x4096. VRAM inventory: everything else UEVR/mod
+   allocates in ID7 is small (colour swapchain 120 MiB is required; compact sources ~15 MiB; depth copies tiny).
+
+## BSOD review (6 Nov, source-only)
+No proven cause. No GPU-side waits/cross-queue fences in ID7, shader loop bounded, compositor slots fence-gated.
+Risks: VRAM near budget (ID7 + QuadViews Build 51 both reported BSOD, Build 51 had no NGX code); the NGX depth
+copy assumes NON_PIXEL_SHADER_RESOURCE at Evaluate (driver-level risk if wrong). Need the Windows stop code.
+
 ## Not done / open
 - Crash root pointer unproven; B12 removes the window it happened in.
 - CropStability is still committed before a layout is accepted (DuoView commits after) - minor.

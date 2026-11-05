@@ -140,6 +140,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B12 TriView autostart overlay failed' }
           python workspace/quadview/apply_triview_resize_safety.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B12 make-before-break resize overlay failed' }
+          python workspace/quadview/apply_triview_vram.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B12 TriView VRAM overlay failed' }
           python workspace/quadview/apply_triview_depth_geometry.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B10 exact camera geometry overlay failed' }
           python workspace/quadview/apply_triview_depth_live.py backend workspace/quadview

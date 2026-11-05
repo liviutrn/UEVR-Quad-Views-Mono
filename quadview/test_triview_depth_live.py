@@ -44,6 +44,7 @@ class DepthLiveTests(unittest.TestCase):
         self.assertIn('old->world_identity!=world_identity',h)
         self.assertIn('Stable gaze crop (OpenNR r10 policy)',self.v)
         self.assertIn('Restore DuoView gaze defaults',self.v)
+        self.assertIn('is_depth_allowed() && !vr->triview_skips_xr_depth()',self.c)
     def test_replay_rejects_duplicate_application(self):
         with self.assertRaises(RuntimeError): overlay.consumer(self.c)
 
