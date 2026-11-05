@@ -76,6 +76,7 @@ struct alignas(16) Constants {
     float crops[2][4];
     float options[4];
     float sharpen[4];
+    float sharpen_eye[4];
     float context_h[2][12]{{1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f},
                            {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f}};
     uint32_t context_source[4]{0, 1, 0, 0};
@@ -83,7 +84,7 @@ struct alignas(16) Constants {
     uint32_t depth_rect[4]{};
     uint32_t depth_options[4]{};
 };
-static_assert(sizeof(Constants) == 304);
+static_assert(sizeof(Constants) == 320);
 
 using Color = std::array<uint8_t, 4>;
 static Color source_color(unsigned view, unsigned x, unsigned y) {
@@ -357,8 +358,8 @@ int main(int argc, char** argv) try {
     D3D12_RESOURCE_STATES atlas_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     std::vector<uint8_t> baseline_focus;
     std::vector<uint8_t> strength_one_focus;
-    for (unsigned pass = 0; pass < 15; ++pass) { // 12-14: B6 compact per-role targets
-        const unsigned mode = pass < 6 || pass >= 9 ? pass % 3 : 2u;
+    for (unsigned pass = 0; pass < 17; ++pass) { // 12-14: B6 compact; 15-16: B8 independent eye sharpening
+        const unsigned mode = pass >= 15 ? 2u : (pass < 6 || pass >= 9 ? pass % 3 : 2u);
         if (pass != 0) {
             require(allocator->Reset(), "Reset allocator");
             require(commands->Reset(allocator.Get(), nullptr), "Reset commands");
@@ -366,6 +367,10 @@ int main(int argc, char** argv) try {
         }
         constants.options[1] = static_cast<float>(mode);
         constants.sharpen[0] = 0.f; // Exact pixel assertions isolate crop/source selection.
+        constants.sharpen_eye[0] = pass == 16 ? 7.f : 0.f;
+        constants.sharpen_eye[1] = pass == 15 ? 5.f : 0.f;
+        constants.sharpen_eye[2] = .30f;
+        constants.sharpen_eye[3] = .30f;
         require(constant_buffer->Map(0, &no_read, &mapped), "Map constants");
         std::memcpy(mapped, &constants, sizeof(constants));
         constant_buffer->Unmap(0, nullptr);
@@ -383,7 +388,7 @@ int main(int argc, char** argv) try {
         commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         std::weak_ptr<unsigned> packet_lifetime;
         D3D12_RESOURCE_STATES output_state = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        if (pass < 3) {
+        if (pass < 3 || pass >= 15) {
             commands->DrawInstanced(3, 1, 0, 0);
         } else {
             auto owner = std::make_shared<unsigned>(pass);
@@ -477,7 +482,7 @@ int main(int argc, char** argv) try {
         }
         D3D12_RANGE read_range{0, static_cast<SIZE_T>(byte_count)};
         require(readback->Map(0, &read_range, &mapped), "Map readback");
-        const bool sharpened = pass == 6 || pass == 7;
+        const bool sharpened = pass == 6 || pass == 7 || pass == 15 || pass == 16;
         std::array<bool,2> changed_focus_eye{};
         std::array<bool,2> changed_strength_eye{};
         if (pass == 5) {
@@ -531,11 +536,15 @@ int main(int argc, char** argv) try {
         }
         D3D12_RANGE no_write{0, 0};
         readback->Unmap(0, &no_write);
-        if (sharpened && (!changed_focus_eye[0] || !changed_focus_eye[1]))
+        if ((pass == 6 || pass == 7) && (!changed_focus_eye[0] || !changed_focus_eye[1]))
             throw std::runtime_error("Positive Glamarye strength did not alter both stereo focus images");
+        if (pass == 15 && (changed_focus_eye[0] || !changed_focus_eye[1]))
+            throw std::runtime_error("B8 right-only sharpening changed left eye or failed to change right eye");
+        if (pass == 16 && (!changed_focus_eye[0] || changed_focus_eye[1]))
+            throw std::runtime_error("B8 left-only sharpening changed right eye or failed to change left eye");
         if (pass==7 && (!changed_strength_eye[0] || !changed_strength_eye[1]))
             throw std::runtime_error("Glamarye strengths 1 and 2 produced identical stereo focus images");
-        if (pass >= 3) {
+        if (pass >= 3 && pass < 15) {
             if (packet_lifetime.expired()) throw std::runtime_error("Production packet owner disappeared before explicit retirement");
             production.on_slot_retired();
             if (pass==3 && (!std::isfinite(production.gpu_milliseconds()) || production.gpu_milliseconds()<0.f))
@@ -543,7 +552,7 @@ int main(int argc, char** argv) try {
             if (!packet_lifetime.expired()) throw std::runtime_error("Production packet owner leaked after retirement");
         }
     }
-    std::cout << "QuadView WARP: four independent native target SRVs, B6 compact per-role targets, stereo isolation, off-center ROI, crop bounds, diagnostic modes, 0/1/2 Glamarye focus strength and slot ownership passed.\n";
+    std::cout << "QuadView WARP: four independent native target SRVs, B6 compact, B8 right/left-only sharpening, stereo isolation, off-center ROI, crop bounds, diagnostic modes, 0/1/2 Glamarye focus strength and slot ownership passed.\n";
     return 0;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
