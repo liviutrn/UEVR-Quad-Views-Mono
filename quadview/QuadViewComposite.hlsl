@@ -75,20 +75,54 @@ float PeripheryDepthAt(float2 uv) {
     return saturate(PeripheryDepth.Load(int3(min(uint2(p), last), 0)));
 }
 
-float2 WarpContextUv(uint eye, float2 contextUv) {
+float InverseDepthAt(float2 uv) {
+    return (DepthCoefficients.z * PeripheryDepthAt(uv) - DepthCoefficients.x) / DepthCoefficients.y;
+}
+
+// B12: the eye ray is marched through the periphery depth, from near to far, in
+// inverse-depth steps; the first surface it meets is what this eye sees. B7-B11
+// used a 4-step fixed point that, for close objects (hands, gun: up to ~7 % of
+// the periphery width of disparity), stayed on the mono position and showed a
+// second, unshifted copy of the arm. Where the eye sees background that the
+// periphery camera could not (behind a near object), `fill` is set and the
+// caller blends a soft background sample instead of stretching the edge.
+// Verified offline against the real fovea of a B11 game snapshot.
+float2 WarpContextUv(uint eye, float2 contextUv, out float fill) {
     float2 uv = contextUv; // single exit: fxc /WX rejects early returns here (X4000)
+    fill = 0.0;
     [branch] if (DepthOptions.x != 0u) {
         const float3 t = DepthEyeOrigin[eye].xyz;
         const float2 ray = float2((2.0 * contextUv.x - 1.0 - DepthProjection.y) / DepthProjection.x,
                                  (1.0 - 2.0 * contextUv.y - DepthProjection.w) / DepthProjection.z);
-        // A full context-space ray translation, including vertical/forward eye
-        // origin components and arbitrary optical cant in ContextUv's homography.
-        [unroll] for (uint i = 0; i < 4; ++i) {
-            const float d = PeripheryDepthAt(uv);
-            const float inverseZ = (DepthCoefficients.z * d - DepthCoefficients.x) / DepthCoefficients.y;
-            const float2 delta = float2(0.5 * DepthProjection.x, -0.5 * DepthProjection.z) *
-                                 (t.xy - ray * t.z) * inverseZ * DepthCoefficients.w;
-            uv = contextUv + delta;
+        // context-uv shift per unit of inverse depth (full eye translation incl. forward/vertical)
+        const float2 k = float2(0.5 * DepthProjection.x, -0.5 * DepthProjection.z) * (t.xy - ray * t.z) * DepthCoefficients.w;
+        // nearest surface searched: 8 world units (~8 cm), or the near plane if farther
+        const float sMax = min(abs(DepthCoefficients.z / DepthCoefficients.y), 0.125);
+        const float ds = sMax / 24.0;
+        float2 previousUv = contextUv + k * sMax;
+        float previousF = -1.0, previousInverse = 0.0;
+        bool found = false;
+        [loop] for (uint i = 0; i <= 24u && !found; ++i) {
+            const float s = sMax - ds * float(i);
+            const float2 c = contextUv + k * s;
+            const bool inside = all(c >= 0.0) && all(c <= 1.0);
+            const float inverseZ = inside ? InverseDepthAt(c) : 0.0;
+            const float f = inverseZ - s;
+            [branch] if (inside && f >= 0.0) {
+                found = true;
+                if (i == 0u) {
+                    uv = c;
+                } else if (inverseZ > previousInverse * 1.25 + 2.0 * ds) {
+                    // depth jumps in front of the ray: hidden background, fill softly
+                    uv = contextUv + k * (s + 4.0 * ds);
+                    fill = 1.0;
+                } else {
+                    uv = lerp(previousUv, c, saturate(previousF / min(previousF - f, -1.0e-6)));
+                }
+            }
+            previousF = inside ? f : -1.0;
+            previousUv = c;
+            previousInverse = inverseZ;
         }
     }
     return uv;
@@ -180,11 +214,20 @@ float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv
 }
 
 float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 contextUv) {
-    const float2 uv = WarpContextUv(eye, contextUv);
+    float fill = 0.0;
+    const float2 uv = WarpContextUv(eye, contextUv, fill);
     float4 color = float4(0.0, 0.0, 0.0, 1.0);
     [branch] if (DepthOptions.y != 0u) {
         const float v = pow(PeripheryDepthAt(uv), 0.25);
         color = float4(v, v, v, 1.0);
+    } else if (fill > 0.0) {
+        // B12: soft 3x5 background average (2-texel spacing) hides row streaks in disocclusions
+        const float2 step = 2.0 / max(float2(contextRect.zw), 1.0);
+        float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+        [unroll] for (int y = -2; y <= 2; ++y)
+            [unroll] for (int x = -1; x <= 1; ++x)
+                sum += ReadSource(contextSource, AtlasUv(contextSource, contextRect, uv + float2(x, y) * step));
+        color = sum / 15.0;
     } else {
         color = ReadSource(contextSource, AtlasUv(contextSource, contextRect, uv));
     }

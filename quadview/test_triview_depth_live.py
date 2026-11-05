@@ -33,6 +33,15 @@ class DepthLiveTests(unittest.TestCase):
         self.assertLess(body.index('unsafe_call'),body.index('scoped_lock'))
     def test_startup_state_logged(self):
         self.assertIn('[TriView][Startup] selected',self.c)
+    def test_b12_autostart_resize_and_gaze_menu(self):
+        self.assertIn('[TriView][Autostart] saved ID7: warming up Native Stereo',self.v)
+        self.assertIn('[TriView][Transition] requested=',self.v)
+        self.assertIn('m_triview_pending_extents_valid=true;',self.v)
+        self.assertIn('requested_extents=m_triview_pending_extents;',self.v)
+        h=(root/'src/mods/vr/FFakeStereoRenderingHook.cpp').read_text()
+        self.assertIn('old->world_identity!=world_identity',h)
+        self.assertIn('Stable gaze crop (OpenNR r10 policy)',self.v)
+        self.assertIn('Restore DuoView gaze defaults',self.v)
     def test_replay_rejects_duplicate_application(self):
         with self.assertRaises(RuntimeError): overlay.consumer(self.c)
 
