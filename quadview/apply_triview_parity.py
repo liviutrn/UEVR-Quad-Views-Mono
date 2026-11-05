@@ -14,7 +14,8 @@ applied right after Stage 2-4, exactly where DuoView applies them. This script:
 3. Tri-view sharpening: strength 0..5 (was 0..2) and a max-change-per-pixel
    slider 0.05..0.30 (default 0.10 = exactly the previous fixed shader value).
 4. Saves the ID7 menu settings to the UEVR config like the DuoView settings
-   (before, every ID7 slider reset to its default at each game start).
+   (before, every ID7 slider reset to its default at each game start). Debug
+   view, debug border and GPU timing are NOT saved, so a debug view never sticks.
 """
 from pathlib import Path
 import sys
@@ -50,8 +51,7 @@ edit("src/mods/VR.hpp", [
      "            *m_duo_micro_gain, *m_duo_breakout, *m_duo_stillness, *m_duo_relock,\n"
      "            *m_quadview_crop_width, *m_quadview_crop_height, *m_quadview_context_scale,\n"
      "            *m_quadview_tri_view, *m_quadview_foveal_density, *m_quadview_feather,\n"
-     "            *m_quadview_sharpen, *m_quadview_sharpen_max, *m_quadview_gpu_timing,\n"
-     "            *m_quadview_eye_tracking, *m_quadview_debug_border, *m_quadview_debug_mode,\n"
+     "            *m_quadview_sharpen, *m_quadview_sharpen_max, *m_quadview_eye_tracking,\n"
      "            *m_quadview_stabilize_crop, *m_quadview_guard, *m_quadview_gaze_quant,\n"
      "            *m_quadview_gaze_hold, *m_quadview_gaze_reacquire, *m_quadview_gaze_offset_u,\n"
      "            *m_quadview_gaze_offset_v, *m_quadview_gaze_micro_gain, *m_quadview_gaze_breakout,\n"
@@ -104,6 +104,9 @@ edit("src/mods/VR.cpp", [
      '    if (ImGui::Button("Reapply DuoView FOV")) {\n',
      f"    ImGui::BeginDisabled(!{GATE});\n"
      '    if (ImGui::Button("Reapply FOV (DuoView/Tri-view)")) {\n'),
+    # keep Overlay/Runtime Keys (FOV + reset keys) open by default, as before the XYZ node was inserted
+    ('            ImGui::TreePop();\n        }\n\n        if (ImGui::TreeNode("Overlay/Runtime Keys")) {\n',
+     '            ImGui::TreePop();\n        }\n\n        ImGui::SetNextItemOpen(true, ImGuiCond_::ImGuiCond_Once);\n        if (ImGui::TreeNode("Overlay/Runtime Keys")) {\n'),
     ('            m_duoview_fov_reapply_key->draw("Reapply DuoView FOV Key");\n',
      '            m_duoview_fov_reapply_key->draw("Reapply FOV Key (DuoView/Tri-view)");\n'),
     # 3. sharpening UI + plumbing
