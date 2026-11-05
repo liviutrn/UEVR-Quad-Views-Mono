@@ -178,23 +178,13 @@ float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 conte
     return color;
 }
 
-float4 CompositePixel(VertexOut input) {
+float4 ScenePixel(VertexOut input) {
     const uint eye = min((uint)input.position.x / EyeAndAtlas.x, 1u);
     const float2 eyeUv = float2(input.position.x - eye * EyeAndAtlas.x,
                                input.position.y) / float2(EyeAndAtlas.xy);
     const uint4 contextRect = eye == 0 ? ContextLeft : ContextRight;
     const uint contextSource = eye == 0 ? ContextSource.x : ContextSource.y;
     const float2 contextUv = ContextUv(eye, eyeUv);
-    // Whole-eye diagnostic precedes focus blending and all other debug modes.
-    // No depth Load occurs when the SRV is missing or rejected.
-    [branch] if (DepthOptions.y != 0u) {
-        if (DepthOptions.z == 0u) {
-            const uint checker = ((uint(input.position.x) / 8u) + (uint(input.position.y) / 8u)) & 1u;
-            return checker != 0u ? float4(1, 0, 1, 1) : float4(0, 0, 0, 1);
-        }
-        const float v = pow(PeripheryDepthAt(contextUv), 0.25);
-        return float4(v, v, v, 1);
-    }
     const uint4 focusRect = eye == 0 ? FocusLeft : FocusRight;
     const float4 crop = eye == 0 ? CropUvLeft : CropUvRight;
     const uint debugMode = (uint)Options.y;
@@ -232,6 +222,27 @@ float4 CompositePixel(VertexOut input) {
         if (min(edgePx.x, edgePx.y) < 1.0) output.rgb = float3(1.0, 0.75, 0.0);
     }
     return output;
+}
+
+// Keep one initialized return path: legacy FXC rejects nested early diagnostic
+// returns as potentially uninitialized output under /WX.
+float4 CompositePixel(VertexOut input) {
+    float4 color = float4(0.0, 0.0, 0.0, 1.0);
+    [branch] if (DepthOptions.y != 0u) {
+        if (DepthOptions.z == 0u) {
+            const uint checker = ((uint(input.position.x) / 8u) + (uint(input.position.y) / 8u)) & 1u;
+            color = checker != 0u ? float4(1, 0, 1, 1) : float4(0, 0, 0, 1);
+        } else {
+            const uint eye = min((uint)input.position.x / EyeAndAtlas.x, 1u);
+            const float2 eyeUv = float2(input.position.x - eye * EyeAndAtlas.x,
+                input.position.y) / float2(EyeAndAtlas.xy);
+            const float v = pow(PeripheryDepthAt(ContextUv(eye, eyeUv)), 0.25);
+            color = float4(v, v, v, 1);
+        }
+    } else {
+        color = ScenePixel(input);
+    }
+    return color;
 }
 
 // Preserve the baseline copy's color encoding when a typed UNORM atlas is
