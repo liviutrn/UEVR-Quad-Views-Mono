@@ -1,9 +1,9 @@
 name: Tri-view B1 (Build51 base, 3 renders) Windows DLL [B7 depth]
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: Tri-view B7 depth compiled Windows DLL (${{ github.run_number }})
+run-name: Tri-view B7 MSVC six-slot fix compiled Windows DLL (${{ github.run_number }})
 on:
   push:
-    branches: ['claude/triview-**']
+    branches: ['claude/triview-**', 'experiment/triview-**']
     paths: ['.github/workflows/triview-b1.yml', 'quadview/**']
   workflow_dispatch:
 permissions:
