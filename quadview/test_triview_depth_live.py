@@ -38,6 +38,8 @@ class DepthLiveTests(unittest.TestCase):
         self.assertIn('[TriView][Transition] requested=',self.v)
         self.assertIn('m_triview_pending_extents_valid=true;',self.v)
         self.assertIn('requested_extents=m_triview_pending_extents;',self.v)
+        self.assertIn('rtm->quadview_native_targets_live(*live)) native_target_set=live;',self.v)
+        self.assertIn('m_save_override >= 0 ? m_save_override : requested_value()',(root/'src/mods/vr/RenderingMethodSetting.hpp').read_text())
         h=(root/'src/mods/vr/FFakeStereoRenderingHook.cpp').read_text()
         self.assertIn('old->world_identity!=world_identity',h)
         self.assertIn('Stable gaze crop (OpenNR r10 policy)',self.v)

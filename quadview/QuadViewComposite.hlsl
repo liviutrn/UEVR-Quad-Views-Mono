@@ -112,7 +112,7 @@ float2 WarpContextUv(uint eye, float2 contextUv, out float fill) {
                 found = true;
                 if (i == 0u) {
                     uv = c;
-                } else if (inverseZ > previousInverse * 1.25 + 2.0 * ds) {
+                } else if (previousF > -0.5 && inverseZ > previousInverse * 1.25 + 2.0 * ds) {
                     // depth jumps in front of the ray: hidden background, fill softly
                     uv = contextUv + k * (s + 4.0 * ds);
                     fill = 1.0;
@@ -222,11 +222,11 @@ float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 conte
         color = float4(v, v, v, 1.0);
     } else if (fill > 0.0) {
         // B12: soft 3x5 background average (2-texel spacing) hides row streaks in disocclusions
-        const float2 step = 2.0 / max(float2(contextRect.zw), 1.0);
+        const float2 tap = 2.0 / max(float2(contextRect.zw), 1.0);
         float4 sum = float4(0.0, 0.0, 0.0, 0.0);
         [unroll] for (int y = -2; y <= 2; ++y)
             [unroll] for (int x = -1; x <= 1; ++x)
-                sum += ReadSource(contextSource, AtlasUv(contextSource, contextRect, uv + float2(x, y) * step));
+                sum += ReadSource(contextSource, AtlasUv(contextSource, contextRect, uv + float2(x, y) * tap));
         color = sum / 15.0;
     } else {
         color = ReadSource(contextSource, AtlasUv(contextSource, contextRect, uv));

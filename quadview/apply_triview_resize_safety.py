@@ -92,6 +92,17 @@ def vr_source(text):
         "    }\n"
         "    if (m_quadview_compact_targets->value() && m_triview_pending_extents_valid) requested_extents=m_triview_pending_extents;\n",
         "requested extents")
+    text = once(text,
+        "    if (rtm && is_quadview_supported_title() && rtm->ensure_quadview_native_target_set(requested_extents))\n"
+        "        native_target_set=rtm->get_quadview_native_target_set();\n",
+        "    if (rtm && is_quadview_supported_title() && rtm->ensure_quadview_native_target_set(requested_extents))\n"
+        "        native_target_set=rtm->get_quadview_native_target_set();\n"
+        "    else if (rtm && m_triview_pending_extents_valid) {\n"
+        "        // B12: the new set is still building; keep drawing from the old live set.\n"
+        "        const auto live=rtm->get_quadview_native_target_set();\n"
+        "        if (live && live->complete() && live->extents==uevr::quadview::source_extents(*layout) &&\n"
+        "            rtm->quadview_native_targets_live(*live)) native_target_set=live;\n"
+        "    }\n", "keep live set")
     return text
 
 

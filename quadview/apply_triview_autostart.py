@@ -21,6 +21,18 @@ import sys
 VR_CPP = Path("src/mods/VR.cpp")
 VR_HPP = Path("src/mods/VR.hpp")
 HOOK_HPP = Path("src/mods/vr/FFakeStereoRenderingHook.hpp")
+RM_HPP = Path("src/mods/vr/RenderingMethodSetting.hpp")
+
+
+def rm_header(text):
+    text = once(text,
+        "    void config_save(utility::Config& cfg) override { cfg.set<int32_t>(m_name, requested_value()); }\n",
+        "    // Tri-view B12: during the autostart warm-up the saved profile stays ID7.\n"
+        "    void set_save_override(int32_t value) { m_save_override = value; }\n"
+        "    void config_save(utility::Config& cfg) override { cfg.set<int32_t>(m_name, m_save_override >= 0 ? m_save_override : requested_value()); }\n",
+        "config_save")
+    return once(text, "    uevr::mono::Selection m_selection;\n",
+        "    uevr::mono::Selection m_selection;\n    int32_t m_save_override{-1};\n", "selection member")
 
 
 def once(text, old, new, what):
@@ -63,6 +75,7 @@ AUTOSTART = r'''void VR::service_mono_transition_game_thread() {
             m_triview_autostart_since = now;
             m_triview_autostart_active_since = {};
             m_native_stereo_fix->value() = true;
+            m_rendering_method->set_save_override(RenderingMethod::QUAD_VIEWS_STEREO);
             selection.request(RenderingMethod::NATIVE_STEREO);
             spdlog::info("[TriView][Autostart] saved ID7: warming up Native Stereo + Native Stereo Fix first (user fix toggle was {})",
                 m_triview_autostart_user_fix);
@@ -74,6 +87,7 @@ AUTOSTART = r'''void VR::service_mono_transition_game_thread() {
             const bool timeout = now - m_triview_autostart_since > std::chrono::seconds(25);
             if (selection.requested() != RenderingMethod::NATIVE_STEREO) {
                 m_native_stereo_fix->value() = m_triview_autostart_user_fix;
+                m_rendering_method->set_save_override(-1);
                 m_triview_autostart_stage = 3;
                 spdlog::info("[TriView][Autostart] user changed the rendering method during warm-up; autostart cancelled");
             } else if (warm || timeout) {
@@ -83,6 +97,7 @@ AUTOSTART = r'''void VR::service_mono_transition_game_thread() {
             }
         } else if (m_triview_autostart_stage == 2 && !selection.pending()) {
             m_native_stereo_fix->value() = m_triview_autostart_user_fix;
+            m_rendering_method->set_save_override(-1);
             m_triview_autostart_stage = 3;
             spdlog::info("[TriView][Autostart] method {} committed; Native Stereo Fix toggle restored to {}",
                 selection.active(), m_triview_autostart_user_fix);
@@ -114,7 +129,7 @@ def main():
     if len(sys.argv) != 2:
         raise SystemExit("Usage: apply_triview_autostart.py <backend>")
     root = Path(sys.argv[1])
-    files = {root / HOOK_HPP: hook_header, root / VR_HPP: vr_header, root / VR_CPP: vr_source}
+    files = {root / HOOK_HPP: hook_header, root / VR_HPP: vr_header, root / VR_CPP: vr_source, root / RM_HPP: rm_header}
     out = {p: f(p.read_text(encoding="utf-8")) for p, f in files.items()}
     for p, t in out.items():
         p.write_text(t, encoding="utf-8")
