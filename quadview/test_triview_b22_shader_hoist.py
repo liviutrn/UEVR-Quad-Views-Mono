@@ -21,8 +21,8 @@ def main():
     require(segment(old, "float2 WarpContextUv(", "// Explicit SM5 resource selection") ==
             segment(new, "float2 WarpContextUv(", "// Explicit SM5 resource selection"),
             "B21 depth ray tracing was modified")
-    require(segment(old, "float4 PSMain(", "// (never present") ==
-            segment(new, "float4 PSMain(", "// (never present"), "B21 final output modified")
+    require(old.split("float4 PSMain(", 1)[1] == new.split("float4 PSMain(", 1)[1],
+            "B21 final output modified")
     require(new.count("AtlasUvKnownSize(") == 5, "Unexpected size-helper call sites")
     require(new.count("ReadFocus(") == 7, "Changed number of sharpening taps")
     require("const float2 sourceSize = SourceSize(contextSource);" in new,
