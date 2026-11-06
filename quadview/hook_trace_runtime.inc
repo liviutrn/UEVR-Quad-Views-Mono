@@ -5,7 +5,20 @@ int hook_trace_mode() {
     return vr->is_quadview_mode_selected()?7:vr->is_duoview_renderer_active()?6:
         vr->is_using_mono()?5:vr->is_using_native_stereo()?0:-1;
 }
+// B22: optional verbose diagnostics. HookTrace is observation only; retaining
+// it in the per-frame RHI path adds lock contention and large log writes.
+// Set UEVR_VERBOSE_HOOK_TRACE=1 BEFORE starting the game to restore the exact
+// existing detailed trace output for crash/provenance investigations.
+static bool hook_trace_enabled() {
+    static const bool enabled = [] {
+        char value[8]{};
+        const DWORD len = GetEnvironmentVariableA("UEVR_VERBOSE_HOOK_TRACE", value, DWORD(sizeof(value)));
+        return len == 1 && value[0] == '1';
+    }();
+    return enabled;
+}
 void emit_hook_trace(size_t site,const HookTraceRecord& r) {
+    if (!hook_trace_enabled()) return;
     static HookTraceGate gate;
     const auto now=std::chrono::steady_clock::now();
     const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
