@@ -84,7 +84,8 @@ def apply_vr_cpp(s):
             m_triview_restart_resume_since=now;
         if (!selection.pending() && selection.active()==RenderingMethod::NATIVE_STEREO &&
             get_runtime() && get_runtime()->loaded) {
-            const bool ready=m_fake_stereo_hook && m_fake_stereo_hook->is_native_stereo_fix_state_ready();
+            const bool ready=get_runtime()->got_first_poses && m_fake_stereo_hook &&
+                m_fake_stereo_hook->is_native_stereo_fix_state_ready();
             if (ready && m_triview_restart_ready_since==std::chrono::steady_clock::time_point{})
                 m_triview_restart_ready_since=now;
             if (!ready) m_triview_restart_ready_since={};
@@ -160,7 +161,7 @@ def apply_vr_cpp(s):
         }
         // The periphery NGX copy pool can submit on a different DIRECT queue.
         // Do not confuse the compositor's completed fence with its producer fence.
-        const bool depth_retired=uevr::quadview::ngx::PeripheryDepth::self().restart_quiescent();
+        const bool depth_retired=m_d3d12.openxr().depth_quiescent_for_restart();
         if (!native_owners_retired || !depth_retired) {
             SPDLOG_INFO_EVERY_N_SEC(2,"[TriView][Restart] waiting native_owners={} depth_queues={}",
                 native_owners_retired,depth_retired);
@@ -176,7 +177,7 @@ def apply_vr_cpp(s):
 
 def apply_dx_header(s):
     return one(s,"        void destroy_swapchains();",
-               "        bool destroy_swapchains();\n        bool restart_teardown_failed{false};",
+               "        bool destroy_swapchains();\n        bool depth_quiescent_for_restart() const;\n        bool restart_teardown_failed{false};",
                "XR header status signature")
 
 
@@ -241,6 +242,13 @@ def apply_dx_cpp(s):
        """    if (!this->destroy_swapchains())
         return "OpenXR swapchain destruction postponed: resources still live";
     if (!this->duoview_compositors.empty())""","create preflight caller")
+    s=one(s,
+        "bool D3D12Component::OpenXR::destroy_swapchains() {",
+        "bool D3D12Component::OpenXR::depth_quiescent_for_restart() const {\n"
+        "    return uevr::quadview::ngx::PeripheryDepth::self().restart_quiescent();\n"
+        "}\n\n"
+        "bool D3D12Component::OpenXR::destroy_swapchains() {",
+        "D3D12 restart depth wrapper")
     return s
 
 
