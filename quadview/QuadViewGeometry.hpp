@@ -420,4 +420,17 @@ private:
     bool seen_{}; SourceExtents seen_extents_{}; uint64_t seen_ms_{};
 };
 
+// Tri-view B15: which pose-ring frame answers "where is the head now" (recenter,
+// standing origin/height). ID7 renders its roles with their own frame numbers
+// (canonical N, then N+1, N+2), and each role render moves the runtime's current
+// frame to N+1/N+2. Only N gets a located head pose; with a 6-slot ring and 3
+// frames per draw the role slots are never refreshed, so a recenter between
+// draws read a pose that could be minutes old. In TriView answer with the newest
+// located frame; every other mode keeps the current frame exactly as before.
+inline uint32_t current_pose_frame(bool triview, bool located_any, uint32_t current, uint32_t newest_located) {
+    return (triview && located_any && current != newest_located) ? newest_located : current;
+}
+// Wraparound-safe "a is newer than b" for 32-bit frame counters.
+inline bool pose_frame_newer(uint32_t a, uint32_t b) { return static_cast<int32_t>(a - b) > 0; }
+
 } // namespace uevr::quadview

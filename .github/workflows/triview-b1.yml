@@ -1,6 +1,6 @@
-name: Tri-view B14 settled resize and ground-truth depth warp Windows DLL
+name: Tri-view B15 recenter fix Windows DLL
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: Tri-view B14 compiled Windows DLL (${{ github.run_number }})
+run-name: Tri-view B15 compiled Windows DLL (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -152,6 +152,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B14 settled resize overlay failed its exact anchors' }
           python workspace/quadview/test_triview_b14.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B14 resize source contracts failed' }
+          python workspace/quadview/apply_triview_b15.py backend workspace/quadview
+          if ($LASTEXITCODE -ne 0) { throw 'B15 recenter head-pose overlay failed its exact anchors' }
+          python workspace/quadview/test_triview_b15.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B15 recenter source contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -250,6 +254,7 @@ jobs:
           Copy-Item workspace/quadview/B12_NOTES.md package/B12_NOTES.md
           Copy-Item workspace/quadview/B13_NOTES.md package/B13_NOTES.md
           Copy-Item workspace/quadview/B14_NOTES.md package/B14_NOTES.md
+          Copy-Item workspace/quadview/B15_NOTES.md package/B15_NOTES.md
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
@@ -264,12 +269,15 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B14-settled-resize'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='Exact tested B8; Build51 lifetime and presentation'; baselineSource='275d6134adf2fbb7a6a80443718d876592a8fc75'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B15-recenter'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='Exact tested B8; Build51 lifetime and presentation'; baselineSource='275d6134adf2fbb7a6a80443718d876592a8fc75'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          TriView B14 (Claude) - ID7 experimental. NOT headset-verified. Built on B13.
+          TriView B15 (Claude) - ID7 experimental. B15 = headset-tested B14 + one fix:
+          Recenter View / Set Standing Origin / Set Standing Height (menu, key,
+          gamepad) now use your current head pose in TriView. NOT headset-verified.
+          B14 notes (unchanged below):
           True stereo foveas, one mono full-FOV periphery, depth-marched stereo periphery.
           B14 changes ONLY how a size change (periphery resolution, fovea size or
           density) is applied: one new set of source textures after you stop moving
@@ -296,16 +304,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B14-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B15-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B14-${{ github.run_number }}
+          name: UEVR-TriView-B15-${{ github.run_number }}
           path: |
-            UEVR-TriView-B14-*.zip
-            UEVR-TriView-B14-*.zip.sha256
+            UEVR-TriView-B15-*.zip
+            UEVR-TriView-B15-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
@@ -363,7 +371,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p sanitizer-evidence
-          for test in RetirementScopeTests HookTraceGateTests NativeRenderTraceTests NativeRoleFrameTests EngineRegistrationDiagnosticsTests RecoveryContinuityTests NativeDeliveryTests FamilyRoutingTests ContentProvenancePropertyTests ResizeGateTests DepthWarpSceneTests; do
+          for test in RetirementScopeTests HookTraceGateTests NativeRenderTraceTests NativeRoleFrameTests EngineRegistrationDiagnosticsTests RecoveryContinuityTests NativeDeliveryTests FamilyRoutingTests ContentProvenancePropertyTests ResizeGateTests DepthWarpSceneTests PoseSlotTests; do
             g++ -std=c++20 -O1 -g -pthread -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer "quadview/$test.cpp" -o "sanitizer-evidence/$test"
             "sanitizer-evidence/$test" > "sanitizer-evidence/$test.log" 2>&1
             cat "sanitizer-evidence/$test.log"
