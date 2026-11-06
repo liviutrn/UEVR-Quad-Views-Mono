@@ -124,8 +124,8 @@ def apply_vr_cpp(s):
             reinitialize_openxr();
         }
     }"""
-    if old.count(expected)!=1:
-        raise RuntimeError("B24: on_post_present() exact reset block not unique")
+    if old.count("            reinitialize_openxr();")!=1 or old.count("m_openxr->wants_reinitialize = false;")!=1:
+        raise RuntimeError("B24: OpenXR restart-call anchor absent or ambiguous")
     new = """    if (runtime->wants_reinitialize) {
         std::scoped_lock restart_lock{m_reinitialize_mtx};
         if (runtime->is_openvr()) {
@@ -172,7 +172,21 @@ def apply_vr_cpp(s):
             spdlog::info("[TriView][Restart] phase=4 fresh OpenXR runtime created; waiting for stereo pair");
         }
     }"""
-    return s[:start]+old.replace(expected,new,1)+s[end:]
+    # Other overlay callbacks may appear before/after the original reset
+    # branch. Preserve them byte-for-byte: change only this one XR call.
+    replacement="""            if (m_is_d3d12 && is_quadview_mode_selected() &&
+                m_triview_restart_phase.load(std::memory_order_acquire)==0) {
+                m_triview_restart_phase.store(1,std::memory_order_release);
+                spdlog::info("[TriView][Restart] phase=1 queued via native-mode transition");
+            } else if (m_triview_restart_phase.load(std::memory_order_acquire)==0) {
+                if (const auto error=reinitialize_openxr())
+                    spdlog::warn("[OpenXR][Restart] {}",*error);
+            } else {
+                spdlog::info("[TriView][Restart] duplicate request coalesced");
+            }"""
+    changed=old.replace("            reinitialize_openxr();",replacement,1)
+    stage3=new[new.index("    if (m_is_d3d12 && m_triview_restart_phase"):]
+    return s[:start]+changed+"\n"+stage3+s[end:]
 
 
 def apply_dx_header(s):
