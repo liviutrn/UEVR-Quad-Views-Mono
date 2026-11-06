@@ -42,6 +42,8 @@ def main():
     need(destroy,"if (context.num_textures_acquired != 0 || context.pre_acquired)")
     need(destroy,"slot && !slot->commands.references_retired()")
     before(destroy,"slot && !slot->commands.references_retired()","this->wait_for_all_copies();")
+    before(destroy,"this->wait_for_all_copies();","if (context.num_textures_acquired != 0 || context.pre_acquired)")
+    before(destroy,"if (context.num_textures_acquired != 0 || context.pre_acquired)","const bool composition_retired=this->ui_composition.reset();")
     before(destroy,"if (restart_teardown_failed) return false;","this->ui_composition.reset()")
     before(destroy,"const auto slot_live=","commands->poisoned")
     before(destroy,"this->wait_for_all_copies();","const bool composition_retired=this->ui_composition.reset();")
