@@ -211,3 +211,15 @@ add_executable(QuadViewResizeGateTests ResizeGateTests.cpp)
 add_test(NAME quadview-settled-single-build-resize COMMAND QuadViewResizeGateTests)
 add_executable(QuadViewPoseSlotTests PoseSlotTests.cpp)
 add_test(NAME quadview-triview-current-head-pose COMMAND QuadViewPoseSlotTests)
+
+
+# B17 TriView-only physical allocation contract. Logical role 1 must be absent
+# from GPU texture ownership; retained view-family slot 1 is not a source.
+add_executable(TriViewThreePhysicalTests TriViewThreePhysicalTests.cpp)
+if(MSVC)
+  target_compile_options(TriViewThreePhysicalTests PRIVATE /UNDEBUG)
+else()
+  target_compile_options(TriViewThreePhysicalTests PRIVATE -UNDEBUG)
+endif()
+add_test(NAME triview-three-physical-targets COMMAND TriViewThreePhysicalTests)
+set_tests_properties(triview-three-physical-targets PROPERTIES TIMEOUT 60)
