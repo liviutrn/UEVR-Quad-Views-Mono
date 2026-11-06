@@ -235,12 +235,11 @@ def apply_dx_cpp(s):
     }""",
        """    // The preflight must run before ANY UI/compositor/swapchain mutation.
     if (restart_teardown_failed) return false;
-    // Never enter wait_for_all_copies() while a fence is outstanding or an XR
-    // texture is acquired: its original wait(INFINITE) is unsafe on GPU loss.
-    // All users of these contexts share mtx, held throughout this transaction.
+    // Only enter original wait_for_all_copies() with all D3D12 fences
+    // retired, so its inherited wait(INFINITE) is already satisfied. An
+    // XR image may still be acquired: the original helper releases it.
+    // New pre-acquisitions are blocked in restart phase 3.
     for (const auto& [index,context]:this->contexts) {
-        if (context.num_textures_acquired != 0 || context.pre_acquired)
-            return false;
         for (const auto& slot:context.texture_contexts)
             if (slot && !slot->commands.references_retired()) return false;
     }
@@ -267,6 +266,11 @@ def apply_dx_cpp(s):
        "move UI mutation after proof")
     b=one(b,"    this->wait_for_all_copies();",
        """    this->wait_for_all_copies();
+    // The original helper releases any XR images already acquired at the
+    // transaction boundary. An XR release failure must veto destruction.
+    for (const auto& [index,context]:this->contexts)
+        if (context.num_textures_acquired != 0 || context.pre_acquired)
+            return false;
     // All acquired XR contexts must be released and every GPU command-slot
     // fence proven complete before UI reset or compositor destruction.
     for (const auto& [commands, compositor] : this->quadview_compositors)
