@@ -110,7 +110,8 @@ float2 WarpContextUv(uint eye, float2 contextUv, out float fill) {
             const float f = inverseZ - s;
             [branch] if (inside && f >= 0.0) {
                 found = true;
-                if (i == 0u) {
+                if (i == 0u || previousF <= -0.5) {
+                    // Never blend with the previous out-of-bounds ray.
                     uv = c;
                 } else if (previousF > -0.5 && inverseZ > previousInverse * 1.25 + 2.0 * ds) {
                     // depth jumps in front of the ray: hidden background, fill softly

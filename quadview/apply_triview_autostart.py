@@ -99,8 +99,13 @@ AUTOSTART = r'''void VR::service_mono_transition_game_thread() {
             m_native_stereo_fix->value() = m_triview_autostart_user_fix;
             m_rendering_method->set_save_override(-1);
             m_triview_autostart_stage = 3;
-            spdlog::info("[TriView][Autostart] method {} committed; Native Stereo Fix toggle restored to {}",
-                selection.active(), m_triview_autostart_user_fix);
+            if (selection.active() == RenderingMethod::QUAD_VIEWS_STEREO) {
+                spdlog::info("[TriView][Autostart] ID7 committed; Native Stereo Fix toggle restored to {}",
+                    m_triview_autostart_user_fix);
+            } else {
+                spdlog::warn("[TriView][Autostart] transition settled WITHOUT ID7 (active={}, requested={}); no TriView success claimed",
+                    selection.active(), selection.requested());
+            }
         }
         static auto last_transition_log = clock::time_point{};
         if ((selection.requested() == RenderingMethod::QUAD_VIEWS_STEREO || selection.active() == RenderingMethod::QUAD_VIEWS_STEREO) &&

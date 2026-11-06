@@ -1,6 +1,6 @@
-name: Tri-view B12 marched depth warp, autostart, safe resize, DuoView gaze menu Windows DLL
+name: Tri-view B13 queue-safe depth and reprojection border correction Windows DLL
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: Tri-view B12 compiled Windows DLL (${{ github.run_number }})
+run-name: Tri-view B13 compiled Windows DLL (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -244,6 +244,7 @@ jobs:
           Copy-Item workspace/quadview/B9_STABILITY_NOTES.md package/B9_STABILITY_NOTES.md
           Copy-Item workspace/quadview/B11_NOTES.md package/B11_NOTES.md
           Copy-Item workspace/quadview/B12_NOTES.md package/B12_NOTES.md
+          Copy-Item workspace/quadview/B13_NOTES.md package/B13_NOTES.md
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
@@ -258,41 +259,46 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B12-warp-autostart-resize'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='Exact tested B8; Build51 lifetime and presentation'; baselineSource='275d6134adf2fbb7a6a80443718d876592a8fc75'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B13-queue-safe-depth'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='Exact tested B8; Build51 lifetime and presentation'; baselineSource='275d6134adf2fbb7a6a80443718d876592a8fc75'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 source lifetime and presentation setup; headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          Tri-view B12 marched depth warp + autostart + safe resize + DuoView gaze menu - Quad Views Stereo ID7 - test candidate, NOT headset-verified
-          Exact camera reprojection and fenced depth ownership code is included for validation.
-          Capture remains blocked: NGX callback coverage is unproven. This is NOT an all-fixed build.
-          New: independent LocalPlayer bootstrap before ID7 projection; family layout validation before
-          ID7 constructor reads; fixed-height status/diagnostics; generation-scoped output status.
-          Depth reprojection is unavailable in B9 pending exact frame identity and GPU fence validation.
-          Old saved ON values cannot enable the unsafe capture. Show depth diagnostic intentionally
-          displays a full-eye magenta/black checker when no validated depth is available. Turn it OFF
-          to return to the game. This build does not claim to fix near-object mono/stereo seams.
-          Compact textures, true native stereo foveas, FOV controls and independent eye sharpening stay.
-          Test from a fresh game and injection; select ID7 first, without Native Stereo Fix workaround.
-          1. Does ID7 start and track correctly? Switch Native -> ID7 -> Native -> ID7 once.
-          2. Do controls stay stationary while status changes? Does Show depth diagnostic show checker?
-          Return the complete UEVR log if startup fails. No performance gain is claimed by this build.
+          TriView B13 independent adversarial review — ID7 experimental. NOT headset-verified.
+          True stereo foveas, mono full-FOV periphery and B12 depth-marched reprojection.
+          B13 fixes per-depth-slot GPU fences across multiple Direct3D queues, shader
+          first-valid-ray border sampling, truthful ID7 autostart logs and stale docs.
+          DLSS periphery depth capture is ON by default; Show Depth is a diagnostic
+          only. It shows grayscale when depth is bound or a magenta checker if not.
+
+          IMPORTANT: CI passes do NOT prove PSVR2 visual correctness or BSOD safety.
+          OpenXR depth swapchain allocation is skipped in saved-ID7 sessions to
+          reduce VRAM; returning to Native Stereo may have no OpenXR depth layer
+          until swapchains are recreated. This is separate from DLSS depth capture.
+
+          CAREFUL HEADSET TEST: fresh STALKER 2 v2.10 session. Save ID7, restart
+          and inspect [TriView][Autostart]; verify actual ID7 commit, stereo eyes,
+          menus and slow head/hand movements at the periphery/fovea boundary.
+          Toggle Show Depth briefly, then off. Change periphery resolution ONE
+          step and stop immediately if unstable. Try ID7 -> Native -> ID7.
+          Report fps, GPU load, VRAM and log; for BSOD get stop code/minidump.
+          See B13_NOTES.md; keep B12 for rollback.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B12-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B13-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B12-Stability-${{ github.run_number }}
+          name: UEVR-TriView-B13-Review-${{ github.run_number }}
           path: |
-            UEVR-TriView-B12-*.zip
-            UEVR-TriView-B12-*.zip.sha256
+            UEVR-TriView-B13-*.zip
+            UEVR-TriView-B13-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4

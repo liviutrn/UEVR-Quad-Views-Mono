@@ -45,6 +45,17 @@ class DepthLiveTests(unittest.TestCase):
         self.assertIn('Stable gaze crop (OpenNR r10 policy)',self.v)
         self.assertIn('Restore DuoView gaze defaults',self.v)
         self.assertIn('is_depth_allowed() && !vr->triview_skips_xr_depth()',self.c)
+    def test_b13_fences_shader_and_truthful_startup(self):
+        self.assertIn('ComPtr<ID3D12Fence> producer_fence;', self.n)
+        self.assertIn('slot->producer_fence->GetCompletedValue()', self.n)
+        self.assertIn('candidate->producer_fence->GetCompletedValue()', self.n)
+        self.assertIn('queue->Signal(slot->producer_fence.Get(), value)', self.n)
+        self.assertNotIn('queue->Signal(fence_.Get(), value)', self.n)
+        shader=Path(__file__).with_name('QuadViewComposite.hlsl').read_text()
+        self.assertIn('if (i == 0u || previousF <= -0.5)',shader)
+        self.assertIn('previousF = inside ? f : -1.0;',shader)
+        self.assertIn('transition settled WITHOUT ID7',self.v)
+
     def test_replay_rejects_duplicate_application(self):
         with self.assertRaises(RuntimeError): overlay.consumer(self.c)
 

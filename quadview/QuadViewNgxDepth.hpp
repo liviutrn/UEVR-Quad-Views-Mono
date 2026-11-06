@@ -69,6 +69,8 @@ inline ID3D12Resource* ngx_resource(const NgxParameters* p, const char* k) noexc
 struct DepthSnapshot {
     ComPtr<ID3D12Resource> texture;          // owned R32_TYPELESS copy
     ComPtr<ID3D12Resource> source_reference; // retained through producer GPU completion
+    // B13: independent per-recording GPU fence; queue signals can finish out of order.
+    ComPtr<ID3D12Fence> producer_fence;
     ID3D12GraphicsCommandList* producer_list{}; // comparison only
     uint64_t sequence{}, producer_fence_value{}, list_epoch{};
     std::array<float,2> jitter_pixels{}, jitter_uv{};
@@ -131,9 +133,9 @@ public:
         if (!enabled_.load(std::memory_order_acquire) || !w || !h) { ++missed_; return {}; }
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(mutex_);
-        const uint64_t completed = fence_ ? fence_->GetCompletedValue() : 0;
         std::shared_ptr<DepthSnapshot> best;
         for (const auto& slot : pool_) {
+            const uint64_t completed = slot->producer_fence ? slot->producer_fence->GetCompletedValue() : 0;
             if (slot->submitted && depth_copy_complete(completed, slot->producer_fence_value))
                 slot->source_reference.Reset();
             if (slot->submitted && slot->valid_evaluation && slot->texture && matches_periphery(slot->out_w, slot->out_h, w, h) &&
@@ -151,7 +153,7 @@ public:
     static const char* reason_name(uint32_t r) {
         static const char* names[]{"none", "periphery size unknown (not TriView / layout pending)", "other size (fovea or other pass)",
             "not DLSS super resolution", "no Depth parameter", "unsupported depth format/rect", "other D3D12 device",
-            "all 8 depth slots busy", "texture allocation failed", "no fence", "exception"};
+            "all 12 depth slots busy", "texture allocation failed", "no fence", "exception"};
         return r < std::size(names) ? names[r] : "?";
     }
 
@@ -251,9 +253,9 @@ private:
         if (!device_ || dev.Get() != device_.Get()) { reject(OtherDevice); return {}; }
         const auto now = std::chrono::steady_clock::now();
         if (!fence_) { reject(NoFence); return {}; }
-        const auto completed=fence_->GetCompletedValue();
         std::shared_ptr<DepthSnapshot> slot;
         for (auto& candidate : pool_) {
+            const uint64_t completed = candidate->producer_fence ? candidate->producer_fence->GetCompletedValue() : 0;
             const bool abandoned = candidate->pending && candidate.use_count()==1 && now - candidate->recorded > AbandonAfter &&
                                    graveyard_.size() < 16;
             if (!abandoned && !depth_slot_reusable(candidate->pending,candidate->submitted,completed,
@@ -271,6 +273,8 @@ private:
             if (pool_.size() >= MaxSlots) { reject(PoolFull); return {}; }
             slot = std::make_shared<DepthSnapshot>(); pool_.push_back(slot);
         }
+        if (!slot->producer_fence && FAILED(device_->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                IID_PPV_ARGS(&slot->producer_fence)))) { reject(NoFence); return {}; }
         constexpr auto read = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
         const auto have = slot->texture ? slot->texture->GetDesc() : D3D12_RESOURCE_DESC{};
         if (!slot->texture || have.Width != w || have.Height != h || have.Format != copy_format) {
@@ -326,7 +330,7 @@ private:
     }
 
     void submitted(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists) {
-        if (!count || !lists || !queue || !fence_) return;
+        if (!count || !lists || !queue) return;
         const auto matches = [&](const DepthSnapshot& slot) {
             if (!slot.pending) return false;
             for (UINT i = 0; i < count; ++i) if (static_cast<void*>(lists[i]) == static_cast<void*>(slot.producer_list)) return true;
@@ -335,17 +339,18 @@ private:
         bool any = false;
         for (const auto& slot : pool_) any = any || matches(*slot);
         if (!any) return;
-        // UE has one graphics queue. The game may reach it through a wrapper
-        // (e.g. Streamline), so the pointer can differ from the swapchain queue
-        // UEVR knows; any DIRECT queue of this device is that same queue.
+        // Submitters may be wrappers or physically different DIRECT queues.
+        // Completion must be tracked per recording, never via a shared global value.
         if (queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT) { reject(OtherDevice); return; }
         const bool foreign = queue != queue_.Get();
         if (foreign) ++foreign_queue_submits_;
-        const auto value = ++next_fence_value_;
-        // Signal failure keeps the slot pending: reused only after AbandonAfter.
-        if (FAILED(queue->Signal(fence_.Get(), value))) { ++skips_; return; }
         const auto now = std::chrono::steady_clock::now();
         for (auto& slot : pool_) if (matches(*slot)) {
+            if (!slot->producer_fence) { reject(NoFence); continue; }
+            const auto value = ++next_fence_value_;
+            // An unrelated GPU queue cannot complete this slot's independent fence.
+            // On signal failure, leave the slot pending and resources retained.
+            if (FAILED(queue->Signal(slot->producer_fence.Get(), value))) { ++skips_; continue; }
             slot->pending = false; slot->submitted = true; slot->producer_fence_value = value; slot->foreign_queue = foreign;
             slot->submitted_at = now; ++submits_;
         }
