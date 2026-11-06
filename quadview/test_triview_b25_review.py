@@ -26,6 +26,9 @@ def main():
     transition=vr.split("void VR::service_mono_transition_game_thread() {",1)[1].split("\n}\n",1)[0]
     need(transition,"m_triview_hold_set.reset();")
     need(transition,"m_triview_resize_gate.reset();")
+    need(transition,"m_triview_resize_world_identity=0;")
+    need(vr,"if (new_world!=m_triview_resize_world_identity)")
+    before(vr,"if (new_world!=m_triview_resize_world_identity)","const auto decision=m_triview_resize_gate.update(")
     before(transition,"m_quadview.retire_generation(retired_generation);","m_triview_hold_set.reset();")
 
     # Return to ID7 only after a new, loaded OpenXR session and new poses.
