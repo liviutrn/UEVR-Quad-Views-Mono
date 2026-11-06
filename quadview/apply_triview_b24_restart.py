@@ -214,10 +214,21 @@ def apply_dx_cpp(s):
     }""",
        """    // The preflight must run before ANY UI/compositor/swapchain mutation.
     if (restart_teardown_failed) return false;
+    // Compositor-map keys are raw pointers; prove that the command context
+    // still belongs to the currently retained swapchain BEFORE dereferencing.
+    const auto slot_live=[&](const d3d12::CommandContext* command) {
+        if (!command) return false;
+        for (const auto& [index,context]:this->contexts) {
+            for (const auto& slot:context.texture_contexts) {
+                if (slot && &slot->commands==command) return true;
+            }
+        }
+        return false;
+    };
     for (const auto& [commands, compositor] : this->quadview_compositors)
-        if (compositor && (!commands || commands->poisoned)) return false;
+        if (compositor && (!slot_live(commands) || commands->poisoned)) return false;
     for (const auto& [commands, compositor] : this->duoview_compositors)
-        if (compositor && (!commands || commands->poisoned)) return false;
+        if (compositor && (!slot_live(commands) || commands->poisoned)) return false;
     if (this->contexts.empty() && this->quadview_compositors.empty() &&
         this->duoview_compositors.empty()) {
         return this->ui_composition.reset() && this->game_ui_alpha.reset() &&
@@ -229,9 +240,9 @@ def apply_dx_cpp(s):
     // All acquired XR contexts must be released and every GPU command-slot
     // fence proven complete before UI reset or compositor destruction.
     for (const auto& [commands, compositor] : this->quadview_compositors)
-        if (compositor && (!commands || !commands->references_retired())) return false;
+        if (compositor && (!slot_live(commands) || !commands->references_retired())) return false;
     for (const auto& [commands, compositor] : this->duoview_compositors)
-        if (compositor && (!commands || !commands->references_retired())) return false;
+        if (compositor && (!slot_live(commands) || !commands->references_retired())) return false;
     const bool composition_retired=this->ui_composition.reset();
     const bool game_alpha_retired=this->game_ui_alpha.reset();
     const bool framework_alpha_retired=this->framework_ui_alpha.reset();
