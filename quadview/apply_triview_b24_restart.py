@@ -217,7 +217,7 @@ def apply_vr_cpp(s):
     # leaving ID7 we must also prove its in-flight callback returned.
     s=one(s,
         "    if (m_is_d3d12 && runtime->is_openxr() && is_native_openxr_async_wait_active()) {",
-        "    if (m_is_d3d12 && runtime->is_openxr() && is_native_openxr_async_wait_active() &&\\n"
+        "    if (m_is_d3d12 && runtime->is_openxr() && is_native_openxr_async_wait_active() &&\n"
         "        m_triview_restart_phase.load(std::memory_order_acquire)==0) {",
         "close async XR wait admission while restarting")
     # Other overlay callbacks may appear before/after the original reset
