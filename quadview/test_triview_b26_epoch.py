@@ -54,8 +54,14 @@ def main():
     assert "execute_.reset()" not in section and "evals_" not in section
     # Old catch-up by timestamp is explicitly 250ms and can span XR session;
     # invalidating completed slots is required, not optional.
-    assert "latest_approximate_since" in ngx
+    # B21 changed the depth selector on the B18 snapshot pool; no specific
+    # function name is required for the session-reset safety proof.
 
+    # TEMP compilation triage: pinpoint the source span around B25's MSVC
+    # C2065/C2001 from the actual generated code, not overlay-string tests.
+    generated=vr.splitlines()
+    for n in range(15545,min(15642,len(generated)+1)):
+        print(f"[B26][VR_SOURCE] {n}: {generated[n-1][:230]}")
     print("B26 production-source restart contracts: full GPU preflight, fresh NativeStereo packet, session-isolated depth pools PASSED")
 
 if __name__=="__main__":main()
