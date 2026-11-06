@@ -1,17 +1,19 @@
 # B26 — OpenXR session boundary fixes (2026-11-06)
 
 **Baseline:** B25 independent-safety commit 09156513ffa6f5295f1e20bc96943ab94769d95a.
+**Fencing correction:** B25 already checks the XR texture command slots that its
+OpenXR::wait_for_all_copies() helper waits on. A proposed extra all-D3D12-consumer
+gate was removed: it risked preventing a live game from ever restarting XR.
 **Scope:** OpenXR reinitialize after save reload, no change to four logical roles /
 three source textures, four-sample reprojection, eye layouts or normal rendering.
 
 ## Three concrete defects addressed
 
-1. **Incomplete GPU preflight:** B25 proved only the OpenXR texture
-   CommandContext fences before calling inherited `wait_for_all_copies()`.
-   That helper may block on other game/UI/spectator/scene commands. B26
-   requires UEVR's existing comprehensive `mono_consumers_retired()` proof
-   before entering the destruction path when in TriView restart phase 3.
-   An unretired command delays restart; it is NEVER freed on a timeout.
+1. **Build-breaking source splice:** B25 inserted an async OpenXR guard
+   before the saved source offset used to replace the later restart block.
+   Its stale offsets split C++ identifiers and string literals, proven by
+   MSVC errors C2065/C2001. B26 recomputes the offsets after insertion.
+   This is a confirmed defect repair.
 
 2. **Stale native stereo readiness:** the Native Stereo Fix hook persists across
    XR session reinit, and `PairReady` may describe a previous session. B26
