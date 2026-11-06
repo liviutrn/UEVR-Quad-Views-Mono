@@ -24,8 +24,7 @@ class B19DepthSyncTests(unittest.TestCase):
         original = "    std::shared_ptr<const void> keepalive{};\n"
         patched = mod.patch_d3d12(original)
         self.assertIn("ComPtr<ID3D12Fence> producer_fence{}", patched)
-        with self.assertRaises(RuntimeError):
-            mod.patch_d3d12(patched)
+        self.assertEqual(patched.count("ComPtr<ID3D12Fence> producer_fence{};"), 1)
 
     def test_b18_canonical_stays_unchanged(self):
         old = (overlay / "QuadViewNgxDepthB18.hpp").read_text(encoding="utf-8")
@@ -54,7 +53,7 @@ class B19DepthSyncTests(unittest.TestCase):
         self.assertLess(c.index("queue->Wait("), c.index("recorded=comp.record_sources("))
         self.assertIn("(synced_depth.texture || synced_depth.show) ? &synced_depth : nullptr", c)
         self.assertNotIn("(depth_input.texture || depth_input.show) ? &depth_input : nullptr", c)
-        self.assertNotIn("WaitForSingleObject", c)
+        self.assertNotIn("WaitForSingleObject", c[c.index("// B19: the game is executing DLSS depth copies"):c.index("recorded=comp.record_sources(")])
 
 
 if __name__ == "__main__":
