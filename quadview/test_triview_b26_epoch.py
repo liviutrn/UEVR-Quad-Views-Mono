@@ -11,6 +11,49 @@ def order(s,a,b):
     if a not in s or b not in s or s.index(a)>=s.index(b):
         raise AssertionError(f"Unsafe order: {a[:95]} must precede {b[:95]}")
 
+
+def check_generated_post_present_cpp(code):
+    """Regression for B25's stale Python splice offset (C2065, C2001)."""
+    start=code.index("void VR::on_post_present() {")
+    end=code.index("\nuint32_t VR::get_hmd_width()",start)
+    body=code[start:end]
+    assert body.count("if (runtime->wants_reinitialize)") == 1
+    assert body.count("m_triview_restart_phase.load(std::memory_order_acquire)==3") == 1
+    # Shallow C++ scanner: skip comments, string/char literals and escapes.
+    # A valid generated function must have balanced braces and no raw newlines
+    # inside ordinary string literals. Neither B24 nor B26 uses raw strings
+    # in this function.
+    mode="code"
+    depth=0
+    i=0
+    while i<len(body):
+        ch=body[i]
+        nx=body[i+1] if i+1<len(body) else ""
+        if mode=="code":
+            if ch=="/" and nx=="/": mode="line"; i+=2; continue
+            if ch=="/" and nx=="*": mode="block"; i+=2; continue
+            if ch=='"': mode="string"
+            elif ch=="'": mode="char"
+            elif ch=="{": depth+=1
+            elif ch=="}":
+                depth-=1
+                if depth<0: raise AssertionError("extra closing brace in generated on_post_present")
+        elif mode=="line":
+            if ch=="\n": mode="code"
+        elif mode=="block":
+            if ch=="*" and nx=="/": mode="code"; i+=2; continue
+        elif mode in ("string","char"):
+            if ch=="\\":
+                i+=2
+                continue
+            if ch==("\x22" if mode=="string" else "'"): mode="code"
+            elif ch=="\n":
+                raise AssertionError("unterminated C++ string / char in generated on_post_present")
+        i+=1
+    if depth!=0 or mode not in ("code","line"):
+        raise AssertionError(f"invalid generated on_post_present structure: depth={depth}, mode={mode}")
+    return True
+
 def main():
     src=Path(sys.argv[1])/"src/mods"
     h=(src/"VR.hpp").read_text(encoding="utf-8")
@@ -57,11 +100,7 @@ def main():
     # B21 changed the depth selector on the B18 snapshot pool; no specific
     # function name is required for the session-reset safety proof.
 
-    # TEMP compilation triage: pinpoint the source span around B25's MSVC
-    # C2065/C2001 from the actual generated code, not overlay-string tests.
-    generated=vr.splitlines()
-    for n in range(15545,min(15642,len(generated)+1)):
-        print(f"[B26][VR_SOURCE] {n}: {generated[n-1][:230]}")
+    check_generated_post_present_cpp(vr)
     print("B26 production-source restart contracts: XR-only fencing, fresh NativeStereo packet, session-isolated depth PASSED")
 
 if __name__=="__main__":main()
