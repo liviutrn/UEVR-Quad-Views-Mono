@@ -1,6 +1,6 @@
-name: TriView B18 reviewed stability and resource reuse Windows DLL
+name: TriView B20 from B18 conservative CPU optimization Windows DLL
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B18 compiled Windows DLL (${{ github.run_number }})
+run-name: TriView B20-B18-base compiled Windows DLL (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -174,6 +174,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B18 cross-platform source parity regression failed' }
           python workspace/quadview/test_triview_b18_resources.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B18 generated ownership/reuse contracts failed' }
+          python workspace/quadview/apply_triview_b20_from_b18.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B20 B18-based hotpath overlay rejected generated source' }
+          python workspace/quadview/test_triview_b20_from_b18.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B20 B18-derived backend invariants failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -275,6 +279,7 @@ jobs:
           Copy-Item workspace/quadview/B15_NOTES.md package/B15_NOTES.md
           Copy-Item workspace/quadview/B17_NOTES.md package/B17_NOTES.md
           Copy-Item workspace/quadview/B18_NOTES.md package/B18_NOTES.md
+          Copy-Item workspace/quadview/B20_B18_BASE_NOTES.md package/B20_B18_BASE_NOTES.md
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
@@ -289,12 +294,12 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B18-reviewed'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 three native sources; per-role reuse; approximate depth, headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B20-from-B18'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 three native sources; per-role reuse; approximate depth, headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          TriView B18 - ID7 experimental headset test candidate.
+          TriView B20 from B18-42 - conservative CPU optimization headset test.
           Three native sources: shared full-FOV periphery + real left/right foveas.
           B15 pose, FOV, native-stereo-fix and existing controls are retained.
 
@@ -320,16 +325,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B18-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B20-B18-Base-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B18-${{ github.run_number }}
+          name: UEVR-TriView-B20-B18-Base-${{ github.run_number }}
           path: |
-            UEVR-TriView-B18-*.zip
-            UEVR-TriView-B18-*.zip.sha256
+            UEVR-TriView-B20-B18-Base-*.zip
+            UEVR-TriView-B20-B18-Base-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
