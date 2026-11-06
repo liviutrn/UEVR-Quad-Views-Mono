@@ -124,8 +124,8 @@ def apply_vr_cpp(s):
             reinitialize_openxr();
         }
     }"""
-    if old != expected:
-        raise RuntimeError("B24: VR::on_post_present() generated reset body changed unexpectedly")
+    if old.count(expected)!=1:
+        raise RuntimeError("B24: on_post_present() exact reset block not unique")
     new = """    if (runtime->wants_reinitialize) {
         std::scoped_lock restart_lock{m_reinitialize_mtx};
         if (runtime->is_openvr()) {
@@ -172,7 +172,7 @@ def apply_vr_cpp(s):
             spdlog::info("[TriView][Restart] phase=4 fresh OpenXR runtime created; waiting for stereo pair");
         }
     }"""
-    return s[:start]+new+s[end:]
+    return s[:start]+old.replace(expected,new,1)+s[end:]
 
 
 def apply_dx_header(s):
