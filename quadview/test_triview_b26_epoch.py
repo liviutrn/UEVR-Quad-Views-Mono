@@ -21,11 +21,11 @@ def main():
     ngx=(src/"vr/QuadViewNgxDepth.hpp").read_text(encoding="utf-8")
 
     reinit=h.split("std::optional<std::string> reinitialize_openxr() {",1)[1].split("    float m_nearz{",1)[0]
-    once(reinit,"m_triview_restart_phase.load(std::memory_order_acquire)==3")
-    once(reinit,"!m_d3d12.mono_consumers_retired()")
-    order(reinit,"!m_d3d12.mono_consumers_retired()","!m_d3d12.openxr().destroy_swapchains()")
+    # B25 already checks every XR command-slot fence. Avoid requiring all
+    # unrelated active game command queues to be idle.
+    assert "!m_d3d12.mono_consumers_retired()" not in reinit
+    once(reinit,"!m_d3d12.openxr().destroy_swapchains()")
     order(reinit,"!m_d3d12.openxr().destroy_swapchains()","m_openxr.reset();")
-    once(reinit,"return std::string{\"Waiting for all D3D12 consumers before XR teardown\"};")
 
     once(hook,"uint64_t native_stereo_publication_serial() const")
     once(hook,"return m_native_stereo_packet_serial.load(std::memory_order_acquire);")
@@ -62,6 +62,6 @@ def main():
     generated=vr.splitlines()
     for n in range(15545,min(15642,len(generated)+1)):
         print(f"[B26][VR_SOURCE] {n}: {generated[n-1][:230]}")
-    print("B26 production-source restart contracts: full GPU preflight, fresh NativeStereo packet, session-isolated depth pools PASSED")
+    print("B26 production-source restart contracts: XR-only fencing, fresh NativeStereo packet, session-isolated depth PASSED")
 
 if __name__=="__main__":main()
