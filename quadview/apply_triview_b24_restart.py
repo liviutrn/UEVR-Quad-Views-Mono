@@ -52,6 +52,15 @@ def apply_vr_header(s):
         }
 
         m_openxr.reset();""", "propagate teardown veto")
+    # A nullopt from initialize_openxr is not sufficient proof of success:
+    # some original initialize_* error paths return nullopt but set loaded=false.
+    s=one(s,
+        "        auto e = initialize_openxr();\n\n        if (e) {",
+        "        auto e = initialize_openxr();\n"
+        "        if (!e && (!m_openxr || !m_openxr->loaded || !m_runtime || !m_runtime->loaded))\n"
+        "            e = std::string{\"New OpenXR runtime did not become loaded after restart\"};\n\n"
+        "        if (e) {",
+        "check new XR loaded")
     return s
 
 
@@ -151,7 +160,8 @@ def apply_vr_cpp(s):
     if (m_is_d3d12 && m_triview_restart_phase.load(std::memory_order_acquire)==3 &&
         runtime->is_openxr() && !is_quadview_mode_selected()) {
         std::scoped_lock restart_lock{m_reinitialize_mtx};
-        bool native_owners_retired=true;
+        // Missing manager is UNKNOWN, not proof of retired engine owners.
+        bool native_owners_retired=false;
         if (m_fake_stereo_hook) if (auto* rtm=m_fake_stereo_hook->get_render_target_manager()) {
             const auto d=rtm->get_quadview_native_retirement_diagnostics();
             native_owners_retired=!d.busy && !d.pending.count && !d.pending.truncated &&
@@ -214,6 +224,15 @@ def apply_dx_cpp(s):
     }""",
        """    // The preflight must run before ANY UI/compositor/swapchain mutation.
     if (restart_teardown_failed) return false;
+    // Never enter wait_for_all_copies() while a fence is outstanding or an XR
+    // texture is acquired: its original wait(INFINITE) is unsafe on GPU loss.
+    // All users of these contexts share mtx, held throughout this transaction.
+    for (const auto& [index,context]:this->contexts) {
+        if (context.num_textures_acquired != 0 || context.pre_acquired)
+            return false;
+        for (const auto& slot:context.texture_contexts)
+            if (slot && !slot->commands.references_retired()) return false;
+    }
     // Compositor-map keys are raw pointers; prove that the command context
     // still belongs to the currently retained swapchain BEFORE dereferencing.
     const auto slot_live=[&](const d3d12::CommandContext* command) {
@@ -247,20 +266,25 @@ def apply_dx_cpp(s):
     const bool game_alpha_retired=this->game_ui_alpha.reset();
     const bool framework_alpha_retired=this->framework_ui_alpha.reset();
     if (!composition_retired || !game_alpha_retired || !framework_alpha_retired) {
-        // UI reset may be partially destructive. A new XR session must never
-        // inherit its stale descriptors; require an application restart.
+        // UI reset can partially mutate state. Do not continue rendering with
+        // uncertain descriptors or pretend a successful XR restart.
         restart_teardown_failed=true;
-        spdlog::error("[TriView][Restart] UI retirement incomplete, old XR runtime preserved");
+        if (vr && vr->get_runtime()) vr->get_runtime()->loaded=false;
+        spdlog::error("[TriView][Restart] UI retirement incomplete; XR rendering stopped, restart game");
         return false;
     }""","post-wait UI proof")
     b=one(b,'                spdlog::error("[VR] Failed to destroy swapchain {}.", i);',
-       '                spdlog::error("[VR] Failed to destroy swapchain {}.", i);\n                restart_teardown_failed=true;',
+       '                spdlog::error("[VR] Failed to destroy swapchain {}.", i);\n'
+       '                restart_teardown_failed=true;\n'
+       '                if (vr && vr->get_runtime()) vr->get_runtime()->loaded=false;',
        "handle XR destroy failure")
     if b.count("    this->contexts.clear();")!=1:
         raise RuntimeError("B24: final context-clear anchor not unique")
     b=one(b,"    vr->m_openxr->swapchains.clear();",
       "    vr->m_openxr->swapchains.clear();\n    return !restart_teardown_failed;",
       "checked destruction result")
+    # The wait(INFINITE) in the original helper is now reachable ONLY after
+    # the initial nonblocking completion/acquired-image check above.
     # Existing overlay vetoes were void and now need explicit failure values.
     b=re.sub(r"\breturn\s*;", "return false;", b)
     # Except an empty context map with successful UI teardown, all paths need
