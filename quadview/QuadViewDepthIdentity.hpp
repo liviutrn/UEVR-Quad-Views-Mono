@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <chrono>
 #include <mutex>
@@ -51,6 +52,20 @@ private:
 };
 // Access is serialized by PeripheryDepth's mutex. An object pointer identifies
 // a command-list object; only pointer + epoch identifies its recorded commands.
+// Publish both dimensions as one identity. Independent width/height atomics
+// can expose a mixed layout while the game thread resizes the periphery.
+class ExpectedPeripheryExtent {
+public:
+    void store(uint32_t width, uint32_t height) noexcept {
+        packed_.store((uint64_t(width) << 32) | uint64_t(height), std::memory_order_release);
+    }
+    std::array<uint32_t,2> load() const noexcept {
+        const auto dimensions = packed_.load(std::memory_order_acquire);
+        return {uint32_t(dimensions >> 32), uint32_t(dimensions)};
+    }
+private:
+    std::atomic<uint64_t> packed_{0};
+};
 class DepthRecordingEpochs {
 public:
     uint64_t current(uintptr_t list) {
