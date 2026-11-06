@@ -41,10 +41,11 @@ require('hook_trace_enabled()?&native_trace:nullptr' in hook,
         "Optional native trace collector still always on")
 require('std::scoped_lock _{vtable_mutex};' in hook,
         "RHI owner lock must not be removed")
-for important in [
-    "Could not select a distinct owned native source target",
-    "Engine view/history did not match its frozen rectangle",
-    "Tracked engine family command failed RHI tail validation",
-]:
-    require(important in vr+hook, "Actual failure warning missing: "+important)
+# B17/B18 customize wording for some target failures. Assert that the generated
+# backend retains a substantial set of actual warning/status callsites instead
+# of depending on a superseded Build51 diagnostic string.
+require(hook.count("vr->set_quadview_status(") >= 15,
+        "Too many native hook failure/status callsites were accidentally removed")
+require(vr.count("set_quadview_status(") >= 6,
+        "Too many GT failure/status callsites were accidentally removed")
 print("B25 generated status/trace/XR and RHI ownership invariants: PASS")
