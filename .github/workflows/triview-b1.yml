@@ -1,6 +1,6 @@
-name: TriView B23 four-depth-sample KISS experiment based on B22
+name: TriView B25 independently reviewed XR restart and native-target lifetime
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B23 four-depth-sample KISS test (${{ github.run_number }})
+run-name: TriView B25 independent safety build (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -186,6 +186,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B24 checked OpenXR restart overlay failed on final generated backend' }
           python workspace/quadview/test_triview_b24_restart.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B24 generated XR teardown and mode handoff contracts failed' }
+          python workspace/quadview/apply_triview_b25_lifetime.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B25 lifetime telemetry source overlay failed its exact generated anchor' }
+          python workspace/quadview/test_triview_b25_review.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B25 independent generated restart/resize owner review contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -290,6 +294,7 @@ jobs:
           Copy-Item workspace/quadview/B21_NOTES.md package/B21_NOTES.md
           Copy-Item workspace/quadview/B22_OPTIMIZATION_NOTES.md package/B22_OPTIMIZATION_NOTES.md
           Copy-Item workspace/quadview/B23_FOUR_SAMPLES_NOTES.md package/B23_FOUR_SAMPLES_NOTES.md
+          Copy-Item workspace/quadview/B25_INDEPENDENT_REVIEW.md package/B25_INDEPENDENT_REVIEW.md
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
@@ -304,12 +309,18 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B23-four-depth-samples-experimental-on-B22'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 B22 three-source/fence baseline with only 25-to-4 depth ray samples changed; experimental; requires ground-truth tests and headset assessment'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B25-independent-reviewed-restart-on-B23'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 B23 four-depth samples plus B24/B25 checked runtime restart and native owner lifetime checks; experimental; kernel BSOD fix not verified'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          TriView B23 - four samples per depth ray instead of twenty-five.
+          TriView B25 - independent XR restart and source lifetime review.
+          WARNING: Windows kernel BSOD prevention is NOT headset-verified.
+          B24 had nonblocking-teardown and source-lease gaps; B25 addresses them.
+          If restart is blocked, do not force it repeatedly; restart the game.
+          See B25_INDEPENDENT_REVIEW.md for exact fixes and limitations.
+
+          Based on B23: four depth ray samples instead of twenty-five.
           B22 shader source dimension reuse and
           verbose HookTrace disabled by default (opt-in via environment).
           Source sampling, depth search, crop and sharpening math unchanged.
@@ -326,16 +337,16 @@ jobs:
           latest submitted depth (max 250 ms) instead of B18's packet-birth
           time cutoff. Depth may originate from an adjacent scene frame.
           No B19 GPU Wait. See B21_NOTES.md, B22_OPTIMIZATION_NOTES.md
-          and B23_FOUR_SAMPLES_NOTES.md. Treat B23 as EXPERIMENTAL.
+          B23_FOUR_SAMPLES_NOTES.md and B25_INDEPENDENT_REVIEW.md. Treat B25 as EXPERIMENTAL.
           This is a performance experiment, not a measured FPS improvement.
           To re-enable the full event trace, set the Windows environment variable
           UEVR_VERBOSE_HOOK_TRACE=1 before launching STALKER 2 and restart it.
           Startup, depth status, warnings and errors remain logged normally.
 
           CI and sanitizer passes do not certify headset visuals or no crashes.
-          Test: direct ID7 startup; both stereo foveas; depth on/off near hands;
+          Cautious TEST: direct ID7 startup; both stereo foveas; depth on/off near hands;
           wheel over diagnostics; save/restart; one moderate periphery resize,
-          then crop/density resize, recenter and a world load. Keep B18-42 and B15-27 rollback.
+          recenter and a world load. Do not intentionally reproduce the crop-size BSOD before an independent source/driver review. Keep B18-42 and B15-27 rollback.
           Record the backend log and stop code/minidump for any blue screen.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
@@ -343,16 +354,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B23-FourDepth-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B25-Safety-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B23-FourDepth-${{ github.run_number }}
+          name: UEVR-TriView-B25-Safety-${{ github.run_number }}
           path: |
-            UEVR-TriView-B23-FourDepth-*.zip
-            UEVR-TriView-B23-FourDepth-*.zip.sha256
+            UEVR-TriView-B25-Safety-*.zip
+            UEVR-TriView-B25-Safety-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
