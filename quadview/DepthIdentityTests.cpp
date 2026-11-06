@@ -1,6 +1,7 @@
 #include "QuadViewDepthIdentity.hpp"
 #include <stdexcept>
 #include <thread>
+#include <future>
 using namespace uevr::quadview::ngx;
 void check(bool ok) { if(!ok) throw std::runtime_error("Depth identity/lifetime contract"); }
 int main() {
@@ -14,6 +15,49 @@ int main() {
       std::thread other([] {check(!DepthOwnerScope::current());});other.join(); }
     check(!DepthOwnerScope::current());
     auto stale=owner;stale.serial++;check(!(owner==stale));stale=owner;stale.target_set++;check(!(owner==stale));
+    check(owner.matches(owner));
+    stale=owner;stale.serial++;check(!owner.matches(stale));
+    stale=owner;stale.target_set++;check(!owner.matches(stale));
+    stale=owner;stale.engine_frame++;check(!owner.matches(stale));
+    stale=owner;stale.projection[14]=1.;check(!owner.matches(stale));
+    stale=owner;stale.role=2;check(!owner.matches(stale));
+    DepthRecordingEpochs epochs;
+    const auto epoch=epochs.current(0x1234);
+    check(epochs.matches(0x1234,epoch));
+    check(!epochs.matches(0x5678,epoch));
+    epochs.reset(0x1234); // old recording discarded, same object reused
+    check(!epochs.matches(0x1234,epoch));
+    check(epochs.matches(0x1234,epoch+1));
+    using Clock=std::chrono::steady_clock;
+    const auto born=Clock::time_point(std::chrono::seconds(1));
+    check(depth_capture_in_window(born,born,born+std::chrono::milliseconds(20)));
+    check(!depth_capture_in_window(born-std::chrono::milliseconds(1),born,born+std::chrono::milliseconds(20)));
+    check(!depth_capture_in_window(born,born,born+std::chrono::milliseconds(250)));
+    check(!depth_capture_in_window(born+std::chrono::milliseconds(21),born,born+std::chrono::milliseconds(20)));
+    check(!depth_capture_in_window(born,{},born));
+    const auto discarded_epoch=epochs.current(0x7777);
+    epochs.prune([](uintptr_t list){return list!=0x7777;});
+    const auto reused_address=epochs.current(0x7777);
+    check(reused_address!=discarded_epoch);
+    check(!epochs.matches(0x7777,discarded_epoch));
+    for(uintptr_t list=0x10000;list<0x10400;++list) {
+        epochs.prune([&](uintptr_t old){return old==list;});
+        check(epochs.current(list)!=0); // long address churn never saturates
+    }
+    check(epochs.reset(0x9999)==0); // Reset of an unrelated list allocates no identity
+    DepthSubmissionSequence submission;
+    bool submitted=false;
+    std::promise<void> attempted;auto attempted_future=attempted.get_future();
+    auto executing=submission.acquire();
+    std::thread resetting([&] {
+        auto early=submission.try_acquire();
+        check(!early.owns_lock()); // driver Execute returned, bookkeeping still owns interval
+        attempted.set_value();
+        auto after=submission.acquire();
+        check(submitted); // Reset cannot classify that enqueued recording as discarded
+    });
+    attempted_future.wait();submitted=true;executing.unlock();resetting.join();
+    { auto first=submission.acquire();auto nested=submission.acquire(); } // wrapped driver reentry
     check(!depth_slot_reusable(true,false,100,0,1)); // even after arbitrary time
     check(!depth_slot_reusable(false,true,9,10,1));
     check(!depth_slot_reusable(false,true,~uint64_t{},10,1));

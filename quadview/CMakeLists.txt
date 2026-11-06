@@ -223,3 +223,21 @@ else()
 endif()
 add_test(NAME triview-three-physical-targets COMMAND TriViewThreePhysicalTests)
 set_tests_properties(triview-three-physical-targets PROPERTIES TIMEOUT 60)
+
+# B18 regression checks: real parent wheel routing and source/lease admission.
+foreach(_test IN ITEMS TriViewAdmission ResourceReuse TriViewReusedDelivery)
+  add_executable(${_test}Tests ${_test}Tests.cpp)
+  if(MSVC)
+    target_compile_options(${_test}Tests PRIVATE /UNDEBUG)
+  else()
+    target_compile_options(${_test}Tests PRIVATE -UNDEBUG)
+  endif()
+  add_test(NAME triview-b18-${_test} COMMAND ${_test}Tests)
+endforeach()
+if(QUADVIEW_IMGUI_DIR)
+  add_executable(QuadViewStatusPanelWheelTests StatusPanelWheelTests.cpp
+    "${QUADVIEW_IMGUI_DIR}/imgui.cpp" "${QUADVIEW_IMGUI_DIR}/imgui_draw.cpp"
+    "${QUADVIEW_IMGUI_DIR}/imgui_widgets.cpp" "${QUADVIEW_IMGUI_DIR}/imgui_tables.cpp")
+  target_include_directories(QuadViewStatusPanelWheelTests PRIVATE "${QUADVIEW_IMGUI_DIR}")
+  add_test(NAME quadview-original-parent-wheel-routing COMMAND QuadViewStatusPanelWheelTests)
+endif()

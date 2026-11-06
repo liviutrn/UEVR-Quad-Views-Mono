@@ -135,23 +135,11 @@ def hook_cpp(s):
 
 
 def native_delivery_header(s):
-    s = one(s,
-        '        for (size_t i = 0; i < 4; ++i) {\n'
-        '            if (!targets[i]) return false;\n'
-        '            for (size_t j = 0; j < i; ++j) if (targets[i] == targets[j]) return false;\n'
-        '        }',
-        '        for (size_t i = 0; i < 4; ++i) {\n'
-        '            if ((required_roles & uint8_t(1u << i)) == 0) continue;\n'
-        '            if (!targets[i]) return false;\n'
-        '            for (size_t j = 0; j < i; ++j) {\n'
-        '                if ((required_roles & uint8_t(1u << j)) && targets[i] == targets[j]) return false;\n'
-        '            }\n'
-        '        }',
-        "required active role target ownership")
-    s = one(s,
-        '                slot.roles_bound = 0xf;',
-        '                slot.roles_bound = required_roles;',
-        "no phantom bound roles")
+    # B18: canonical source and tests now use the same required-role behavior.
+    # Keep a guarded verification here so replay cannot silently diverge.
+    if 'if ((required_roles & uint8_t(1u << i)) == 0) continue;' not in s or \
+            'slot.roles_bound = required_roles;' not in s:
+        raise RuntimeError("Canonical NativeDelivery lacks the three-role contract")
     return s
 
 

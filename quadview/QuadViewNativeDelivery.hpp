@@ -250,8 +250,11 @@ public:
         // Tri-view renders roles 0,2,3 (0x0d); role 0 always carries the batch.
         if ((required_roles & 0x01) == 0 || (required_roles & ~0x0f) != 0) return false;
         for (size_t i = 0; i < 4; ++i) {
+            if ((required_roles & uint8_t(1u << i)) == 0) continue;
             if (!targets[i]) return false;
-            for (size_t j = 0; j < i; ++j) if (targets[i] == targets[j]) return false;
+            for (size_t j = 0; j < i; ++j) {
+                if ((required_roles & uint8_t(1u << j)) && targets[i] == targets[j]) return false;
+            }
         }
         std::scoped_lock lock{mutex_};
         for (const auto& slot : slots_) if (slot.source &&
@@ -267,7 +270,7 @@ public:
             slot.required = required_roles;
             if (!explicit_role_frames) {
                 slot.role_frames.fill(engine.engine_frame);
-                slot.roles_bound = 0xf;
+                slot.roles_bound = required_roles;
             }
             slot.owner_id = owner_id;
             return true;

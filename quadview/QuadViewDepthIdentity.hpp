@@ -1,6 +1,9 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <chrono>
+#include <mutex>
+#include <unordered_map>
 namespace uevr::quadview::ngx {
 // A producer identity, never a lookup by dimensions or current global GT key.
 // The adapter may publish it only while executing one authenticated role-0 tail.
@@ -18,6 +21,11 @@ struct DepthOwner {
         return generation==other.generation && serial==other.serial && target_set==other.target_set &&
             engine_frame==other.engine_frame && role==other.role;
     }
+    bool matches(const DepthOwner& other) const noexcept {
+        return valid() && other.valid() && same_source(other) &&
+            output_width==other.output_width && output_height==other.output_height &&
+            projection==other.projection;
+    }
     friend bool operator==(const DepthOwner&,const DepthOwner&)=default;
 };
 class DepthOwnerScope {
@@ -32,6 +40,47 @@ private:
     const DepthOwner* previous_{};
     static inline thread_local const DepthOwner* current_{};
 };
+// Kept separate from the snapshot-data lock: no data lock crosses a driver
+// call, but Reset cannot overtake Execute's post-call submission bookkeeping.
+class DepthSubmissionSequence {
+public:
+    auto acquire() { return std::unique_lock<std::recursive_mutex>(mutex_); }
+    auto try_acquire() { return std::unique_lock<std::recursive_mutex>(mutex_,std::try_to_lock); }
+private:
+    std::recursive_mutex mutex_;
+};
+// Access is serialized by PeripheryDepth's mutex. An object pointer identifies
+// a command-list object; only pointer + epoch identifies its recorded commands.
+class DepthRecordingEpochs {
+public:
+    uint64_t current(uintptr_t list) {
+        const auto found=epochs_.find(list);
+        if(found!=epochs_.end()) return found->second;
+        if(!list || epochs_.size()>=256) return 0;
+        return epochs_.emplace(list,++next_epoch_).first->second;
+    }
+    uint64_t reset(uintptr_t list) {
+        const auto found=epochs_.find(list);
+        return found==epochs_.end() ? 0 : (found->second=++next_epoch_);
+    }
+    template<class Keep> void prune(Keep keep) {
+        for(auto it=epochs_.begin();it!=epochs_.end();) {
+            if(!keep(it->first)) it=epochs_.erase(it); else ++it;
+        }
+    }
+    bool matches(uintptr_t list,uint64_t epoch) const {
+        const auto it=epochs_.find(list);
+        return epoch && it!=epochs_.end() && it->second==epoch;
+    }
+private:
+    std::unordered_map<uintptr_t,uint64_t> epochs_{};
+    uint64_t next_epoch_{};
+};
+inline bool depth_capture_in_window(std::chrono::steady_clock::time_point captured,
+        std::chrono::steady_clock::time_point packet_born,std::chrono::steady_clock::time_point now) {
+    return packet_born.time_since_epoch().count()>0 && captured>=packet_born && captured<=now &&
+        now-captured<std::chrono::milliseconds(250);
+}
 // UINT64_MAX is D3D12's device-removal sentinel, never completion proof.
 inline bool depth_copy_complete(uint64_t completed,uint64_t required) noexcept {
     return required && completed!=~uint64_t{} && completed>=required;
