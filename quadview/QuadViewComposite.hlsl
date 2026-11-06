@@ -168,24 +168,23 @@ float3 GlamEncode(float3 color) {
     return lerp(low, high, float3(color.r > 0.0031308, color.g > 0.0031308, color.b > 0.0031308));
 }
 
-float3 ReadFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float2 pixelOffset, float2 sourceSize) {
-    // Offsets are in final output pixels after the game's upscaler. AtlasUv
-    // clamps each tap to this eye's focus rectangle, so eyes never bleed.
-    const float2 shifted = fullUv + pixelOffset / float2(EyeAndAtlas.xy);
-    const float2 local = (shifted - crop.xy) / (crop.zw - crop.xy);
+float3 ReadFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float2 pixelOffset, float2 sourceSize) {
+    // Share crop/output normalization across the six sharpening taps.
+    // AtlasUv still clamps taps to this eye's focus rectangle.
+    const float2 local = focusUv + pixelOffset * tapScale;
     return GlamDecode(ReadSource(sourceIndex, AtlasUvKnownSize(sourceSize, rect, local)).rgb);
 }
 
-float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float3 center,
+float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float3 center,
                         float strength, float maxChange, float2 sourceSize) {
     // Fused v186.1 Glamarye Bigger-radius four-diagonal filter with its
     // FXAA-style edge guard and maximum-change limiter. No separate pass.
     const float3 c = GlamDecode(center);
     const float radius = 1.4;
-    const float3 ne = ReadFocus(sourceIndex, rect, crop, fullUv, float2( radius,  radius), sourceSize);
-    const float3 sw = ReadFocus(sourceIndex, rect, crop, fullUv, float2(-radius, -radius), sourceSize);
-    const float3 se = ReadFocus(sourceIndex, rect, crop, fullUv, float2( radius, -radius), sourceSize);
-    const float3 nw = ReadFocus(sourceIndex, rect, crop, fullUv, float2(-radius,  radius), sourceSize);
+    const float3 ne = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2( radius,  radius), sourceSize);
+    const float3 sw = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2(-radius, -radius), sourceSize);
+    const float3 se = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2( radius, -radius), sourceSize);
+    const float3 nw = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2(-radius,  radius), sourceSize);
     float3 smoothed = (ne + nw) + (se + sw);
     smoothed = clamp((smoothed + c) / 5.0, c * 0.5, c * 2.0);
     smoothed = min(smoothed, 1.0);
@@ -198,8 +197,8 @@ float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv
     n2 *= 0.5; s2 *= 0.5;
     const float2 west = horizontal ? float2(-3.5, 0.0) : float2(0.0, 3.5);
     const float2 east = horizontal ? float2( 3.5, 0.0) : float2(0.0,-3.5);
-    const float3 ww = ReadFocus(sourceIndex, rect, crop, fullUv, west, sourceSize);
-    const float3 ee = ReadFocus(sourceIndex, rect, crop, fullUv, east, sourceSize);
+    const float3 ww = ReadFocus(sourceIndex, rect, focusUv, tapScale, west, sourceSize);
+    const float3 ee = ReadFocus(sourceIndex, rect, focusUv, tapScale, east, sourceSize);
     const float3 d1 = abs((ww - n2) - (ee - s2));
     const float3 d2 = abs((ee - n2) - (ww - s2));
     const float3 totalDiff = d1 + d2 + 0.00004;
@@ -217,7 +216,9 @@ float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv
     return GlamEncode(c + change);
 }
 
-float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 contextUv) {
+float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 eyeUv) {
+    // Fully opaque native fovea pixels never need this context homography.
+    const float2 contextUv = ContextUv(eye, eyeUv);
     float fill = 0.0;
     const float2 uv = WarpContextUv(eye, contextUv, fill);
     float4 color = float4(0.0, 0.0, 0.0, 1.0);
@@ -246,7 +247,6 @@ float4 ScenePixel(VertexOut input) {
                                input.position.y) / float2(EyeAndAtlas.xy);
     const uint4 contextRect = eye == 0 ? ContextLeft : ContextRight;
     const uint contextSource = eye == 0 ? ContextSource.x : ContextSource.y;
-    const float2 contextUv = ContextUv(eye, eyeUv);
     const uint4 focusRect = eye == 0 ? FocusLeft : FocusRight;
     const float4 crop = eye == 0 ? CropUvLeft : CropUvRight;
     const uint debugMode = (uint)Options.y;
@@ -262,10 +262,10 @@ float4 ScenePixel(VertexOut input) {
     // 50% crop this skips a texture fetch for most focused pixels, including
     // pixels using the fused Glamarye filter. Keep diagnostics exact.
     if (debugMode == 1)
-        return ReadContext(eye, contextSource, contextRect, contextUv);
+        return ReadContext(eye, contextSource, contextRect, eyeUv);
     if (weight <= 0.0) {
         if (debugMode == 2) return float4(0.04, 0.04, 0.04, 1.0);
-        return ReadContext(eye, contextSource, contextRect, contextUv);
+        return ReadContext(eye, contextSource, contextRect, eyeUv);
     }
 
     const float2 focusUv = (eyeUv - crop.xy) / (crop.zw - crop.xy);
@@ -274,11 +274,13 @@ float4 ScenePixel(VertexOut input) {
     float4 focus = ReadSource(2u + eye, AtlasUvKnownSize(focusSourceSize, focusRect, focusUv));
     const float eyeStrength = eye == 0u ? SharpenEye.x : SharpenEye.y;
     const float eyeMaxChange = eye == 0u ? SharpenEye.z : SharpenEye.w;
-    [branch] if (eyeStrength > 0.0)
-        focus.rgb = GlamSharpenFocus(2u + eye, focusRect, crop, eyeUv, focus.rgb, eyeStrength, eyeMaxChange, focusSourceSize);
+    [branch] if (eyeStrength > 0.0) {
+        const float2 tapScale = 1.0 / (float2(EyeAndAtlas.xy) * (crop.zw - crop.xy));
+        focus.rgb = GlamSharpenFocus(2u + eye, focusRect, focusUv, tapScale, focus.rgb, eyeStrength, eyeMaxChange, focusSourceSize);
+    }
     float4 output = focus;
     [branch] if (debugMode != 2 && weight < 1.0) {
-        const float4 context = ReadContext(eye, contextSource, contextRect, contextUv);
+        const float4 context = ReadContext(eye, contextSource, contextRect, eyeUv);
         output = lerp(context, focus, weight);
     }
     if (Options.w > 0.5) {
