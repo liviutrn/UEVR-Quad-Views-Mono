@@ -220,6 +220,13 @@ def apply_vr_cpp(s):
         "    if (m_is_d3d12 && runtime->is_openxr() && is_native_openxr_async_wait_active() &&\n"
         "        m_triview_restart_phase.load(std::memory_order_acquire)==0) {",
         "close async XR wait admission while restarting")
+    # B26: this earlier insertion changes offsets inside on_post_present.
+    # B25 spliced with the OLD offsets, corrupting C++ tokens (MSVC C2065
+    # 'm_o', C2001 newline in constant). Locate the restart body AGAIN in
+    # the updated source before replacing it. This is a proven compiler bug.
+    start=s.index("    if (runtime->wants_reinitialize) {",s.index("void VR::on_post_present() {"))
+    end=s.index("\n}\n\nuint32_t VR::get_hmd_width()",start)
+    old=s[start:end]
     # Other overlay callbacks may appear before/after the original reset
     # branch. Preserve them byte-for-byte: change only this one XR call.
     replacement="""            const auto error = [&]() -> std::optional<std::string> {
