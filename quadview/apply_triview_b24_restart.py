@@ -294,13 +294,19 @@ def apply_dx_cpp(s):
        """    if (!this->destroy_swapchains())
         return "OpenXR swapchain destruction postponed: resources still live";
     if (!this->duoview_compositors.empty())""","create preflight caller")
-    s=one(s,
+    # Scope the interception to pre_acquire (not the other XR methods with
+    # similar runtime-null checks).
+    pre_start=s.index("bool D3D12Component::OpenXR::pre_acquire(")
+    pre_end=s.index("\nvoid D3D12Component::OpenXR::release_acquired(",pre_start)
+    pre=s[pre_start:pre_end]
+    pre=one(pre,
         "    auto vr = VR::get();\n\n    if (vr == nullptr || vr->m_openxr == nullptr) {",
         "    auto vr = VR::get();\n"
         "    // During phase 3, no new async image acquisitions on the old XR session.\n"
         "    if (vr && vr->triview_restart_phase()==3) return false;\n\n"
         "    if (vr == nullptr || vr->m_openxr == nullptr) {",
-        "stop async acquisitions",)
+        "stop async acquisitions")
+    s=s[:pre_start]+pre+s[pre_end:]
     s=one(s,
         "bool D3D12Component::OpenXR::destroy_swapchains() {",
         "bool D3D12Component::OpenXR::depth_quiescent_for_restart() const {\n"
