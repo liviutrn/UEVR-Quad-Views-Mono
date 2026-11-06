@@ -359,4 +359,65 @@ inline void apply_focus_crop(Matrix& matrix, const Crop& crop) {
     }
 }
 
+// Tri-view B14: one source-target build per SETTLED size change, at most one in
+// flight, and the sizes of every published set are known. B12 started a new
+// four-target build on every 64 px slider step; each build allocates four render
+// targets that only Unreal's garbage collector frees (about once a minute), and
+// a build replaced mid-flight could publish with sizes the draw no longer knew.
+struct ResizeSizes {
+    float crop_width{}, crop_height{}, context_scale{}, foveal_density{};
+};
+class ResizeGate {
+public:
+    static constexpr uint64_t settle_ms = 400;      // wanted extents unchanged this long
+    static constexpr uint64_t latch_timeout_ms = 35000; // > the 30 s build timeout
+    // While a build is in flight it is re-requested at most this often: a build that
+    // fails fast must not respawn four targets every frame. Between requests the
+    // caller asks for the live extents, which leaves an in-flight build untouched.
+    static constexpr uint64_t retry_ms = 2000;
+    struct Decision {
+        bool hold{};            // draw with `draw` (the published set's sizes)
+        ResizeSizes draw{};
+        bool request{};         // ask for a build of `request_extents`
+        SourceExtents request_extents{};
+    };
+    // A draw used the published set with these sizes.
+    void confirm_live(const SourceExtents& extents, const ResizeSizes& sizes) {
+        live_valid_ = true; live_extents_ = extents; live_sizes_ = sizes;
+    }
+    void reset() { *this = ResizeGate{}; }
+    // published: extents of the set published right now (nullopt = none).
+    Decision update(const std::optional<SourceExtents>& published, const SourceExtents& wanted,
+                    const ResizeSizes& wanted_sizes, uint64_t now_ms) {
+        Decision d{};
+        // No published set (world change, mode switch): the caller's normal path
+        // requests what it draws; an old in-flight request is not carried over.
+        if (!published) { latched_ = false; seen_ = false; return d; }
+        if (latched_ && *published == latched_extents_) {
+            confirm_live(*published, latched_sizes_);
+            latched_ = false;
+        }
+        if (latched_ && now_ms - latched_ms_ > latch_timeout_ms) latched_ = false;
+        if (latched_ && now_ms - requested_ms_ >= retry_ms) {
+            d.request = true; d.request_extents = latched_extents_; requested_ms_ = now_ms;
+        }
+        // Unknown sizes for the published set: no hold (the caller's normal path).
+        if (!live_valid_ || *published != live_extents_) { seen_ = false; return d; }
+        if (wanted == live_extents_) { seen_ = false; return d; }
+        d.hold = true; d.draw = live_sizes_;
+        if (!seen_ || wanted != seen_extents_) { seen_ = true; seen_extents_ = wanted; seen_ms_ = now_ms; return d; }
+        if (!latched_ && now_ms - seen_ms_ >= settle_ms) {
+            latched_ = true; latched_extents_ = wanted; latched_sizes_ = wanted_sizes; latched_ms_ = now_ms;
+            requested_ms_ = now_ms;
+            d.request = true; d.request_extents = wanted;
+        }
+        return d;
+    }
+    bool latched() const { return latched_; }
+private:
+    bool live_valid_{}; SourceExtents live_extents_{}; ResizeSizes live_sizes_{};
+    bool latched_{}; SourceExtents latched_extents_{}; ResizeSizes latched_sizes_{}; uint64_t latched_ms_{}, requested_ms_{};
+    bool seen_{}; SourceExtents seen_extents_{}; uint64_t seen_ms_{};
+};
+
 } // namespace uevr::quadview

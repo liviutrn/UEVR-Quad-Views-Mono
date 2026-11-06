@@ -61,6 +61,12 @@ if(WIN32)
   add_test(NAME quadview-stereo-typeless-warp
     COMMAND QuadViewShaderWarpTests "${CMAKE_CURRENT_SOURCE_DIR}/QuadViewComposite.hlsl" --typeless)
   set_tests_properties(quadview-stereo-shader-warp quadview-stereo-srgb-warp quadview-stereo-typeless-warp PROPERTIES TIMEOUT 60)
+  # Tri-view B14: the real shader against exact ground-truth stereo pixels.
+  add_executable(QuadViewDepthWarpTests QuadViewDepthWarpTest.cpp)
+  target_link_libraries(QuadViewDepthWarpTests PRIVATE d3d12 dxgi d3dcompiler)
+  add_test(NAME quadview-depth-warp-ground-truth-stereo
+    COMMAND QuadViewDepthWarpTests "${CMAKE_CURRENT_SOURCE_DIR}/QuadViewComposite.hlsl")
+  set_tests_properties(quadview-depth-warp-ground-truth-stereo PROPERTIES TIMEOUT 60)
 endif()
 
 add_executable(QuadViewNativeDeliveryTests NativeDeliveryTests.cpp)
@@ -199,3 +205,7 @@ add_executable(QuadViewDepthIdentityTests DepthIdentityTests.cpp)
 add_test(NAME quadview-depth-owner-fence-contract COMMAND QuadViewDepthIdentityTests)
 add_executable(QuadViewDepthGeometryTests DepthGeometryTests.cpp)
 add_test(NAME quadview-depth-exact-camera-geometry COMMAND QuadViewDepthGeometryTests)
+add_executable(QuadViewDepthWarpSceneTests DepthWarpSceneTests.cpp)
+add_test(NAME quadview-depth-warp-scene-reference COMMAND QuadViewDepthWarpSceneTests)
+add_executable(QuadViewResizeGateTests ResizeGateTests.cpp)
+add_test(NAME quadview-settled-single-build-resize COMMAND QuadViewResizeGateTests)
