@@ -91,13 +91,14 @@ public:
 
     // Game thread, per draw: expected periphery output size (0 = disabled).
     void set_expected(uint32_t w, uint32_t h) {
-        want_w_.store(w, std::memory_order_relaxed); want_h_.store(h, std::memory_order_relaxed);
+        expected_extent_.store(w, h);
     }
     static constexpr bool capture_supported() noexcept { return true; }
     void set_enabled(bool on) {
         enabled_.store(on && capture_supported(), std::memory_order_release);
         std::scoped_lock lock(mutex_);
-        prune_locked(want_w_.load(),want_h_.load(),!on);
+        const auto extent = expected_extent_.load();
+        prune_locked(extent[0],extent[1],!on);
     }
 
     // Present thread: install hooks lazily (only while Tri-view depth is on).
@@ -135,7 +136,8 @@ public:
     // bound prevents definite stale reuse, but is not exact source identity.
     // The compositor retains the snapshot through its own GPU retirement.
     std::shared_ptr<const DepthSnapshot> latest_approximate_since(std::chrono::steady_clock::time_point not_before) {
-        const auto w = want_w_.load(std::memory_order_relaxed), h = want_h_.load(std::memory_order_relaxed);
+        const auto extent = expected_extent_.load();
+        const auto w = extent[0], h = extent[1];
         if (!enabled_.load(std::memory_order_acquire) || !w || !h) { ++missed_; return {}; }
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(mutex_);
@@ -167,10 +169,11 @@ public:
                    bool queue_hook; uint32_t want_w, want_h, other_w, other_h, reason, used_age_us, slots; bool jitter_valid; float jitter_x, jitter_y; uint64_t foreign_queue_submits; };
     Stats stats() const {
         uint32_t hooks = 0, slots = 0; bool queue_hook = false;
+        const auto extent = expected_extent_.load();
         { std::scoped_lock lock(hook_install_mutex_,mutex_); for (bool b : eval_ok_) hooks += b; queue_hook = execute_ok_; slots = uint32_t(pool_.size()); }
         return {evaluations_.load(), matches_.load(), captures_.load(), submits_.load(), used_.load(), missed_.load(), skips_.load(),
                 last_out_w_.load(), last_out_h_.load(), last_in_w_.load(), last_in_h_.load(), last_format_.load(), hooks, queue_hook,
-                want_w_.load(), want_h_.load(), other_w_.load(), other_h_.load(), last_reason_.load(), last_used_age_us_.load(), slots,
+                extent[0], extent[1], other_w_.load(), other_h_.load(), last_reason_.load(), last_used_age_us_.load(), slots,
                 last_jitter_valid_.load(), last_jitter_x_.load(), last_jitter_y_.load(), foreign_queue_submits_.load()};
     }
 
@@ -197,7 +200,8 @@ private:
     std::vector<std::shared_ptr<DepthSnapshot>> pool_{};
     uint64_t next_sequence_{};
     std::atomic<bool> enabled_{false};
-    std::atomic<uint32_t> want_w_{}, want_h_{}, last_out_w_{}, last_out_h_{}, last_in_w_{}, last_in_h_{}, last_format_{};
+    ExpectedPeripheryExtent expected_extent_{};
+    std::atomic<uint32_t> last_out_w_{}, last_out_h_{}, last_in_w_{}, last_in_h_{}, last_format_{};
     std::atomic<uint32_t> other_w_{}, other_h_{}, last_reason_{}, last_used_age_us_{};
     std::atomic<bool> last_jitter_valid_{};
     std::atomic<uint64_t> foreign_queue_submits_{};
@@ -233,7 +237,8 @@ private:
             cmd->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) return {};
         if (!install_reset(cmd)) { reject(RecordingHookUnavailable); return {}; }
         ++evaluations_;
-        const auto want_w = want_w_.load(std::memory_order_relaxed), want_h = want_h_.load(std::memory_order_relaxed);
+        const auto extent = expected_extent_.load();
+        const auto want_w = extent[0], want_h = extent[1];
         const auto out_w = ngx_uint(p, "OutWidth"), out_h = ngx_uint(p, "OutHeight");
         if (!want_w || !want_h) { last_reason_.store(NoExpectedSize, std::memory_order_relaxed); return {}; }
         if (!matches_periphery(out_w, out_h, want_w, want_h)) {
