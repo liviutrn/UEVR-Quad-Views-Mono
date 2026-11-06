@@ -1,6 +1,6 @@
-name: Tri-view B15 recenter fix Windows DLL
+name: Tri-view B16 safe resize and settings Windows DLL
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: Tri-view B15 compiled Windows DLL (${{ github.run_number }})
+run-name: Tri-view B16 compiled Windows DLL (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -156,6 +156,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B15 recenter head-pose overlay failed its exact anchors' }
           python workspace/quadview/test_triview_b15.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B15 recenter source contracts failed' }
+          python workspace/quadview/apply_triview_b16.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B16 UI/config/retirement overlay failed its source anchors' }
+          python workspace/quadview/test_triview_b16.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B16 UI/config/retirement source contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
