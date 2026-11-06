@@ -119,6 +119,17 @@ def apply_vr_cpp(s):
     }
 """
     s=one(s,anchor,injection,"GT lifecycle")
+    # A B14 held-set shared_ptr is a lease on each old native source owner.
+    # Transition can stop calling quadview_begin_frame(), so its ordinary
+    # end-of-draw reset might never run. Explicitly release it at the mode
+    # commit boundary AFTER the production engine-tail retirement check.
+    s=one(s,
+        "    m_quadview.retire_generation(retired_generation);",
+        "    m_quadview.retire_generation(retired_generation);\n"
+        "    m_triview_hold_set.reset();\n"
+        "    m_triview_resize_gate.reset();\n"
+        "    m_triview_pending_extents_valid=false;",
+        "release B14 held source at mode transition")
     start=s.index("    if (runtime->wants_reinitialize) {",s.index("void VR::on_post_present() {"))
     end=s.index("\n}\n\nuint32_t VR::get_hmd_width()",start)
     old=s[start:end]
