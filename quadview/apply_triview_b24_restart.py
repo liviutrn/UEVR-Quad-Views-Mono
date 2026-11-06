@@ -22,6 +22,7 @@ def apply_vr_header(s):
     // 0=idle, 1=requested, 2=Native Stereo transition, 3=drain/restart,
     // 4=XR re-created and Native Stereo warming, 5=TriView return requested.
     std::atomic<int> m_triview_restart_phase{0};
+    uintptr_t m_triview_resize_world_identity{}; // B25 world reload invalidates B14 resize cache.
     bool m_triview_restart_saved_native_fix{false};
     std::chrono::steady_clock::time_point m_triview_restart_ready_since{};
     std::chrono::steady_clock::time_point m_triview_restart_resume_since{};
@@ -119,6 +120,21 @@ def apply_vr_cpp(s):
     }
 """
     s=one(s,anchor,injection,"GT lifecycle")
+    # B14 keeps resize sizes across draws but its key was only physical extents.
+    # Save-game world replacement can give the SAME extents with a NEW owner.
+    # Reset stale size assumptions when the published native world changes.
+    s=one(s,
+        "                if (m_triview_hold_set && !m_triview_hold_set->complete()) m_triview_hold_set.reset();\n"
+        "                auto wanted=uevr::quadview::make_layout(",
+        "                if (m_triview_hold_set && !m_triview_hold_set->complete()) m_triview_hold_set.reset();\n"
+        "                const uintptr_t new_world=m_triview_hold_set ? m_triview_hold_set->world_identity : 0;\n"
+        "                if (new_world!=m_triview_resize_world_identity) {\n"
+        "                    m_triview_resize_world_identity=new_world;\n"
+        "                    m_triview_resize_gate.reset();\n"
+        "                    SPDLOG_INFO(\"[TriView][Resize] published world identity changed; discard prior-size cache\");\n"
+        "                }\n"
+        "                auto wanted=uevr::quadview::make_layout(",
+        "invalidate resize sizes on world change")
     # A B14 held-set shared_ptr is a lease on each old native source owner.
     # Transition can stop calling quadview_begin_frame(), so its ordinary
     # end-of-draw reset might never run. Explicitly release it at the mode
@@ -128,6 +144,7 @@ def apply_vr_cpp(s):
         "    m_quadview.retire_generation(retired_generation);\n"
         "    m_triview_hold_set.reset();\n"
         "    m_triview_resize_gate.reset();\n"
+        "    m_triview_resize_world_identity=0;\n"
         "    m_triview_pending_extents_valid=false;",
         "release B14 held source at mode transition")
     start=s.index("    if (runtime->wants_reinitialize) {",s.index("void VR::on_post_present() {"))
