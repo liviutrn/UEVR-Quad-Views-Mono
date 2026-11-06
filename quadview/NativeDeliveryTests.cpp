@@ -341,14 +341,16 @@ int main() {
         assert(weak.expired());
     }
     {
-        // Tri-view: roles 0,2,3 publish; role 1 is never rendered.
+        // Tri-view B17: roles 0,2,3 publish and physical slot 1 is NULL.
+        // This differs from B15's three renders into FOUR allocated resources.
         D d;N n(d);
         D::Source s{std::make_shared<const Packet>(Packet{1}),1,1,100,1,
             0x100,0x200,0x300,{0x401,0x402,0x403,0x404}};
         D::EngineTicket e{1,1,100,s.family,s.target,s.scene};
         assert(d.register_engine_family(e)); assert(d.register_bound(s));
-        assert(!n.bind(s,e,44,{0x501,0x502,0x503,0x504},false,0x0c)); // role 0 is mandatory
-        assert(n.bind(s,e,44,{0x501,0x502,0x503,0x504},false,0x0d));
+        assert(!n.bind(s,e,44,{0x501,0,0x503,0x504},false,0x0c)); // role 0 mandatory
+        assert(n.bind(s,e,44,{0x501,0,0x503,0x504},false,0x0d));
+        assert(!n.render(1,100,0,0x300)); // vacant slot cannot claim a native callback
         std::array<N::Command,4> c{};
         for(size_t i: {size_t(0),size_t(2),size_t(3)}) {
             auto found=n.render(1,100,0x501+i,0x300); assert(found); c[i]=*found;
