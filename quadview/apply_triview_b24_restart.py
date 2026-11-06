@@ -124,7 +124,7 @@ def apply_vr_cpp(s):
             reinitialize_openxr();
         }
     }"""
-    if old.count("            reinitialize_openxr();")!=1 or old.count("m_openxr->wants_reinitialize = false;")!=1:
+    if old.count("            const auto error = reinitialize_openxr();")!=1 or old.count("m_openxr->wants_reinitialize = false;")!=1:
         raise RuntimeError(f"B24 reset source mismatch: {old[-2300:]!r}")
     new = """    if (runtime->wants_reinitialize) {
         std::scoped_lock restart_lock{m_reinitialize_mtx};
@@ -174,17 +174,20 @@ def apply_vr_cpp(s):
     }"""
     # Other overlay callbacks may appear before/after the original reset
     # branch. Preserve them byte-for-byte: change only this one XR call.
-    replacement="""            if (m_is_d3d12 && is_quadview_mode_selected() &&
-                m_triview_restart_phase.load(std::memory_order_acquire)==0) {
-                m_triview_restart_phase.store(1,std::memory_order_release);
-                spdlog::info("[TriView][Restart] phase=1 queued via native-mode transition");
-            } else if (m_triview_restart_phase.load(std::memory_order_acquire)==0) {
-                if (const auto error=reinitialize_openxr())
-                    spdlog::warn("[OpenXR][Restart] {}",*error);
-            } else {
-                spdlog::info("[TriView][Restart] duplicate request coalesced");
-            }"""
-    changed=old.replace("            reinitialize_openxr();",replacement,1)
+    replacement="""            const auto error = [&]() -> std::optional<std::string> {
+                if (m_is_d3d12 && is_quadview_mode_selected() &&
+                    m_triview_restart_phase.load(std::memory_order_acquire)==0) {
+                    m_triview_restart_phase.store(1,std::memory_order_release);
+                    spdlog::info("[TriView][Restart] phase=1 queued via native-mode transition");
+                    return std::string{"TriView restart queued; engine owners must retire first"};
+                }
+                if (m_triview_restart_phase.load(std::memory_order_acquire)!=0) {
+                    spdlog::info("[TriView][Restart] duplicate request coalesced");
+                    return std::string{"TriView restart already pending"};
+                }
+                return reinitialize_openxr();
+            }();"""
+    changed=old.replace("            const auto error = reinitialize_openxr();",replacement,1)
     stage3=new[new.index("    if (m_is_d3d12 && m_triview_restart_phase"):]
     return s[:start]+changed+"\n"+stage3+s[end:]
 
