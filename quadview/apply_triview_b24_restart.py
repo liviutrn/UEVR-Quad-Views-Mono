@@ -281,7 +281,7 @@ def main():
         root/"VR.cpp":apply_vr_cpp,
         root/"vr/D3D12Component.hpp":apply_dx_header,
         root/"vr/D3D12Component.cpp":apply_dx_cpp,
-        root/"vr/QuadViewNgxDepthB18.hpp":apply_depth,
+        root/"vr/QuadViewNgxDepth.hpp":apply_depth,
     }
     updated={p:fn(p.read_text(encoding="utf-8")) for p,fn in ops.items()}
     for p,s in updated.items():p.write_text(s,encoding="utf-8")
