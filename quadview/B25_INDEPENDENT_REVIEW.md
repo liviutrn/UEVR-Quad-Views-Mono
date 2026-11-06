@@ -21,9 +21,10 @@ that a GPU/OpenXR/UE5.5.4 lifetime transition is safe. It still had:
 - Release the B14 held source-owner lease and reset its resize gate at the GT
   rendering-method commit, after the existing engine tail retirement check.
 - Treat missing native target manager as UNKNOWN, not proven drained.
-- Preflight all XR image acquisition counts and command fences without blocking.
-  Only enter inherited `wait_for_all_copies()` when every tracked context is
-  already retired; pre-acquire is closed while restart phase 3 is active.
+- Preflight all XR command fences without blocking. Only enter the inherited
+  `wait_for_all_copies()` once fences are retired; it then releases images that
+  were already acquired. Verify acquisition counts are zero before UI teardown.
+  New pre-acquisitions are closed while restart phase 3 is active.
 - On irreversible partial UI/XR destruction failure, mark XR unloaded and refuse
   further rendering rather than continuing on uncertain resources.
 - Check the actual loaded state after `initialize_openxr()` before reporting success.
