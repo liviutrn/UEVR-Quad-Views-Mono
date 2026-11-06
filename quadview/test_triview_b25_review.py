@@ -56,8 +56,9 @@ def main():
 
     # Never mistake a submitted-but-uncompleted NGX copy for safe retirement.
     need(depth,"bool restart_quiescent() const")
-    need(depth,"slot->pending || slot.use_count()!=1",2) # restart gate and pool prune
-    need(depth,"slot->producer_fence->GetCompletedValue()")
+    restart_depth=depth.split("bool restart_quiescent() const {",1)[1].split("static constexpr bool capture_supported()",1)[0]
+    need(restart_depth,"slot->pending || slot.use_count()!=1")
+    need(restart_depth,"slot->producer_fence->GetCompletedValue()")
 
     # The Native Stereo Fix engine-owned source remains fail-closed on an
     # actual owner/property/device/hook failure; log which category failed.
