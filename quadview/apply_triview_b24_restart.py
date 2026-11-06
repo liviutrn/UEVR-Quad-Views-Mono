@@ -125,7 +125,7 @@ def apply_vr_cpp(s):
         }
     }"""
     if old.count("            reinitialize_openxr();")!=1 or old.count("m_openxr->wants_reinitialize = false;")!=1:
-        raise RuntimeError("B24: OpenXR restart-call anchor absent or ambiguous")
+        raise RuntimeError(f"B24 reset source mismatch: {old[-2300:]!r}")
     new = """    if (runtime->wants_reinitialize) {
         std::scoped_lock restart_lock{m_reinitialize_mtx};
         if (runtime->is_openvr()) {
