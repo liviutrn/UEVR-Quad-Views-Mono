@@ -182,6 +182,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B23 shader differs from B22 beyond exactly two sample-count constants' }
           python workspace/quadview/test_triview_b22_trace_gate.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B22 runtime verbose-trace gate did not reach generated backend' }
+          python workspace/quadview/apply_triview_b24_restart.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B24 checked OpenXR restart overlay failed on final generated backend' }
+          python workspace/quadview/test_triview_b24_restart.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B24 generated XR teardown and mode handoff contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
