@@ -101,11 +101,11 @@ float2 WarpContextUv(uint eye, float2 contextUv, out float fill) {
         const float2 k = float2(0.5 * DepthProjection.x, -0.5 * DepthProjection.z) * (t.xy - ray * t.z) * DepthCoefficients.w;
         // nearest surface searched: 8 world units (~8 cm), or the near plane if farther
         const float sMax = min(abs(DepthCoefficients.z / DepthCoefficients.y), 0.125);
-        const float ds = sMax / 24.0;
+        const float ds = sMax / 3.0;
         float2 previousUv = contextUv + k * sMax;
         float previousF = -1.0, previousInverse = 0.0;
         bool found = false;
-        [loop] for (uint i = 0; i <= 24u && !found; ++i) {
+        [loop] for (uint i = 0; i <= 3u && !found; ++i) {
             const float s = sMax - ds * float(i);
             const float2 c = contextUv + k * s;
             const bool inside = all(c >= 0.0) && all(c <= 1.0);
