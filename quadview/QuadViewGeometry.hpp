@@ -309,6 +309,15 @@ inline SourceExtents source_extents(const Layout& layout) {
 // Converts an atlas layout (from make_layout, optionally tri-view) into
 // target-local rectangles. Sizes, crops and homographies are unchanged: the
 // homographies map eye uv to context uv, which is rectangle-relative.
+// B17: retain logical role 1 for view-family identity while never allocating a
+// corresponding physical source. This also applies to unprojected "wanted"
+// layouts during B14 resize negotiation (not only frozen shared-context layouts).
+inline SourceExtents triview_source_extents(const Layout& layout) {
+    auto extents = source_extents(layout);
+    extents[1] = {0, 0};
+    return extents;
+}
+
 inline bool apply_native_local(Layout& layout) {
     if (layout.native_local) return true;
     const auto context = layout.views[0], focus = layout.views[2];
