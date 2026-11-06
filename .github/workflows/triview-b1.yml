@@ -1,6 +1,6 @@
-name: TriView B25 independently reviewed XR restart and native-target lifetime
+name: TriView B26 XR session epoch and full GPU completion gate
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B25 independent safety build (${{ github.run_number }})
+run-name: TriView B26 OpenXR restart barrier (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -190,6 +190,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B25 lifetime telemetry source overlay failed its exact generated anchor' }
           python workspace/quadview/test_triview_b25_review.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B25 independent generated restart/resize owner review contracts failed' }
+          python workspace/quadview/apply_triview_b26_xr_epoch.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B26 full GPU preflight and XR epoch overlay failed on generated source' }
+          python workspace/quadview/test_triview_b26_epoch.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B26 fresh Native Fix frame / depth lifetime contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -295,6 +299,7 @@ jobs:
           Copy-Item workspace/quadview/B22_OPTIMIZATION_NOTES.md package/B22_OPTIMIZATION_NOTES.md
           Copy-Item workspace/quadview/B23_FOUR_SAMPLES_NOTES.md package/B23_FOUR_SAMPLES_NOTES.md
           Copy-Item workspace/quadview/B25_INDEPENDENT_REVIEW.md package/B25_INDEPENDENT_REVIEW.md
+          Copy-Item workspace/quadview/B26_NOTES.md package/B26_NOTES.md
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
@@ -309,11 +314,16 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B25-independent-reviewed-restart-on-B23'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 B23 four-depth samples plus B24/B25 checked runtime restart and native owner lifetime checks; experimental; kernel BSOD fix not verified'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B26-session-barrier-on-B25'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 B23 four-sample shader, B25 lifecycle, B26 all-consumer/DLSS depth/session-serial barrier; experimental; BSOD not proven fixed'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
+          TriView B26 - stricter XR restart with new-session identity.
+          Full UEVR D3D12 consumer preflight, old DLSS depth removal and
+          truly new Native Fix packet needed before re-entering TriView.
+          See B26_NOTES.md for verified source changes and limitations.
+
           TriView B25 - independent XR restart and source lifetime review.
           WARNING: Windows kernel BSOD prevention is NOT headset-verified.
           B24 had nonblocking-teardown and source-lease gaps; B25 addresses them.
@@ -337,7 +347,7 @@ jobs:
           latest submitted depth (max 250 ms) instead of B18's packet-birth
           time cutoff. Depth may originate from an adjacent scene frame.
           No B19 GPU Wait. See B21_NOTES.md, B22_OPTIMIZATION_NOTES.md
-          B23_FOUR_SAMPLES_NOTES.md and B25_INDEPENDENT_REVIEW.md. Treat B25 as EXPERIMENTAL.
+          B23_FOUR_SAMPLES_NOTES.md, B25_INDEPENDENT_REVIEW.md and B26_NOTES.md. Treat B26 as EXPERIMENTAL.
           This is a performance experiment, not a measured FPS improvement.
           To re-enable the full event trace, set the Windows environment variable
           UEVR_VERBOSE_HOOK_TRACE=1 before launching STALKER 2 and restart it.
@@ -354,16 +364,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B25-Safety-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B26-XRBarrier-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B25-Safety-${{ github.run_number }}
+          name: UEVR-TriView-B26-XRBarrier-${{ github.run_number }}
           path: |
-            UEVR-TriView-B25-Safety-*.zip
-            UEVR-TriView-B25-Safety-*.zip.sha256
+            UEVR-TriView-B26-XRBarrier-*.zip
+            UEVR-TriView-B26-XRBarrier-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
