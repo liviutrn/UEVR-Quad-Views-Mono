@@ -38,6 +38,10 @@ def main():
     need(vr,'m_triview_restart_phase.store(5,std::memory_order_release);')
     need(vr,'bool native_owners_retired=false;')
     need(vr,'m_d3d12.openxr().depth_quiescent_for_restart();')
+    need(vr,'const bool async_xr_idle=!m_native_openxr_async_wait_inflight.load(std::memory_order_acquire);')
+    frame=vr.split("void VR::on_post_present() {",1)[1].split("\n}\n\nuint32_t VR::get_hmd_width()",1)[0]
+    need(frame,"is_native_openxr_async_wait_active() &&\n        m_triview_restart_phase.load(std::memory_order_acquire)==0)")
+    before(frame,"const bool async_xr_idle=","else if (const auto error=reinitialize_openxr())")
 
     # Never wait INFINITE on outstanding D3D12 queues while holding XR mtx.
     destroy=dx.split("bool D3D12Component::OpenXR::destroy_swapchains() {",1)[1].split(
