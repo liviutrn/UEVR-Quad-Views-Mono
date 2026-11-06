@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""B26: prove all GPU consumers, new Native Fix frame and clean depth epoch at XR restart.
+"""B26: prove a NEW Native Fix frame and clean depth epoch at XR restart.
 
 Apply LAST after B25. Exact generated-source anchors: abort on mismatches.
 No per-frame new allocations or GPU waits; only the uncommon XR restart path.
@@ -20,23 +20,9 @@ def vr_header(s):
     // Native Stereo Fix MUST publish a frame newer than the final old XR session.
     std::atomic<uint64_t> m_triview_restart_previous_native_serial{0};""",
         "fresh pair baseline member")
-    s=once(s,
-        """        if (m_is_d3d12) {
-            // The old void path could refuse GPU teardown but still destroy
-            // XrSession. Never advance after a veto or partial destruction.
-            if (!m_d3d12.openxr().destroy_swapchains()) {""",
-        """        if (m_is_d3d12) {
-            // B26: on a TriView restart prove ALL UEVR D3D12 consumers have
-            // completed, not just the OpenXR texture command slots. The
-            // inherited teardown contains wait(INFINITE) for other slots.
-            if (m_triview_restart_phase.load(std::memory_order_acquire)==3 &&
-                !m_d3d12.mono_consumers_retired()) {
-                return std::string{"Waiting for all D3D12 consumers before XR teardown"};
-            }
-            // The old void path could refuse GPU teardown but still destroy
-            // XrSession. Never advance after a veto or partial destruction.
-            if (!m_d3d12.openxr().destroy_swapchains()) {""",
-        "all-consumer preflight")
+    # The inherited OpenXR::wait_for_all_copies() touches XR texture
+    # command contexts only, already preflighted in B25. Do not gate
+    # reinitialize on unrelated always-active game D3D12 consumers.
     return s
 
 def hook_header(s):
@@ -149,7 +135,7 @@ def main():
     updated={p:op(p.read_text(encoding="utf-8")) for p,op in ops.items()}
     for p,val in updated.items():
         p.write_text(val,encoding="utf-8",newline="\n")
-    print("B26: full D3D12 quiesce preflight; depth epoch invalidation; new-session native-pair serial barrier")
+    print("B26: bounded depth snapshot retirement and fresh native-pair serial barrier")
 
 if __name__=="__main__":
     main()
