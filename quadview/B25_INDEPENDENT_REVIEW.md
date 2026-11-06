@@ -16,10 +16,14 @@ that a GPU/OpenXR/UE5.5.4 lifetime transition is safe. It still had:
 6. Async `pre_acquire` of XR images remained possible while the restart was draining.
 7. Stale native source logs did not distinguish D3D12 device, allocation generation,
    and render target identity mismatches.
+8. B14's resize-size gate was keyed by physical dimensions but not world identity.
+   A save reload could reuse the same dimensions with a different UWorld owner.
 
 ## B25 changes
 - Release the B14 held source-owner lease and reset its resize gate at the GT
   rendering-method commit, after the existing engine tail retirement check.
+- Invalidate B14 resize-size history when the published UWorld identity changes,
+  so new game worlds cannot inherit dimensions/settings confirmation from old ones.
 - Treat missing native target manager as UNKNOWN, not proven drained.
 - Preflight all XR command fences without blocking. Only enter the inherited
   `wait_for_all_copies()` once fences are retired; it then releases images that
