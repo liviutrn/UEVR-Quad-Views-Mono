@@ -50,13 +50,16 @@ float2 SourceSize(uint sourceIndex) {
     return float2(max(width, 1u), max(height, 1u));
 }
 
-float2 AtlasUv(uint sourceIndex, uint4 rectangle, float2 uv) {
-    const float2 atlasSize = SourceSize(sourceIndex);
+float2 AtlasUvKnownSize(float2 atlasSize, uint4 rectangle, float2 uv) {
     const float2 origin = float2(rectangle.xy);
     const float2 extent = float2(rectangle.zw);
     const float2 texel = clamp(origin + saturate(uv) * extent,
                               origin + 0.5, origin + extent - 0.5);
     return texel / atlasSize;
+}
+
+float2 AtlasUv(uint sourceIndex, uint4 rectangle, float2 uv) {
+    return AtlasUvKnownSize(SourceSize(sourceIndex), rectangle, uv);
 }
 
 float2 ContextUv(uint eye, float2 eyeUv) {
@@ -165,24 +168,24 @@ float3 GlamEncode(float3 color) {
     return lerp(low, high, float3(color.r > 0.0031308, color.g > 0.0031308, color.b > 0.0031308));
 }
 
-float3 ReadFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float2 pixelOffset) {
+float3 ReadFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float2 pixelOffset, float2 sourceSize) {
     // Offsets are in final output pixels after the game's upscaler. AtlasUv
     // clamps each tap to this eye's focus rectangle, so eyes never bleed.
     const float2 shifted = fullUv + pixelOffset / float2(EyeAndAtlas.xy);
     const float2 local = (shifted - crop.xy) / (crop.zw - crop.xy);
-    return GlamDecode(ReadSource(sourceIndex, AtlasUv(sourceIndex, rect, local)).rgb);
+    return GlamDecode(ReadSource(sourceIndex, AtlasUvKnownSize(sourceSize, rect, local)).rgb);
 }
 
 float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv, float3 center,
-                        float strength, float maxChange) {
+                        float strength, float maxChange, float2 sourceSize) {
     // Fused v186.1 Glamarye Bigger-radius four-diagonal filter with its
     // FXAA-style edge guard and maximum-change limiter. No separate pass.
     const float3 c = GlamDecode(center);
     const float radius = 1.4;
-    const float3 ne = ReadFocus(sourceIndex, rect, crop, fullUv, float2( radius,  radius));
-    const float3 sw = ReadFocus(sourceIndex, rect, crop, fullUv, float2(-radius, -radius));
-    const float3 se = ReadFocus(sourceIndex, rect, crop, fullUv, float2( radius, -radius));
-    const float3 nw = ReadFocus(sourceIndex, rect, crop, fullUv, float2(-radius,  radius));
+    const float3 ne = ReadFocus(sourceIndex, rect, crop, fullUv, float2( radius,  radius), sourceSize);
+    const float3 sw = ReadFocus(sourceIndex, rect, crop, fullUv, float2(-radius, -radius), sourceSize);
+    const float3 se = ReadFocus(sourceIndex, rect, crop, fullUv, float2( radius, -radius), sourceSize);
+    const float3 nw = ReadFocus(sourceIndex, rect, crop, fullUv, float2(-radius,  radius), sourceSize);
     float3 smoothed = (ne + nw) + (se + sw);
     smoothed = clamp((smoothed + c) / 5.0, c * 0.5, c * 2.0);
     smoothed = min(smoothed, 1.0);
@@ -195,8 +198,8 @@ float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float4 crop, float2 fullUv
     n2 *= 0.5; s2 *= 0.5;
     const float2 west = horizontal ? float2(-3.5, 0.0) : float2(0.0, 3.5);
     const float2 east = horizontal ? float2( 3.5, 0.0) : float2(0.0,-3.5);
-    const float3 ww = ReadFocus(sourceIndex, rect, crop, fullUv, west);
-    const float3 ee = ReadFocus(sourceIndex, rect, crop, fullUv, east);
+    const float3 ww = ReadFocus(sourceIndex, rect, crop, fullUv, west, sourceSize);
+    const float3 ee = ReadFocus(sourceIndex, rect, crop, fullUv, east, sourceSize);
     const float3 d1 = abs((ww - n2) - (ee - s2));
     const float3 d2 = abs((ee - n2) - (ww - s2));
     const float3 totalDiff = d1 + d2 + 0.00004;
@@ -223,11 +226,13 @@ float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 conte
         color = float4(v, v, v, 1.0);
     } else if (fill > 0.0) {
         // B12: soft 3x5 background average (2-texel spacing) hides row streaks in disocclusions
+        // One resource-dimension query per disocclusion pixel, not once per tap.
+        const float2 sourceSize = SourceSize(contextSource);
         const float2 tap = 2.0 / max(float2(contextRect.zw), 1.0);
         float4 sum = float4(0.0, 0.0, 0.0, 0.0);
         [unroll] for (int y = -2; y <= 2; ++y)
             [unroll] for (int x = -1; x <= 1; ++x)
-                sum += ReadSource(contextSource, AtlasUv(contextSource, contextRect, uv + float2(x, y) * tap));
+                sum += ReadSource(contextSource, AtlasUvKnownSize(sourceSize, contextRect, uv + float2(x, y) * tap));
         color = sum / 15.0;
     } else {
         color = ReadSource(contextSource, AtlasUv(contextSource, contextRect, uv));
@@ -264,11 +269,13 @@ float4 ScenePixel(VertexOut input) {
     }
 
     const float2 focusUv = (eyeUv - crop.xy) / (crop.zw - crop.xy);
-    float4 focus = ReadSource(2u + eye, AtlasUv(2u + eye, focusRect, focusUv));
+    // Share the same source extent across center and all six sharpening taps.
+    const float2 focusSourceSize = SourceSize(2u + eye);
+    float4 focus = ReadSource(2u + eye, AtlasUvKnownSize(focusSourceSize, focusRect, focusUv));
     const float eyeStrength = eye == 0u ? SharpenEye.x : SharpenEye.y;
     const float eyeMaxChange = eye == 0u ? SharpenEye.z : SharpenEye.w;
     [branch] if (eyeStrength > 0.0)
-        focus.rgb = GlamSharpenFocus(2u + eye, focusRect, crop, eyeUv, focus.rgb, eyeStrength, eyeMaxChange);
+        focus.rgb = GlamSharpenFocus(2u + eye, focusRect, crop, eyeUv, focus.rgb, eyeStrength, eyeMaxChange, focusSourceSize);
     float4 output = focus;
     [branch] if (debugMode != 2 && weight < 1.0) {
         const float4 context = ReadContext(eye, contextSource, contextRect, contextUv);
