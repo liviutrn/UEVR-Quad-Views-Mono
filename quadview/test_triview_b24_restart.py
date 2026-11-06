@@ -29,6 +29,8 @@ def main():
         "bool D3D12Component::OpenXR::pre_acquire(",1)[0]
     assert "void D3D12Component::OpenXR::destroy_swapchains()" not in dx
     assert "restart_teardown_failed" in body
+    assert body.index("const auto slot_live=") < body.index("commands->poisoned")
+    assert body.count("!slot_live(commands)") >= 4
     assert body.index("if (restart_teardown_failed)") < body.index("this->ui_composition.reset()")
     assert body.index("this->wait_for_all_copies()") < body.index("const bool composition_retired=this->ui_composition.reset();")
     assert body.index("!commands->references_retired()") < body.index("const bool composition_retired=this->ui_composition.reset();")
