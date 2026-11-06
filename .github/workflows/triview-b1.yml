@@ -170,6 +170,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B18 final generated integration contracts failed' }
           python workspace/quadview/test_triview_b18_depth.py
           if ($LASTEXITCODE -ne 0) { throw 'B18 recording/submission safety contracts failed' }
+          python workspace/quadview/test_triview_b18_resource_newlines.py
+          if ($LASTEXITCODE -ne 0) { throw 'B18 cross-platform source parity regression failed' }
           python workspace/quadview/test_triview_b18_resources.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B18 generated ownership/reuse contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp

@@ -4,6 +4,11 @@ from pathlib import Path
 import sys
 
 
+def same_source_text(left, right):
+    # Git may check out CRLF on Windows; overlays deliberately emit LF.
+    # Compare all source characters while normalizing line terminators only.
+    return left.read_text(encoding='utf-8') == right.read_text(encoding='utf-8')
+
 def main():
     base=Path(sys.argv[1])/'src/mods/vr'
     c=(base/'FFakeStereoRenderingHook.cpp').read_text()
@@ -27,7 +32,7 @@ def main():
     assert 'completed!=UINT64_MAX && completed>=owner->retire_fence_value' in c
     assert 'live_vtable==reinterpret_cast<uintptr_t>(owner->hooked_vtable.data())' in c
     assert 'is_writable_process_range(address,sizeof(uintptr_t))' in c
-    assert (base/'QuadViewResourceReuse.hpp').read_bytes()==(Path(__file__).parent/'QuadViewResourceReuse.hpp').read_bytes()
+    assert same_source_text(base/'QuadViewResourceReuse.hpp',Path(__file__).parent/'QuadViewResourceReuse.hpp')
     print('B18 resource contracts passed: three roles, allocation/publication identity, reused hook ownership, world/device gates, conservative retirement')
 
 if __name__=='__main__': main()
