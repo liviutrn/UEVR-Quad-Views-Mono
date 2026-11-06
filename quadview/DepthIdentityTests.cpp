@@ -5,6 +5,30 @@
 using namespace uevr::quadview::ngx;
 void check(bool ok) { if(!ok) throw std::runtime_error("Depth identity/lifetime contract"); }
 int main() {
+    // B19: capture and consumer must never see dimensions from different resizes.
+    ExpectedPeripheryExtent expected;
+    check(expected.load() == (std::array<uint32_t,2>{0u,0u}));
+    expected.store(1920,1080);
+    check(expected.load() == (std::array<uint32_t,2>{1920u,1080u}));
+    std::atomic<bool> go{false}, done{false};
+    bool torn_extent=false;
+    std::thread resize_writer([&] {
+        while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+        for (int i=0;i<250000;++i)
+            expected.store((i&1) ? 640u : 1536u, (i&1) ? 480u : 1024u);
+        done.store(true, std::memory_order_release);
+    });
+    go.store(true, std::memory_order_release);
+    while (!done.load(std::memory_order_acquire)) {
+        const auto sample=expected.load();
+        if (sample != (std::array<uint32_t,2>{1920u,1080u}) &&
+            sample != (std::array<uint32_t,2>{640u,480u}) &&
+            sample != (std::array<uint32_t,2>{1536u,1024u}))
+            torn_extent=true;
+    }
+    resize_writer.join();
+    check(!torn_extent);
+    expected.store(0,0); check(expected.load()==(std::array<uint32_t,2>{0u,0u}));
     DepthOwner owner; owner.generation=2;owner.serial=7;owner.target_set=3;owner.engine_frame=4;
     owner.role=0;owner.output_width=400;owner.output_height=300;owner.unambiguous=true;owner.ngx_input_state_known=true;
     check(owner.valid());

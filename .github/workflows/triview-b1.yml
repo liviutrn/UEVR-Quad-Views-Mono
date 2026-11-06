@@ -1,6 +1,6 @@
-name: TriView B18 reviewed stability and resource reuse Windows DLL
+name: TriView B19 independent safety review Windows DLL
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B18 compiled Windows DLL (${{ github.run_number }})
+run-name: TriView B19 compiled Windows DLL (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -174,6 +174,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B18 cross-platform source parity regression failed' }
           python workspace/quadview/test_triview_b18_resources.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B18 generated ownership/reuse contracts failed' }
+          python workspace/quadview/test_triview_b19.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B19 coherent NGX depth extent regression failed in generated backend' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -275,6 +277,7 @@ jobs:
           Copy-Item workspace/quadview/B15_NOTES.md package/B15_NOTES.md
           Copy-Item workspace/quadview/B17_NOTES.md package/B17_NOTES.md
           Copy-Item workspace/quadview/B18_NOTES.md package/B18_NOTES.md
+          Copy-Item workspace/quadview/B19_NOTES.md package/B19_NOTES.md
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
@@ -289,12 +292,12 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B18-reviewed'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 three native sources; per-role reuse; approximate depth, headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B19-independent-review'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17 + B18; B19 coherent depth extent'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='1a96e7b1cc7f71304ed106ec00424f5f14a6bf15'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 three native sources; per-role reuse; approximate depth, headset test candidate'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          TriView B18 - ID7 experimental headset test candidate.
+          TriView B19 - ID7 experimental headset test candidate.
           Three native sources: shared full-FOV periphery + real left/right foveas.
           B15 pose, FOV, native-stereo-fix and existing controls are retained.
 
@@ -304,10 +307,14 @@ jobs:
           Automatic GPU image readback is removed; manual snapshots remain.
           The original parent menu receives wheel input over diagnostics.
 
+          B19 fixes a real depth-resize race: both output dimensions now move
+          together in one atomic publication, including capture and telemetry.
+          This does not add GPU allocations or change render projection.
+
           DEPTH LIMIT: reprojection remains approximate. B18 rejects depth
           recorded before this packet, but the engine adapter does not prove
           exact color/depth frame identity for parallel work. This is not an
-          exact-provenance fix. See B18_NOTES.md for remaining limitations.
+          exact-provenance fix. See B18_NOTES.md and B19_NOTES.md for limitations.
 
           CI and sanitizer passes do not certify headset visuals or no crashes.
           Test: direct ID7 startup; both stereo foveas; depth on/off near hands;
@@ -315,21 +322,21 @@ jobs:
           then crop/density resize, recenter and a world load. Keep B15 rollback.
           Record the backend log and stop code/minidump for any blue screen.
           '@ | Set-Content package/READ_FIRST.txt
-          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
+          $needed=@('B19_NOTES.md','BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B18-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B19-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B18-${{ github.run_number }}
+          name: UEVR-TriView-B19-${{ github.run_number }}
           path: |
-            UEVR-TriView-B18-*.zip
-            UEVR-TriView-B18-*.zip.sha256
+            UEVR-TriView-B19-*.zip
+            UEVR-TriView-B19-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
