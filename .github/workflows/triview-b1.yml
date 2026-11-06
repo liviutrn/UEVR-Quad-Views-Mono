@@ -1,6 +1,6 @@
-name: TriView B26 XR session epoch and full GPU completion gate
+name: TriView B26 safe XR session reinitialization
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B26 OpenXR restart barrier (${{ github.run_number }})
+run-name: TriView B26 restart / native frame epoch (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -314,13 +314,13 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B26-session-barrier-on-B25'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 B23 four-sample shader, B25 lifecycle, B26 all-consumer/DLSS depth/session-serial barrier; experimental; BSOD not proven fixed'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B26-session-barrier-on-B25'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 B23 shader, B25 XR-only fencing, B26 fixed splice/native packet/depth session barrier; experimental; BSOD not proven fixed'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
           TriView B26 - stricter XR restart with new-session identity.
-          Full UEVR D3D12 consumer preflight, old DLSS depth removal and
+          B25 XR texture-fence preflight, old DLSS depth removal and
           truly new Native Fix packet needed before re-entering TriView.
           See B26_NOTES.md for verified source changes and limitations.
 
