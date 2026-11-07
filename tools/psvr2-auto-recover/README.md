@@ -24,7 +24,7 @@ If there are multiple copies of the tool running, stop them before testing.
 - Polls OpenVR head pose every 500 ms. Only a valid, connected HMD with `Fallback_RotationOnly` = 300 triggers recovery. Other errors are logged, not treated as 3DoF.
 - After sustained 3DoF (4 seconds after stable 6DoF; 10 seconds on startup), signals `Refine Map` = `0x2` via the same Win32 IPC as UnitySetup. Suppresses commands if the room-setup keepalive appears active.
 - During recovery sends the same temporary play-area camera keepalive used by UnitySetup (once per second).
-- By default **does not automatically send Activate Map**. With explicit `--auto-activate` opt-in, it sends `Activate Map` = `0x4` once after 12 seconds if still in rotation-only fallback. On failure it waits 120 seconds before trying again. `Running_OK` for 3 seconds confirms SteamVR's reported state, not actual physical translation.
+- By default **does not automatically send Activate Map**. With explicit `--auto-activate` opt-in, it sends `Activate Map` = `0x4` once after 12 seconds if still in rotation-only fallback. On a failed recovery attempt, it waits 120 seconds and then stays disarmed **until SteamVR reports 3 continuous seconds of Running_OK**. It will not retry indefinitely while tracking remains broken. `Running_OK` for 3 seconds confirms SteamVR's reported state, not actual physical translation.
 - Never sends `ClearMap` = `0x20`. Blocks a second instance and attempts to reattach when SteamVR restarts.
 
 ## Important limitations and safety
@@ -57,3 +57,5 @@ The workflow at `.github/workflows/psvr2-autorecover-windows.yml` builds, runs o
 - Logs raw positional head coordinates for diagnosis if SteamVR reports Running_OK but translation is frozen.
 - Adds offline detection/timing tests; these cannot establish success on physical headset hardware.
 - Corrected claims about tracking map modifications: refinement may modify the Sony map, although it does not issue ClearMap.
+
+- Prevents unlimited 2-minute map-refinement loops if the headset stays in 3DoF, requiring confirmed stable 6DoF before rearming.

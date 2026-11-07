@@ -266,9 +266,10 @@ bool StableSixDof(TrackingKind kind, Clock::time_point since, Clock::time_point 
     return kind == TrackingKind::Good && since != Clock::time_point{} &&
            now - since >= kHealthyConfirm;
 }
-bool ShouldRefine(TrackingKind kind, bool previouslyStable, Clock::time_point since,
-                  Clock::time_point now) {
-    return kind == TrackingKind::RotationOnly && since != Clock::time_point{} &&
+bool ShouldRefine(TrackingKind kind, bool previouslyStable, bool blockedUntilHealthy,
+                  Clock::time_point since, Clock::time_point now) {
+    return !blockedUntilHealthy && kind == TrackingKind::RotationOnly &&
+           since != Clock::time_point{} &&
            now - since >= (previouslyStable ? 4s : 10s);
 }
 
@@ -287,12 +288,14 @@ bool SelfTest() {
     test(Classify(1, false, true) == TrackingKind::Unavailable, "uninitialized excluded");
     test(kRefineMap != 0x20 && kActivateMap != 0x20, "no clear-map recovery command");
     const auto t = Clock::now();
-    test(!ShouldRefine(TrackingKind::RotationOnly, true, t, t + 3500ms), "no early refine");
-    test(ShouldRefine(TrackingKind::RotationOnly, true, t, t + 4s), "refine on sustained 3DOF");
-    test(!ShouldRefine(TrackingKind::RotationOnly, false, t, t + 9s), "startup 10s grace");
-    test(ShouldRefine(TrackingKind::RotationOnly, false, t, t + 10s), "startup sustained 3DOF");
-    test(!ShouldRefine(TrackingKind::Degraded, true, t, t + 120s), "do not auto-refine generic tracking errors");
-    test(!ShouldRefine(TrackingKind::Unavailable, true, t, t + 120s), "do not auto-refine unavailable HMD");
+    test(!ShouldRefine(TrackingKind::RotationOnly, true, false, t, t + 3500ms), "no early refine");
+    test(ShouldRefine(TrackingKind::RotationOnly, true, false, t, t + 4s), "refine on sustained 3DOF");
+    test(!ShouldRefine(TrackingKind::RotationOnly, false, false, t, t + 9s), "startup 10s grace");
+    test(ShouldRefine(TrackingKind::RotationOnly, false, false, t, t + 10s), "startup sustained 3DOF");
+    test(!ShouldRefine(TrackingKind::Degraded, true, false, t, t + 120s), "do not auto-refine generic tracking errors");
+    test(!ShouldRefine(TrackingKind::Unavailable, true, false, t, t + 120s), "do not auto-refine unavailable HMD");
+    test(!ShouldRefine(TrackingKind::RotationOnly, true, true, t, t + 300s),
+         "persistent loss cannot auto-retry after failed episode");
     test(!StableSixDof(TrackingKind::Good, t, t + 2s), "no premature recovery confirmation");
     test(StableSixDof(TrackingKind::Good, t, t + 3s), "confirmed stable 6DOF");
     test(!StableSixDof(TrackingKind::RotationOnly, t, t + 20s), "3DOF cannot confirm success");
@@ -358,6 +361,7 @@ int main(int argc, char **argv) {
     Clock::time_point lastExternalSetup{}, unavailableSince{}, lastVrReconnect{};
     int previousKeepAliveCounter = -1;
     bool wasGood = false;
+    bool blockedUntilHealthy = false;
     bool loggedDriverUnavailable = false;
     auto lastConnectAttempt = Clock::now() - 20s;
     auto lastMappingAttempt = Clock::now() - 20s;
@@ -373,6 +377,7 @@ int main(int argc, char **argv) {
             driver.Close();
             phase = Phase::Idle;
             wasGood = false;
+            blockedUntilHealthy = false;
             degradedSince = goodSince = unavailableSince = Clock::time_point{};
             previousKeepAliveCounter = -1;
             lastConnectAttempt = lastMappingAttempt = now;
@@ -403,6 +408,7 @@ int main(int argc, char **argv) {
                 driver.Close();
                 phase = Phase::Idle;
                 wasGood = false;
+                blockedUntilHealthy = false;
                 degradedSince = goodSince = Clock::time_point{};
                 previousKeepAliveCounter = -1;
                 lastConnectAttempt = lastMappingAttempt = now;
@@ -450,7 +456,10 @@ int main(int argc, char **argv) {
         if (s.kind == TrackingKind::Good) {
             degradedSince = Clock::time_point{};
             if (goodSince == Clock::time_point{}) goodSince = now;
-            if (StableSixDof(s.kind, goodSince, now)) wasGood = true;
+            if (StableSixDof(s.kind, goodSince, now)) {
+                wasGood = true;
+                blockedUntilHealthy = false;
+            }
             if ((phase == Phase::Refine || phase == Phase::Activate) && StableSixDof(s.kind, goodSince, now)) {
                 Log("SteamVR reports Running_OK for >=3 seconds after recovery command; positional 6DOF still requires headset verification.");
                 phase = Phase::Cooldown;
@@ -467,6 +476,7 @@ int main(int argc, char **argv) {
                     Log("HMD unavailable during recovery; aborting commands and cooling down.");
                     phase = Phase::Cooldown;
                     cooldownUntil = now + kCooldown;
+                    blockedUntilHealthy = true;
                 }
             }
         }
@@ -474,7 +484,7 @@ int main(int argc, char **argv) {
         if (!diagnostic && driver.Ready()) {
             if (phase == Phase::Cooldown && now >= cooldownUntil) phase = Phase::Idle;
             if (phase == Phase::Idle && !roomSetupActive &&
-                ShouldRefine(s.kind, wasGood, degradedSince, now)) {
+                ShouldRefine(s.kind, wasGood, blockedUntilHealthy, degradedSince, now)) {
                     if (driver.SignalCommand(kRefineMap)) {
                         Log("AUTO: signaled Refine Map command (0x2). Driver execution and 6DOF recovery unconfirmed.");
                         phase = Phase::Refine;
@@ -484,6 +494,7 @@ int main(int argc, char **argv) {
                         Log("ERROR: driver refused Refine Map command; entering cooldown.");
                         phase = Phase::Cooldown;
                         cooldownUntil = now + kCooldown;
+                        blockedUntilHealthy = true;
                     }
             }
             if (phase == Phase::Refine || phase == Phase::Activate) {
@@ -503,12 +514,14 @@ int main(int argc, char **argv) {
                                            " Activate Map is disabled by default for safety.");
                         phase = Phase::Cooldown;
                         cooldownUntil = now + kCooldown;
+                        blockedUntilHealthy = true;
                     }
                 } else if (phase == Phase::Activate && now - phaseSince >= kActivateTimeout) {
                     Log("AUTO: No verified 6DOF recovery. Stopping attempts for 120 seconds. "
                         "Try PSVR2Toolkit.UnitySetup -> Refine Map manually, or improve camera visibility.");
                     phase = Phase::Cooldown;
                     cooldownUntil = now + kCooldown;
+                    blockedUntilHealthy = true;
                 }
             }
         }
