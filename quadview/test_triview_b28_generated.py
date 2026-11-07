@@ -70,4 +70,9 @@ require('static bool dirty_world' in world and 'dirty_world=false' in world,
     'canceled leave request can lose an unfinished world recovery')
 require('bool(quad_source)' in hook and 'quad_build_epoch_lease' in hook,
     'source-only callbacks or asynchronous target builds bypass world admission')
+claim=block(hook,'        const bool quad_native_runtime_claimed=', '        const auto runtime_frame_count=')
+require('quad_native.source' not in claim,
+    'RHI TailTicket has no source member; use the authenticated RuntimeEvent serial')
+require(claim.index('claim_runtime_event(')<claim.index('triview_source_epoch_accepts(quad_native_runtime_event.serial)'),
+    'world cutoff must validate the real serial returned by the successful runtime event claim')
 print('B28 final generated integration checks passed (not a Windows build or BSOD certification)')

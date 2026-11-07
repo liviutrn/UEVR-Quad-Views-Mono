@@ -127,8 +127,8 @@ def main():
     s=one(s, '''        const bool quad_native_runtime_claimed=N==correct_execute_index && quad_native && g_hook &&
             g_hook->quadview_native_delivery.claim_runtime_event(quad_native,quad_native_runtime_event);''',
         '''        const bool quad_native_runtime_claimed=N==correct_execute_index && quad_native && g_hook && quad_epoch_admitted &&
-            vr->triview_source_epoch_accepts(quad_native.source.serial) &&
-            g_hook->quadview_native_delivery.claim_runtime_event(quad_native,quad_native_runtime_event);''')
+            g_hook->quadview_native_delivery.claim_runtime_event(quad_native,quad_native_runtime_event) &&
+            vr->triview_source_epoch_accepts(quad_native_runtime_event.serial);''')
     cadence='quad_drain.allows_runtime(vr->mono_generation(),quad_engine)'
     if s.count(cadence)!=2: raise RuntimeError('B28 world: expected both recovery XR cadence sites')
     s=s.replace(cadence,'''(quad_epoch_admitted &&
