@@ -664,7 +664,10 @@ private:
         seam_readback_->Unmap(0,&no_write);
         // Invalid depth still publishes the *decaying* confidence. Otherwise
         // a high-confidence cached match could be held forever on missing depth.
-        if(!finite || !has_valid) return;
+        // Publish fully decayed records too: otherwise the last nonzero
+        // cached confidence keeps getting reused forever after it reaches 0.05.
+        // Invalid/NaN data is still rejected, without publishing it.
+        if(!finite) return;
         auto& cache=seam_temporal_history();
         std::lock_guard<std::mutex> guard(cache.mutex);
         // Out-of-order slot retirements cannot replace a newer completed frame.
@@ -683,7 +686,9 @@ private:
         }
         cache.accepted=temporal_serial_;
         cache.last_valid=std::chrono::steady_clock::now();
-        cache.valid=true;
+        // Invalidate an exhausted cache instead of replaying a tiny stale
+        // gain forever. New valid observations will bootstrap from neutral.
+        cache.valid=has_valid;
     }
     bool fail(const char* message) { error_ = message; return false; }
 

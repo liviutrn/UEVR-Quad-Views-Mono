@@ -112,7 +112,8 @@ def main():
         '        a.seam_mode==b.seam_mode && a.seam_strength==b.seam_strength &&\n',
         '        a.seam_max_gain==b.seam_max_gain && a.seam_brightness_ev==b.seam_brightness_ev &&\n',
         '        a.seam_color_strength==b.seam_color_strength && a.seam_local_strength==b.seam_local_strength &&\n',
-        '        a.seam_radius_px==b.seam_radius_px && a.seam_transition_px==b.seam_transition_px &&\n',
+        '        a.seam_radius_px==b.seam_radius_px && a.seam_outward_fraction==b.seam_outward_fraction &&\n',
+        '        a.seam_transition_px==b.seam_transition_px &&\n',
         '        a.seam_debug==b.seam_debug &&\n',
     ]
     for line in contract:
