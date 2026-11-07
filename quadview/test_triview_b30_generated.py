@@ -25,12 +25,14 @@ dispatch=dx.index('commands->Dispatch(2, 1, 1)')
 assert dx.index('SetComputeRootDescriptorTable(2, uav)')<dispatch
 assert dispatch<dx.index('D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE',dispatch)<dx.index('commands->DrawInstanced(',dispatch)
 assert 'ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,3,' in dx
-assert 'settings.seam_mode == 2 && settings.diagnostic_view == 0' in dx
+assert 'settings.seam_mode == 2 &&' in dx and 'settings.diagnostic_view == 0 &&' in dx
+assert '(settings.seam_strength > 0.f || settings.seam_debug)' in dx
 assert 'StructuredBuffer<float4> SeamMatch : register(t5)' in shader
 assert '[numthreads(128, 1, 1)]' in shader and 'SeamOutput[eye * 9u]' in shader
 assert 'SeamOutput[eye * 9u + 1u + lane / 16u]' in shader
 assert 'GroupMemoryBarrierWithGroupSync()' in shader
-assert 'SeamOptions.w > 0.5' in shader and 'fill == 0.0' in shader
+assert 'if (SeamOptions.w <= 0.5)' in shader and 'fill == 0.0' in shader
+assert 'if (lane < 9u) SeamOutput[eye * 9u + lane]' in shader
 assert 'if (Seam.x < 0.5) return FocusWeight(uv, crop)' in shader
 assert 'if (width <= 0.0) return 1.0' in shader
 assert shader.count('CorrectFocusColor(')==3 # function, displayed focus, analysis reference

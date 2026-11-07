@@ -18,7 +18,8 @@ assert 'range.NumDescriptors = 6;' in d and 'heap.NumDescriptors = 7;' in d
 assert 'commands->Dispatch(2, 1, 1)' in d
 assert 'focus.rgb = CorrectFocusColor(focus.rgb, focusUv)' in s
 assert s.count('CorrectFocusColor(')==3 # definition, display, adaptive reference
-assert 'FocusLift.y*(1.0+FocusLift.z*FocusProfile.y*pow(t,FocusProfile.x))' in s
+assert 'gain *= 1.0+FocusLift.z*FocusProfile.y*pow(t,FocusProfile.x);' in s
+assert 'r2 > FocusLift.w && FocusLift.z*FocusProfile.y > 0.0' in s
 assert 'Compositor command slot has not retired' in d
 assert 'if (owner_) return fail("Cannot recreate an in-flight compositor")' in d
 print('B30 focus-only integration: enabled shipping preset, frozen controls, corrected adaptive reference, bounded slot-local resources, 480/512-byte constants')
