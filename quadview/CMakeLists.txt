@@ -234,6 +234,14 @@ foreach(_test IN ITEMS TriViewAdmission ResourceReuse TriViewReusedDelivery)
   endif()
   add_test(NAME triview-b18-${_test} COMMAND ${_test}Tests)
 endforeach()
+
+add_executable(HeadMovementScalingTests HeadMovementScalingTests.cpp)
+if(MSVC)
+  target_compile_options(HeadMovementScalingTests PRIVATE /UNDEBUG)
+else()
+  target_compile_options(HeadMovementScalingTests PRIVATE -UNDEBUG)
+endif()
+add_test(NAME head-movement-recentered-xyz-axes COMMAND HeadMovementScalingTests)
 if(QUADVIEW_IMGUI_DIR)
   add_executable(QuadViewStatusPanelWheelTests StatusPanelWheelTests.cpp
     "${QUADVIEW_IMGUI_DIR}/imgui.cpp" "${QUADVIEW_IMGUI_DIR}/imgui_draw.cpp"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify B23 differs from the vetted B22 HLSL by only two march-count literals."""
+"""Keep B23's exact four-sample warp, allowing only the pinned B29 ALU port."""
 from pathlib import Path
 import subprocess
 import sys
@@ -20,9 +20,18 @@ def main():
                                 "const float ds = sMax / 3.0;")
     expected = expected.replace("i <= 24u && !found",
                                 "i <= 3u && !found")
-    assert actual == expected, "Unexpected HLSL edits beyond two sample-count literals"
+    # B29 ports only B27's normalization/homography ALU optimizations. Preserve
+    # an exact full-file allowlist AND compare the depth algorithm separately.
+    optimized = subprocess.check_output(
+        ["git", "-C", str(root), "show",
+         "b024570edbbdc8852aa7e7e2e508235c228ca245:quadview/QuadViewComposite.hlsl"], text=True)
+    assert actual in (expected, optimized), "Unexpected HLSL edits beyond pinned B23/B27 shaders"
+    def warp(s):
+        return s.split("float2 WarpContextUv(",1)[1].split("// Explicit SM5 resource selection",1)[0]
+    assert warp(actual) == warp(expected), "B23 depth geometry or four-sample search changed"
+    assert actual.split("float4 PSMain(",1)[1] == expected.split("float4 PSMain(",1)[1], "Output encoding changed"
     assert actual.count("InverseDepthAt(c)") == 1
-    print("B23 source diff: PASS (4 depth samples; only 2 B22 HLSL literals changed)")
+    print("B23 depth/output contracts: PASS (4 samples; exact B23 or pinned B27 ALU-only shader)")
 
 if __name__ == "__main__":
     main()
