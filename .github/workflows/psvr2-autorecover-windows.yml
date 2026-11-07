@@ -1,0 +1,47 @@
+name: PSVR2 AutoRecover (Windows)
+on:
+  push:
+    branches:
+      - experiment/psvr2-auto-recover-20261107
+    paths:
+      - 'tools/psvr2-auto-recover/**'
+      - '.github/workflows/psvr2-autorecover-windows.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout utility sources
+        uses: actions/checkout@v4
+      - name: Install Visual Studio compilation environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Fetch official OpenVR headers and import library
+        shell: pwsh
+        run: git clone --depth 1 https://github.com/ValveSoftware/openvr.git deps/openvr
+      - name: Build native x64 Windows utility
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          cl /nologo /std:c++17 /EHsc /W4 /O2 /MD /I deps/openvr/headers tools/psvr2-auto-recover/src/main.cpp /link /OUT:dist/PSVR2AutoRecover.exe deps/openvr/lib/win64/openvr_api.lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item deps/openvr/bin/win64/openvr_api.dll dist/
+          Copy-Item tools/psvr2-auto-recover/*.cmd dist/
+          Copy-Item tools/psvr2-auto-recover/README.md dist/
+      - name: Smoke tests (no headset necessary)
+        shell: pwsh
+        run: |
+          & ./dist/PSVR2AutoRecover.exe --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./dist/PSVR2AutoRecover.exe --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item dist/* | Select-Object Name, Length
+      - name: Publish portable Windows ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: PSVR2-AutoRecover-v0.1-Windows-x64
+          path: dist/*
+          retention-days: 14
