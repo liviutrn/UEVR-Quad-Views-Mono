@@ -1,6 +1,6 @@
-name: TriView B23 four-depth-sample KISS experiment based on B22
+name: TriView B28 coherent poses and DuoView target lifetime
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B23 four-depth-sample KISS test (${{ github.run_number }})
+run-name: TriView B28 lifecycle repair (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -182,6 +182,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B23 shader differs from B22 beyond exactly two sample-count constants' }
           python workspace/quadview/test_triview_b22_trace_gate.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B22 runtime verbose-trace gate did not reach generated backend' }
+          python workspace/quadview/apply_triview_b24_restart.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Checked TriView runtime restart overlay failed' }
+          python workspace/quadview/apply_triview_b25_lifetime.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Native owner failure classification overlay failed' }
+          python workspace/quadview/apply_triview_b26_xr_epoch.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Fresh XR session and depth epoch overlay failed' }
+          python workspace/quadview/apply_triview_b28_pose.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B28 coherent camera/submission pose overlay failed' }
+          python workspace/quadview/apply_triview_b28_targets.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B28 process-lifetime gamma table overlay failed' }
+          python workspace/quadview/apply_triview_b28_world.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B28 world epoch invalidation overlay failed' }
+          python workspace/quadview/test_triview_b28_generated.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B28 final generated integration safety contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -286,6 +300,7 @@ jobs:
           Copy-Item workspace/quadview/B21_NOTES.md package/B21_NOTES.md
           Copy-Item workspace/quadview/B22_OPTIMIZATION_NOTES.md package/B22_OPTIMIZATION_NOTES.md
           Copy-Item workspace/quadview/B23_FOUR_SAMPLES_NOTES.md package/B23_FOUR_SAMPLES_NOTES.md
+          Copy-Item workspace/quadview/B28_NOTES.md package/B28_NOTES.md
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
@@ -300,55 +315,45 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B23-four-depth-samples-experimental-on-B22'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 B22 three-source/fence baseline with only 25-to-4 depth ray samples changed; experimental; requires ground-truth tests and headset assessment'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B28-DuoView-lifetime-and-coherent-pose-repair'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B15 + B17; B18 reviewed stability and reuse'; baselineSource='55b99d075dd6c2307dcb1833f3969c9f9e55566c'; sourceParent='8d1b9d88f6dd27a32da6a641438026c65514d60c'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='ID7 B23 rendering/depth selector; coherent located head+eyes, bounded process-lifetime gamma tables, checked XR restart and world epochs; hardware validation pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          TriView B23 - four samples per depth ray instead of twenty-five.
-          B22 shader source dimension reuse and
-          verbose HookTrace disabled by default (opt-in via environment).
-          Source sampling, depth search, crop and sharpening math unchanged.
-          Three native sources: shared full-FOV periphery + real left/right foveas.
-          B15 pose, FOV, native-stereo-fix and existing controls are retained.
+          TriView B28 - repair based on the stable DuoView architecture comparison.
+          Three physical sources: shared periphery + real left/right stereo foveas.
+          One completed head-and-eye locate is frozen for both cameras and submission.
+          Native target gamma tables are permanent and bounded, as in DuoView;
+          retirement no longer writes saved virtual pointers into old resources.
+          Real UWorld identity replacement closes XR admission while old callbacks
+          drain, invalidates cached publication and recreates sources for the new world.
+          Runtime reset uses checked teardown and requires a fresh Native Fix pair.
 
-          B18 repairs canonical/test delivery mismatch, prohibits warm-up atlas
-          publication, reuses unchanged source allocations across size changes,
-          guards command-list recording epochs and prunes completed unused depth.
-          Automatic GPU image readback is removed; manual snapshots remain.
-          The original parent menu receives wheel input over diagnostics.
+          B23 four-sample shader and B21 depth selection are unchanged.
+          Depth reprojection remains approximate and may use adjacent-frame depth.
+          No measured FPS or headset/BSOD stability claim is made by the CI build.
+          Read B28_NOTES.md for the concrete findings, validation and limitations.
 
-          DEPTH LIMIT: reprojection remains approximate. B21 restores the B15-27
-          latest submitted depth (max 250 ms) instead of B18's packet-birth
-          time cutoff. Depth may originate from an adjacent scene frame.
-          No B19 GPU Wait. See B21_NOTES.md, B22_OPTIMIZATION_NOTES.md
-          and B23_FOUR_SAMPLES_NOTES.md. Treat B23 as EXPERIMENTAL.
-          This is a performance experiment, not a measured FPS improvement.
-          To re-enable the full event trace, set the Windows environment variable
-          UEVR_VERBOSE_HOOK_TRACE=1 before launching STALKER 2 and restart it.
-          Startup, depth status, warnings and errors remain logged normally.
-
-          CI and sanitizer passes do not certify headset visuals or no crashes.
-          Test: direct ID7 startup; both stereo foveas; depth on/off near hands;
-          wheel over diagnostics; save/restart; one moderate periphery resize,
-          then crop/density resize, recenter and a world load. Keep B18-42 and B15-27 rollback.
-          Record the backend log and stop code/minidump for any blue screen.
+          Test sequence: direct ID7 start; head motion; load the same save;
+          head motion and recenter again; runtime reset and automatic return to ID7;
+          one fovea width change, one height change, then a resolution change.
+          Keep the stable DuoView package. Record backend log/build JSON for issues.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B23-FourDepth-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B28-Lifecycle-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B23-FourDepth-${{ github.run_number }}
+          name: UEVR-TriView-B28-Lifecycle-${{ github.run_number }}
           path: |
-            UEVR-TriView-B23-FourDepth-*.zip
-            UEVR-TriView-B23-FourDepth-*.zip.sha256
+            UEVR-TriView-B28-Lifecycle-*.zip
+            UEVR-TriView-B28-Lifecycle-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
@@ -406,7 +411,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p sanitizer-evidence
-          for test in RetirementScopeTests HookTraceGateTests NativeRenderTraceTests NativeRoleFrameTests EngineRegistrationDiagnosticsTests RecoveryContinuityTests NativeDeliveryTests FamilyRoutingTests ContentProvenancePropertyTests ResizeGateTests DepthWarpSceneTests PoseSlotTests DepthIdentityTests TriViewThreePhysicalTests TriViewAdmissionTests ResourceReuseTests TriViewReusedDeliveryTests; do
+          for test in RetirementScopeTests HookTraceGateTests NativeRenderTraceTests NativeRoleFrameTests EngineRegistrationDiagnosticsTests RecoveryContinuityTests NativeDeliveryTests FamilyRoutingTests ContentProvenancePropertyTests ResizeGateTests DepthWarpSceneTests PoseSlotTests DepthIdentityTests TriViewThreePhysicalTests TriViewAdmissionTests ResourceReuseTests TriViewReusedDeliveryTests TriViewLocatedPoseTests TriViewGammaTablesTests TriViewEpochGateTests; do
             echo "[B18 sanitizer] $test"
             g++ -std=c++20 -O1 -g -pthread -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer "quadview/$test.cpp" -o "sanitizer-evidence/$test"
             "sanitizer-evidence/$test" > "sanitizer-evidence/$test.log" 2>&1
