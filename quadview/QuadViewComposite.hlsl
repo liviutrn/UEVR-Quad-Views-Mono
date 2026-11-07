@@ -485,10 +485,10 @@ void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
         SeamContextSums[lane] = SeamContextSums[lane * 16u];
     }
     GroupMemoryBarrierWithGroupSync();
-    [unroll] for (uint stride = 4u; stride > 0u; stride >>= 1u) {
-        if (lane < stride) {
-            SeamFocusSums[lane] += SeamFocusSums[lane + stride];
-            SeamContextSums[lane] += SeamContextSums[lane + stride];
+    [unroll] for (uint reduceStride = 4u; reduceStride > 0u; reduceStride >>= 1u) {
+        if (lane < reduceStride) {
+            SeamFocusSums[lane] += SeamFocusSums[lane + reduceStride];
+            SeamContextSums[lane] += SeamContextSums[lane + reduceStride];
         }
         GroupMemoryBarrierWithGroupSync();
     }
