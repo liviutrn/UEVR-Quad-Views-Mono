@@ -32,6 +32,8 @@ cbuffer QuadViewConstants : register(b0) {
     float4 SeamLocal;   // outward residual radius in output pixels, local strength, reserved
     float4 FocusLift;    // enabled, overall brightness, corner gain minus one, onset r^2
     float4 FocusProfile; // exponent, anti-vignette strength, reserved
+    float4 SeamTemporal; // stability, max gain change/frame, history available
+    float4 SeamHistory[18]; // CPU-published fence-retired per-eye global + 8 local gains
 };
 
 struct VertexOut {
@@ -313,7 +315,7 @@ float SeamFocusWeight(float2 uv, float4 crop) {
     // Off preserves the old feather exactly. Matching mode keeps the complete
     // rendered fovea sharp at transition=0. An optional transition reserves
     // existing edge pixels; it does not claim additional rendered coverage.
-    if (Seam.x < 0.5) return FocusWeight(uv, crop);
+    if (Seam.x < 0.5 || SeamLocal.z > 0.5) return FocusWeight(uv, crop);
     if (any(uv < crop.xy) || any(uv > crop.zw)) return 0.0;
     const float2 extentPx = (crop.zw - crop.xy) * float2(EyeAndAtlas.xy);
     const float width = min(SeamOptions.y, 0.49 * min(extentPx.x, extentPx.y));
@@ -413,6 +415,22 @@ RWStructuredBuffer<float4> SeamOutput : register(u0);
 groupshared float4 SeamFocusSums[128];
 groupshared float4 SeamContextSums[128];
 
+// B32: smooth 18 compact gains from the latest fence-retired GPU slot.
+// No image history, no per-pixel temporal work, no cross-slot GPU writes.
+float4 StableSeam(uint index, float4 measured) {
+    if (SeamTemporal.z < 0.5) return measured;
+    const float4 old = SeamHistory[index];
+    if (old.a <= 0.05) return measured;
+    // Unreliable patches do not suddenly reset gains: hold the recent valid
+    // estimate while its CPU-side age guard is still satisfied.
+    if (measured.a <= 0.20) return old;
+    const float alpha = lerp(0.55, 0.025, saturate(SeamTemporal.x)) * saturate(measured.a * 2.0);
+    const float3 blended = lerp(old.rgb, measured.rgb, alpha);
+    const float stepSize = max(SeamTemporal.y, 0.005);
+    const float3 stable = clamp(blended, old.rgb - stepSize, old.rgb + stepSize);
+    return float4(stable, lerp(old.a, measured.a, alpha));
+}
+
 // Four low-frequency patch samples, solely for analysis: displayed focus
 // samples are never blurred. Use the actual same context homography/depth
 // warp as composition and reject out-of-bounds/disocclusion-filled samples.
@@ -455,7 +473,8 @@ void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
     // return together, before any groupshared barrier or texture/depth probe.
     // Initialize every record, including after an earlier valid frame.
     [branch] if (SeamOptions.w <= 0.5) {
-        if (lane < 9u) SeamOutput[eye * 9u + lane] = float4(1.0, 1.0, 1.0, 0.0);
+        if (lane < 9u) SeamOutput[eye * 9u + lane] =
+            StableSeam(eye * 9u + lane, float4(1.0, 1.0, 1.0, 0.0));
         return;
     }
     const float4 crop = eye == 0u ? CropUvLeft : CropUvRight;
@@ -490,7 +509,9 @@ void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
                                      sc.g > count * 0.03 ? sf.g / max(sc.g, 1.0e-5) : lumGain,
                                      sc.b > count * 0.03 ? sf.b / max(sc.b, 1.0e-5) : lumGain);
         const float3 gain = clamp(lerp(lumGain.xxx, rgbGain, SeamOptions.x), 1.0 - Seam.z, 1.0 + Seam.z);
-        SeamOutput[eye * 9u + 1u + lane / 16u] = float4(count > 4.0 ? gain : float3(1.0, 1.0, 1.0), saturate((count - 4.0) / 8.0));
+        const uint index = eye * 9u + 1u + lane / 16u;
+        SeamOutput[index] = StableSeam(index,
+            float4(count > 4.0 ? gain : float3(1.0, 1.0, 1.0), saturate((count - 4.0) / 8.0)));
     }
     GroupMemoryBarrierWithGroupSync();
     if (lane < 8u) {
@@ -514,7 +535,9 @@ void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
                                      sc.b > count * 0.03 ? sf.b / max(sc.b, 1.0e-5) : lumGain);
         const float3 gain = clamp(lerp(lumGain.xxx, rgbGain, SeamOptions.x), 1.0 - Seam.z, 1.0 + Seam.z);
         const float confidence = saturate((count - 8.0) / 40.0);
-        SeamOutput[eye * 9u] = float4(count > 8.0 ? gain : float3(1.0, 1.0, 1.0), confidence);
+        const uint index = eye * 9u;
+        SeamOutput[index] = StableSeam(index,
+            float4(count > 8.0 ? gain : float3(1.0, 1.0, 1.0), confidence));
     }
 }
 #endif

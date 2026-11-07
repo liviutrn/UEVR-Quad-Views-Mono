@@ -33,6 +33,23 @@ inline std::atomic<float>& last_seam_analysis_milliseconds() {
     return value;
 }
 
+// B32: temporal gains are shared through CPU *only after* an individual
+// compositor slot's GPU fence retires. Never share a GPU UAV across slots.
+struct SeamTemporalHistory {
+    std::mutex mutex;
+    std::array<std::array<float,4>,18> values{};
+    ID3D12Device* device{}; // identity only; no lifetime ownership
+    uint32_t width{},height{};
+    float crop_width{},crop_height{},context_scale{};
+    uint64_t issued{},accepted{};
+    std::chrono::steady_clock::time_point last_valid{};
+    bool valid{};
+};
+inline SeamTemporalHistory& seam_temporal_history() {
+    static SeamTemporalHistory state;
+    return state;
+}
+
 struct alignas(16) ShaderConstants {
     uint32_t eye_and_atlas[4]{};
     uint32_t rectangles[4][4]{};
@@ -55,9 +72,11 @@ struct alignas(16) ShaderConstants {
     float seam_local[4]{};
     float focus_lift[4]{};
     float focus_profile[4]{};
+    float seam_temporal[4]{}; // stability, max gain step, history available
+    float seam_history[18][4]{}; // per-eye 1 global + 8 local smoothed records
 };
-static_assert(sizeof(ShaderConstants) == 480);
-static_assert(sizeof(ShaderConstants) <= 512); // slot-local, CB-aligned allocation
+static_assert(sizeof(ShaderConstants) == 784);
+static_assert(sizeof(ShaderConstants) <= 1024); // slot-local, CB-aligned allocation
 
 // B7: optional periphery depth for reprojection. texture is R32_TYPELESS and
 // stays in D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE between uses.
@@ -154,7 +173,8 @@ public:
         if (mapped_ && constants_) constants_->Unmap(0, nullptr);
         mapped_ = nullptr;
         constants_.Reset(); root_.Reset(); pipeline_.Reset(); srv_heap_.Reset(); rtv_heap_.Reset();
-        seam_pipeline_.Reset(); seam_stats_.Reset();
+        seam_pipeline_.Reset(); seam_stats_.Reset(); seam_readback_.Reset();
+        temporal_pending_=false; temporal_serial_=0; temporal_producer_valid_=false;
         queries_.Reset(); timestamps_.Reset(); frequency_=0; timing_pending_=false; gpu_ms_=-1.f; seam_gpu_ms_=-1.f; timed_seam_active_=false;
         device_ = device;
         source_format_ = source_srv_format;
@@ -249,7 +269,7 @@ public:
         upload.CreationNodeMask = upload.VisibleNodeMask = 1;
         D3D12_RESOURCE_DESC buffer{};
         buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        buffer.Width = 512;
+        buffer.Width = 1024;
         buffer.Height = buffer.DepthOrArraySize = buffer.MipLevels = 1;
         buffer.SampleDesc.Count = 1;
         buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -263,6 +283,15 @@ public:
         if (FAILED(device->CreateCommittedResource(&gpu, D3D12_HEAP_FLAG_NONE, &buffer,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&seam_stats_))))
             return fail("Could not create QuadView slot-local seam statistics");
+        // No CPU stalls: 288 bytes are copied on the recording queue and read
+        // only in on_slot_retired(), after the slot's existing GPU fence.
+        D3D12_HEAP_PROPERTIES readback_props{};
+        readback_props.Type=D3D12_HEAP_TYPE_READBACK;
+        readback_props.CreationNodeMask=readback_props.VisibleNodeMask=1;
+        buffer.Flags=D3D12_RESOURCE_FLAG_NONE;
+        // Failure is nonfatal: adaptive falls back to B31's stateless matcher.
+        device->CreateCommittedResource(&readback_props,D3D12_HEAP_FLAG_NONE,&buffer,
+            D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&seam_readback_));
         D3D12_SHADER_RESOURCE_VIEW_DESC match_srv{};
         match_srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
         match_srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -282,6 +311,7 @@ public:
         if (FAILED(constants_->Map(0, &no_read, &mapped_))) return fail("Could not map QuadView constants");
         constants_->SetName(L"QuadView slot constants");
         seam_stats_->SetName(L"QuadView slot seam gain and confidence");
+        if (seam_readback_) seam_readback_->SetName(L"QuadView slot seam history readback");
         root_->SetName(L"QuadView root signature");
         pipeline_->SetName(L"QuadView stereo raster pipeline");
         srv_heap_->SetName(L"QuadView slot SRV");
@@ -295,6 +325,7 @@ public:
         // Call only after the owning command-context fence proves every query
         // and resource reference in this slot has completed.
         read_timing();
+        publish_seam_history();
         flush_snapshot();
         owner_.reset();
         depth_keepalive_.reset();
@@ -428,12 +459,48 @@ public:
             !constants.depth_options[0] ? 0.f : 1.f;
         constants.seam_local[0] = settings.seam_radius_px;
         constants.seam_local[1] = settings.seam_local_strength;
+        constants.seam_local[2] = settings.seam_blend_basic ? 1.f : 0.f;
         constants.focus_lift[0]=settings.focus_lift_enabled ? 1.f : 0.f;
         constants.focus_lift[1]=settings.focus_brightness;
         constants.focus_lift[2]=settings.focus_corner_gain-1.f;
         constants.focus_lift[3]=settings.focus_lift_onset;
         constants.focus_profile[0]=settings.focus_lift_power;
         constants.focus_profile[1]=settings.focus_lift_strength;
+        // The historical gains are small (18 x float4) and published only
+        // when their producer's slot fence has retired. Stale/other-device
+        // histories are never sampled. Cheeky NR-before-SR is already baked
+        // into the fovea source that this analysis reads.
+        const bool analyze = settings.seam_mode == 2 &&
+            (settings.seam_strength > 0.f || settings.seam_debug) &&
+            settings.diagnostic_view == 0 && !(depth && depth->show);
+        const bool use_temporal=analyze && settings.seam_temporal_enabled && bool(seam_readback_);
+        temporal_pending_=false;
+        temporal_serial_=0;
+        temporal_producer_valid_=false;
+        if (use_temporal) {
+            constants.seam_temporal[0]=settings.seam_stability;
+            constants.seam_temporal[1]=settings.seam_max_frame_change;
+            auto& cache=seam_temporal_history();
+            std::lock_guard<std::mutex> guard(cache.mutex);
+            const auto now=std::chrono::steady_clock::now();
+            if (cache.valid && cache.device==device_.Get() &&
+                cache.width==layout.eye_width && cache.height==layout.eye_height &&
+                std::abs(cache.crop_width-(layout.focus_crops[0].u1-layout.focus_crops[0].u0))<1.e-4f &&
+                std::abs(cache.crop_height-(layout.focus_crops[0].v1-layout.focus_crops[0].v0))<1.e-4f &&
+                std::abs(cache.context_scale-layout.context_scale)<1.e-4f &&
+                now-cache.last_valid<std::chrono::milliseconds(850)) {
+                for (unsigned i=0;i<18;++i) for (unsigned j=0;j<4;++j)
+                    constants.seam_history[i][j]=cache.values[i][j];
+                constants.seam_temporal[2]=1.f;
+            }
+            temporal_serial_=++cache.issued;
+            temporal_output_width_=layout.eye_width;
+            temporal_output_height_=layout.eye_height;
+            temporal_crop_width_=layout.focus_crops[0].u1-layout.focus_crops[0].u0;
+            temporal_crop_height_=layout.focus_crops[0].v1-layout.focus_crops[0].v0;
+            temporal_context_scale_=layout.context_scale;
+            temporal_producer_valid_=constants.seam_options[3]>0.5f;
+        }
         std::memcpy(mapped_, &constants, sizeof(constants));
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format = source_format_;
@@ -463,11 +530,8 @@ public:
         owner_ = std::move(owner);
         for (size_t i = 0; i != 4; ++i) sources_[i] = sources[i];
         destination_ = destination;
-        // Strength zero is visually neutral; skip statistics work unless the
-        // confidence diagnostic explicitly needs these values.
-        const bool analyze = settings.seam_mode == 2 &&
-            (settings.seam_strength > 0.f || settings.seam_debug) &&
-            settings.diagnostic_view == 0 && !(depth && depth->show);
+        // This is the exact same analyze decision used to prepare the
+        // fence-retired temporal history above.
         const auto sample_state = analyze ? D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE
                                          : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         for (size_t i = 0; i != 4; ++i) {
@@ -514,6 +578,14 @@ public:
             commands->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,3,timestamps_.Get(),0);
             timing_pending_=true;
         }
+        if (use_temporal) {
+            barrier(commands,seam_stats_.Get(),D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_COPY_SOURCE);
+            commands->CopyBufferRegion(seam_readback_.Get(),0,seam_stats_.Get(),0,18u*4u*sizeof(float));
+            barrier(commands,seam_stats_.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            temporal_pending_=true;
+        }
         if (analyze) for (size_t i = 0; i != 4; ++i) {
             bool duplicate = false;
             for (size_t j = 0; j < i; ++j) duplicate = duplicate || active[j] == active[i];
@@ -533,6 +605,38 @@ public:
     }
 
 private:
+    void publish_seam_history() {
+        if (!temporal_pending_ || !seam_readback_) return;
+        temporal_pending_=false;
+        D3D12_RANGE range{0,18u*4u*sizeof(float)};
+        float* values{};
+        if (FAILED(seam_readback_->Map(0,&range,reinterpret_cast<void**>(&values)))) return;
+        std::array<std::array<float,4>,18> results{};
+        bool finite=true,has_valid=false;
+        for(unsigned i=0;i<18;++i) for(unsigned k=0;k<4;++k) {
+            const float v=values[i*4u+k];
+            finite=finite && std::isfinite(v) && v>=0.f && v<=4.f;
+            results[i][k]=v;
+            if(k==3 && v>0.05f) has_valid=true;
+        }
+        const D3D12_RANGE no_write{0,0};
+        seam_readback_->Unmap(0,&no_write);
+        if(!finite || !temporal_producer_valid_ || !has_valid) return;
+        auto& cache=seam_temporal_history();
+        std::lock_guard<std::mutex> guard(cache.mutex);
+        // Out-of-order slot retirements cannot replace a newer completed frame.
+        if(temporal_serial_<=cache.accepted) return;
+        cache.values=results;
+        cache.device=device_.Get();
+        cache.width=temporal_output_width_;
+        cache.height=temporal_output_height_;
+        cache.crop_width=temporal_crop_width_;
+        cache.crop_height=temporal_crop_height_;
+        cache.context_scale=temporal_context_scale_;
+        cache.accepted=temporal_serial_;
+        cache.last_valid=std::chrono::steady_clock::now();
+        cache.valid=true;
+    }
     bool fail(const char* message) { error_ = message; return false; }
 
     template <typename Constants>
@@ -713,7 +817,7 @@ private:
     ComPtr<ID3D12PipelineState> seam_pipeline_;
     ComPtr<ID3D12DescriptorHeap> srv_heap_, rtv_heap_;
     ComPtr<ID3D12Resource> constants_, destination_, timestamps_;
-    ComPtr<ID3D12Resource> seam_stats_;
+    ComPtr<ID3D12Resource> seam_stats_,seam_readback_;
     std::array<ComPtr<ID3D12Resource>, 4> sources_;
     ComPtr<ID3D12QueryHeap> queries_;
     void* mapped_{};
@@ -726,6 +830,10 @@ private:
     bool recorded_{};
     bool timing_pending_{};
     bool timed_seam_active_{}; // pending timestamp interval includes CSSeam
+    bool temporal_pending_{},temporal_producer_valid_{};
+    uint64_t temporal_serial_{};
+    uint32_t temporal_output_width_{},temporal_output_height_{};
+    float temporal_crop_width_{},temporal_crop_height_{},temporal_context_scale_{};
     UINT64 frequency_{};
     float gpu_ms_{-1.f};
     float seam_gpu_ms_{-1.f};

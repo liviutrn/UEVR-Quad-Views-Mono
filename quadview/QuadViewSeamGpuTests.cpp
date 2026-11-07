@@ -214,6 +214,9 @@ int main() try {
         "Disabled focus lift used stored EV settings");
 
     Settings adaptive = off; adaptive.seam_mode = 2; adaptive.seam_strength = 1.f;
+    // Preserve B31's exact stateless pixel contracts; temporal is separately
+    // tested below with its own enabled settings and retired-frame history.
+    adaptive.seam_temporal_enabled = false;
     adaptive.seam_max_gain = .50f; adaptive.seam_color_strength = 0.f;
     const auto independent = make_sources(gpu, layout, {{{77,77,77,255}, {77,77,77,255}, {102,102,102,255}, {153,153,153,255}}});
     const auto fit = draw(gpu, compositor, independent, output.Get(), layout, adaptive);
@@ -251,11 +254,26 @@ int main() try {
                 "Fovea sharpening contaminated adaptive periphery statistics");
 
     Settings transitioned = manual; transitioned.seam_transition_px = 16.f;
+    transitioned.seam_blend_basic = false; // exercise explicit pixels mode
     const auto edge_blend = draw(gpu, compositor, base, output.Get(), layout, transitioned);
     check(edge_blend.at(eye_w / 2, eye_h / 2)[0] == corrected.at(eye_w / 2, eye_h / 2)[0],
         "Transition reservation changed the fovea core");
     check(edge_blend.at(17, eye_h / 2)[0] < corrected.at(17, eye_h / 2)[0],
         "Transition reservation did not blend the crop boundary");
+    // Hybrid percentage feather should be identical to basic feather geometry
+    // but retain the adaptive brightness/color correction in the periphery.
+    Settings hybrid = adaptive;
+    hybrid.seam_strength = .4f; // keep a visible corrected context/focus gap
+    hybrid.seam_blend_basic = true;
+    hybrid.feather_fraction = .20f;
+    Settings hybrid_full = hybrid;
+    hybrid_full.seam_blend_basic = false; // full sharp, otherwise identical
+    const auto hybrid_pixels = draw(gpu, compositor, base, output.Get(), layout, hybrid);
+    const auto hybrid_full_pixels = draw(gpu, compositor, base, output.Get(), layout, hybrid_full);
+    check(hybrid_pixels.at(17, eye_h / 2)[0] < hybrid_full_pixels.at(17, eye_h / 2)[0],
+        "B32 hybrid basic feather did not blend inside the focus crop");
+    check(hybrid_pixels.at(eye_w / 2, eye_h / 2) == hybrid_full_pixels.at(eye_w / 2, eye_h / 2),
+        "B32 hybrid feather changed the sharp focus center");
 
     const auto black = make_sources(gpu, layout, {{{0,0,0,255}, {0,0,0,255}, {0,0,0,255}, {0,0,0,255}}});
     const auto black_fit = draw(gpu, compositor, black, output.Get(), layout, adaptive);
@@ -283,6 +301,35 @@ int main() try {
     check(recovered_fit.at(4, 32)[0] > shared_off.at(4, 32)[0],
         "Adaptive statistics did not recover after missing-depth frame");
 
+    // The very same fovea-only intensity change can occur when Cheeky NR
+    // runs BEFORE the game's SR. Temporal gains must not jump to the new
+    // correction on the very next frame. Both views use unchanged periphery.
+    Settings stable = adaptive;
+    stable.seam_temporal_enabled = true;
+    stable.seam_stability = .95f;
+    stable.seam_max_frame_change = .025f;
+    const auto anchor = draw(gpu, compositor, base, output.Get(), layout, stable);
+    const auto changing = make_sources(gpu, layout,
+        {{{77,77,77,255}, {77,77,77,255}, {153,153,153,255}, {153,153,153,255}}});
+    const auto raw_jump = draw(gpu, compositor, changing, output.Get(), layout, adaptive);
+    const auto stable_jump = draw(gpu, compositor, changing, output.Get(), layout, stable);
+    for (uint32_t eye = 0; eye < 2; ++eye) {
+        const int x = int(eye * eye_w + 4);
+        check(stable_jump.at(x,32)[0] >= anchor.at(x,32)[0],
+            "B32 temporal filter moved against the new NR color");
+        check(stable_jump.at(x,32)[0] < raw_jump.at(x,32)[0],
+            "B32 temporal filter failed to suppress frame-to-frame gain jump");
+    }
+    // When depth alignment disappears for a frame, retain the recently
+    // retired match instead of abruptly switching to neutral.
+    const auto short_gap = draw(gpu, compositor, changing, output.Get(), shared_layout, stable, &missing_depth);
+    check(short_gap.at(4,32)[0] > shared_off.at(4,32)[0],
+        "B32 invalid-depth match did not hold the recent temporal gain");
+    // Turning temporal OFF must immediately restore the stateless behavior.
+    const auto temporal_off = draw(gpu, compositor, changing, output.Get(), shared_layout, adaptive, &missing_depth);
+    check(temporal_off.at(4,32)[0] == shared_off.at(4,32)[0],
+        "B32 temporal-off mode did not preserve neutral missing-depth fallback");
+
     if (info) for (UINT64 i=0,n=info->GetNumStoredMessages();i<n;++i) {
         SIZE_T size{}; info->GetMessage(i,nullptr,&size);
         std::vector<uint8_t> storage(size);
@@ -292,7 +339,7 @@ int main() try {
             throw std::runtime_error(std::string("D3D12 seam validation: ")+message->pDescription);
     }
 
-    std::cout << "QuadView seam WARP: off/manual/zero-strength identity, independent eyes, sharpened periphery, missing-depth neutral/recovery, edge blend and invalid-patch rejection passed.\n";
+    std::cout << "QuadView seam WARP: B31 stateless compatibility plus B32 stronger gains, percentage hybrid, fovea-only NR jump stabilization, temporal depth-loss hold and temporal-off fallback passed.\n";
     return 0;
 } catch (const std::exception& e) {
     std::cerr << "QuadView seam WARP FAILED: " << e.what() << '\n';
