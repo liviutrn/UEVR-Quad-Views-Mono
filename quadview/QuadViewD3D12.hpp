@@ -28,6 +28,11 @@ namespace uevr::quadview::dx12 {
 
 using Microsoft::WRL::ComPtr;
 
+inline std::atomic<float>& last_seam_analysis_milliseconds() {
+    static std::atomic<float> value{-1.f};
+    return value;
+}
+
 struct alignas(16) ShaderConstants {
     uint32_t eye_and_atlas[4]{};
     uint32_t rectangles[4][4]{};
@@ -45,8 +50,13 @@ struct alignas(16) ShaderConstants {
     float depth_projection[4]{};
     float depth_coefficients[4]{};
     float depth_jitter[4]{};
+    float seam[4]{};
+    float seam_options[4]{};
+    float seam_local[4]{};
+    float focus_lift[4]{};
 };
-static_assert(sizeof(ShaderConstants) == 400); // B8: 512-byte constant buffer
+static_assert(sizeof(ShaderConstants) == 464);
+static_assert(sizeof(ShaderConstants) <= 512); // slot-local, CB-aligned allocation
 
 // B7: optional periphery depth for reprojection. texture is R32_TYPELESS and
 // stays in D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE between uses.
@@ -128,7 +138,7 @@ public:
     }
 
     const char* error() const { return error_; }
-    bool prepared() const { return device_ && root_ && pipeline_ && mapped_; }
+    bool prepared() const { return device_ && root_ && pipeline_ && seam_pipeline_ && seam_stats_ && mapped_; }
     bool commands_recorded() const { return recorded_; }
 
     bool prewarm(ID3D12Device* device, DXGI_FORMAT source_srv_format, DXGI_FORMAT output_format,
@@ -143,6 +153,7 @@ public:
         if (mapped_ && constants_) constants_->Unmap(0, nullptr);
         mapped_ = nullptr;
         constants_.Reset(); root_.Reset(); pipeline_.Reset(); srv_heap_.Reset(); rtv_heap_.Reset();
+        seam_pipeline_.Reset(); seam_stats_.Reset();
         queries_.Reset(); timestamps_.Reset(); frequency_=0; timing_pending_=false; gpu_ms_=-1.f;
         device_ = device;
         source_format_ = source_srv_format;
@@ -158,23 +169,30 @@ public:
 
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 5; // 4 sources + B7 periphery depth
-        D3D12_ROOT_PARAMETER parameters[2]{};
+        range.NumDescriptors = 6; // 4 colors, depth, seam gain/confidence
+        D3D12_DESCRIPTOR_RANGE seam_uav{};
+        seam_uav.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        seam_uav.NumDescriptors = 1;
+        D3D12_ROOT_PARAMETER parameters[3]{};
         parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         parameters[1].DescriptorTable.NumDescriptorRanges = 1;
         parameters[1].DescriptorTable.pDescriptorRanges = &range;
-        parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        parameters[2].DescriptorTable.NumDescriptorRanges = 1;
+        parameters[2].DescriptorTable.pDescriptorRanges = &seam_uav;
+        parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         D3D12_STATIC_SAMPLER_DESC sampler{};
         sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
         sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
         sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
         sampler.MaxAnisotropy = 1;
         sampler.MaxLOD = D3D12_FLOAT32_MAX;
-        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         D3D12_ROOT_SIGNATURE_DESC signature{};
-        signature.NumParameters = 2;
+        signature.NumParameters = 3;
         signature.pParameters = parameters;
         signature.NumStaticSamplers = 1;
         signature.pStaticSamplers = &sampler;
@@ -210,9 +228,14 @@ public:
         description.SampleDesc.Count = 1;
         if (FAILED(device->CreateGraphicsPipelineState(&description, IID_PPV_ARGS(&pipeline_))))
             return fail("Could not create QuadView raster pipeline");
+        D3D12_COMPUTE_PIPELINE_STATE_DESC analysis{};
+        analysis.pRootSignature = root_.Get();
+        analysis.CS = {shaders::seam, sizeof(shaders::seam)};
+        if (FAILED(device->CreateComputePipelineState(&analysis, IID_PPV_ARGS(&seam_pipeline_))))
+            return fail("Could not create QuadView seam analysis pipeline");
 
         D3D12_DESCRIPTOR_HEAP_DESC heap{};
-        heap.NumDescriptors = 5;
+        heap.NumDescriptors = 7; // six SRVs followed by one seam UAV
         heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&srv_heap_)))) return fail("Could not create QuadView SRV heap");
@@ -231,9 +254,33 @@ public:
         buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         if (FAILED(device->CreateCommittedResource(&upload, D3D12_HEAP_FLAG_NONE, &buffer,
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&constants_)))) return fail("Could not create QuadView constants");
+        D3D12_HEAP_PROPERTIES gpu{};
+        gpu.Type = D3D12_HEAP_TYPE_DEFAULT;
+        gpu.CreationNodeMask = gpu.VisibleNodeMask = 1;
+        buffer.Width = 18 * 4 * sizeof(float);
+        buffer.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if (FAILED(device->CreateCommittedResource(&gpu, D3D12_HEAP_FLAG_NONE, &buffer,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&seam_stats_))))
+            return fail("Could not create QuadView slot-local seam statistics");
+        D3D12_SHADER_RESOURCE_VIEW_DESC match_srv{};
+        match_srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        match_srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        match_srv.Buffer.NumElements = 18;
+        match_srv.Buffer.StructureByteStride = 4 * sizeof(float);
+        const auto descriptor_stride = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        auto match_descriptor = srv_heap_->GetCPUDescriptorHandleForHeapStart();
+        match_descriptor.ptr += SIZE_T(5) * descriptor_stride;
+        device->CreateShaderResourceView(seam_stats_.Get(), &match_srv, match_descriptor);
+        match_descriptor.ptr += descriptor_stride;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC match_uav{};
+        match_uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        match_uav.Buffer.NumElements = 18;
+        match_uav.Buffer.StructureByteStride = 4 * sizeof(float);
+        device->CreateUnorderedAccessView(seam_stats_.Get(), nullptr, &match_uav, match_descriptor);
         D3D12_RANGE no_read{0, 0};
         if (FAILED(constants_->Map(0, &no_read, &mapped_))) return fail("Could not map QuadView constants");
         constants_->SetName(L"QuadView slot constants");
+        seam_stats_->SetName(L"QuadView slot seam gain and confidence");
         root_->SetName(L"QuadView root signature");
         pipeline_->SetName(L"QuadView stereo raster pipeline");
         srv_heap_->SetName(L"QuadView slot SRV");
@@ -255,6 +302,7 @@ public:
         recorded_ = false;
     }
     float gpu_milliseconds() const { return gpu_ms_; }
+    float seam_gpu_milliseconds() const { return seam_gpu_ms_; }
     UINT64 timing_frequency() const { return frequency_; }
     bool timing_ready() const { return queries_ && timestamps_ && frequency_; }
 
@@ -366,6 +414,22 @@ public:
                 depth_bound = true;
             }
         }
+        constants.seam[0] = static_cast<float>(settings.seam_mode);
+        constants.seam[1] = settings.seam_strength;
+        constants.seam[2] = settings.seam_max_gain;
+        // Approximate EV control in encoded UNORM; no per-pixel pow. Adaptive
+        // estimates themselves compare/apply in the exact same sampled domain.
+        constants.seam[3] = std::exp2(settings.seam_brightness_ev / (encoded_unorm ? 2.2f : 1.f));
+        constants.seam_options[0] = settings.seam_color_strength;
+        constants.seam_options[1] = settings.seam_transition_px;
+        constants.seam_options[2] = settings.seam_debug ? 1.f : 0.f;
+        constants.seam_options[3] = depth && depth->reproject && layout.shared_context &&
+            !constants.depth_options[0] ? 0.f : 1.f;
+        constants.seam_local[0] = settings.seam_radius_px;
+        constants.seam_local[1] = settings.seam_local_strength;
+        constants.focus_lift[0] = settings.focus_lift_enabled ? 1.f : 0.f;
+        constants.focus_lift[1] = std::exp2(settings.focus_center_ev / (encoded_unorm ? 2.2f : 1.f));
+        constants.focus_lift[2] = std::exp2(settings.focus_edge_ev / (encoded_unorm ? 2.2f : 1.f));
         std::memcpy(mapped_, &constants, sizeof(constants));
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format = source_format_;
@@ -395,16 +459,37 @@ public:
         owner_ = std::move(owner);
         for (size_t i = 0; i != 4; ++i) sources_[i] = sources[i];
         destination_ = destination;
+        const bool analyze = settings.seam_mode == 2 && settings.diagnostic_view == 0 &&
+            !(depth && depth->show);
+        const auto sample_state = analyze ? D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE
+                                         : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         for (size_t i = 0; i != 4; ++i) {
             bool duplicate = false;
             for (size_t j = 0; j < i; ++j) duplicate = duplicate || active[j] == active[i];
-            if (!duplicate) barrier(commands, active[i], source_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            if (!duplicate) barrier(commands, active[i], source_state, sample_state);
         }
         barrier(commands, destination, destination_state, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        commands->SetPipelineState(pipeline_.Get());
-        commands->SetGraphicsRootSignature(root_.Get());
         ID3D12DescriptorHeap* heaps[]{srv_heap_.Get()};
         commands->SetDescriptorHeaps(1, heaps);
+        const bool timed=settings.gpu_timing && timestamp_frequency &&
+            timestamp_frequency==frequency_ && timing_ready();
+        if (timed) commands->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);
+        if (analyze) {
+            barrier(commands, seam_stats_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            commands->SetPipelineState(seam_pipeline_.Get());
+            commands->SetComputeRootSignature(root_.Get());
+            commands->SetComputeRootConstantBufferView(0, constants_->GetGPUVirtualAddress());
+            commands->SetComputeRootDescriptorTable(1, srv_heap_->GetGPUDescriptorHandleForHeapStart());
+            auto uav = srv_heap_->GetGPUDescriptorHandleForHeapStart();
+            uav.ptr += UINT64(6) * stride;
+            commands->SetComputeRootDescriptorTable(2, uav);
+            commands->Dispatch(2, 1, 1);
+            // The transition orders UAV writes before the pixel SRV read.
+            barrier(commands, seam_stats_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        if (timed) commands->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,1);
+        commands->SetPipelineState(pipeline_.Get());
+        commands->SetGraphicsRootSignature(root_.Get());
         commands->SetGraphicsRootConstantBufferView(0, constants_->GetGPUVirtualAddress());
         commands->SetGraphicsRootDescriptorTable(1, srv_heap_->GetGPUDescriptorHandleForHeapStart());
         const D3D12_VIEWPORT viewport{0, 0, static_cast<float>(layout.eye_width * 2), static_cast<float>(layout.eye_height), 0, 1};
@@ -413,14 +498,16 @@ public:
         commands->RSSetScissorRects(1, &scissor);
         commands->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        const bool timed=settings.gpu_timing && timestamp_frequency &&
-            timestamp_frequency==frequency_ && timing_ready();
-        if (timed) commands->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);
         commands->DrawInstanced(3, 1, 0, 0);
         if (timed) {
-            commands->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,1);
-            commands->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,2,timestamps_.Get(),0);
+            commands->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,2);
+            commands->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,3,timestamps_.Get(),0);
             timing_pending_=true;
+        }
+        if (analyze) for (size_t i = 0; i != 4; ++i) {
+            bool duplicate = false;
+            for (size_t j = 0; j < i; ++j) duplicate = duplicate || active[j] == active[i];
+            if (!duplicate) barrier(commands, active[i], sample_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
         if (snapshot_.empty() && snapshot_requested().exchange(false))
             capture_snapshot(commands, active, destination, depth_bound ? depth : nullptr, layout, constants);
@@ -524,11 +611,14 @@ private:
     void read_timing() {
         if (!timing_pending_ || !timestamps_ || !frequency_) return;
         gpu_ms_=-1.f;
-        D3D12_RANGE range{0,sizeof(UINT64)*2};
+        D3D12_RANGE range{0,sizeof(UINT64)*3};
         UINT64* values{};
         if (SUCCEEDED(timestamps_->Map(0,&range,reinterpret_cast<void**>(&values)))) {
-            if (values[1]>=values[0])
-                gpu_ms_=static_cast<float>(double(values[1]-values[0])*1000.0/double(frequency_));
+            if (values[2]>=values[1] && values[1]>=values[0]) {
+                gpu_ms_=static_cast<float>(double(values[2]-values[0])*1000.0/double(frequency_));
+                seam_gpu_ms_=static_cast<float>(double(values[1]-values[0])*1000.0/double(frequency_));
+                last_seam_analysis_milliseconds().store(seam_gpu_ms_, std::memory_order_relaxed);
+            }
             D3D12_RANGE no_write{0,0};
             timestamps_->Unmap(0,&no_write);
         }
@@ -539,14 +629,14 @@ private:
         queries_.Reset(); timestamps_.Reset(); frequency_=0; timing_pending_=false; gpu_ms_=-1.f;
         D3D12_QUERY_HEAP_DESC query{};
         query.Type=D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-        query.Count=2;
+        query.Count=3;
         if (FAILED(device->CreateQueryHeap(&query,IID_PPV_ARGS(&queries_)))) return;
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type=D3D12_HEAP_TYPE_READBACK;
         heap.CreationNodeMask=heap.VisibleNodeMask=1;
         D3D12_RESOURCE_DESC buffer{};
         buffer.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
-        buffer.Width=sizeof(UINT64)*2;
+        buffer.Width=sizeof(UINT64)*3;
         buffer.Height=buffer.DepthOrArraySize=buffer.MipLevels=1;
         buffer.SampleDesc.Count=1;
         buffer.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -605,8 +695,10 @@ private:
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12RootSignature> root_;
     ComPtr<ID3D12PipelineState> pipeline_;
+    ComPtr<ID3D12PipelineState> seam_pipeline_;
     ComPtr<ID3D12DescriptorHeap> srv_heap_, rtv_heap_;
     ComPtr<ID3D12Resource> constants_, destination_, timestamps_;
+    ComPtr<ID3D12Resource> seam_stats_;
     std::array<ComPtr<ID3D12Resource>, 4> sources_;
     ComPtr<ID3D12QueryHeap> queries_;
     void* mapped_{};
@@ -620,6 +712,7 @@ private:
     bool timing_pending_{};
     UINT64 frequency_{};
     float gpu_ms_{-1.f};
+    float seam_gpu_ms_{-1.f};
 };
 
 } // namespace uevr::quadview::dx12

@@ -1,6 +1,6 @@
-name: TriView B29 efficiency and recentered head scaling
+name: TriView B30 adaptive seam matching
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B29 efficiency and XYZ axes (${{ github.run_number }})
+run-name: TriView B30 adaptive seam matching (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -202,6 +202,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B29 final generated integration contracts failed' }
           python workspace/quadview/test_triview_b28_generated.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B29 regressed B28 generated safety contracts' }
+          python workspace/quadview/apply_triview_b30_controls.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B30 saved seam controls overlay failed' }
+          python workspace/quadview/test_triview_b30_generated.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B30 final generated seam safety contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -308,6 +312,7 @@ jobs:
           Copy-Item workspace/quadview/B23_FOUR_SAMPLES_NOTES.md package/B23_FOUR_SAMPLES_NOTES.md
           Copy-Item workspace/quadview/B28_NOTES.md package/B28_NOTES.md
           Copy-Item workspace/quadview/B29_EFFICIENCY_NOTES.md package/B29_EFFICIENCY_NOTES.md
+          Copy-Item workspace/quadview/B30_SEAM_NOTES.md package/B30_SEAM_NOTES.md
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
           Copy-Item workspace/quadview/GLAMARYE_LICENSE.txt package/GLAMARYE_LICENSE.txt
@@ -322,46 +327,48 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B29-Efficiency-and-recentered-XYZ'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B28-103 user-tested'; baselineSource='3ebe512c830a8e7467717d85d1cd0b7f52c5e4ba'; sourceParent='3ebe512c830a8e7467717d85d1cd0b7f52c5e4ba'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B28 lifecycle preserved; B27 ALU-only shader port; recentered XYZ head scaling; bounded depth housekeeping; seam unchanged; hardware validation pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B30-Adaptive-Seam-Matching'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B28-103 user-tested'; baselineSource='3ebe512c830a8e7467717d85d1cd0b7f52c5e4ba'; sourceParent='9fb0702b549d1710de573d302104dcd995cf1c7b'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B28 lifecycle+B29 efficiency/XYZ preserved; opt-in GPU global/local periphery appearance matching; default0 reserved-edge transition; source vignetting not assumed fixed; hardware validation pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          TriView B29 - efficiency and recentered XYZ head translation.
-          Baseline: B28-103 (3ebe512c), reported stable by the user.
-          ID7 still uses three physical sources and the B28 lifecycle safety.
-          B27 shader normalization/homography optimizations are ported alone.
-          Four depth samples, reprojection, sharpening and inward seam feather stay.
-          XYZ gains now apply after recenter alignment: unequal gains no longer
-          mix player left/right and forward/back through SteamVR room axes.
-          Recenter while facing forward, then test X=3, Y=1, Z=1.
-          Gains remain independent of IPD, World Scale and roomscale pawn movement.
-          Depth export discovery and redundant housekeeping run less often.
-          No fence relaxation, longer depth-age limit, or larger depth pool.
-          No seam correction or new restart policy in this build.
-          Read B29_EFFICIENCY_NOTES.md for evidence and limitations.
+          TriView B30 - opt-in adaptive seam appearance matching.
+          Includes B29 efficiency/XYZ and tested B28-103 lifecycle safety.
+          ID7 still renders exactly three sources. No camera/target-size changes.
+          Game vignette may already be disabled; no further vignette toggle is assumed.
 
-          Test XYZ with unequal gains, turn/recenter, then test uniform gains.
-          Compare B28/B29 in the SAME scene/settings using GPU frametime.
-          If low-FPS depth flicker returns, keep the log and record real FPS.
-          Repeat the B28 size-change smoke test; retain the B28 package.
-          FPS improvement and hardware behavior are not certified by CI.
+          In QuadView controls open Advanced Seam Matching and select Adaptive.
+          Start strength 0.85, color matching 0.5, gain cap 0.2,
+          local residual strength 0.5, radius 120px, transition 0px.
+          Adaptive mode changes peripheral colors, not the opaque fovea.
+          Confidence diagnostic: green enough valid patches, red low confidence.
+          Compare Off/Adaptive with the same scene and headset position.
+          Brightness EV is an optional manual peripheral bias, initially zero.
+          When matching is on, the old inward feather is bypassed. Zero transition
+          preserves the complete foveal crop; a positive transition reserves its
+          existing edge pixels for blending and reduces the fully sharp interior.
+          It does NOT render extra guard pixels outside the existing crop.
+          Source vignetting/depth errors are not proven fixed by this feature.
+
+          Enable GPU timing for total compositor+analysis cost comparisons.
+          Keep the B28 package. Verify XYZ, resize/reload smoke tests as before.
+          Read B30_SEAM_NOTES.md for implementation, tests and limitations.
           '@ | Set-Content package/READ_FIRST.txt
           $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B29-Efficiency-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B30-Seam-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B29-Efficiency-${{ github.run_number }}
+          name: UEVR-TriView-B30-Seam-${{ github.run_number }}
           path: |
-            UEVR-TriView-B29-Efficiency-*.zip
-            UEVR-TriView-B29-Efficiency-*.zip.sha256
+            UEVR-TriView-B30-Seam-*.zip
+            UEVR-TriView-B30-Seam-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
@@ -419,7 +426,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p sanitizer-evidence
-          for test in RetirementScopeTests HookTraceGateTests NativeRenderTraceTests NativeRoleFrameTests EngineRegistrationDiagnosticsTests RecoveryContinuityTests NativeDeliveryTests FamilyRoutingTests ContentProvenancePropertyTests ResizeGateTests DepthWarpSceneTests PoseSlotTests DepthIdentityTests TriViewThreePhysicalTests TriViewAdmissionTests ResourceReuseTests TriViewReusedDeliveryTests TriViewLocatedPoseTests TriViewGammaTablesTests TriViewEpochGateTests HeadMovementScalingTests; do
+          for test in RetirementScopeTests HookTraceGateTests NativeRenderTraceTests NativeRoleFrameTests EngineRegistrationDiagnosticsTests RecoveryContinuityTests NativeDeliveryTests FamilyRoutingTests ContentProvenancePropertyTests ResizeGateTests DepthWarpSceneTests PoseSlotTests DepthIdentityTests TriViewThreePhysicalTests TriViewAdmissionTests ResourceReuseTests TriViewReusedDeliveryTests TriViewLocatedPoseTests TriViewGammaTablesTests TriViewEpochGateTests HeadMovementScalingTests SeamSettingsTests; do
             echo "[B18 sanitizer] $test"
             g++ -std=c++20 -O1 -g -pthread -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer "quadview/$test.cpp" -o "sanitizer-evidence/$test"
             "sanitizer-evidence/$test" > "sanitizer-evidence/$test.log" 2>&1

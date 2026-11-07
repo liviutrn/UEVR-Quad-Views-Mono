@@ -67,6 +67,12 @@ if(WIN32)
   add_test(NAME quadview-depth-warp-ground-truth-stereo
     COMMAND QuadViewDepthWarpTests "${CMAKE_CURRENT_SOURCE_DIR}/QuadViewComposite.hlsl")
   set_tests_properties(quadview-depth-warp-ground-truth-stereo PROPERTIES TIMEOUT 60)
+  add_executable(QuadViewSeamGpuTests QuadViewSeamGpuTests.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/QuadViewShaderBytecode.hpp")
+  target_include_directories(QuadViewSeamGpuTests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+  target_link_libraries(QuadViewSeamGpuTests PRIVATE d3d12 dxgi d3dcompiler)
+  add_test(NAME quadview-seam-production-gpu COMMAND QuadViewSeamGpuTests)
+  set_tests_properties(quadview-seam-production-gpu PROPERTIES TIMEOUT 120)
 endif()
 
 add_executable(QuadViewNativeDeliveryTests NativeDeliveryTests.cpp)
@@ -242,6 +248,13 @@ else()
   target_compile_options(HeadMovementScalingTests PRIVATE -UNDEBUG)
 endif()
 add_test(NAME head-movement-recentered-xyz-axes COMMAND HeadMovementScalingTests)
+add_executable(SeamSettingsTests SeamSettingsTests.cpp)
+if(MSVC)
+  target_compile_options(SeamSettingsTests PRIVATE /UNDEBUG)
+else()
+  target_compile_options(SeamSettingsTests PRIVATE -UNDEBUG)
+endif()
+add_test(NAME quadview-seam-settings-validation COMMAND SeamSettingsTests)
 if(QUADVIEW_IMGUI_DIR)
   add_executable(QuadViewStatusPanelWheelTests StatusPanelWheelTests.cpp
     "${QUADVIEW_IMGUI_DIR}/imgui.cpp" "${QUADVIEW_IMGUI_DIR}/imgui_draw.cpp"

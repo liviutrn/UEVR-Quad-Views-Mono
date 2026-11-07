@@ -16,6 +16,18 @@ struct Settings {
     float foveal_density{1.f};
     float feather_fraction{.08f};
     float sharpen_strength{1.f};
+    uint32_t seam_mode{0}; // Off=0, Manual=1, Adaptive=2
+    float seam_strength{.85f};
+    float seam_max_gain{.20f};
+    float seam_brightness_ev{};
+    float seam_color_strength{.5f};
+    float seam_local_strength{.5f};
+    float seam_radius_px{120.f};
+    float seam_transition_px{}; // reserves existing rendered edge; adds no pixels
+    bool seam_debug{};
+    bool focus_lift_enabled{};
+    float focus_center_ev{};
+    float focus_edge_ev{.25f};
     bool gpu_timing{};
     bool debug_border{};
     bool eye_tracked{true};
@@ -40,6 +52,8 @@ enum Reject : uint32_t {
     reject_offset_v=1u<<12, reject_micro=1u<<13, reject_breakout=1u<<14,
     reject_still=1u<<15, reject_relock=1u<<16
 };
+
+inline constexpr uint32_t reject_seam=1u<<20;
 
 struct Reconciled {
     Settings settings{};
@@ -103,6 +117,8 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     out.gpu_timing=requested.gpu_timing;
     out.eye_tracked=requested.eye_tracked;
     out.stabilize_crop=requested.stabilize_crop;
+    out.seam_debug=requested.seam_debug;
+    out.focus_lift_enabled=requested.focus_lift_enabled;
     const auto scalar = [&](float value,float lo,float hi,uint32_t mask,float Settings::* field) {
         if (valid(value,lo,hi)) out.*field=value;
         else result.rejected|=mask;
@@ -117,6 +133,16 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     };
     scalar(requested.feather_fraction,0.f,.45f,reject_feather,&Settings::feather_fraction);
     scalar(requested.sharpen_strength,0.f,2.f,reject_sharpen,&Settings::sharpen_strength);
+    scalar(requested.seam_strength,0.f,1.f,reject_seam,&Settings::seam_strength);
+    scalar(requested.seam_max_gain,.01f,.5f,reject_seam,&Settings::seam_max_gain);
+    scalar(requested.seam_brightness_ev,-.5f,.5f,reject_seam,&Settings::seam_brightness_ev);
+    scalar(requested.seam_color_strength,0.f,1.f,reject_seam,&Settings::seam_color_strength);
+    scalar(requested.seam_local_strength,0.f,1.f,reject_seam,&Settings::seam_local_strength);
+    scalar(requested.seam_radius_px,16.f,512.f,reject_seam,&Settings::seam_radius_px);
+    scalar(requested.seam_transition_px,0.f,64.f,reject_seam,&Settings::seam_transition_px);
+    scalar(requested.focus_center_ev,-.5f,.5f,reject_seam,&Settings::focus_center_ev);
+    scalar(requested.focus_edge_ev,0.f,1.5f,reject_seam,&Settings::focus_edge_ev);
+    unsigned_integer(requested.seam_mode,0u,2u,reject_seam,&Settings::seam_mode);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
     scalar(requested.gaze_offset_v,-.25f,.25f,reject_offset_v,&Settings::gaze_offset_v);
@@ -147,6 +173,13 @@ inline bool same_settings(const Settings& a, const Settings& b) {
     return a.crop_width==b.crop_width && a.crop_height==b.crop_height &&
         a.context_scale==b.context_scale && a.foveal_density==b.foveal_density &&
         a.feather_fraction==b.feather_fraction && a.sharpen_strength==b.sharpen_strength &&
+        a.seam_mode==b.seam_mode && a.seam_strength==b.seam_strength &&
+        a.seam_max_gain==b.seam_max_gain && a.seam_brightness_ev==b.seam_brightness_ev &&
+        a.seam_color_strength==b.seam_color_strength && a.seam_local_strength==b.seam_local_strength &&
+        a.seam_radius_px==b.seam_radius_px && a.seam_transition_px==b.seam_transition_px &&
+        a.seam_debug==b.seam_debug &&
+        a.focus_lift_enabled==b.focus_lift_enabled && a.focus_center_ev==b.focus_center_ev &&
+        a.focus_edge_ev==b.focus_edge_ev &&
         a.gpu_timing==b.gpu_timing &&
         a.debug_border==b.debug_border && a.eye_tracked==b.eye_tracked &&
         a.diagnostic_view==b.diagnostic_view && a.stabilize_crop==b.stabilize_crop &&
