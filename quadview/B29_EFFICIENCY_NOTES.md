@@ -89,6 +89,14 @@ introduced. Investigate precise stalled conditions if the user reproduces it.
 
 ## Short headset checklist
 
+Windows run104 stopped before backend compilation in the generated-header
+content check: the template checkout and generated file used different line
+endings. The sanitizer job passed; no application package was produced. The
+follow-up changes only that check to compare exact UTF-8 source text through
+universal-newline decoding. It does not alter the generated helper or runtime
+code. Windows compilation, shader/WARP tests and packaging must still complete
+in the corrected run before presenting a testable build.
+
 1. Recenter facing forward. Enable XYZ with X=3, Y=1, Z=1. Move sideways,
    forward/back and vertically; sideways motion must not add forward motion.
 2. Turn/recenter in another direction and repeat. Test all gains=1, all=3,

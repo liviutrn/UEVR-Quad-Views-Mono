@@ -13,7 +13,10 @@ assert 'scaled_standing_delta' not in hook
 assert 'const auto pos_flat = glm::vec3{rotation_offset * standing_delta_flat};' in hook
 assert 'eye_offset * world_scale' in hook
 assert 'Turning your head does not rotate the scaling axes.' in vr
-assert (root/'vr/HeadMovementScaling.hpp').read_bytes()==Path(__file__).with_name('HeadMovementScaling.hpp').read_bytes()
+# Windows checkout can give the template CRLF while the guarded overlay writes
+# LF. Compare exact source text after universal-newline decoding, not authoring
+# line endings. This retains the content check on both Windows and Linux.
+assert (root/'vr/HeadMovementScaling.hpp').read_text(encoding='utf-8')==Path(__file__).with_name('HeadMovementScaling.hpp').read_text(encoding='utf-8')
 enabled=depth.split('    void set_enabled(bool on) {',1)[1].split('\n    }',1)[0]
 assert enabled.index('if (on) return;')<enabled.index('std::scoped_lock lock(mutex_)')
 assert 'prune_locked(want_w_.load(),want_h_.load(),true);' in enabled
