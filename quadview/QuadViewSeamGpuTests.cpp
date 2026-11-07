@@ -272,7 +272,7 @@ int main() try {
     // records must become neutral rather than leaking the prior-frame gains.
     auto shared_layout = layout;
     shared_layout.shared_context = true;
-    check(valid_layout(shared_layout), "Missing-depth shared layout invalid");
+    // record_sources validates the full layout; its validator is private to Compositor.
     uevr::quadview::dx12::DepthInput missing_depth{};
     missing_depth.reproject = true;
     const auto shared_off = draw(gpu, compositor, base, output.Get(), shared_layout, off);
