@@ -57,7 +57,7 @@ def main():
         '                        m_quadview_seam_local_strength->draw("Local boundary residual strength (0=off)");\n',
         '                        m_quadview_seam_local_strength->draw("Local boundary residual strength (0=off)");\n'
         '                        m_quadview_seam_outward_fraction->draw("Outward matching falloff (% eye width; 0=global)");\n'
-        '                        m_quadview_seam_temporal->draw("Temporal stabilization (fence-safe)");\n',
+        '                        m_quadview_seam_temporal->draw("Temporal stabilization (fence-safe)");\n'
         '                        if (m_quadview_seam_temporal->value()) {\n'
         '                            m_quadview_seam_stability->draw("Temporal stability (0=fast, 1=very stable)");\n'
         '                            m_quadview_seam_max_frame_change->draw("Max gain change per frame");\n'
