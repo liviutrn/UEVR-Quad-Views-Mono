@@ -308,10 +308,12 @@ int main() try {
     stable.seam_temporal_enabled = true;
     stable.seam_stability = .95f;
     stable.seam_max_frame_change = .025f;
-    const auto anchor = draw(gpu, compositor, base, output.Get(), layout, stable);
     const auto changing = make_sources(gpu, layout,
         {{{77,77,77,255}, {77,77,77,255}, {153,153,153,255}, {153,153,153,255}}});
+    // Compare the instantaneous response FIRST. Turning temporal off resets
+    // history, so an intervening unfiltered draw would invalidate this test.
     const auto raw_jump = draw(gpu, compositor, changing, output.Get(), layout, adaptive);
+    const auto anchor = draw(gpu, compositor, base, output.Get(), layout, stable);
     const auto stable_jump = draw(gpu, compositor, changing, output.Get(), layout, stable);
     for (uint32_t eye = 0; eye < 2; ++eye) {
         const int x = int(eye * eye_w + 4);
@@ -325,6 +327,13 @@ int main() try {
     const auto short_gap = draw(gpu, compositor, changing, output.Get(), shared_layout, stable, &missing_depth);
     check(short_gap.at(4,32)[0] > shared_off.at(4,32)[0],
         "B32 invalid-depth match did not hold the recent temporal gain");
+    // Repeat missing-depth frames past the history's confidence-decay window.
+    // Old B32 incorrectly held the last good brightness indefinitely.
+    Pixels expired=short_gap;
+    for (int i=0;i<32;++i)
+        expired = draw(gpu, compositor, changing, output.Get(), shared_layout, stable, &missing_depth);
+    check(expired.at(4,32)[0] == shared_off.at(4,32)[0],
+        "B32R1 repeated invalid-depth frames preserved stale gain indefinitely");
     // Turning temporal OFF must immediately restore the stateless behavior.
     const auto temporal_off = draw(gpu, compositor, changing, output.Get(), shared_layout, adaptive, &missing_depth);
     check(temporal_off.at(4,32)[0] == shared_off.at(4,32)[0],

@@ -35,13 +35,15 @@ def main():
         '    const ModToggle::Ptr m_quadview_seam_temporal{ModToggle::create(generate_name("QuadViewSeamTemporal"), true)};\n'
         '    const ModSlider::Ptr m_quadview_seam_stability{ModSlider::create(generate_name("QuadViewSeamStability"), 0.f, 1.f, .85f)};\n'
         '    const ModSlider::Ptr m_quadview_seam_max_frame_change{ModSlider::create(generate_name("QuadViewSeamMaxFrameChange"), .005f, .30f, .05f)};\n'
-        '    const ModToggle::Ptr m_quadview_seam_blend_basic{ModToggle::create(generate_name("QuadViewSeamBlendBasic"), true)};\n',
+        '    const ModToggle::Ptr m_quadview_seam_blend_basic{ModToggle::create(generate_name("QuadViewSeamBlendBasic"), true)};\n'
+        '    const ModSlider::Ptr m_quadview_seam_outward_fraction{ModSlider::create(generate_name("QuadViewSeamOutwardFraction"), 0.f, 1.f, .25f)};\n',
         'B32 slider declaration')
     s=once(s,
         '            *m_quadview_seam_transition_px, *m_quadview_seam_debug,\n',
         '            *m_quadview_seam_transition_px, *m_quadview_seam_debug,\n'
         '            *m_quadview_seam_temporal, *m_quadview_seam_stability,\n'
-        '            *m_quadview_seam_max_frame_change, *m_quadview_seam_blend_basic,\n',
+        '            *m_quadview_seam_max_frame_change, *m_quadview_seam_blend_basic,\n'
+        '            *m_quadview_seam_outward_fraction,\n',
         'B32 persisted controls')
     paths[p]=s
 
@@ -54,7 +56,8 @@ def main():
     s=once(s,
         '                        m_quadview_seam_local_strength->draw("Local boundary residual strength (0=off)");\n',
         '                        m_quadview_seam_local_strength->draw("Local boundary residual strength (0=off)");\n'
-        '                        m_quadview_seam_temporal->draw("Temporal stabilization (fence-safe)");\n'
+        '                        m_quadview_seam_outward_fraction->draw("Outward matching falloff (% eye width; 0=global)");\n'
+        '                        m_quadview_seam_temporal->draw("Temporal stabilization (fence-safe)");\n',
         '                        if (m_quadview_seam_temporal->value()) {\n'
         '                            m_quadview_seam_stability->draw("Temporal stability (0=fast, 1=very stable)");\n'
         '                            m_quadview_seam_max_frame_change->draw("Max gain change per frame");\n'
@@ -74,7 +77,8 @@ def main():
         '            requested.seam_temporal_enabled=m_quadview_seam_temporal->value();\n'
         '            requested.seam_stability=m_quadview_seam_stability->value();\n'
         '            requested.seam_max_frame_change=m_quadview_seam_max_frame_change->value();\n'
-        '            requested.seam_blend_basic=m_quadview_seam_blend_basic->value();\n',
+        '            requested.seam_blend_basic=m_quadview_seam_blend_basic->value();\n'
+        '            requested.seam_outward_fraction=m_quadview_seam_outward_fraction->value();\n',
         'B32 requested controls')
     paths[p]=s
     for path,contents in paths.items():

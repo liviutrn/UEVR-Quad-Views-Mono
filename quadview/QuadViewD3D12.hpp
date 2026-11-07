@@ -41,6 +41,8 @@ struct SeamTemporalHistory {
     ID3D12Device* device{}; // identity only; no lifetime ownership
     uint32_t width{},height{};
     float crop_width{},crop_height{},context_scale{};
+    float crop_u0[2]{},crop_v0[2]{}; // eye-tracked crop position is part of history identity
+    std::array<float,15> setting_key{}; // exact settings, no hash collision
     uint64_t issued{},accepted{};
     std::chrono::steady_clock::time_point last_valid{};
     bool valid{};
@@ -170,11 +172,16 @@ public:
             setup_timing(device,timestamp_frequency);
             return true;
         }
+        if (device_.Get()!=device) {
+            auto& history=seam_temporal_history();
+            std::lock_guard<std::mutex> lock(history.mutex);
+            history.valid=false; // never adopt another runtime/device's gain
+        }
         if (mapped_ && constants_) constants_->Unmap(0, nullptr);
         mapped_ = nullptr;
         constants_.Reset(); root_.Reset(); pipeline_.Reset(); srv_heap_.Reset(); rtv_heap_.Reset();
         seam_pipeline_.Reset(); seam_stats_.Reset(); seam_readback_.Reset();
-        temporal_pending_=false; temporal_serial_=0; temporal_producer_valid_=false;
+        temporal_pending_=false; temporal_serial_=0;
         queries_.Reset(); timestamps_.Reset(); frequency_=0; timing_pending_=false; gpu_ms_=-1.f; seam_gpu_ms_=-1.f; timed_seam_active_=false;
         device_ = device;
         source_format_ = source_srv_format;
@@ -460,6 +467,7 @@ public:
         constants.seam_local[0] = settings.seam_radius_px;
         constants.seam_local[1] = settings.seam_local_strength;
         constants.seam_local[2] = settings.seam_blend_basic ? 1.f : 0.f;
+        constants.seam_local[3] = settings.seam_outward_fraction;
         constants.focus_lift[0]=settings.focus_lift_enabled ? 1.f : 0.f;
         constants.focus_lift[1]=settings.focus_brightness;
         constants.focus_lift[2]=settings.focus_corner_gain-1.f;
@@ -476,10 +484,30 @@ public:
         const bool use_temporal=analyze && settings.seam_temporal_enabled && bool(seam_readback_);
         temporal_pending_=false;
         temporal_serial_=0;
-        temporal_producer_valid_=false;
+        // Invalidate past matching when the user explicitly leaves temporal
+        // adaptive mode. A debug depth view alone need not flush history.
+        if (settings.seam_mode!=2 || !settings.seam_temporal_enabled) {
+            auto& cache=seam_temporal_history();
+            std::lock_guard<std::mutex> guard(cache.mutex);
+            cache.valid=false;
+        }
         if (use_temporal) {
             constants.seam_temporal[0]=settings.seam_stability;
             constants.seam_temporal[1]=settings.seam_max_frame_change;
+            constants.seam_temporal[3]=1.f; // temporal ON, even with no history
+            // Changes to Cheeky NR-before-SR input affect the sampled foveas.
+            // We cannot inspect Cheeky's menu: safely ramp from neutral after
+            // meaningful changes in our own brightness, color or gain settings.
+            const std::array<float,15> settings_key{
+                settings.focus_lift_enabled ? 1.f : 0.f,
+                settings.focus_brightness,settings.focus_lift_strength,
+                settings.focus_corner_gain,settings.focus_lift_onset,
+                settings.focus_lift_power,settings.sharpen_strength,
+                settings.seam_strength,settings.seam_max_gain,
+                settings.seam_color_strength,settings.seam_local_strength,
+                settings.seam_radius_px,settings.seam_outward_fraction,
+                settings.seam_stability,settings.seam_max_frame_change
+            };
             auto& cache=seam_temporal_history();
             std::lock_guard<std::mutex> guard(cache.mutex);
             const auto now=std::chrono::steady_clock::now();
@@ -488,10 +516,19 @@ public:
                 std::abs(cache.crop_width-(layout.focus_crops[0].u1-layout.focus_crops[0].u0))<1.e-4f &&
                 std::abs(cache.crop_height-(layout.focus_crops[0].v1-layout.focus_crops[0].v0))<1.e-4f &&
                 std::abs(cache.context_scale-layout.context_scale)<1.e-4f &&
+                cache.setting_key==settings_key &&
                 now-cache.last_valid<std::chrono::milliseconds(850)) {
-                for (unsigned i=0;i<18;++i) for (unsigned j=0;j<4;++j)
-                    constants.seam_history[i][j]=cache.values[i][j];
-                constants.seam_temporal[2]=1.f;
+                // Preserve smooth global and local gains independently per
+                // eye; a saccade invalidates its prior spatial correction.
+                for (unsigned eye=0;eye<2;++eye) {
+                    const bool gaze_near=
+                        std::abs(cache.crop_u0[eye]-layout.focus_crops[eye].u0)<.025f &&
+                        std::abs(cache.crop_v0[eye]-layout.focus_crops[eye].v0)<.025f;
+                    if (!gaze_near) continue;
+                    for (unsigned k=0;k<9;++k) for(unsigned j=0;j<4;++j)
+                        constants.seam_history[eye*9+k][j]=cache.values[eye*9+k][j];
+                    constants.seam_temporal[2]=1.f;
+                }
             }
             temporal_serial_=++cache.issued;
             temporal_output_width_=layout.eye_width;
@@ -499,7 +536,11 @@ public:
             temporal_crop_width_=layout.focus_crops[0].u1-layout.focus_crops[0].u0;
             temporal_crop_height_=layout.focus_crops[0].v1-layout.focus_crops[0].v0;
             temporal_context_scale_=layout.context_scale;
-            temporal_producer_valid_=constants.seam_options[3]>0.5f;
+            temporal_setting_key_=settings_key;
+            for(unsigned eye=0;eye<2;++eye) {
+                temporal_crop_u0_[eye]=layout.focus_crops[eye].u0;
+                temporal_crop_v0_[eye]=layout.focus_crops[eye].v0;
+            }
         }
         std::memcpy(mapped_, &constants, sizeof(constants));
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
@@ -621,7 +662,9 @@ private:
         }
         const D3D12_RANGE no_write{0,0};
         seam_readback_->Unmap(0,&no_write);
-        if(!finite || !temporal_producer_valid_ || !has_valid) return;
+        // Invalid depth still publishes the *decaying* confidence. Otherwise
+        // a high-confidence cached match could be held forever on missing depth.
+        if(!finite || !has_valid) return;
         auto& cache=seam_temporal_history();
         std::lock_guard<std::mutex> guard(cache.mutex);
         // Out-of-order slot retirements cannot replace a newer completed frame.
@@ -633,6 +676,11 @@ private:
         cache.crop_width=temporal_crop_width_;
         cache.crop_height=temporal_crop_height_;
         cache.context_scale=temporal_context_scale_;
+        cache.setting_key=temporal_setting_key_;
+        for(unsigned eye=0;eye<2;++eye) {
+            cache.crop_u0[eye]=temporal_crop_u0_[eye];
+            cache.crop_v0[eye]=temporal_crop_v0_[eye];
+        }
         cache.accepted=temporal_serial_;
         cache.last_valid=std::chrono::steady_clock::now();
         cache.valid=true;
@@ -830,10 +878,12 @@ private:
     bool recorded_{};
     bool timing_pending_{};
     bool timed_seam_active_{}; // pending timestamp interval includes CSSeam
-    bool temporal_pending_{},temporal_producer_valid_{};
+    bool temporal_pending_{};
     uint64_t temporal_serial_{};
     uint32_t temporal_output_width_{},temporal_output_height_{};
     float temporal_crop_width_{},temporal_crop_height_{},temporal_context_scale_{};
+    float temporal_crop_u0_[2]{},temporal_crop_v0_[2]{};
+    std::array<float,15> temporal_setting_key_{};
     UINT64 frequency_{};
     float gpu_ms_{-1.f};
     float seam_gpu_ms_{-1.f};

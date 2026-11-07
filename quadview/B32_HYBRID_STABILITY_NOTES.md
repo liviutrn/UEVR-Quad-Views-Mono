@@ -62,3 +62,25 @@ and B28-103 (older, user-tested rendering lifecycle).
   absolutely zero flicker caused by depth reprojected geometry or NR
   intrinsic instability. Most shared-queue rendering performance
   remains identical apart from 288-byte asynchronous readback.
+
+## B32R1 independent-review corrections
+- Initial B32-111 stopped at a B31-labelled workflow assertion before FXC/WARP.
+  The B31 optimization assertions now expect the B32 package and ID7 label.
+- Both eyes' moving focus crop coordinates are recorded at slot submission;
+  stale spatial gains are omitted for any eye with >2.5% screen-position
+  difference. Crop dimensions/context scale are still required to agree.
+- History equality also checks a collision-free 15-float settings key and
+  invalidates when adaptive temporal mode or D3D12 device changes.
+- Temporal mode distinguishes active filtering from existing history. On the
+  first frame/reset, a fitted gain starts near 1.0, never more than the user's
+  per-frame gain limit away from neutral.
+- On low confidence / missing depth, prior RGB is retained temporarily but
+  its confidence decays 0.04 per retired slot. This decayed confidence is
+  published even if depth is unavailable, preventing indefinite hold.
+- Global correction optionally fades to identity beyond a smooth outward
+  radius, normalized to eye width; default 0.25 eye widths. The shader uses
+  the existing distance-squared value and adds no extra sqrt.
+- Original anti-vignette calibration remains unchanged.
+- NR BEFORE SR on foveas needs no extra integration: the compositor compares
+  the final SR fovea to the raw periphery. Direct Cheeky NR setting changes
+  are not exposed through UEVR; first-frame bounds mitigate transient steps.

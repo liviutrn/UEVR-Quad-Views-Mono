@@ -29,7 +29,7 @@ cbuffer QuadViewConstants : register(b0) {
     float4 DepthJitter;
     float4 Seam;        // mode, strength, maximum relative auto gain, manual sample-domain gain
     float4 SeamOptions; // color strength, reserved rendered-edge pixels, confidence debug, alignment usable
-    float4 SeamLocal;   // outward residual radius in output pixels, local strength, reserved
+    float4 SeamLocal;   // local radius pixels, local strength, hybrid feather, global correction outward fade/eye width
     float4 FocusLift;    // enabled, overall brightness, corner gain minus one, onset r^2
     float4 FocusProfile; // exponent, anti-vignette strength, reserved
     float4 SeamTemporal; // stability, max gain change/frame, history available
@@ -302,6 +302,15 @@ float4 MatchContext(uint eye, float2 uv, float4 crop, float4 color) {
                 const float t = saturate(sqrt(distanceSq) / max(SeamLocal.x, 1.0));
                 gain = lerp(gain, local, SeamLocal.y * (1.0 - t * t * (3.0 - 2.0 * t)));
             }
+            // Strongly match the boundary without making the entire distant
+            // periphery pulse when fovea-only Cheeky NR changes color/exposure.
+            // Squared-radius falloff avoids the global sqrt B31 optimized away.
+            if (SeamLocal.w > 0.001) {
+                const float radius = SeamLocal.w * EyeAndAtlas.x;
+                const float x = saturate(distanceSq / max(radius * radius, 1.0));
+                const float fade = 1.0 - x * x * (3.0 - 2.0 * x);
+                gain = lerp(1.0, gain, fade);
+            }
         }
         gain = lerp(1.0, gain * Seam.w, Seam.y);
         color.rgb = max(color.rgb * gain, 0.0);
@@ -418,15 +427,25 @@ groupshared float4 SeamContextSums[128];
 // B32: smooth 18 compact gains from the latest fence-retired GPU slot.
 // No image history, no per-pixel temporal work, no cross-slot GPU writes.
 float4 StableSeam(uint index, float4 measured) {
-    if (SeamTemporal.z < 0.5) return measured;
-    const float4 old = SeamHistory[index];
-    if (old.a <= 0.05) return measured;
-    // Unreliable patches do not suddenly reset gains: hold the recent valid
-    // estimate while its CPU-side age guard is still satisfied.
-    if (measured.a <= 0.20) return old;
-    const float alpha = lerp(0.55, 0.025, saturate(SeamTemporal.x)) * saturate(measured.a * 2.0);
-    const float3 blended = lerp(old.rgb, measured.rgb, alpha);
+    if (SeamTemporal.w < 0.5) return measured; // temporal explicitly disabled
     const float stepSize = max(SeamTemporal.y, 0.005);
+    const float4 old = SeamHistory[index];
+    if (SeamTemporal.z < 0.5 || old.a <= 0.05) {
+        if (measured.a <= 0.20) return float4(1.0, 1.0, 1.0, 0.0);
+        // Never flash the full fitted gain on startup, scene load or gaze jump.
+        const float alpha = lerp(0.60, 0.08, saturate(SeamTemporal.x));
+        const float3 first = clamp(lerp(1.0, measured.rgb, alpha),
+                                   1.0 - stepSize, 1.0 + stepSize);
+        return float4(first, measured.a);
+    }
+    if (measured.a <= 0.20) {
+        // Decay confidence on every *retired* invalid frame, even when depth
+        // disappears. Never republish old confidence unchanged indefinitely.
+        return float4(old.rgb, max(0.0, old.a - 0.04));
+    }
+    const float alpha = lerp(0.55, 0.025, saturate(SeamTemporal.x)) *
+                        saturate(measured.a * 2.0);
+    const float3 blended = lerp(old.rgb, measured.rgb, alpha);
     const float3 stable = clamp(blended, old.rgb - stepSize, old.rgb + stepSize);
     return float4(stable, lerp(old.a, measured.a, alpha));
 }

@@ -18,6 +18,7 @@ int main() {
     assert(result.settings.seam_color_strength == .7f);
     assert(result.settings.seam_local_strength == .65f);
     assert(result.settings.seam_radius_px == 120.f);
+    assert(result.settings.seam_outward_fraction == .25f);
     assert(result.settings.seam_transition_px == 0.f);
     assert(!result.settings.seam_debug);
     assert(result.settings.seam_temporal_enabled);
@@ -33,6 +34,7 @@ int main() {
     minimum.seam_color_strength = 0.f;
     minimum.seam_local_strength = 0.f;
     minimum.seam_radius_px = 16.f;
+    minimum.seam_outward_fraction = 0.f;
     minimum.seam_transition_px = 0.f;
     minimum.seam_debug = true;
     minimum.seam_temporal_enabled = false;
@@ -51,6 +53,7 @@ int main() {
     maximum.seam_color_strength = 1.f;
     maximum.seam_local_strength = 1.f;
     maximum.seam_radius_px = 512.f;
+    maximum.seam_outward_fraction = 1.f;
     maximum.seam_transition_px = 512.f;
     maximum.seam_debug = true;
     maximum.seam_stability = 1.f;
@@ -78,6 +81,8 @@ int main() {
         [](const Settings& s) { assert(s.seam_color_strength == .7f); });
     rejects([](Settings& s) { s.seam_local_strength = -0.01f; },
         [](const Settings& s) { assert(s.seam_local_strength == .65f); });
+    rejects([](Settings& s) { s.seam_outward_fraction = 1.01f; },
+        [](const Settings& s) { assert(s.seam_outward_fraction == .25f); });
     rejects([](Settings& s) { s.seam_radius_px = 15.f; },
         [](const Settings& s) { assert(s.seam_radius_px == 120.f); });
     rejects([](Settings& s) { s.seam_transition_px = 512.01f; },
@@ -97,6 +102,8 @@ int main() {
     changed = defaults; changed.seam_local_strength += .01f;
     assert(!same_settings(defaults, changed));
     changed = defaults; changed.seam_radius_px += 1.f;
+    assert(!same_settings(defaults, changed));
+    changed = defaults; changed.seam_outward_fraction += .05f;
     assert(!same_settings(defaults, changed));
     changed = defaults; changed.seam_transition_px = 1.f;
     assert(!same_settings(defaults, changed));

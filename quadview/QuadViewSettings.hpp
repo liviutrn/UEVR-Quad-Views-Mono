@@ -34,6 +34,7 @@ struct Settings {
     float seam_color_strength{.7f};
     float seam_local_strength{.65f};
     float seam_radius_px{120.f};
+    float seam_outward_fraction{.25f}; // fade correction to neutral after 25% eye width outside crop
     float seam_transition_px{};
     bool seam_debug{};
     bool gpu_timing{};
@@ -157,6 +158,7 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.seam_color_strength,0.f,1.f,reject_seam,&Settings::seam_color_strength);
     scalar(requested.seam_local_strength,0.f,1.f,reject_seam,&Settings::seam_local_strength);
     scalar(requested.seam_radius_px,16.f,512.f,reject_seam,&Settings::seam_radius_px);
+    scalar(requested.seam_outward_fraction,0.f,1.f,reject_seam,&Settings::seam_outward_fraction);
     scalar(requested.seam_transition_px,0.f,512.f,reject_seam,&Settings::seam_transition_px);
     unsigned_integer(requested.seam_mode,0u,2u,reject_seam,&Settings::seam_mode);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
@@ -199,7 +201,8 @@ inline bool same_settings(const Settings& a, const Settings& b) {
         a.seam_blend_basic==b.seam_blend_basic &&
         a.seam_max_gain==b.seam_max_gain && a.seam_brightness_ev==b.seam_brightness_ev &&
         a.seam_color_strength==b.seam_color_strength && a.seam_local_strength==b.seam_local_strength &&
-        a.seam_radius_px==b.seam_radius_px && a.seam_transition_px==b.seam_transition_px &&
+        a.seam_radius_px==b.seam_radius_px && a.seam_outward_fraction==b.seam_outward_fraction &&
+        a.seam_transition_px==b.seam_transition_px &&
         a.seam_debug==b.seam_debug &&
         a.gpu_timing==b.gpu_timing &&
         a.debug_border==b.debug_border && a.eye_tracked==b.eye_tracked &&

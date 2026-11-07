@@ -17,8 +17,8 @@ checks = {
     "no stale stats at zero strength": "(Seam.y > 0.0 || SeamOptions.z > 0.5)" in shader,
     "skip zero-strength dispatch": "(settings.seam_strength > 0.f || settings.seam_debug)" in backend,
     "no-analysis timer is neutral": "seam_gpu_ms_=timed_seam_active_ ?" in backend,
-    "ID7 present in package text": "UEVR ID7 / TriView B31" in workflow,
-    "B31 package artifact": "UEVR-TriView-B31-Optimized-" in workflow,
+    "ID7 present in package text": "UEVR ID7 / TriView B32" in workflow,
+    "B32 package artifact": "UEVR-TriView-B32-Stable-Hybrid-" in workflow,
 }
 assert all(checks.values()), {k: v for k, v in checks.items() if not v}
 tests = 0
