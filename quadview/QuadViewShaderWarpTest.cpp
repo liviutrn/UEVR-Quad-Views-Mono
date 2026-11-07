@@ -87,10 +87,13 @@ struct alignas(16) Constants {
     float depth_projection[4]{};
     float depth_coefficients[4]{};
     float depth_jitter[4]{};
+    float seam[4]{};
+    float seam_options[4]{};
+    float seam_local[4]{};
     float focus_lift[4]{};
     float focus_profile[4]{};
 };
-static_assert(sizeof(Constants) == 432);
+static_assert(sizeof(Constants) == 480);
 
 using Color = std::array<uint8_t, 4>;
 static Color source_color(unsigned view, unsigned x, unsigned y) {
@@ -262,7 +265,7 @@ int main(int argc, char** argv) try {
 
     D3D12_DESCRIPTOR_HEAP_DESC heap_description{};
     heap_description.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heap_description.NumDescriptors = 5;
+    heap_description.NumDescriptors = 6;
     heap_description.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> srv_heap;
     require(device->CreateDescriptorHeap(&heap_description, IID_PPV_ARGS(&srv_heap)), "Create SRV heap");
@@ -281,6 +284,16 @@ int main(int argc, char** argv) try {
         auto depth_srv = srv;
         depth_srv.Format = DXGI_FORMAT_R32_FLOAT;
         device->CreateShaderResourceView(nullptr, &depth_srv, source_descriptor);
+        source_descriptor.ptr += source_stride;
+    }
+    {   // B30: null structured seam-match SRV (t5); seam mode stays Off.
+        D3D12_SHADER_RESOURCE_VIEW_DESC seam_srv{};
+        seam_srv.Format = DXGI_FORMAT_UNKNOWN;
+        seam_srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        seam_srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        seam_srv.Buffer.NumElements = 18;
+        seam_srv.Buffer.StructureByteStride = 16;
+        device->CreateShaderResourceView(nullptr, &seam_srv, source_descriptor);
     }
     heap_description.NumDescriptors = 1;
     heap_description.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -295,7 +308,7 @@ int main(int argc, char** argv) try {
 
     D3D12_DESCRIPTOR_RANGE range{};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    range.NumDescriptors = 5;
+    range.NumDescriptors = 6;
     D3D12_ROOT_PARAMETER parameters[2]{};
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;

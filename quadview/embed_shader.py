@@ -33,9 +33,11 @@ def main() -> None:
     compiler = find_fxc()
     arrays = []
     with tempfile.TemporaryDirectory(prefix="quadview-shader-") as temporary:
-        for name, entry, profile in (("vertex", "VSMain", "vs_5_0"), ("pixel", "PSMain", "ps_5_0")):
+        for name, entry, profile in (("vertex", "VSMain", "vs_5_0"), ("pixel", "PSMain", "ps_5_0"),
+                                     ("seam", "CSSeam", "cs_5_0")):
             bytecode = Path(temporary) / f"{name}.cso"
-            subprocess.run([str(compiler), "/nologo", "/Ges", "/WX", "/O3", "/T", profile,
+            defines = ["/D", "SEAM_COMPUTE=1"] if name == "seam" else []
+            subprocess.run([str(compiler), "/nologo", "/Ges", "/WX", "/O3", *defines, "/T", profile,
                             "/E", entry, "/Fo", str(bytecode), str(source)], check=True)
             data = bytecode.read_bytes()
             if not data.startswith(b"DXBC"):

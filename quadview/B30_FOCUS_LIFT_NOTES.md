@@ -6,10 +6,10 @@ Branch: `experiment/triview-b30-focus-lift-20261107`.
 
 ## User decision and scope
 
-Test anti-vignette/brightness alone first, then assess residual seams from new
-headset screenshots. The larger adaptive seam implementation is preserved as
-unbuilt prepared source in `archive/seam-matching-prepared-20261107`, commit
-`144fe38f83e3b9f4f10be6d4d5e53249d1114396`. It is not included here.
+This note describes the calibrated fovea component. The shipping B30 build now
+ALSO includes adaptive seam matching, as requested. See B30_COMBINED_NOTES.md
+for the authoritative combined behavior, resource layout, defaults and checks.
+Earlier prepared source is retained in archive/seam-matching-prepared-20261107.
 
 The game vignette setting was already disabled; enabling it worsened the effect.
 Similar crop-local darkening was observed in DuoView Mono screenshots, so this
@@ -65,16 +65,18 @@ Brightening cannot recover clipped colors or lost detail and can clip highlights
 ## Implementation and safety
 
 Only foveal RGB in normal composition is multiplied, after existing sharpening.
-No blur, new texture sample, render, compute pass, DLSS operation, readback, render
-resource, descriptor, target-size or camera/projection change is added. Alpha,
+The foveal compensation itself adds no blur, texture sample, render, compute
+pass or resource. The combined matcher adds its separate analysis/statistics.
+No new Unreal render, DLSS operation, target-size or camera/projection change
+is added. Alpha,
 peripheral output outside the crop, diagnostics, resource retirement and B28
 world/XR safety remain unchanged. Both actual native stereo foveas use the same
 normalized calibrated profile. This feature is exposed in TriView/QuadView, not
 ported into the protected DuoView baseline in this change.
 
-Two float4s extend constants from400 to432 bytes, inside the existing512-byte
-slot-local allocation. HLSL, C++ and both old WARP mirrors agree. Existing five
-SRVs and graphics root signature are unchanged. Off and zero strength with
+The focus component adds two float4s. With the seam matcher, combined constants
+are480 bytes in the512-byte allocation. The matcher also adds its bounded
+statistics SRV/UAV and compute pass; see the combined notes. Off and zero strength with
 neutral brightness execute the original output behavior. Existing standalone
 Settings defaults remain off for legacy API tests; shipping saved UI defaults on.
 

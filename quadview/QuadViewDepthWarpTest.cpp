@@ -72,10 +72,13 @@ struct alignas(16) Constants {
     float depth_projection[4]{};
     float depth_coefficients[4]{};
     float depth_jitter[4]{};
+    float seam[4]{};
+    float seam_options[4]{};
+    float seam_local[4]{};
     float focus_lift[4]{};
     float focus_profile[4]{};
 };
-static_assert(sizeof(Constants) == 432);
+static_assert(sizeof(Constants) == 480);
 
 int main(int argc, char** argv) try {
     if (argc != 2) throw std::runtime_error("Pass the QuadViewComposite.hlsl path");
@@ -163,7 +166,7 @@ int main(int argc, char** argv) try {
     auto constant_buffer = resource(device.Get(), buffer(512), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
 
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
-    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 5; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 6; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> srv_heap;
     require(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srv_heap)), "SRV heap");
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
@@ -174,13 +177,19 @@ int main(int argc, char** argv) try {
     for (int i = 0; i != 4; ++i) { device->CreateShaderResourceView(context.Get(), &srv, cpu); cpu.ptr += stride; }
     srv.Format = DXGI_FORMAT_R32_FLOAT;
     device->CreateShaderResourceView(depth.Get(), &srv, cpu);
+    cpu.ptr += stride;
+    D3D12_SHADER_RESOURCE_VIEW_DESC seam_srv{};
+    seam_srv.Format = DXGI_FORMAT_UNKNOWN; seam_srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    seam_srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    seam_srv.Buffer.NumElements = 18; seam_srv.Buffer.StructureByteStride = 16;
+    device->CreateShaderResourceView(nullptr, &seam_srv, cpu);
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = 1; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ComPtr<ID3D12DescriptorHeap> rtv_heap;
     require(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_heap)), "RTV heap");
     const auto rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
     device->CreateRenderTargetView(output.Get(), nullptr, rtv);
 
-    D3D12_DESCRIPTOR_RANGE range{}; range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; range.NumDescriptors = 5;
+    D3D12_DESCRIPTOR_RANGE range{}; range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; range.NumDescriptors = 6;
     D3D12_ROOT_PARAMETER parameters[2]{};
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;

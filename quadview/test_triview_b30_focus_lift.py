@@ -13,12 +13,12 @@ for field in ('focus_lift_enabled','focus_brightness','focus_lift_strength','foc
     assert '*m_quadview_'+field in h, field
 assert 'FocusLiftEnabled"), true)' in h, 'Shipping UI must start with the calibrated correction enabled'
 assert (root/'vr/QuadViewFocusLift.hpp').read_text()==Path(__file__).with_name('QuadViewFocusLift.hpp').read_text()
-assert 'sizeof(ShaderConstants) == 432' in d and 'sizeof(ShaderConstants) <= 512' in d
-assert 'range.NumDescriptors = 5;' in d and 'heap.NumDescriptors = 5;' in d
-assert 'Dispatch(' not in d and 'CreateComputePipelineState' not in d
-assert 'if (debugMode == 0u) focus.rgb=CorrectFocusColor(focus.rgb,focusUv);' in s
-assert s.count('CorrectFocusColor(')==2
+assert 'sizeof(ShaderConstants) == 480' in d and 'sizeof(ShaderConstants) <= 512' in d
+assert 'range.NumDescriptors = 6;' in d and 'heap.NumDescriptors = 7;' in d
+assert 'commands->Dispatch(2, 1, 1)' in d
+assert 'focus.rgb = CorrectFocusColor(focus.rgb, focusUv)' in s
+assert s.count('CorrectFocusColor(')==3 # definition, display, adaptive reference
 assert 'FocusLift.y*(1.0+FocusLift.z*FocusProfile.y*pow(t,FocusProfile.x))' in s
 assert 'Compositor command slot has not retired' in d
 assert 'if (owner_) return fail("Cannot recreate an in-flight compositor")' in d
-print('B30 focus-only integration: enabled shipping preset, frozen controls, unchanged descriptors/resources, 432/512-byte constants')
+print('B30 focus-only integration: enabled shipping preset, frozen controls, corrected adaptive reference, bounded slot-local resources, 480/512-byte constants')
