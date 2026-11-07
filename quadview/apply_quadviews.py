@@ -1594,7 +1594,7 @@ void VRRenderTargetManager_Base::retire_quadview_native_target_set() {
     target = backend / "src/mods/vr"
     for name in ("QuadViewGeometry.hpp", "QuadViewProducer.hpp", "QuadViewDelivery.hpp", "QuadViewNativeTargets.hpp",
                  "QuadViewFramePacket.hpp", "QuadViewD3D12.hpp", "QuadViewViewDemand.hpp",
-                 "QuadViewSettings.hpp", "QuadViewGaze.hpp", "QuadViewPSVR2Gaze.hpp"):
+                 "QuadViewSettings.hpp", "QuadViewGaze.hpp", "QuadViewPSVR2Gaze.hpp", "QuadViewFocusLift.hpp"):
         source = overlay / name
         if not source.is_file():
             raise RuntimeError(f"required Quad Views production header is missing: {source}")

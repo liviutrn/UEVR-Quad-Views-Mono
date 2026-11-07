@@ -1,6 +1,7 @@
 #pragma once
 
 #include "QuadViewGeometry.hpp"
+#include "QuadViewFocusLift.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -16,6 +17,12 @@ struct Settings {
     float foveal_density{1.f};
     float feather_fraction{.08f};
     float sharpen_strength{1.f};
+    bool focus_lift_enabled{false};
+    float focus_brightness{1.f};
+    float focus_lift_strength{1.f};
+    float focus_corner_gain{focus_lift::default_corner_gain};
+    float focus_lift_onset{focus_lift::default_onset};
+    float focus_lift_power{focus_lift::default_power};
     bool gpu_timing{};
     bool debug_border{};
     bool eye_tracked{true};
@@ -40,6 +47,8 @@ enum Reject : uint32_t {
     reject_offset_v=1u<<12, reject_micro=1u<<13, reject_breakout=1u<<14,
     reject_still=1u<<15, reject_relock=1u<<16
 };
+
+inline constexpr uint32_t reject_focus_lift=1u<<20;
 
 struct Reconciled {
     Settings settings{};
@@ -103,6 +112,7 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     out.gpu_timing=requested.gpu_timing;
     out.eye_tracked=requested.eye_tracked;
     out.stabilize_crop=requested.stabilize_crop;
+    out.focus_lift_enabled=requested.focus_lift_enabled;
     const auto scalar = [&](float value,float lo,float hi,uint32_t mask,float Settings::* field) {
         if (valid(value,lo,hi)) out.*field=value;
         else result.rejected|=mask;
@@ -117,6 +127,11 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     };
     scalar(requested.feather_fraction,0.f,.45f,reject_feather,&Settings::feather_fraction);
     scalar(requested.sharpen_strength,0.f,2.f,reject_sharpen,&Settings::sharpen_strength);
+    scalar(requested.focus_brightness,.8f,1.3f,reject_focus_lift,&Settings::focus_brightness);
+    scalar(requested.focus_lift_strength,0.f,2.f,reject_focus_lift,&Settings::focus_lift_strength);
+    scalar(requested.focus_corner_gain,1.f,1.5f,reject_focus_lift,&Settings::focus_corner_gain);
+    scalar(requested.focus_lift_onset,0.f,.9f,reject_focus_lift,&Settings::focus_lift_onset);
+    scalar(requested.focus_lift_power,.5f,3.f,reject_focus_lift,&Settings::focus_lift_power);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
     scalar(requested.gaze_offset_v,-.25f,.25f,reject_offset_v,&Settings::gaze_offset_v);
@@ -147,6 +162,9 @@ inline bool same_settings(const Settings& a, const Settings& b) {
     return a.crop_width==b.crop_width && a.crop_height==b.crop_height &&
         a.context_scale==b.context_scale && a.foveal_density==b.foveal_density &&
         a.feather_fraction==b.feather_fraction && a.sharpen_strength==b.sharpen_strength &&
+        a.focus_lift_enabled==b.focus_lift_enabled && a.focus_brightness==b.focus_brightness &&
+        a.focus_lift_strength==b.focus_lift_strength && a.focus_corner_gain==b.focus_corner_gain &&
+        a.focus_lift_onset==b.focus_lift_onset && a.focus_lift_power==b.focus_lift_power &&
         a.gpu_timing==b.gpu_timing &&
         a.debug_border==b.debug_border && a.eye_tracked==b.eye_tracked &&
         a.diagnostic_view==b.diagnostic_view && a.stabilize_crop==b.stabilize_crop &&

@@ -72,8 +72,10 @@ struct alignas(16) Constants {
     float depth_projection[4]{};
     float depth_coefficients[4]{};
     float depth_jitter[4]{};
+    float focus_lift[4]{};
+    float focus_profile[4]{};
 };
-static_assert(sizeof(Constants) == 400);
+static_assert(sizeof(Constants) == 432);
 
 int main(int argc, char** argv) try {
     if (argc != 2) throw std::runtime_error("Pass the QuadViewComposite.hlsl path");

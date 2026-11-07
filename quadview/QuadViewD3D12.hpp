@@ -45,8 +45,11 @@ struct alignas(16) ShaderConstants {
     float depth_projection[4]{};
     float depth_coefficients[4]{};
     float depth_jitter[4]{};
+    float focus_lift[4]{};
+    float focus_profile[4]{};
 };
-static_assert(sizeof(ShaderConstants) == 400); // B8: 512-byte constant buffer
+static_assert(sizeof(ShaderConstants) == 432);
+static_assert(sizeof(ShaderConstants) <= 512);
 
 // B7: optional periphery depth for reprojection. texture is R32_TYPELESS and
 // stays in D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE between uses.
@@ -366,6 +369,12 @@ public:
                 depth_bound = true;
             }
         }
+        constants.focus_lift[0]=settings.focus_lift_enabled ? 1.f : 0.f;
+        constants.focus_lift[1]=settings.focus_brightness;
+        constants.focus_lift[2]=settings.focus_corner_gain-1.f;
+        constants.focus_lift[3]=settings.focus_lift_onset;
+        constants.focus_profile[0]=settings.focus_lift_power;
+        constants.focus_profile[1]=settings.focus_lift_strength;
         std::memcpy(mapped_, &constants, sizeof(constants));
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format = source_format_;

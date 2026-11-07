@@ -1,0 +1,54 @@
+{
+  "purpose": "Initial anti-vignette-only scalar gain fit; no image outputs or repository edits",
+  "primary_image": "upload/image(20261107-161252).png",
+  "primary_crop_xy_inclusive": [420, 602, 1210, 1222],
+  "normalization": {
+    "center_xy": [815, 912],
+    "half_extent_xy": [395, 310],
+    "qx": "(x-815)/395",
+    "qy": "(y-912)/310",
+    "r2": "(qx^2+qy^2)/2"
+  },
+  "sampling": {
+    "grid_stride_px": 3,
+    "excluded_crop_border_px": 5,
+    "pixel_filter": "R=G=B and 125<=gray<=146",
+    "samples": 52584,
+    "gray_146_samples": 40264,
+    "samples_below_146": 12320,
+    "target_gray": 146,
+    "fit": "SciPy least_squares, soft_l1 loss, f_scale=1 gray level; residual is observed_gray*gain-146"
+  },
+  "recommended_profile": {
+    "formula": "gain = 1 + A * max(0, (r2-start)/(1-start))^power",
+    "A": 0.14799273,
+    "start": 0.46940367,
+    "power": 0.92386647,
+    "gain_at_center": 1.0,
+    "gain_at_exact_corner_r2_1": 1.14799273,
+    "gain_at_farthest_sample_r2_approx_0.966": 1.13979,
+    "abs_gray_residual_median_all_samples": 0.0,
+    "abs_gray_residual_p95_all_samples": 0.77494,
+    "abs_gray_residual_median_below_146": 0.39510,
+    "abs_gray_residual_p95_below_146": 1.33923
+  },
+  "comparison_quartic": {
+    "formula": "gain = 1 + A*r2^2",
+    "A": 0.07694165,
+    "gain_at_exact_corner_r2_1": 1.07694165,
+    "abs_gray_residual_median_all_samples": 0.88260,
+    "abs_gray_residual_p95_all_samples": 4.35204,
+    "abs_gray_residual_median_below_146": 1.78941,
+    "abs_gray_residual_p95_below_146": 6.90891
+  },
+  "cross_screenshot_checks": {
+    "images_161131_and_161201_same_crop": "Gray-only upper-right sky/corner pixels show about 135 at the extreme corner, 141 in adjacent corner bands, and 146 in the interior where enough gray pixels are present; consistent with primary profile. Cloud coverage limits other corners; colored pixels were not used.",
+    "duoview_images_163549_and_163742_crop_xy_inclusive": [858, 385, 1842, 1187],
+    "duoview_check": "Gray-only edge/corner tiles include about 133-134 at outer corners, about 140-141 in adjacent bands, and about 145-146 across interior areas. This supports the same broad falloff, but the views/crops are not treated as geometrically exact correspondences."
+  },
+  "limitations": [
+    "This estimates a display-space correction for the supplied compositor screenshots; it does not establish the 3D location or cause of the vignette.",
+    "The flat sky is clipped/plateaued at gray 146 over most of the crop, so onset and shape are weakly constrained; the dark corner pixels carry most of the fit signal.",
+    "Image encoding/compositor color domain and any upstream tonemapping are unknown. Treat these values as a starting preset, not a verified in-headset calibration."
+  ]
+}

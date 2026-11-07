@@ -26,6 +26,8 @@ cbuffer QuadViewConstants : register(b0) {
     float4 DepthProjection;
     float4 DepthCoefficients;
     float4 DepthJitter;
+    float4 FocusLift;    // enabled, overall brightness, corner gain minus one, onset r^2
+    float4 FocusProfile; // falloff exponent, anti-vignette strength, reserved
 };
 
 struct VertexOut {
@@ -241,6 +243,19 @@ float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 eyeUv
     return color;
 }
 
+// Screenshot-fitted brightness-only compensation. Off is exactly the original
+// focus sample. No extra texture reads, periphery changes or spatial filtering.
+float3 CorrectFocusColor(float3 color, float2 focusUv) {
+    [branch] if (FocusLift.x > 0.5) {
+        const float2 q=focusUv*2.0-1.0;
+        const float r2=saturate(dot(q,q)*0.5);
+        const float t=saturate((r2-FocusLift.w)/max(1.0-FocusLift.w,0.1));
+        const float gain=FocusLift.y*(1.0+FocusLift.z*FocusProfile.y*pow(t,FocusProfile.x));
+        color=max(color*gain,0.0);
+    }
+    return color;
+}
+
 float4 ScenePixel(VertexOut input) {
     const uint eye = min((uint)input.position.x / EyeAndAtlas.x, 1u);
     const float2 eyeUv = float2(input.position.x - eye * EyeAndAtlas.x,
@@ -278,6 +293,7 @@ float4 ScenePixel(VertexOut input) {
         const float2 tapScale = 1.0 / (float2(EyeAndAtlas.xy) * (crop.zw - crop.xy));
         focus.rgb = GlamSharpenFocus(2u + eye, focusRect, focusUv, tapScale, focus.rgb, eyeStrength, eyeMaxChange, focusSourceSize);
     }
+    if (debugMode == 0u) focus.rgb=CorrectFocusColor(focus.rgb,focusUv);
     float4 output = focus;
     [branch] if (debugMode != 2 && weight < 1.0) {
         const float4 context = ReadContext(eye, contextSource, contextRect, eyeUv);

@@ -25,7 +25,14 @@ def main():
     optimized = subprocess.check_output(
         ["git", "-C", str(root), "show",
          "b024570edbbdc8852aa7e7e2e508235c228ca245:quadview/QuadViewComposite.hlsl"], text=True)
-    assert actual in (expected, optimized), "Unexpected HLSL edits beyond pinned B23/B27 shaders"
+    restored=actual
+    start=restored.index('// Screenshot-fitted brightness-only compensation.')
+    end=restored.index('float4 ScenePixel(',start)
+    restored=restored[:start]+restored[end:]
+    restored=restored.replace('    float4 FocusLift;    // enabled, overall brightness, corner gain minus one, onset r^2\n','')
+    restored=restored.replace('    float4 FocusProfile; // falloff exponent, anti-vignette strength, reserved\n','')
+    restored=restored.replace('    if (debugMode == 0u) focus.rgb=CorrectFocusColor(focus.rgb,focusUv);\n','')
+    assert restored == optimized, 'Unexpected rendering changes outside isolated focus compensation'
     def warp(s):
         return s.split("float2 WarpContextUv(",1)[1].split("// Explicit SM5 resource selection",1)[0]
     assert warp(actual) == warp(expected), "B23 depth geometry or four-sample search changed"

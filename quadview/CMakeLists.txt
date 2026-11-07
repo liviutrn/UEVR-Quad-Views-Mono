@@ -67,6 +67,12 @@ if(WIN32)
   add_test(NAME quadview-depth-warp-ground-truth-stereo
     COMMAND QuadViewDepthWarpTests "${CMAKE_CURRENT_SOURCE_DIR}/QuadViewComposite.hlsl")
   set_tests_properties(quadview-depth-warp-ground-truth-stereo PROPERTIES TIMEOUT 60)
+  add_executable(QuadViewFocusLiftGpuTests QuadViewFocusLiftGpuTests.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/QuadViewShaderBytecode.hpp")
+  target_include_directories(QuadViewFocusLiftGpuTests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+  target_link_libraries(QuadViewFocusLiftGpuTests PRIVATE d3d12 dxgi d3dcompiler)
+  add_test(NAME quadview-focus-lift-production-gpu COMMAND QuadViewFocusLiftGpuTests)
+  set_tests_properties(quadview-focus-lift-production-gpu PROPERTIES TIMEOUT 120)
 endif()
 
 add_executable(QuadViewNativeDeliveryTests NativeDeliveryTests.cpp)
@@ -242,6 +248,15 @@ else()
   target_compile_options(HeadMovementScalingTests PRIVATE -UNDEBUG)
 endif()
 add_test(NAME head-movement-recentered-xyz-axes COMMAND HeadMovementScalingTests)
+foreach(_focus_test IN ITEMS FocusLiftMath FocusLiftSettings)
+  add_executable(${_focus_test}Tests ${_focus_test}Tests.cpp)
+  if(MSVC)
+    target_compile_options(${_focus_test}Tests PRIVATE /UNDEBUG)
+  else()
+    target_compile_options(${_focus_test}Tests PRIVATE -UNDEBUG)
+  endif()
+  add_test(NAME quadview-${_focus_test} COMMAND ${_focus_test}Tests)
+endforeach()
 if(QUADVIEW_IMGUI_DIR)
   add_executable(QuadViewStatusPanelWheelTests StatusPanelWheelTests.cpp
     "${QUADVIEW_IMGUI_DIR}/imgui.cpp" "${QUADVIEW_IMGUI_DIR}/imgui_draw.cpp"
