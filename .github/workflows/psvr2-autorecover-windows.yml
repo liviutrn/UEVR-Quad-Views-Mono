@@ -2,7 +2,7 @@ name: PSVR2 AutoRecover (Windows)
 on:
   push:
     branches:
-      - experiment/psvr2-auto-recover-20261107
+      - experiment/psvr2-auto-recover-v02-20261107
     paths:
       - 'tools/psvr2-auto-recover/**'
       - '.github/workflows/psvr2-autorecover-windows.yml'
@@ -21,7 +21,10 @@ jobs:
           arch: x64
       - name: Fetch official OpenVR headers and import library
         shell: pwsh
-        run: git clone --depth 1 https://github.com/ValveSoftware/openvr.git deps/openvr
+        run: |
+          git clone --depth 1 https://github.com/ValveSoftware/openvr.git deps/openvr
+          git -C deps/openvr fetch --depth 1 origin 0924064316de3effbcd1acf1e309182a2deb1c05
+          git -C deps/openvr checkout --detach 0924064316de3effbcd1acf1e309182a2deb1c05
       - name: Build native x64 Windows utility
         shell: pwsh
         run: |
@@ -42,6 +45,6 @@ jobs:
       - name: Publish portable Windows ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: PSVR2-AutoRecover-v0.1-Windows-x64
+          name: PSVR2-AutoRecover-v0.2-Windows-x64
           path: dist/*
           retention-days: 14

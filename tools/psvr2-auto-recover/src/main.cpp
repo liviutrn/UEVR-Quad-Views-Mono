@@ -40,6 +40,7 @@ constexpr auto kRefineTimeout = 12s;
 constexpr auto kActivateTimeout = 15s;
 constexpr auto kCooldown = 120s;
 constexpr auto kHealthyConfirm = 3s;
+constexpr auto kVrReconnectPeriod = 90s;
 
 std::atomic_bool gRunning{true};
 std::mutex gLogMutex;
@@ -141,6 +142,15 @@ public:
         return signaled;
     }
 
+    int KeepAliveCounter() const {
+        if (!Ready() || !hCommonMutex_) return -1;
+        const DWORD wait = WaitForSingleObject(hCommonMutex_, 50);
+        if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) return -1;
+        const int val = static_cast<int>(pView_[kKeepAliveOffset]);
+        ReleaseMutex(hCommonMutex_);
+        return val;
+    }
+
     int SonyTrackingStatus() const {
         if (!Ready() || !hStatusMutex_) return -1;
         DWORD result = WaitForSingleObject(hStatusMutex_, 100);
@@ -170,11 +180,12 @@ struct TrackingSample {
     bool valid = false;
     bool connected = false;
     TrackingKind kind = TrackingKind::Unavailable;
+    float x = 0, y = 0, z = 0;
 };
 
 TrackingKind Classify(int result, bool valid, bool connected) {
     if (!connected || result == 1 || result < 0) return TrackingKind::Unavailable;
-    if (result == 300) return TrackingKind::RotationOnly;
+    if (result == 300 && valid) return TrackingKind::RotationOnly;
     if (result == 200 && valid) return TrackingKind::Good;
     if (result == 201 || result == 100 || result == 101) return TrackingKind::Degraded;
     return TrackingKind::Unavailable;
@@ -212,8 +223,21 @@ public:
         s.result = static_cast<int>(poses[0].eTrackingResult);
         s.valid = poses[0].bPoseIsValid;
         s.connected = poses[0].bDeviceIsConnected;
+        s.x = poses[0].mDeviceToAbsoluteTracking.m[0][3];
+        s.y = poses[0].mDeviceToAbsoluteTracking.m[1][3];
+        s.z = poses[0].mDeviceToAbsoluteTracking.m[2][3];
         s.kind = Classify(s.result, s.valid, s.connected);
         return s;
+    }
+    bool QuitRequested() {
+        if (!system_) return false;
+        vr::VREvent_t event{};
+        while (system_->PollNextEvent(&event, sizeof(event))) {
+            if (event.eventType == vr::VREvent_Quit ||
+                event.eventType == vr::VREvent_DriverRequestedQuit ||
+                event.eventType == vr::VREvent_RestartRequested) return true;
+        }
+        return false;
     }
     void Disconnect() {
         if (system_) {
@@ -237,6 +261,17 @@ const char *PhaseName(Phase p) {
     return "unknown";
 }
 
+// Deterministic predicates used by the production state machine and offline tests.
+bool StableSixDof(TrackingKind kind, Clock::time_point since, Clock::time_point now) {
+    return kind == TrackingKind::Good && since != Clock::time_point{} &&
+           now - since >= kHealthyConfirm;
+}
+bool ShouldRefine(TrackingKind kind, bool previouslyStable, Clock::time_point since,
+                  Clock::time_point now) {
+    return kind == TrackingKind::RotationOnly && since != Clock::time_point{} &&
+           now - since >= (previouslyStable ? 4s : 10s);
+}
+
 bool SelfTest() {
     bool pass = true;
     auto test = [&](bool check, const char *name) {
@@ -248,38 +283,64 @@ bool SelfTest() {
     test(Classify(201, true, true) == TrackingKind::Degraded, "out-of-range");
     test(Classify(200, false, true) != TrackingKind::Good, "invalid pose not OK");
     test(Classify(300, true, false) == TrackingKind::Unavailable, "disconnected HMD excluded");
+    test(Classify(300, false, true) != TrackingKind::RotationOnly, "invalid fallback pose excluded");
     test(Classify(1, false, true) == TrackingKind::Unavailable, "uninitialized excluded");
     test(kRefineMap != 0x20 && kActivateMap != 0x20, "no clear-map recovery command");
+    const auto t = Clock::now();
+    test(!ShouldRefine(TrackingKind::RotationOnly, true, t, t + 3500ms), "no early refine");
+    test(ShouldRefine(TrackingKind::RotationOnly, true, t, t + 4s), "refine on sustained 3DOF");
+    test(!ShouldRefine(TrackingKind::RotationOnly, false, t, t + 9s), "startup 10s grace");
+    test(ShouldRefine(TrackingKind::RotationOnly, false, t, t + 10s), "startup sustained 3DOF");
+    test(!ShouldRefine(TrackingKind::Degraded, true, t, t + 120s), "do not auto-refine generic tracking errors");
+    test(!ShouldRefine(TrackingKind::Unavailable, true, t, t + 120s), "do not auto-refine unavailable HMD");
+    test(!StableSixDof(TrackingKind::Good, t, t + 2s), "no premature recovery confirmation");
+    test(StableSixDof(TrackingKind::Good, t, t + 3s), "confirmed stable 6DOF");
+    test(!StableSixDof(TrackingKind::RotationOnly, t, t + 20s), "3DOF cannot confirm success");
     return pass;
 }
 
 void Usage() {
-    std::cout << "PSVR2 AutoRecover v0.1 (experimental, Windows x64)\n"
-              << "  --watch         Monitor and automatically refine/activate on sustained 3DOF (default)\n"
+    std::cout << "PSVR2 AutoRecover v0.2 (experimental, Windows x64)\n"
+              << "  --watch         Monitor; refine sustained rotation-only tracking (default)\n"
               << "  --diagnostic    Observe and log tracking; NEVER send recovery commands\n"
               << "  --recover-once  Send one Refine Map command, then exit\n"
-              << "  --self-test     Run offline classification checks\n"
+              << "  --auto-activate Opt-in second stage: Activate Map after Refine fails\n"
+              << "  --self-test     Run offline classification/timing checks\n"
               << "  --help          Show this help\n\n"
               << "Logs: %LOCALAPPDATA%\\PSVR2AutoRecover\\recovery.log\n"
-              << "No SteamVR, UEVR, driver, saved map, or play area files are modified.\n";
+              << "No driver DLL or play area is replaced. Refine Map may update the Sony SLAM map.\n";
 }
 
 } // namespace
 
 int main(int argc, char **argv) {
-    bool diagnostic = false, recoverOnce = false;
+    bool diagnostic = false, recoverOnce = false, autoActivate = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--diagnostic") diagnostic = true;
         else if (arg == "--watch") diagnostic = false;
         else if (arg == "--recover-once") recoverOnce = true;
+        else if (arg == "--auto-activate") autoActivate = true;
         else if (arg == "--self-test") return SelfTest() ? 0 : 1;
         else if (arg == "--help" || arg == "-h") { Usage(); return 0; }
         else { std::cerr << "Unknown option: " << arg << '\n'; Usage(); return 2; }
     }
+    if ((diagnostic && (recoverOnce || autoActivate)) || (recoverOnce && autoActivate)) {
+        std::cerr << "Conflicting flags: diagnostic mode cannot send commands.\n";
+        return 2;
+    }
+    // An independent instance can overwrite the single EVF command slot.
+    HANDLE oneInstance = CreateMutexA(nullptr, TRUE, "Local\\PSVR2AutoRecover-SingleInstance");
+    if (!oneInstance) { std::cerr << "Could not create single-instance mutex.\n"; return 5; }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        std::cerr << "PSVR2 AutoRecover already running. Close it before starting another.\n";
+        CloseHandle(oneInstance);
+        return 5;
+    }
     SetConsoleCtrlHandler(OnConsoleSignal, TRUE);
-    Log(std::string("Starting v0.1. Mode: ") + (diagnostic ? "diagnostic" : (recoverOnce ? "refine-once" : "automatic")));
+    Log(std::string("Starting v0.2. Mode: ") + (diagnostic ? "diagnostic" : (recoverOnce ? "refine-once" : "automatic")));
     Log("This utility NEVER clears the SLAM map and NEVER restarts SteamVR/UEVR.");
+    Log(std::string("Auto Activate Map second stage: ") + (autoActivate ? "OPTED IN" : "OFF (default)"));
     DriverInterface driver;
     if (recoverOnce) {
         if (!driver.Open()) { Log("ERROR: PSVR2 Sony driver shared memory unavailable."); return 3; }
@@ -294,6 +355,8 @@ int main(int argc, char **argv) {
     int oldSonyStatus = -999;
     Phase phase = Phase::Idle;
     Clock::time_point degradedSince{}, phaseSince{}, goodSince{}, lastKeepAlive{};
+    Clock::time_point lastExternalSetup{}, unavailableSince{}, lastVrReconnect{};
+    int previousKeepAliveCounter = -1;
     bool wasGood = false;
     bool loggedDriverUnavailable = false;
     auto lastConnectAttempt = Clock::now() - 20s;
@@ -304,6 +367,18 @@ int main(int argc, char **argv) {
 
     while (gRunning.load()) {
         const auto now = Clock::now();
+        if (openvr.QuitRequested()) {
+            Log("SteamVR requested shutdown/restart: releasing OpenVR and Sony mapping handles.");
+            openvr.Disconnect();
+            driver.Close();
+            phase = Phase::Idle;
+            wasGood = false;
+            degradedSince = goodSince = unavailableSince = Clock::time_point{};
+            previousKeepAliveCounter = -1;
+            lastConnectAttempt = lastMappingAttempt = now;
+            std::this_thread::sleep_for(2s);
+            continue;
+        }
         if (now - lastConnectAttempt >= 5s) {
             lastConnectAttempt = now;
             openvr.EnsureConnected();
@@ -319,12 +394,41 @@ int main(int argc, char **argv) {
             }
         }
         const TrackingSample s = openvr.Sample();
+        if (s.kind == TrackingKind::Unavailable) {
+            if (unavailableSince == Clock::time_point{}) unavailableSince = now;
+            if (now - unavailableSince >= 30s && now - lastVrReconnect >= kVrReconnectPeriod) {
+                Log("OpenVR HMD unavailable: reopening runtime and Sony mapping handles.");
+                lastVrReconnect = now;
+                openvr.Disconnect();
+                driver.Close();
+                phase = Phase::Idle;
+                wasGood = false;
+                degradedSince = goodSince = Clock::time_point{};
+                previousKeepAliveCounter = -1;
+                lastConnectAttempt = lastMappingAttempt = now;
+                std::this_thread::sleep_for(1s);
+                continue;
+            }
+        } else {
+            unavailableSince = Clock::time_point{};
+        }
+        const int currentKeepAliveCounter = driver.KeepAliveCounter();
+        if (currentKeepAliveCounter >= 0) {
+            if (previousKeepAliveCounter >= 0 && currentKeepAliveCounter != previousKeepAliveCounter &&
+                phase != Phase::Refine && phase != Phase::Activate) {
+                lastExternalSetup = now;
+            }
+            previousKeepAliveCounter = currentKeepAliveCounter;
+        }
+        const bool roomSetupActive = lastExternalSetup != Clock::time_point{} &&
+                                     now - lastExternalSetup < 4s;
         int sonyStatus = -1;
         if (driver.Ready()) sonyStatus = driver.SonyTrackingStatus();
         if (s.kind != oldKind || s.result != oldResult || s.connected != oldConnected) {
             Log("HMD " + KindName(s.kind) + " (OpenVR tracking=" + std::to_string(s.result) +
                 ", pose_valid=" + std::to_string(s.valid) + ", connected=" + std::to_string(s.connected) +
-                ", Sony status=" + std::to_string(sonyStatus) + ")");
+                ", Sony status=" + std::to_string(sonyStatus) + ", raw_position_m=" +
+                std::to_string(s.x) + "," + std::to_string(s.y) + "," + std::to_string(s.z) + ")");
             oldKind = s.kind;
             oldResult = s.result;
             oldConnected = s.connected;
@@ -337,26 +441,29 @@ int main(int argc, char **argv) {
         }
         if (now - lastHeartbeat > 60s) {
             Log("Heartbeat: phase=" + std::string(PhaseName(phase)) +
-                ", OpenVR=" + std::to_string(s.result) + ", Sony=" + std::to_string(sonyStatus));
+                ", OpenVR=" + std::to_string(s.result) + ", Sony=" + std::to_string(sonyStatus) +
+                ", raw_position_m=" + std::to_string(s.x) + "," + std::to_string(s.y) +
+                "," + std::to_string(s.z));
             lastHeartbeat = now;
         }
 
         if (s.kind == TrackingKind::Good) {
-            wasGood = true;
             degradedSince = Clock::time_point{};
             if (goodSince == Clock::time_point{}) goodSince = now;
-            if ((phase == Phase::Refine || phase == Phase::Activate) && now - goodSince >= kHealthyConfirm) {
-                Log("Recovery verified by SteamVR: Running_OK for >=3 seconds. No further actions.");
+            if (StableSixDof(s.kind, goodSince, now)) wasGood = true;
+            if ((phase == Phase::Refine || phase == Phase::Activate) && StableSixDof(s.kind, goodSince, now)) {
+                Log("SteamVR reports Running_OK for >=3 seconds after recovery command; positional 6DOF still requires headset verification.");
                 phase = Phase::Cooldown;
                 cooldownUntil = now + 15s;
             }
         } else {
             goodSince = Clock::time_point{};
-            if (s.kind == TrackingKind::RotationOnly || s.kind == TrackingKind::Degraded) {
+            if (s.kind == TrackingKind::RotationOnly) {
                 if (degradedSince == Clock::time_point{}) degradedSince = now;
             } else {
                 degradedSince = Clock::time_point{};
-                if (phase == Phase::Refine || phase == Phase::Activate) {
+                if (s.kind == TrackingKind::Unavailable &&
+                    (phase == Phase::Refine || phase == Phase::Activate)) {
                     Log("HMD unavailable during recovery; aborting commands and cooling down.");
                     phase = Phase::Cooldown;
                     cooldownUntil = now + kCooldown;
@@ -366,11 +473,10 @@ int main(int argc, char **argv) {
 
         if (!diagnostic && driver.Ready()) {
             if (phase == Phase::Cooldown && now >= cooldownUntil) phase = Phase::Idle;
-            if (phase == Phase::Idle && degradedSince != Clock::time_point{}) {
-                const auto threshold = s.kind == TrackingKind::RotationOnly ? (wasGood ? 4s : 10s) : 15s;
-                if (now - degradedSince >= threshold) {
+            if (phase == Phase::Idle && !roomSetupActive &&
+                ShouldRefine(s.kind, wasGood, degradedSince, now)) {
                     if (driver.SignalCommand(kRefineMap)) {
-                        Log("AUTO: sent non-destructive Refine Map command (0x2). Attempting 6DOF recovery.");
+                        Log("AUTO: signaled Refine Map command (0x2). Driver execution and 6DOF recovery unconfirmed.");
                         phase = Phase::Refine;
                         phaseSince = now;
                         lastKeepAlive = now - kKeepAliveInterval;
@@ -379,7 +485,6 @@ int main(int argc, char **argv) {
                         phase = Phase::Cooldown;
                         cooldownUntil = now + kCooldown;
                     }
-                }
             }
             if (phase == Phase::Refine || phase == Phase::Activate) {
                 if (now - lastKeepAlive >= kKeepAliveInterval) {
@@ -387,12 +492,15 @@ int main(int argc, char **argv) {
                     lastKeepAlive = now;
                 }
                 if (phase == Phase::Refine && now - phaseSince >= kRefineTimeout) {
-                    if (s.kind != TrackingKind::Good && driver.SignalCommand(kActivateMap)) {
+                    if (autoActivate && s.kind == TrackingKind::RotationOnly &&
+                        driver.SignalCommand(kActivateMap)) {
                         Log("AUTO: Refine did not restore 6DOF; sent Activate Map command (0x4).");
                         phase = Phase::Activate;
                         phaseSince = now;
                     } else {
-                        Log("AUTO: Refine stage ended; activation not needed or unavailable.");
+                        Log(autoActivate ? "AUTO: Activate Map was not appropriate or unavailable."
+                                         : "AUTO: Refine stage expired without confirmed recovery."
+                                           " Activate Map is disabled by default for safety.");
                         phase = Phase::Cooldown;
                         cooldownUntil = now + kCooldown;
                     }
@@ -407,5 +515,7 @@ int main(int argc, char **argv) {
         std::this_thread::sleep_for(kPollInterval);
     }
     Log("Stopped gracefully.");
+    ReleaseMutex(oneInstance);
+    CloseHandle(oneInstance);
     return 0;
 }
