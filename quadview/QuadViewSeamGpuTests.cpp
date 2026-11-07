@@ -127,7 +127,7 @@ struct Pixels {
 
 static Pixels draw(Gpu& gpu, uevr::quadview::dx12::Compositor& compositor,
                    const SourceSet& sources, ID3D12Resource* output, const Layout& layout,
-                   Settings settings) {
+                   Settings settings, const uevr::quadview::dx12::DepthInput* depth = nullptr) {
     ComPtr<ID3D12CommandAllocator> allocator;
     require(gpu.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create draw allocator");
     ComPtr<ID3D12GraphicsCommandList> list;
@@ -136,7 +136,7 @@ static Pixels draw(Gpu& gpu, uevr::quadview::dx12::Compositor& compositor,
     const std::array<ID3D12Resource*, 4> raw{sources.textures[0].Get(), sources.textures[1].Get(),
         sources.textures[2].Get(), sources.textures[3].Get()};
     const bool recorded = compositor.record_sources(list.Get(), raw, output, layout, settings,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE, owner);
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE, owner, 0, depth);
     check(recorded, compositor.error());
     D3D12_RESOURCE_DESC output_desc = output->GetDesc();
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{}; UINT rows{}; UINT64 row_bytes{}, total{};
@@ -221,6 +221,10 @@ int main() try {
     check(left_fit > 77 && right_fit > left_fit, "Adaptive matching did not fit the two eyes independently");
     check(fit.at(eye_w / 2, eye_h / 2)[0] == 102 && fit.at(eye_w + eye_w / 2, eye_h / 2)[0] == 153,
         "Adaptive correction changed opaque focus pixels");
+    Settings zero_strength = adaptive; zero_strength.seam_strength = 0.f;
+    const auto zero_strength_pixels = draw(gpu, compositor, base, output.Get(), layout, zero_strength);
+    check(zero_strength_pixels.rgba == baseline.rgba,
+        "Zero-strength adaptive matching must not change any pixels");
     Settings adaptive_lift = adaptive; adaptive_lift.focus_lift_enabled = true; adaptive_lift.focus_brightness = 1.05f;
     const auto fit_lifted = draw(gpu, compositor, independent, output.Get(), layout, adaptive_lift);
     check(fit_lifted.at(4, eye_h / 2)[0] > fit.at(4, eye_h / 2)[0],
@@ -237,6 +241,14 @@ int main() try {
     check(varied_local.at(14,32)[0] < varied_global.at(14,32)[0] &&
           varied_local.at(50,32)[0] > varied_global.at(50,32)[0], "Local fit did not follow opposite boundary brightness changes");
     check(varied_local.at(32,32) == varied_global.at(32,32), "Local residual altered the opaque fovea");
+    // Exercise the production sharpening branch. Seam probes deliberately
+    // compare unsharpened low-frequency patches; periphery is unchanged.
+    Settings sharp_local = local_fit; sharp_local.sharpen_strength = 1.f;
+    const auto sharpened_fit = draw(gpu, compositor, varying, output.Get(), layout, sharp_local);
+    for (uint32_t eye = 0; eye < 2; ++eye)
+        for (uint32_t x : {4u, 14u, 50u})
+            check(sharpened_fit.at(eye * eye_w + x, 32)[0] == varied_local.at(eye * eye_w + x, 32)[0],
+                "Fovea sharpening contaminated adaptive periphery statistics");
 
     Settings transitioned = manual; transitioned.seam_transition_px = 16.f;
     const auto edge_blend = draw(gpu, compositor, base, output.Get(), layout, transitioned);
@@ -256,6 +268,21 @@ int main() try {
     check(mismatch_fit.at(4, eye_h / 2)[0] == 77 && mismatch_fit.at(4, eye_h / 2)[1] == 20,
         "Adaptive fit changed a mismatched-color patch");
 
+    // Requested depth is unavailable after a prior valid adaptive fit. All
+    // records must become neutral rather than leaking the prior-frame gains.
+    auto shared_layout = layout;
+    shared_layout.shared_context = true;
+    check(valid_layout(shared_layout), "Missing-depth shared layout invalid");
+    uevr::quadview::dx12::DepthInput missing_depth{};
+    missing_depth.reproject = true;
+    const auto shared_off = draw(gpu, compositor, base, output.Get(), shared_layout, off);
+    const auto invalid_depth_fit = draw(gpu, compositor, base, output.Get(), shared_layout, adaptive, &missing_depth);
+    check(invalid_depth_fit.rgba == shared_off.rgba,
+        "Missing depth reused stale adaptive gains instead of neutral output");
+    const auto recovered_fit = draw(gpu, compositor, base, output.Get(), shared_layout, adaptive);
+    check(recovered_fit.at(4, 32)[0] > shared_off.at(4, 32)[0],
+        "Adaptive statistics did not recover after missing-depth frame");
+
     if (info) for (UINT64 i=0,n=info->GetNumStoredMessages();i<n;++i) {
         SIZE_T size{}; info->GetMessage(i,nullptr,&size);
         std::vector<uint8_t> storage(size);
@@ -265,7 +292,7 @@ int main() try {
             throw std::runtime_error(std::string("D3D12 seam validation: ")+message->pDescription);
     }
 
-    std::cout << "QuadView seam WARP: off identity, manual EV, untouched focus, independent adaptive eyes, reserved crop-edge blend, and black/clipped/color-mismatch rejection passed.\n";
+    std::cout << "QuadView seam WARP: off/manual/zero-strength identity, independent eyes, sharpened periphery, missing-depth neutral/recovery, edge blend and invalid-patch rejection passed.\n";
     return 0;
 } catch (const std::exception& e) {
     std::cerr << "QuadView seam WARP FAILED: " << e.what() << '\n';

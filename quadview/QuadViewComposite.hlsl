@@ -254,8 +254,13 @@ float3 CorrectFocusColor(float3 color, float2 focusUv) {
     [branch] if (FocusLift.x > 0.5) {
         const float2 q=focusUv*2.0-1.0;
         const float r2=saturate(dot(q,q)*0.5);
-        const float t=saturate((r2-FocusLift.w)/max(1.0-FocusLift.w,0.1));
-        const float gain=FocusLift.y*(1.0+FocusLift.z*FocusProfile.y*pow(t,FocusProfile.x));
+        float gain=FocusLift.y;
+        // The calibrated interior has t=0: do not execute pow() there.
+        // Uniform brightness remains effective inside the neutral mask.
+        [branch] if (r2 > FocusLift.w && FocusLift.z*FocusProfile.y > 0.0) {
+            const float t=saturate((r2-FocusLift.w)/max(1.0-FocusLift.w,0.1));
+            gain *= 1.0+FocusLift.z*FocusProfile.y*pow(t,FocusProfile.x);
+        }
         color=max(color*gain,0.0);
     }
     return color;
@@ -275,14 +280,15 @@ float4 MatchContext(uint eye, float2 uv, float4 crop, float4 color) {
     [branch] if (Seam.x > 0.5) {
         float3 gain = 1.0;
         float confidence = 0.0;
-        [branch] if (Seam.x > 1.5) {
+        [branch] if (Seam.x > 1.5 && (Seam.y > 0.0 || SeamOptions.z > 0.5)) {
             const uint baseIndex = eye * 9u;
             const float4 match = SeamMatch[baseIndex];
             gain = lerp(1.0, match.rgb, match.a);
             confidence = match.a;
             const float2 outside = max(max(crop.xy - uv, uv - crop.zw), 0.0) * float2(EyeAndAtlas.xy);
-            const float distance = length(outside);
-            [branch] if (SeamLocal.y > 0.0 && distance < SeamLocal.x) {
+            const float distanceSq = dot(outside, outside);
+            // Reject distant pixels before evaluating the square root.
+            [branch] if (SeamLocal.y > 0.0 && distanceSq < SeamLocal.x*SeamLocal.x) {
                 const float2 along = saturate((uv - crop.xy) / (crop.zw - crop.xy));
                 const float4 d = abs(float4(uv.y - crop.y, uv.x - crop.z, uv.y - crop.w, uv.x - crop.x)) *
                                  float4(EyeAndAtlas.y, EyeAndAtlas.x, EyeAndAtlas.y, EyeAndAtlas.x);
@@ -291,7 +297,7 @@ float4 MatchContext(uint eye, float2 uv, float4 crop, float4 color) {
                                       SeamSideGain(baseIndex, 1u, along.y, gain) * weights.y +
                                       SeamSideGain(baseIndex, 2u, along.x, gain) * weights.z +
                                       SeamSideGain(baseIndex, 3u, along.y, gain) * weights.w) / dot(weights, float4(1.0, 1.0, 1.0, 1.0));
-                const float t = saturate(distance / max(SeamLocal.x, 1.0));
+                const float t = saturate(sqrt(distanceSq) / max(SeamLocal.x, 1.0));
                 gain = lerp(gain, local, SeamLocal.y * (1.0 - t * t * (3.0 - 2.0 * t)));
             }
         }
@@ -417,7 +423,7 @@ bool SeamPatch(uint eye, float2 center, float4 crop, out float3 focus, out float
     const uint cs = eye == 0u ? ContextSource.x : ContextSource.y;
     const float2 patch = 1.25 / max(float2(cr.zw), 1.0);
     float loF = 1.0e10, hiF = -1.0e10, loC = 1.0e10, hiC = -1.0e10;
-    bool valid = SeamOptions.w > 0.5;
+    bool valid = true; // CSSeam exits uniformly before probes on invalid alignment.
     [unroll] for (uint i = 0u; i < 4u; ++i) {
         const float2 p = center + float2((i & 1u) == 0u ? -1.0 : 1.0, (i & 2u) == 0u ? -1.0 : 1.0) * patch;
         float fill = 0.0;
@@ -445,6 +451,13 @@ bool SeamPatch(uint eye, float2 center, float4 crop, out float3 focus, out float
 // reductions for a global estimate instead of sampling the image again.
 void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
     const uint eye = group.x;
+    // Alignment usability is uniform across both dispatch groups. All lanes
+    // return together, before any groupshared barrier or texture/depth probe.
+    // Initialize every record, including after an earlier valid frame.
+    [branch] if (SeamOptions.w <= 0.5) {
+        if (lane < 9u) SeamOutput[eye * 9u + lane] = float4(1.0, 1.0, 1.0, 0.0);
+        return;
+    }
     const float4 crop = eye == 0u ? CropUvLeft : CropUvRight;
     const uint side = lane / 32u;
     const float along = (float(lane % 32u) + 0.5) / 32.0;

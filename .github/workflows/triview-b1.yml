@@ -1,6 +1,6 @@
-name: TriView B30 combined anti-vignette brightness and seam matching
+name: TriView B31 optimized anti-vignette brightness and seam matching
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B30 combined appearance (${{ github.run_number }})
+run-name: TriView B31 optimized appearance (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -210,6 +210,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B30 final focus-lift integration failed' }
           python workspace/quadview/test_triview_b30_generated.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B30 final combined GPU integration contracts failed' }
+          python workspace/quadview/test_triview_b31_optimizations.py
+          if ($LASTEXITCODE -ne 0) { throw 'B31 optimized shader and timing regression checks failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -318,6 +320,7 @@ jobs:
           Copy-Item workspace/quadview/B29_EFFICIENCY_NOTES.md package/B29_EFFICIENCY_NOTES.md
           Copy-Item workspace/quadview/B30_FOCUS_LIFT_NOTES.md package/B30_FOCUS_LIFT_NOTES.md
           Copy-Item workspace/quadview/B30_COMBINED_NOTES.md package/B30_COMBINED_NOTES.md
+          Copy-Item workspace/quadview/B31_OPTIMIZATION_NOTES.md package/B31_OPTIMIZATION_NOTES.md
           Copy-Item workspace/quadview/focus_lift_calibration.json package/focus_lift_calibration.json
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
@@ -333,12 +336,12 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B30-Combined-Appearance'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B28-103 user-tested'; baselineSource='3ebe512c830a8e7467717d85d1cd0b7f52c5e4ba'; sourceParent='cbf4817b55cf9b57e2da36b56ee4d0f6247405c1'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B28 lifecycle and B29 efficiency/XYZ; calibrated focus correction plus corrected-reference global/local adaptive seam matching; both enabled by default; hardware validation pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B31-Optimized-Appearance'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B28-103 user-tested'; baselineSource='3ebe512c830a8e7467717d85d1cd0b7f52c5e4ba'; sourceParent='2e9b7567bbe190b1c934045ed64121ba655458e2'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B28 lifecycle, B29 efficiency/XYZ, B30 calibrated focus/adaptive seam; B31 neutral shader fast paths, depth fallback, truthful timing; headset test pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          TriView B30 - COMBINED anti-vignette, brightness and adaptive seam.
+          UEVR ID7 / TriView B31 - OPTIMIZED anti-vignette, brightness and adaptive seam.
           Includes B29 efficiency/XYZ and tested B28-103 lifecycle safeguards.
           Focus correction starts ENABLED with the screenshot-fitted profile.
           Seam matching starts ADAPTIVE, strength0.85, local0.5, radius120px.
@@ -355,23 +358,24 @@ jobs:
           Enable GPU timing for total composite+analysis and analysis-only time.
           A screenshot preset does not guarantee exact runtime correction.
           Compare the same scene ON/OFF; keep B28 and take updated screenshots.
-          Read B30_COMBINED_NOTES.md for scope, controls and remaining limitations.
+          Read B30_COMBINED_NOTES.md for scope and B31_OPTIMIZATION_NOTES.md for
+          shader fast paths, regression checks and remaining headset limitations.
           '@ | Set-Content package/READ_FIRST.txt
-          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json')
+          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json','B31_OPTIMIZATION_NOTES.md')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B30-Combined-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B31-Optimized-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B30-Combined-${{ github.run_number }}
+          name: UEVR-TriView-B31-Optimized-${{ github.run_number }}
           path: |
-            UEVR-TriView-B30-Combined-*.zip
-            UEVR-TriView-B30-Combined-*.zip.sha256
+            UEVR-TriView-B31-Optimized-*.zip
+            UEVR-TriView-B31-Optimized-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4

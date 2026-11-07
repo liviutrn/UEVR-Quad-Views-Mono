@@ -155,7 +155,7 @@ public:
         mapped_ = nullptr;
         constants_.Reset(); root_.Reset(); pipeline_.Reset(); srv_heap_.Reset(); rtv_heap_.Reset();
         seam_pipeline_.Reset(); seam_stats_.Reset();
-        queries_.Reset(); timestamps_.Reset(); frequency_=0; timing_pending_=false; gpu_ms_=-1.f;
+        queries_.Reset(); timestamps_.Reset(); frequency_=0; timing_pending_=false; gpu_ms_=-1.f; seam_gpu_ms_=-1.f; timed_seam_active_=false;
         device_ = device;
         source_format_ = source_srv_format;
         output_format_ = output_format;
@@ -463,8 +463,11 @@ public:
         owner_ = std::move(owner);
         for (size_t i = 0; i != 4; ++i) sources_[i] = sources[i];
         destination_ = destination;
-        const bool analyze = settings.seam_mode == 2 && settings.diagnostic_view == 0 &&
-            !(depth && depth->show);
+        // Strength zero is visually neutral; skip statistics work unless the
+        // confidence diagnostic explicitly needs these values.
+        const bool analyze = settings.seam_mode == 2 &&
+            (settings.seam_strength > 0.f || settings.seam_debug) &&
+            settings.diagnostic_view == 0 && !(depth && depth->show);
         const auto sample_state = analyze ? D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE
                                          : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         for (size_t i = 0; i != 4; ++i) {
@@ -477,7 +480,10 @@ public:
         commands->SetDescriptorHeaps(1, heaps);
         const bool timed=settings.gpu_timing && timestamp_frequency &&
             timestamp_frequency==frequency_ && timing_ready();
-        if (timed) commands->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);
+        if (timed) {
+            timed_seam_active_ = analyze;
+            commands->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);
+        }
         if (analyze) {
             barrier(commands, seam_stats_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             commands->SetPipelineState(seam_pipeline_.Get());
@@ -615,22 +621,27 @@ private:
     void read_timing() {
         if (!timing_pending_ || !timestamps_ || !frequency_) return;
         gpu_ms_=-1.f;
+        seam_gpu_ms_=-1.f;
         D3D12_RANGE range{0,sizeof(UINT64)*3};
         UINT64* values{};
         if (SUCCEEDED(timestamps_->Map(0,&range,reinterpret_cast<void**>(&values)))) {
             if (values[2]>=values[1] && values[1]>=values[0]) {
                 gpu_ms_=static_cast<float>(double(values[2]-values[0])*1000.0/double(frequency_));
-                seam_gpu_ms_=static_cast<float>(double(values[1]-values[0])*1000.0/double(frequency_));
+                // No adaptive dispatch -> no seam-analysis work; ignore the
+                // timestamp gap that would otherwise include setup overhead.
+                seam_gpu_ms_=timed_seam_active_ ?
+                    static_cast<float>(double(values[1]-values[0])*1000.0/double(frequency_)) : 0.f;
                 last_seam_analysis_milliseconds().store(seam_gpu_ms_, std::memory_order_relaxed);
             }
             D3D12_RANGE no_write{0,0};
             timestamps_->Unmap(0,&no_write);
         }
         timing_pending_=false;
+        timed_seam_active_=false;
     }
     void setup_timing(ID3D12Device* device, UINT64 frequency) {
         if (!device || !frequency || (queries_ && timestamps_ && frequency_==frequency)) return;
-        queries_.Reset(); timestamps_.Reset(); frequency_=0; timing_pending_=false; gpu_ms_=-1.f;
+        queries_.Reset(); timestamps_.Reset(); frequency_=0; timing_pending_=false; gpu_ms_=-1.f; seam_gpu_ms_=-1.f; timed_seam_active_=false;
         D3D12_QUERY_HEAP_DESC query{};
         query.Type=D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
         query.Count=3;
@@ -714,6 +725,7 @@ private:
     const char* error_{"Compositor not prewarmed"};
     bool recorded_{};
     bool timing_pending_{};
+    bool timed_seam_active_{}; // pending timestamp interval includes CSSeam
     UINT64 frequency_{};
     float gpu_ms_{-1.f};
     float seam_gpu_ms_{-1.f};
