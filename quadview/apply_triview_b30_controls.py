@@ -90,7 +90,7 @@ def main():
     p = root/'vr/QuadViewSettings.hpp'
     settings = p.read_text(encoding='utf-8')
     contract = [
-        '    uint32_t seam_mode{0}; // Off=0, Manual=1, Adaptive=2\n',
+        '    uint32_t seam_mode{0}; // Off=0, Manual=1, Adaptive B31=2, Boundary B34=3\n',
         '    float seam_strength{.85f};\n',
         '    float seam_max_gain{.20f};\n',
         '    float seam_brightness_ev{};\n',
