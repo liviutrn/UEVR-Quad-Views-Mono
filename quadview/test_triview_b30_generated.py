@@ -17,7 +17,7 @@ for field in ('focus_lift_enabled','focus_brightness','focus_lift_strength','foc
 assert 's_quadview_seam_mode_names, 2)' in vh, 'Shipping seam mode must start Adaptive'
 assert 'sizeof(ShaderConstants) == 512' in dx and 'sizeof(ShaderConstants) <= 512' in dx
 assert 'heap.NumDescriptors = 7;' in dx and 'range.NumDescriptors = 6;' in dx
-assert 'match_srv.Buffer.NumElements = 146;' in dx and 'match_uav.Buffer.NumElements = 146;' in dx
+assert 'match_srv.Buffer.NumElements = 148;' in dx and 'match_uav.Buffer.NumElements = 148;' in dx
 assert 'owner_) return fail("Cannot recreate an in-flight compositor")' in dx
 assert 'Compositor command slot has not retired' in dx
 assert 'D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE' in dx
@@ -34,7 +34,7 @@ assert 'GroupMemoryBarrierWithGroupSync()' in shader
 assert 'if (SeamOptions.w <= 0.5)' in shader and 'fill == 0.0' in shader
 assert 'if (lane < 9u) SeamOutput[eye * 9u + lane]' in shader
 assert 'if (Seam.x < 0.5) return FocusWeight(uv, crop)' in shader
-assert 'if (width <= 0.0) return 1.0' in shader
+assert 'if (width <= 0.0) return Seam.x>2.5 ? FocusWeight(uv,crop) : 1.0;' in shader # B31 modes retain 1; V2 honors user feather
 assert shader.count('CorrectFocusColor(')==4 # function, displayed focus, analysis reference
 assert 'FocusProfile.x' in shader and 'if (FocusLift.x > 0.5)' in shader
 assert 'return ReadContext(eye, contextSource, contextRect, eyeUv);' in shader

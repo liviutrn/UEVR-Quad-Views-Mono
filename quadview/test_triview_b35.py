@@ -12,7 +12,7 @@ def function(text,name):
 original=subprocess.check_output(['git','-C',str(r.parent),'show','008c9f7548c43f5977c1197c4180cddb435c64de:quadview/QuadViewComposite.hlsl'],text=True)
 assert function(original,'float3 CorrectFocusColor(')==function(s,'float3 CorrectFocusColor('),'B31 anti-vignette changed'
 assert 'sizeof(ShaderConstants) == 512' in h
-assert 'match_srv.Buffer.NumElements = 146;' in h and 'match_uav.Buffer.NumElements = 146;' in h
+assert 'match_srv.Buffer.NumElements = 148;' in h and 'match_uav.Buffer.NumElements = 148;' in h
 assert h.count('order.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV')==2
 assert 'SetComputeRootUnorderedAccessView(3,history->GetGPUVirtualAddress())' in h
 assert 'float3 correction=slow*stable+fast*(target-stable)' in s

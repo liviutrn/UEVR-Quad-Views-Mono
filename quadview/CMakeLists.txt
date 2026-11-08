@@ -26,6 +26,8 @@ else()
   message(WARNING "Recovery ZIP lacks production DuoView headers: QuadViewProducerTests are UNAVAILABLE (not passed)")
 endif()
 enable_testing()
+add_executable(QuadViewDepthContinuityTests QuadViewDepthContinuityTests.cpp)
+add_test(NAME quadview-depth-submission-continuity COMMAND QuadViewDepthContinuityTests)
 # Recovery-session property tests; independent of DuoView and restricted SDK headers.
 add_executable(QuadViewResumeContractTests ResumeContractTests.cpp)
 # This test uses assert() for geometric invariants; Release must execute them.
