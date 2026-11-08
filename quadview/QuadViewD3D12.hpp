@@ -416,7 +416,8 @@ public:
             }
         }
         constants.seam[0] = static_cast<float>(settings.seam_mode);
-        constants.seam[1] = settings.seam_strength;
+        // Manual is fixed; Adaptive retains the B31 compute analysis.
+        constants.seam[1] = settings.seam_mode == 1 ? 1.f : settings.seam_strength;
         constants.seam[2] = settings.seam_max_gain;
         // Approximate EV control in encoded UNORM; no per-pixel pow. Adaptive
         // estimates themselves compare/apply in the exact same sampled domain.
@@ -428,12 +429,16 @@ public:
             !constants.depth_options[0] ? 0.f : 1.f;
         constants.seam_local[0] = settings.seam_radius_px;
         constants.seam_local[1] = settings.seam_local_strength;
+        constants.seam_local[2] = settings.seam_hybrid_blend ? 1.f : 0.f;
+        constants.seam_local[3] = .16f * settings.seam_temperature;
         constants.focus_lift[0]=settings.focus_lift_enabled ? 1.f : 0.f;
         constants.focus_lift[1]=settings.focus_brightness;
         constants.focus_lift[2]=settings.focus_corner_gain-1.f;
         constants.focus_lift[3]=settings.focus_lift_onset;
         constants.focus_profile[0]=settings.focus_lift_power;
         constants.focus_profile[1]=settings.focus_lift_strength;
+        constants.focus_profile[2]=.12f * settings.seam_tint;
+        constants.focus_profile[3]=-.16f * settings.seam_temperature;
         std::memcpy(mapped_, &constants, sizeof(constants));
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format = source_format_;

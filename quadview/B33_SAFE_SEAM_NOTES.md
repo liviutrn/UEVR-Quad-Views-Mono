@@ -1,0 +1,11 @@
+# TriView B33 safe RGB seam — B31-110 lineage
+
+Based directly on tested B31-110 commit `008c9f7548c43f5977c1197c4180cddb435c64de`, not B32. B31 anti-vignette shader and its calibration stay unchanged; also unchanged are the B28 native target lifetime, engine registration ledger, three-view renderer and OpenXR submission.
+
+New stateless Manual (default): fixed EV=0, warmth=0, tint=0 (neutral until manually adjusted), hybrid B31 percentage feather ON. Warmth controls red (+/-16%) and blue inversely; green-magenta tint controls green (+/-12%). This is RGB white-balance approximation in encoded pixel domain, not physical Kelvin conversion. Fixed parameters cannot fluctuate because of per-frame scene/depth. New persisted mode key prevents previous B31/B32 Adaptive setting from silently overriding Manual. Anti-vignette and base B31 percentage feather remain active.
+
+Optional Adaptive mode = B31 existing automatic per-eye RGB gain / brightness matching, still vulnerable to flicker from changing scene/depth. Unlike B32 no 288-byte GPU->CPU readback, temporal cache, fence, resource allocation, extra render pass, copy or extra shader constants. Manual avoids B31 adaptive compute dispatch; only cheap periphery channel operations are added. Check performance with GPU timer/headset; zero net performance cost cannot be asserted without measurement.
+
+**Critical inherited limitation:** The B32 headset log reported a full engine family ledger (16/16), D3D12-device-mismatch source rejection and later no submitted XR views. These registration/target lifetime mechanisms already exist in B31 and are intentionally unmodified in this appearance-only change. The shader reimplementation does not prove immunity from long-session black screens. Do not reset or reap in-flight engine registrations based on time alone. If the failure recurs, return to stable DuoView and implement retirement backed by proven RHI completion in a separate reviewed fix.
+
+CI gates: B31 original generated overlays, extra B33 overlay contract, B31 anti-vignette CPU math, production WARP source identity/manual color channel sign/deterministic repeat/hybrid feather, FXC /WX, backend, sanitizer and final packaged ZIP.

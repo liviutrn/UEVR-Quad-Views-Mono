@@ -27,6 +27,9 @@ struct Settings {
     float seam_strength{.85f};
     float seam_max_gain{.20f};
     float seam_brightness_ev{};
+    float seam_temperature{}; // -1 cool, +1 warm
+    float seam_tint{}; // -1 magenta, +1 green
+    bool seam_hybrid_blend{true}; // B31 percentage feather
     float seam_color_strength{.5f};
     float seam_local_strength{.5f};
     float seam_radius_px{120.f};
@@ -124,6 +127,7 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     out.stabilize_crop=requested.stabilize_crop;
     out.focus_lift_enabled=requested.focus_lift_enabled;
     out.seam_debug=requested.seam_debug;
+    out.seam_hybrid_blend=requested.seam_hybrid_blend;
     const auto scalar = [&](float value,float lo,float hi,uint32_t mask,float Settings::* field) {
         if (valid(value,lo,hi)) out.*field=value;
         else result.rejected|=mask;
@@ -146,6 +150,8 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.seam_strength,0.f,1.f,reject_seam,&Settings::seam_strength);
     scalar(requested.seam_max_gain,.01f,.5f,reject_seam,&Settings::seam_max_gain);
     scalar(requested.seam_brightness_ev,-.5f,.5f,reject_seam,&Settings::seam_brightness_ev);
+    scalar(requested.seam_temperature,-1.f,1.f,reject_seam,&Settings::seam_temperature);
+    scalar(requested.seam_tint,-1.f,1.f,reject_seam,&Settings::seam_tint);
     scalar(requested.seam_color_strength,0.f,1.f,reject_seam,&Settings::seam_color_strength);
     scalar(requested.seam_local_strength,0.f,1.f,reject_seam,&Settings::seam_local_strength);
     scalar(requested.seam_radius_px,16.f,512.f,reject_seam,&Settings::seam_radius_px);
@@ -189,6 +195,8 @@ inline bool same_settings(const Settings& a, const Settings& b) {
         a.seam_color_strength==b.seam_color_strength && a.seam_local_strength==b.seam_local_strength &&
         a.seam_radius_px==b.seam_radius_px && a.seam_transition_px==b.seam_transition_px &&
         a.seam_debug==b.seam_debug &&
+        a.seam_temperature==b.seam_temperature && a.seam_tint==b.seam_tint &&
+        a.seam_hybrid_blend==b.seam_hybrid_blend &&
         a.gpu_timing==b.gpu_timing &&
         a.debug_border==b.debug_border && a.eye_tracked==b.eye_tracked &&
         a.diagnostic_view==b.diagnostic_view && a.stabilize_crop==b.stabilize_crop &&

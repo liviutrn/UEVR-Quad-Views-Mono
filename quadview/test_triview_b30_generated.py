@@ -33,7 +33,7 @@ assert 'SeamOutput[eye * 9u + 1u + lane / 16u]' in shader
 assert 'GroupMemoryBarrierWithGroupSync()' in shader
 assert 'if (SeamOptions.w <= 0.5)' in shader and 'fill == 0.0' in shader
 assert 'if (lane < 9u) SeamOutput[eye * 9u + lane]' in shader
-assert 'if (Seam.x < 0.5) return FocusWeight(uv, crop)' in shader
+assert 'if (Seam.x < 0.5 || SeamLocal.z > 0.5) return FocusWeight(uv, crop)' in shader
 assert 'if (width <= 0.0) return 1.0' in shader
 assert shader.count('CorrectFocusColor(')==3 # function, displayed focus, analysis reference
 assert 'FocusProfile.x' in shader and 'if (FocusLift.x > 0.5)' in shader

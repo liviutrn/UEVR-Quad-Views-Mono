@@ -201,6 +201,26 @@ int main() try {
         check(corrected.at(x_focus, eye_h / 2)[0] == 102, "Seam correction changed opaque focus pixels");
     }
 
+    Settings warm=manual; warm.seam_temperature=1.f; warm.seam_tint=1.f;
+    const auto warm_px=draw(gpu,compositor,base,output.Get(),layout,warm);
+    check(warm_px.at(4,32)[0]>corrected.at(4,32)[0],"B33 warmth failed to raise red");
+    check(warm_px.at(4,32)[1]>corrected.at(4,32)[1],"B33 tint failed to raise green");
+    check(warm_px.at(4,32)[2]<corrected.at(4,32)[2],"B33 warmth failed to reduce blue");
+    check(warm_px.at(32,32)==corrected.at(32,32),"B33 manual grade altered opaque focus");
+    check(draw(gpu,compositor,base,output.Get(),layout,warm).rgba==warm_px.rgba,
+          "B33 manual grade changed between identical frames");
+    Settings cool=manual; cool.seam_temperature=-1.f; cool.seam_tint=-1.f;
+    const auto cool_px=draw(gpu,compositor,base,output.Get(),layout,cool);
+    check(cool_px.at(4,32)[0]<corrected.at(4,32)[0] &&
+          cool_px.at(4,32)[2]>corrected.at(4,32)[2],"B33 cool polarity incorrect");
+    Settings hybrid=manual; hybrid.seam_hybrid_blend=true; hybrid.feather_fraction=.20f;
+    const auto hybrid_px=draw(gpu,compositor,base,output.Get(),layout,hybrid);
+    check(hybrid_px.at(17,32)[0]<corrected.at(17,32)[0],"B33 hybrid missing feather");
+    check(hybrid_px.at(32,32)==corrected.at(32,32),"B33 feather altered fovea core");
+    Settings off_hybrid=off; off_hybrid.seam_hybrid_blend=true;
+    check(draw(gpu,compositor,base,output.Get(),layout,off_hybrid).rgba==baseline.rgba,
+          "B33 seam-off changed B31 pixels");
+
     Settings lifted = off; lifted.focus_lift_enabled = true; lifted.focus_brightness = 1.05f;
     const auto lifted_off = draw(gpu, compositor, base, output.Get(), layout, lifted);
     Settings disabled_lift = lifted; disabled_lift.focus_lift_enabled = false;
@@ -251,6 +271,7 @@ int main() try {
                 "Fovea sharpening contaminated adaptive periphery statistics");
 
     Settings transitioned = manual; transitioned.seam_transition_px = 16.f;
+    transitioned.seam_hybrid_blend=false; // explicit B31 inward transition test
     const auto edge_blend = draw(gpu, compositor, base, output.Get(), layout, transitioned);
     check(edge_blend.at(eye_w / 2, eye_h / 2)[0] == corrected.at(eye_w / 2, eye_h / 2)[0],
         "Transition reservation changed the fovea core");
@@ -292,7 +313,7 @@ int main() try {
             throw std::runtime_error(std::string("D3D12 seam validation: ")+message->pDescription);
     }
 
-    std::cout << "QuadView seam WARP: off/manual/zero-strength identity, independent eyes, sharpened periphery, missing-depth neutral/recovery, edge blend and invalid-patch rejection passed.\n";
+    std::cout << "QuadView seam WARP: B31 and B33 stateless RGB, repeat, hybrid, OFF identity passed.\n";
     return 0;
 } catch (const std::exception& e) {
     std::cerr << "QuadView seam WARP FAILED: " << e.what() << '\n';

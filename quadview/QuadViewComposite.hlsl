@@ -29,9 +29,9 @@ cbuffer QuadViewConstants : register(b0) {
     float4 DepthJitter;
     float4 Seam;        // mode, strength, maximum relative auto gain, manual sample-domain gain
     float4 SeamOptions; // color strength, reserved rendered-edge pixels, confidence debug, alignment usable
-    float4 SeamLocal;   // outward residual radius in output pixels, local strength, reserved
+    float4 SeamLocal;   // radius, local strength, hybrid feather, static red delta
     float4 FocusLift;    // enabled, overall brightness, corner gain minus one, onset r^2
-    float4 FocusProfile; // exponent, anti-vignette strength, reserved
+    float4 FocusProfile; // exponent, anti-vignette strength, static green/blue deltas
 };
 
 struct VertexOut {
@@ -301,7 +301,9 @@ float4 MatchContext(uint eye, float2 uv, float4 crop, float4 color) {
                 gain = lerp(gain, local, SeamLocal.y * (1.0 - t * t * (3.0 - 2.0 * t)));
             }
         }
-        gain = lerp(1.0, gain * Seam.w, Seam.y);
+        // Stateless RGB white balance, neutral when unused constants are zero.
+        const float3 grade = float3(1.0 + SeamLocal.w, 1.0 + FocusProfile.z, 1.0 + FocusProfile.w);
+        gain = lerp(1.0, gain * Seam.w * grade, Seam.y);
         color.rgb = max(color.rgb * gain, 0.0);
         [branch] if (SeamOptions.z > 0.5)
             color.rgb = lerp(float3(0.7, 0.05, 0.05), float3(0.05, 0.7, 0.05), confidence);
@@ -313,7 +315,7 @@ float SeamFocusWeight(float2 uv, float4 crop) {
     // Off preserves the old feather exactly. Matching mode keeps the complete
     // rendered fovea sharp at transition=0. An optional transition reserves
     // existing edge pixels; it does not claim additional rendered coverage.
-    if (Seam.x < 0.5) return FocusWeight(uv, crop);
+    if (Seam.x < 0.5 || SeamLocal.z > 0.5) return FocusWeight(uv, crop);
     if (any(uv < crop.xy) || any(uv > crop.zw)) return 0.0;
     const float2 extentPx = (crop.zw - crop.xy) * float2(EyeAndAtlas.xy);
     const float width = min(SeamOptions.y, 0.49 * min(extentPx.x, extentPx.y));
