@@ -123,6 +123,13 @@ static SourceSet make_sources(Gpu& gpu, const Layout& layout, std::array<std::ar
                     color=inside ? (i>=2 ? captured_focus_color(i-2,x-rect.x,y-rect.y,rect.width,rect.height)
                                          : colors[i]) : std::array<uint8_t,4>{0,0,0,255};
                 }
+                if (focus_gradient==9 && i>=2) {
+                    auto rect=layout.views[i];
+                    if (layout.native_local) rect.x=rect.y=0;
+                    const bool spot=x>=rect.x && x<rect.x+4 &&
+                        y>=rect.y+61 && y<=rect.y+67;
+                    color=spot ? std::array<uint8_t,4>{240,240,240,255} : colors[i];
+                }
                 if (focus_gradient==8 && i>=2) {
                     const uint32_t origin=layout.native_local ? 0u : layout.views[i].x;
                     const uint32_t sx=x>=origin ? x-origin : 0u;
@@ -483,6 +490,54 @@ int main() try {
     check(render(immediate,highFrequency,compact,noFeather).rgba==
           render(immediate,highFrequency,compact,plainB37).rgba,
           "B38 legacy toggle unexpectedly changed zero-feather rendering");
+
+
+    // B39: the real GPU output must not mirror a tiny bright focus-edge
+    // pixel into the outside periphery. B37 Instant is the control.
+    const std::array<Color,4> ambientColors{{{75,75,75,255},{75,75,75,255},
+                                            {75,75,75,255},{75,75,75,255}}};
+    const auto normalSources=make_sources(gpu,compact,ambientColors);
+    const auto tinySpotSources=make_sources(gpu,compact,ambientColors,9);
+    Settings ambientSettings=feathered; ambientSettings.seam_mode=5;
+    ambientSettings.ambient_radius_px=48.f;
+    ambientSettings.ambient_inside_px=32.f;
+    ambientSettings.ambient_time_ms=350u;
+    auto ambientHistory=uevr::quadview::dx12::EdgeHistoryState::create(gpu.device.Get(),gpu.queue.Get());
+    check(bool(ambientHistory),"Failed to create B39 queue-owned history");
+    Compositor ambient; prepare(ambient); ambient.set_edge_history(ambientHistory);
+    check(ambient.edge_submission_queue()==gpu.queue.Get(),"B39 lost pinned queue");
+    const auto before=render(ambient,normalSources,compact,ambientSettings);
+    const auto flashed=render(ambient,tinySpotSources,compact,ambientSettings);
+    const auto oldBefore=render(immediate,normalSources,compact,instant);
+    const auto oldFlash=render(immediate,tinySpotSources,compact,instant);
+    for (unsigned eye=0;eye<2;++eye) {
+        const uint32_t x=eye*256+63,y=128;
+        int oldDelta=0,newDelta=0;
+        for(unsigned ch=0;ch<3;++ch) {
+            oldDelta+=std::abs(int(oldFlash.at(x,y)[ch])-int(oldBefore.at(x,y)[ch]));
+            newDelta+=std::abs(int(flashed.at(x,y)[ch])-int(before.at(x,y)[ch]));
+        }
+        check(oldDelta>90,"Fixture did not reproduce B37 isolated bright-edge flash");
+        check(newDelta*4<oldDelta,"Ambient V3 still mirrors a bright edge pixel");
+    }
+    // Whole-area illumination changes must evolve gradually, then converge.
+    const auto brightSources=make_sources(gpu,compact,
+        {{{75,75,75,255},{75,75,75,255},{175,175,175,255},{175,175,175,255}}});
+    const auto prior=render(ambient,normalSources,compact,ambientSettings);
+    const auto first=render(ambient,brightSources,compact,ambientSettings);
+    auto later=first;
+    for (int i=0;i<24;++i) later=render(ambient,brightSources,compact,ambientSettings);
+    for (unsigned eye=0;eye<2;++eye) {
+        const uint32_t x=eye*256+48,y=128;
+        const int p=int(prior.at(x,y)[0]),f=int(first.at(x,y)[0]),l=int(later.at(x,y)[0]);
+        check(std::abs(f-p)<16,"Ambient temporal correction jumped in one frame");
+        check(l>f+3,"Ambient temporal correction failed to track sustained change");
+    }
+    Settings ambientZero=ambientSettings; ambientZero.seam_strength=0.f;
+    Settings ambientOff=ambientSettings; ambientOff.seam_mode=0u;
+    check(render(immediate,tinySpotSources,compact,ambientZero).rgba==
+          render(immediate,tinySpotSources,compact,ambientOff).rgba,
+          "Zero-strength ambient mode changed the source image");
 
     if (info) for (UINT64 i=0,n=info->GetNumStoredMessages();i<n;++i) {
         SIZE_T size{}; info->GetMessage(i,nullptr,&size); std::vector<uint8_t> storage(size);

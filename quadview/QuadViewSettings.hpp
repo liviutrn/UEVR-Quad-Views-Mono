@@ -37,6 +37,9 @@ struct Settings {
     float edge_hysteresis{.004f};
     bool legacy_inward_feather{true}; // B38: restore B27 raw-context inward feather
     float legacy_inward_anchor_px{12.f}; // color-continuity strip next to crop
+    float ambient_radius_px{48.f}; // B39: pooled along-edge width (output px)
+    float ambient_inside_px{32.f}; // inward sample reach (output px)
+    uint32_t ambient_time_ms{350u}; // temporal RGB average time constant
     bool seam_debug{};
     bool gpu_timing{};
     bool debug_border{};
@@ -155,6 +158,9 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.edge_rate,.001f,4.f,reject_seam,&Settings::edge_rate);
     scalar(requested.edge_hysteresis,0.f,.05f,reject_seam,&Settings::edge_hysteresis);
     scalar(requested.legacy_inward_anchor_px,2.f,64.f,reject_seam,&Settings::legacy_inward_anchor_px);
+    scalar(requested.ambient_radius_px,8.f,128.f,reject_seam,&Settings::ambient_radius_px);
+    scalar(requested.ambient_inside_px,8.f,96.f,reject_seam,&Settings::ambient_inside_px);
+    unsigned_integer(requested.ambient_time_ms,50u,1500u,reject_seam,&Settings::ambient_time_ms);
     scalar(requested.seam_strength,0.f,1.f,reject_seam,&Settings::seam_strength);
     scalar(requested.seam_max_gain,.01f,.5f,reject_seam,&Settings::seam_max_gain);
     scalar(requested.seam_brightness_ev,-.5f,.5f,reject_seam,&Settings::seam_brightness_ev);
@@ -162,7 +168,7 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.seam_local_strength,0.f,1.f,reject_seam,&Settings::seam_local_strength);
     scalar(requested.seam_radius_px,16.f,512.f,reject_seam,&Settings::seam_radius_px);
     scalar(requested.seam_transition_px,0.f,64.f,reject_seam,&Settings::seam_transition_px);
-    unsigned_integer(requested.seam_mode,0u,4u,reject_seam,&Settings::seam_mode);
+    unsigned_integer(requested.seam_mode,0u,5u,reject_seam,&Settings::seam_mode);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
     scalar(requested.gaze_offset_v,-.25f,.25f,reject_offset_v,&Settings::gaze_offset_v);
@@ -200,6 +206,9 @@ inline bool same_settings(const Settings& a, const Settings& b) {
         a.edge_rate==b.edge_rate && a.edge_hysteresis==b.edge_hysteresis &&
         a.legacy_inward_feather==b.legacy_inward_feather &&
         a.legacy_inward_anchor_px==b.legacy_inward_anchor_px &&
+        a.ambient_radius_px==b.ambient_radius_px &&
+        a.ambient_inside_px==b.ambient_inside_px &&
+        a.ambient_time_ms==b.ambient_time_ms &&
         a.seam_mode==b.seam_mode && a.seam_strength==b.seam_strength &&
         a.seam_max_gain==b.seam_max_gain && a.seam_brightness_ev==b.seam_brightness_ev &&
         a.seam_color_strength==b.seam_color_strength && a.seam_local_strength==b.seam_local_strength &&

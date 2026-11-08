@@ -28,7 +28,7 @@ if len(sys.argv)>1:
  vh=(b/'VR.hpp').read_text();vr=(b/'VR.cpp').read_text()
  for field in ('reach_px','fast_px','rate','hysteresis'):
   assert 'requested.edge_'+field+'=' in vr
- assert 's_quadview_edge_mode_names, 2)' in vh
+ assert 's_quadview_edge_mode_names, 3)' in vh
  assert 'comp->set_edge_history(quadview_edge_history)' in dx
  assert 'commands.seam_submission_queue=seam_queue' in dx
  assert 'std::exchange(this->seam_submission_queue' in cc

@@ -342,6 +342,41 @@ bool EdgeDifference(uint eye, float2 anchor, uint side, float4 crop, out float3 
     return valid;
 }
 
+// B39: spatially pool 15 INWARD samples at each of 32 knots per eye.
+// No pixel-by-pixel correction, no additional pass or per-frame storage.
+bool AmbientEdgeDifference(uint eye,float2 anchor,uint side,float4 crop,out float3 delta) {
+    const uint4 fr=eye==0u ? FocusLeft : FocusRight;
+    const uint4 cr=eye==0u ? ContextLeft : ContextRight;
+    const uint cs=eye==0u ? ContextSource.x : ContextSource.y;
+    const float2 size=float2(EyeAndAtlas.xy);
+    const float2 lo=(ceil(crop.xy*size-0.5)+0.5)/size;
+    const float2 hi=(ceil(crop.zw*size-0.5)-0.5)/size;
+    const float2 inward=side==0u ? float2(0.0,1.0) :
+                        side==1u ? float2(-1.0,0.0) :
+                        side==2u ? float2(0.0,-1.0) : float2(1.0,0.0);
+    const float2 tangent=float2(inward.y,-inward.x);
+    float3 sum=0.0; float accepted=0.0;
+    [unroll] for (int depth=0;depth<3;++depth) {
+        const float d=FocusProfile.w*(0.25+0.375*float(depth));
+        [unroll] for (int i=-2;i<=2;++i) {
+            const float along=0.5*float(i)*FocusProfile.z;
+            const float2 p=clamp(anchor+(inward*d+tangent*along)/size,lo,hi);
+            const float2 fu=(p-crop.xy)/(crop.zw-crop.xy);
+            float fill=0.0;
+            const float2 cu=WarpContextUv(eye,ContextUv(eye,p),fill);
+            [branch] if (fill==0.0 && all(cu>=0.0) && all(cu<=1.0)) {
+                const float3 f=DisplayFocus(eye,fr,fu,crop).rgb;
+                const float3 c=ReadSource(cs,AtlasUv(cs,cr,cu)).rgb;
+                [branch] if (all(isfinite(f)) && all(isfinite(c))) {
+                    sum+=f-c; accepted+=1.0;
+                }
+            }
+        }
+    }
+    delta=sum/max(accepted,1.0);
+    return SeamOptions.w>0.5 && accepted>=8.0;
+}
+
 float EdgeFade(float distance, float reach) {
     const float t=saturate(distance/max(reach,1.0));
     return 1.0-t*t*(3.0-2.0*t);
@@ -364,10 +399,16 @@ float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
     const float fast=EdgeFade(distance,min(EdgeV2.y,EdgeV2.x));
     float3 target=stable;
     bool valid=true;
-    [branch] if (fast > 0.0) valid=EdgeDifference(eye,anchor,side,crop,target);
+    [branch] if (fast > 0.0 && Seam.x<4.5) valid=EdgeDifference(eye,anchor,side,crop,target);
     // At distance zero slow=fast=1: history cancels exactly. Farther out
     // only the slew-limited broad field remains. No focus pixels are blurred.
-    const float3 correction=slow*stable+fast*(target-stable);
+    // V3 never copies instantaneous border pixels. Its entire field comes
+    // from spatially pooled + temporally averaged GPU knots.
+    float3 correction=slow*stable+fast*(target-stable);
+    [branch] if (Seam.x>4.5) {
+        valid=a.a>0.5 && b.a>0.5;
+        correction=slow*stable;
+    }
     color.rgb=max(color.rgb+Seam.y*(valid ? correction : slow*stable),0.0);
     [branch] if (SeamOptions.z > 0.5) color.rgb=valid ? float3(0.05,0.7,0.05) : float3(0.7,0.05,0.05);
     }
@@ -577,7 +618,8 @@ void UpdateEdgeV2(uint eye,uint lane) {
     uint unusedSide=0u; float unusedAlong=0.0;
     p=EdgeAnchor(p,crop,unusedSide,unusedAlong);
     float3 target;
-    const bool valid=EdgeDifference(eye,p,side,crop,target);
+    const bool valid=Seam.x>4.5 ? AmbientEdgeDifference(eye,p,side,crop,target) :
+                                  EdgeDifference(eye,p,side,crop,target);
     const uint h=(eye*32u+lane)*3u;
     float3 stable=valid ? target : 0.0;
     bool tracking=false;
@@ -593,7 +635,15 @@ void UpdateEdgeV2(uint eye,uint lane) {
             const float3 delta=target-stable;
             const float error=max(abs(delta.x),max(abs(delta.y),abs(delta.z)));
             tracking=old.a>0.5 ? error>EdgeV2.w : error>2.0*EdgeV2.w;
-            if (tracking) stable+=clamp(delta,-EdgeV2.z*float(elapsed)*0.001,EdgeV2.z*float(elapsed)*0.001);
+            if (tracking) {
+                const float seconds=float(elapsed)*0.001;
+                float3 step=delta;
+                // Time-domain averaging of spatially pooled RGB residuals.
+                // Keep B37's rate limit too: no abrupt broad-field jumps.
+                [branch] if (Seam.x>4.5)
+                    step*=float(elapsed)/(float(max(EdgeHistory.w,1u))+float(elapsed));
+                stable+=clamp(step,-EdgeV2.z*seconds,EdgeV2.z*seconds);
+            }
         }
         // Invalid geometry resets immediately; no stale-world/occlusion hold.
         EdgeState[h]=float4(stable,tracking ? 1.0 : 0.0);

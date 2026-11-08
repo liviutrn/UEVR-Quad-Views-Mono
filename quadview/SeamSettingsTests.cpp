@@ -22,6 +22,9 @@ int main() {
     assert(!result.settings.seam_debug);
     assert(result.settings.legacy_inward_feather);
     assert(result.settings.legacy_inward_anchor_px == 12.f);
+    assert(result.settings.ambient_radius_px == 48.f);
+    assert(result.settings.ambient_inside_px == 32.f);
+    assert(result.settings.ambient_time_ms == 350u);
 
     Settings minimum = defaults;
     minimum.seam_mode = 1;
@@ -35,6 +38,9 @@ int main() {
     minimum.seam_debug = true;
     minimum.legacy_inward_feather = false;
     minimum.legacy_inward_anchor_px = 2.f;
+    minimum.ambient_radius_px = 8.f;
+    minimum.ambient_inside_px = 8.f;
+    minimum.ambient_time_ms = 50u;
     result = reconcile_settings(minimum, defaults, 1920, 1080);
     assert(result.rejected == 0);
     assert(same_settings(result.settings, minimum));
@@ -50,6 +56,10 @@ int main() {
     maximum.seam_transition_px = 64.f;
     maximum.seam_debug = true;
     maximum.legacy_inward_anchor_px = 64.f;
+    maximum.ambient_radius_px = 128.f;
+    maximum.ambient_inside_px = 96.f;
+    maximum.ambient_time_ms = 1500u;
+    maximum.seam_mode = 5u;
     result = reconcile_settings(maximum, defaults, 1920, 1080);
     assert(result.rejected == 0);
     assert(same_settings(result.settings, maximum));
@@ -61,7 +71,7 @@ int main() {
         assert(rejected.rejected & uevr::quadview::reject_seam);
         check_preserved(rejected.settings);
     };
-    rejects([](Settings& s) { s.seam_mode = 5; },
+    rejects([](Settings& s) { s.seam_mode = 6; },
         [](const Settings& s) { assert(s.seam_mode == 0); });
     rejects([](Settings& s) { s.seam_strength = -0.01f; },
         [](const Settings& s) { assert(s.seam_strength == .85f); });
@@ -79,6 +89,12 @@ int main() {
         [](const Settings& s) { assert(s.seam_transition_px == 0.f); });
     rejects([](Settings& s) { s.legacy_inward_anchor_px = -1.f; },
         [](const Settings& s) { assert(s.legacy_inward_anchor_px == 12.f); });
+    rejects([](Settings& s) { s.ambient_radius_px = 0.f; },
+        [](const Settings& s) { assert(s.ambient_radius_px == 48.f); });
+    rejects([](Settings& s) { s.ambient_inside_px = 100.f; },
+        [](const Settings& s) { assert(s.ambient_inside_px == 32.f); });
+    rejects([](Settings& s) { s.ambient_time_ms = 1501u; },
+        [](const Settings& s) { assert(s.ambient_time_ms == 350u); });
 
     Settings changed = defaults;
     changed.seam_mode = 1;
@@ -100,6 +116,12 @@ int main() {
     changed = defaults; changed.legacy_inward_feather = false;
     assert(!same_settings(defaults, changed));
     changed = defaults; changed.legacy_inward_anchor_px = 20.f;
+    assert(!same_settings(defaults, changed));
+    changed = defaults; changed.ambient_radius_px = 60.f;
+    assert(!same_settings(defaults, changed));
+    changed = defaults; changed.ambient_inside_px = 48.f;
+    assert(!same_settings(defaults, changed));
+    changed = defaults; changed.ambient_time_ms = 500u;
     assert(!same_settings(defaults, changed));
     changed = defaults; changed.seam_debug = true;
     assert(!same_settings(defaults, changed));

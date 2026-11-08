@@ -3,7 +3,7 @@
 from pathlib import Path
 import subprocess,sys
 r=Path(__file__).resolve().parent
-old=subprocess.check_output(['git','-C',str(r.parent),'show','9a4596a796ec447ada2390922284ac0eb74734d9:quadview/QuadViewComposite.hlsl'],text=True)
+old=subprocess.check_output(['git','-C',str(r.parent),'show','d043d5ec009e7290a0e0770615a462fd505e2b4b:quadview/QuadViewComposite.hlsl'],text=True)
 now=(r/'QuadViewComposite.hlsl').read_text()
 def body(text,name):
     a=text.index(name);start=text.index('{',a);end=start+1;depth=1
@@ -11,10 +11,10 @@ def body(text,name):
         depth+=(text[end]=='{')-(text[end]=='}');end+=1
     return text[a:end]
 for fn in ('float FocusWeight(','float4 ReadContext(','float4 MatchContext(',
-           'float4 MatchEdgeV2(','float4 SeamFocusWeight(','float3 CorrectFocusColor(',
+           'float SeamFocusWeight(','float3 CorrectFocusColor(',
            'float3 GlamSharpenFocus(','float3 ReadFocus(','float2 WarpContextUv('):
     assert body(old,fn)==body(now,fn),fn+' changed unexpectedly'
-assert old.replace(body(old,'float4 ScenePixel('),body(now,'float4 ScenePixel('),1)==now, 'Other B37 shader paths changed'
+assert body(old,'float4 ScenePixel(')==body(now,'float4 ScenePixel('), 'B38 inward feather changed'
 for marker in (
     'const float4 rawContext = ReadContext(',
     'float4 context = MatchContext(eye, eyeUv, crop, rawContext);',

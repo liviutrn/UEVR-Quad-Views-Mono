@@ -481,6 +481,8 @@ public:
         hash_float(settings.edge_rate); hash_float(settings.edge_hysteresis);
         hash_float(settings.edge_reach_px); hash_float(settings.edge_fast_px); hash_float(settings.seam_strength);
         hash_float(settings.seam_transition_px); hash_float(settings.feather_fraction);
+        hash_float(settings.ambient_radius_px); hash_float(settings.ambient_inside_px);
+        hash_word(settings.ambient_time_ms);
         hash_word(layout.shared_context);
         for (const auto& rect : constants.rectangles) for (auto v : rect) hash_word(v);
         hash_word(layout.eye_width); hash_word(layout.eye_height);
@@ -488,7 +490,9 @@ public:
         constants.edge_history[0]=epoch;
         constants.edge_history[1]=history_time_ms ? history_time_ms : static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
-        constants.edge_history[2]=settings.seam_mode==4 && edge_history_ && edge_history_->device.Get()==device_.Get() ? 1u : 0u;
+        constants.edge_history[2]=(settings.seam_mode==4 || settings.seam_mode==5) &&
+            edge_history_ && edge_history_->device.Get()==device_.Get() ? 1u : 0u;
+        constants.edge_history[3]=settings.ambient_time_ms;
         constants.seam_local[0] = settings.seam_radius_px;
         constants.seam_local[1] = settings.seam_local_strength;
         constants.seam_local[2] = settings.legacy_inward_anchor_px;
@@ -499,6 +503,8 @@ public:
         constants.focus_lift[3]=settings.focus_lift_onset;
         constants.focus_profile[0]=settings.focus_lift_power;
         constants.focus_profile[1]=settings.focus_lift_strength;
+        constants.focus_profile[2]=settings.ambient_radius_px;
+        constants.focus_profile[3]=settings.ambient_inside_px;
         std::memcpy(mapped_, &constants, sizeof(constants));
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format = source_format_;
