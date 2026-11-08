@@ -1,6 +1,6 @@
-name: TriView B34 adaptive RGB boundary from B31
+name: TriView B34-R2 stateless noise guard from B31
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B34 spatial color correction (${{ github.run_number }})
+run-name: TriView B34-R2 quiet adaptive RGB (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -341,15 +341,15 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B34-Boundary-RGB'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B28-103 user-tested'; baselineSource='3ebe512c830a8e7467717d85d1cd0b7f52c5e4ba'; sourceParent='2e9b7567bbe190b1c934045ed64121ba655458e2'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B31 unchanged rendering/lifetime and anti-vignette; B34 new bounded stateless spatial boundary RGB+luminance model, narrow inward feather; no B32 temporal state; headset test pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B34-R2-Quiet-RGB'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B28-103 user-tested'; baselineSource='3ebe512c830a8e7467717d85d1cd0b7f52c5e4ba'; sourceParent='2e9b7567bbe190b1c934045ed64121ba655458e2'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B31 renderer/lifetime and anti-vignette unchanged; B34R2 stateless spatial RGB+luminance + smooth noise deadband, 280px outward/28px inward; no B32 temporal state; headset test pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          UEVR ID7 / TriView B34 - spatial adaptive brightness/RGB seam from B31-110.
+          UEVR ID7 / TriView B34-R2 - stateless noise suppression in spatial RGB matching from B31-110.
           Includes B29 efficiency/XYZ and tested B28-103 lifecycle safeguards.
           Focus correction starts ENABLED with the screenshot-fitted profile.
-          Boundary B34 starts AUTO, strength.95, maxgain.40, chroma.80, radius180px, inward feather12px.
+          Boundary B34-R2 starts AUTO, strength.95, maxgain.40, chroma.80, radius280px, inward feather28px, noise gates.035/.015.
           The matcher compares against the corrected foveas, not their old colors.
           Overall fovea brightness defaults neutral1; optional slider adjusts it.
           Exactly the existing three views. No new Unreal render or crop resizing.
@@ -357,7 +357,7 @@ jobs:
 
           No initial slider configuration is required. Advanced Seam Matching
           and Fovea brightness / anti-vignette allow independent comparisons.
-          B34 preserves the sharp stereo core and blends only a narrow existing edge strip.
+          B34-R2 preserves sharp stereo core, supports tunable 0-64px inward feather, 16-512px outward reach.
           Optional transition pixels reserve the existing focus edge and reduce
           its fully sharp interior; they add no physical outward guard pixels.
           Enable GPU timing for total composite+analysis and analysis-only time.
@@ -371,16 +371,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B34-Boundary-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B34-R2-Quiet-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B34-Boundary-${{ github.run_number }}
+          name: UEVR-TriView-B34-R2-Quiet-${{ github.run_number }}
           path: |
-            UEVR-TriView-B34-Boundary-*.zip
-            UEVR-TriView-B34-Boundary-*.zip.sha256
+            UEVR-TriView-B34-R2-Quiet-*.zip
+            UEVR-TriView-B34-R2-Quiet-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4

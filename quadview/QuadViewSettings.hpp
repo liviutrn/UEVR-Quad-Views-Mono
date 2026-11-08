@@ -31,6 +31,9 @@ struct Settings {
     float seam_local_strength{.5f};
     float seam_radius_px{120.f};
     float seam_transition_px{};
+    // B34-R2: zero-memory measurement deadbands, not true temporal history.
+    float seam_noise_guard{.035f};
+    float seam_chroma_guard{.015f};
     bool seam_debug{};
     bool gpu_timing{};
     bool debug_border{};
@@ -150,6 +153,8 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.seam_local_strength,0.f,1.f,reject_seam,&Settings::seam_local_strength);
     scalar(requested.seam_radius_px,16.f,512.f,reject_seam,&Settings::seam_radius_px);
     scalar(requested.seam_transition_px,0.f,64.f,reject_seam,&Settings::seam_transition_px);
+    scalar(requested.seam_noise_guard,0.f,.15f,reject_seam,&Settings::seam_noise_guard);
+    scalar(requested.seam_chroma_guard,0.f,.08f,reject_seam,&Settings::seam_chroma_guard);
     unsigned_integer(requested.seam_mode,0u,3u,reject_seam,&Settings::seam_mode);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
@@ -188,6 +193,7 @@ inline bool same_settings(const Settings& a, const Settings& b) {
         a.seam_max_gain==b.seam_max_gain && a.seam_brightness_ev==b.seam_brightness_ev &&
         a.seam_color_strength==b.seam_color_strength && a.seam_local_strength==b.seam_local_strength &&
         a.seam_radius_px==b.seam_radius_px && a.seam_transition_px==b.seam_transition_px &&
+        a.seam_noise_guard==b.seam_noise_guard && a.seam_chroma_guard==b.seam_chroma_guard &&
         a.seam_debug==b.seam_debug &&
         a.gpu_timing==b.gpu_timing &&
         a.debug_border==b.debug_border && a.eye_tracked==b.eye_tracked &&

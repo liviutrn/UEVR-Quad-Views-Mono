@@ -453,6 +453,12 @@ RWStructuredBuffer<float4> SeamOutput : register(u0);
 groupshared float4 SeamFocusSums[128];
 groupshared float4 SeamContextSums[128];
 
+// B34-R2: smooth current-frame noise rejection without any history state.
+float QuietGate(float difference, float threshold) {
+    [branch] if (threshold <= 0.0) return 1.0;
+    return smoothstep(threshold, threshold * 2.0, abs(difference));
+}
+
 // Four low-frequency patch samples, solely for analysis: displayed focus
 // samples are never blurred. Use the actual same context homography/depth
 // warp as composition and reject out-of-bounds/disocclusion-filled samples.
@@ -534,10 +540,16 @@ void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
         const float3 chromaResidual = (sf - sc * boundedLum) / max(count, 1.0);
         const float residualMagnitude = max(abs(chromaResidual.r), max(abs(chromaResidual.g), abs(chromaResidual.b)));
         const float agreement = 1.0 - smoothstep(0.15, 0.35, residualMagnitude);
-        const float3 boundaryModel = float3(boundedLum,
-            clamp(chromaResidual.r, -0.18, 0.18) * SeamOptions.x,
-            clamp(chromaResidual.b, -0.18, 0.18) * SeamOptions.x);
-        const float confidence = saturate((count - 4.0) / 8.0) * (Seam.x > 2.5 ? agreement : 1.0);
+        const float stableLum = lerp(1.0, boundedLum, QuietGate(boundedLum - 1.0, SeamLocal.z));
+        const float stableRed = clamp(chromaResidual.r, -0.18, 0.18) * SeamOptions.x *
+            QuietGate(chromaResidual.r, SeamLocal.w);
+        const float stableBlue = clamp(chromaResidual.b, -0.18, 0.18) * SeamOptions.x *
+            QuietGate(chromaResidual.b, SeamLocal.w);
+        const float3 boundaryModel = float3(stableLum, stableRed, stableBlue);
+        // Ignore sparse boundary measurements; B31 Adaptive is unchanged.
+        const float confidence = Seam.x > 2.5 ?
+            smoothstep(7.0, 15.0, count) * agreement :
+            saturate((count - 4.0) / 8.0);
         SeamOutput[eye * 9u + 1u + lane / 16u] =
             float4(count > 4.0 ? (Seam.x > 2.5 ? boundaryModel : gain) :
                    (Seam.x > 2.5 ? float3(1.0, 0.0, 0.0) : float3(1.0, 1.0, 1.0)), confidence);
@@ -567,10 +579,15 @@ void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
         const float3 chromaResidual = (sf - sc * boundedLum) / max(count, 1.0);
         const float residualMagnitude = max(abs(chromaResidual.r), max(abs(chromaResidual.g), abs(chromaResidual.b)));
         const float agreement = 1.0 - smoothstep(0.15, 0.35, residualMagnitude);
-        const float3 boundaryModel = float3(boundedLum,
-            clamp(chromaResidual.r, -0.18, 0.18) * SeamOptions.x,
-            clamp(chromaResidual.b, -0.18, 0.18) * SeamOptions.x);
-        const float confidence = saturate((count - 8.0) / 40.0) * (Seam.x > 2.5 ? agreement : 1.0);
+        const float stableLum = lerp(1.0, boundedLum, QuietGate(boundedLum - 1.0, SeamLocal.z));
+        const float stableRed = clamp(chromaResidual.r, -0.18, 0.18) * SeamOptions.x *
+            QuietGate(chromaResidual.r, SeamLocal.w);
+        const float stableBlue = clamp(chromaResidual.b, -0.18, 0.18) * SeamOptions.x *
+            QuietGate(chromaResidual.b, SeamLocal.w);
+        const float3 boundaryModel = float3(stableLum, stableRed, stableBlue);
+        const float confidence = Seam.x > 2.5 ?
+            smoothstep(24.0, 72.0, count) * agreement :
+            saturate((count - 8.0) / 40.0);
         SeamOutput[eye * 9u] =
             float4(count > 8.0 ? (Seam.x > 2.5 ? boundaryModel : gain) :
                    (Seam.x > 2.5 ? float3(1.0, 0.0, 0.0) : float3(1.0, 1.0, 1.0)), confidence);

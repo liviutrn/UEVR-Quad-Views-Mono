@@ -19,6 +19,8 @@ int main() {
     assert(result.settings.seam_local_strength == .5f);
     assert(result.settings.seam_radius_px == 120.f);
     assert(result.settings.seam_transition_px == 0.f);
+    assert(result.settings.seam_noise_guard == .035f);
+    assert(result.settings.seam_chroma_guard == .015f);
     assert(!result.settings.seam_debug);
 
     Settings minimum = defaults;
@@ -95,6 +97,10 @@ int main() {
     auto boundary = defaults; boundary.seam_mode = 3;
     const auto accepted = reconcile_settings(boundary, defaults, 1810, 1440);
     assert(accepted.settings.seam_mode == 3);
+    changed = defaults; changed.seam_noise_guard = .07f;
+    assert(!same_settings(defaults, changed));
+    changed = defaults; changed.seam_chroma_guard = .05f;
+    assert(!same_settings(defaults, changed));
     changed = defaults; changed.seam_debug = true;
     assert(!same_settings(defaults, changed));
 }

@@ -1,4 +1,4 @@
-# B34: automatic spatial boundary brightness + RGB (B31-110 foundation)
+# B34-R2: stateless noise-aware RGB boundary from B31-110
 
 Built directly from B31-110 `008c9f7548c43f5977c1197c4180cddb435c64de`, not from B32 or B33.
 
@@ -23,3 +23,11 @@ No claim that the seam is mathematically invisible or never flickers: stereo geo
 B31 underlying engine-registration 16-slot capacity and source role-3 D3D12 mismatch failure remain unmodified, and B34 does not resolve them. Do not stress runtime reset or resize in the first headset test. Always keep B28/B31 rollback binaries.
 
 Tests: original B31 anti-vignette and WARP, new B34 WARP boundary/neutral/determinism, CI FXC /WX, sanitizer and backend compatibility.
+
+## B34-R2 spatial noise suppression (2026-11-08)
+
+* Still zero cross-frame temporal history: true hysteresis would require remembering a previous value and hence some state/lifetime protocol. Instead two adjustable **current-frame soft deadbands** ignore small noisy brightness and chroma deviations; there are no CPU readbacks, no GPU waits, and no new resources. This reduces pumping for measurement noise below the thresholds but cannot stop large scene-dependent correction changes or depth-induced flicker.
+* The gates act only in CSSeam on the 18 small boundary model records. The GPU pixel shader remains unchanged from B34; costs are a few smoothstep operations in the existing two compute groups. Low-sample-confidence segments are also smoothly discounted. Original B31 mode2 retains its own gain/confidence behavior.
+* New persisted in-game controls **Brightness noise suppression** (default .035, range 0-.15) and **RGB noise suppression** (default .015, range 0-.08). Setting either to zero disables that deadband.
+* Default outward reach increases **180 -> 280 px**, inward feather **12 -> 28 px** (adjustable in the existing ranges 16-512px and 0-64px). New separate saved key names ensure the updated defaults don't get overwritten by old B34 settings. This uses more peripheral pixels; any FPS impact needs real GPU timing.
+* Test cases: under-threshold source-color variation must yield identical peripheral output; strong brightness/warm-chroma corrections must still act; wider outward band must reach farther; unchanged opaque stereo core; unchanged B31 anti-vignette, rendering lifecycle, D3D12 constant-buffer size and compatibility tests.

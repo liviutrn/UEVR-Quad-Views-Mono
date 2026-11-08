@@ -428,6 +428,9 @@ public:
             !constants.depth_options[0] ? 0.f : 1.f;
         constants.seam_local[0] = settings.seam_radius_px;
         constants.seam_local[1] = settings.seam_local_strength;
+        // Reuse B31's two spare constants: no extra buffer, fence, or ABI bytes.
+        constants.seam_local[2] = settings.seam_noise_guard;
+        constants.seam_local[3] = settings.seam_chroma_guard;
         constants.focus_lift[0]=settings.focus_lift_enabled ? 1.f : 0.f;
         constants.focus_lift[1]=settings.focus_brightness;
         constants.focus_lift[2]=settings.focus_corner_gain-1.f;

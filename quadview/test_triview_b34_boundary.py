@@ -11,6 +11,13 @@ q=Path(__file__).with_name("QuadViewSettings.hpp").read_text()
 assert 's_quadview_seam_mode_names, 3)' in h and 'Boundary B34' in h
 assert 'QuadViewBoundaryMode' in h and 'generate_name("QuadViewSeamMode")' not in h
 assert 'm_quadview_seam_mode->value()>=2' in v and 'requested.seam_mode=' in v
+assert 'requested.seam_noise_guard=' in v and 'requested.seam_chroma_guard=' in v
+assert '*m_quadview_seam_noise_guard' in h and '*m_quadview_seam_chroma_guard' in h
+assert 'QuadViewBoundaryReachR2' in h and 'QuadViewBoundaryFeatherR2' in h
+assert 'seam_local[2] = settings.seam_noise_guard;' in d
+assert 'seam_local[3] = settings.seam_chroma_guard;' in d
+assert 'float QuietGate(float difference, float threshold)' in s
+assert 'smoothstep(7.0, 15.0, count)' in s and 'smoothstep(24.0, 72.0, count)' in s
 assert 'unsigned_integer(requested.seam_mode,0u,3u' in q
 assert 'sizeof(ShaderConstants) == 480' in d and 'sizeof(ShaderConstants) <= 512' in d
 assert 'const bool analyze = settings.seam_mode >= 2 &&' in d
@@ -21,4 +28,4 @@ assert 'if (Seam.x < 0.5) return FocusWeight(uv, crop)' in s
 assert s.count('CorrectFocusColor(')==3
 for forbidden in ('seam_readback_','publish_seam_history','SeamTemporal'):
     assert forbidden not in d and forbidden not in s
-print("B34 PASS: generated UI, B31 anti-vignette, 480-byte constants, no B32 history")
+print("B34-R2 PASS: stateless noise gates, in-game tuning, B31 anti-vignette and ABI")

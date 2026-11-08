@@ -206,6 +206,7 @@ int main() try {
     boundary.seam_max_gain=.5f; boundary.seam_color_strength=1.f;
     boundary.seam_local_strength=.9f; boundary.seam_radius_px=16.f;
     boundary.seam_transition_px=6.f;
+    boundary.seam_noise_guard=.035f; boundary.seam_chroma_guard=.015f;
     const auto boundary_px=draw(gpu,compositor,base,output.Get(),layout,boundary);
     check(boundary_px.at(15,32)[0]>baseline.at(15,32)[0]+10,
           "B34 failed to brighten context close to the foveal boundary");
@@ -226,6 +227,32 @@ int main() try {
           "B34 failed to correct warm-color mismatch");
     check(chromatic_px.at(32,32)[0]==104 && chromatic_px.at(32,32)[2]==83,
           "B34 color correction modified real stereo fovea core");
+
+    // B34-R2: subthreshold RGB/luminance jitter must not change the periphery.
+    const auto tiny_a=make_sources(gpu,layout,{{{77,77,77,255},{77,77,77,255},
+                                               {78,78,78,255},{78,78,78,255}}});
+    const auto tiny_b=make_sources(gpu,layout,{{{77,77,77,255},{77,77,77,255},
+                                               {79,79,79,255},{79,79,79,255}}});
+    const auto tiny_a_out=draw(gpu,compositor,tiny_a,output.Get(),layout,boundary);
+    const auto tiny_b_out=draw(gpu,compositor,tiny_b,output.Get(),layout,boundary);
+    check(tiny_a_out.at(15,32)==tiny_b_out.at(15,32),
+          "B34-R2 brightness noise escaped the deadband");
+    check(tiny_a_out.at(15,32)[0]==77,
+          "B34-R2 neutral source acquired spurious brightness");
+    const auto tiny_chroma_a=make_sources(gpu,layout,{{{77,77,77,255},{77,77,77,255},
+                                               {77,78,77,255},{77,78,77,255}}});
+    const auto tiny_chroma_b=make_sources(gpu,layout,{{{77,77,77,255},{77,77,77,255},
+                                               {77,79,77,255},{77,79,77,255}}});
+    const auto ca=draw(gpu,compositor,tiny_chroma_a,output.Get(),layout,boundary);
+    const auto cb=draw(gpu,compositor,tiny_chroma_b,output.Get(),layout,boundary);
+    check(ca.at(15,32)==cb.at(15,32),
+          "B34-R2 chroma noise escaped the deadband");
+    Settings wide=boundary; wide.seam_radius_px=32.f; wide.seam_transition_px=28.f;
+    const auto wide_px=draw(gpu,compositor,base,output.Get(),layout,wide);
+    check(wide_px.at(0,32)[0]>boundary_px.at(0,32)[0],
+          "B34-R2 larger outward correction did not reach distant periphery");
+    check(wide_px.at(32,32)==baseline.at(32,32),
+          "B34-R2 wider feather changed sharp stereo fovea core");
 
     Settings lifted = off; lifted.focus_lift_enabled = true; lifted.focus_brightness = 1.05f;
     const auto lifted_off = draw(gpu, compositor, base, output.Get(), layout, lifted);
