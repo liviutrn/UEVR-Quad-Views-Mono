@@ -31,7 +31,6 @@ struct Settings {
     float seam_local_strength{.5f};
     float seam_radius_px{120.f};
     float seam_transition_px{};
-    bool edge_padding_guard{true};
     float edge_reach_px{240.f};
     float edge_fast_px{32.f};
     float edge_rate{.15f}; // sample-domain RGB units per second, no amplitude ceiling
@@ -129,7 +128,6 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     out.stabilize_crop=requested.stabilize_crop;
     out.focus_lift_enabled=requested.focus_lift_enabled;
     out.seam_debug=requested.seam_debug;
-    out.edge_padding_guard=requested.edge_padding_guard;
     const auto scalar = [&](float value,float lo,float hi,uint32_t mask,float Settings::* field) {
         if (valid(value,lo,hi)) out.*field=value;
         else result.rejected|=mask;
@@ -194,7 +192,6 @@ inline bool same_settings(const Settings& a, const Settings& b) {
         a.focus_lift_enabled==b.focus_lift_enabled && a.focus_brightness==b.focus_brightness &&
         a.focus_lift_strength==b.focus_lift_strength && a.focus_corner_gain==b.focus_corner_gain &&
         a.focus_lift_onset==b.focus_lift_onset && a.focus_lift_power==b.focus_lift_power &&
-        a.edge_padding_guard==b.edge_padding_guard &&
         a.edge_reach_px==b.edge_reach_px && a.edge_fast_px==b.edge_fast_px &&
         a.edge_rate==b.edge_rate && a.edge_hysteresis==b.edge_hysteresis &&
         a.seam_mode==b.seam_mode && a.seam_strength==b.seam_strength &&

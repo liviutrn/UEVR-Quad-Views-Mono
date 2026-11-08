@@ -1,6 +1,6 @@
-name: TriView B36 blend, blank-border repair and depth continuity
+name: TriView B36 blend and depth continuity (black bar unresolved)
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B36 edge and depth repairs (${{ github.run_number }})
+run-name: TriView B36 blend and depth continuity (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -217,7 +217,7 @@ jobs:
           python workspace/quadview/apply_triview_b35_queue.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B35 queue pin source anchors failed' }
           python workspace/quadview/apply_triview_b36_controls.py backend
-          if ($LASTEXITCODE -ne 0) { throw 'B36 blend/padding controls failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'B36 blend controls failed' }
           python workspace/quadview/apply_triview_b36_depth.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B36 depth continuity source anchors failed' }
           python workspace/quadview/test_triview_b36.py backend
@@ -350,12 +350,12 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B36-Blend-Border-Depth'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B31-110 user-tested'; baselineSource='008c9f7548c43f5977c1197c4180cddb435c64de'; sourceParent='dba83e5845ac69d5b7064fbada13f8175e44cb09'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B31 renderer/anti-vignette preserved; B35 displayed-edge RGB residual, queue-pinned GPU hysteresis and rate-limited broad field; headset test pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B36-Blend-Depth'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B31-110 user-tested'; baselineSource='008c9f7548c43f5977c1197c4180cddb435c64de'; sourceParent='dba83e5845ac69d5b7064fbada13f8175e44cb09'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B31 renderer/anti-vignette preserved; B35 displayed-edge RGB residual, queue-pinned GPU hysteresis and rate-limited broad field; headset test pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          UEVR ID7 / TriView B36 - blend, blank-border and depth continuity repairs.
+          UEVR ID7 / TriView B36 - blend/depth work in progress; black bar unresolved.
           Includes B29 efficiency/XYZ and tested B28-103 lifecycle safeguards.
           Focus correction starts ENABLED with the screenshot-fitted profile.
           Edge matcher starts TEMPORAL, strength1, outward240px, immediate32px.
@@ -370,7 +370,7 @@ jobs:
           No initial slider configuration is required. Advanced Seam Matching
           and Fovea brightness / anti-vignette allow independent comparisons.
           Edge V2 now honors Context/focus blend feather as well as inward pixels.
-          Automatic uniform-black border repair is enabled (optional toggle).
+          No black-border masking/clamping is applied. Root cause pending capture.
           Optional transition pixels reserve the existing focus edge and reduce
           its fully sharp interior; they add no physical outward guard pixels.
           Enable GPU timing for total composite+analysis and analysis-only time.
@@ -388,16 +388,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B36-BlendBorderDepth-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B36-BlendDepth-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B36-BlendBorderDepth-${{ github.run_number }}
+          name: UEVR-TriView-B36-BlendDepth-${{ github.run_number }}
           path: |
-            UEVR-TriView-B36-BlendBorderDepth-*.zip
-            UEVR-TriView-B36-BlendBorderDepth-*.zip.sha256
+            UEVR-TriView-B36-BlendDepth-*.zip
+            UEVR-TriView-B36-BlendDepth-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4

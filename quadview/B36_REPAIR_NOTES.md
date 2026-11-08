@@ -1,33 +1,27 @@
-# B36 — blend, blank border and depth continuity repairs
+# B36 — work in progress; black-bar root cause unresolved
 
-Based on user-tested B35-125 (`dba83e5845ac69d5b7064fbada13f8175e44cb09`). B31 calibrated anti-vignette remains byte-identical. Native rendering, view layout, target allocation, retirement fences, queue-pinned seam history and the existing 250 ms depth selection limit are retained.
+Base: user-tested B35-125 (`dba83e5845ac69d5b7064fbada13f8175e44cb09`). No completed B36 test artifact is approved for headset testing.
 
-## User observations and evidence
+## Confirmed changes
 
-The standard Context/focus blend feather had no effect with Edge V2. Confirmed in code: B35's `SeamFocusWeight` ignored `Options.x` whenever a matching mode was enabled.
+Edge V2 ignored the original Context/focus blend feather. Its shader now combines that fraction-based control with the explicit inward-pixel feather, using the wider effective feather. B31 anti-vignette remains unchanged.
 
-The supplied screenshot's yellow rectangle is the exact focus crop. Five columns immediately inside its right edge (x1653..1657) are RGB zero at all 600 sampled rows (y610..1209). Outside the edge, B35 spreads that darkness into the periphery because its exact-edge estimator treats source black as valid color. The screenshot alone cannot prove whether those blank pixels originate from Unreal, an upscaler subrect, source viewport rounding or another producer stage. B36 repairs the observed narrow blank-rim class in the compositor; it does not claim to have identified/fixed its upstream producer.
+The depth capture pool could recycle its sole/newest valid submitted snapshot before a replacement was submitted, leaving an availability gap between Record and Submit. The pending B36 policy reserves the latest still-selectable snapshot while recording a replacement. The existing 250 ms selector age, matching tolerance, producer fences, consumer leases and twelve-slot cap remain unchanged. No CPU wait or per-frame heap allocation is added. This closes a verified availability gap; runtime evidence is still needed to establish whether it explains all below-30-fps shake/dropouts.
 
-The below-30-fps stereo/mono switching had no explicit 30-fps cutoff in code. A concrete availability defect was found: the capture pool could recycle its sole/newest valid submitted depth while its replacement was merely being recorded. `latest_recent_submitted()` then had nothing to return until submission, so composition could temporarily skip depth warp. This can occur at interleaved low-frame-rate recording/presentation cadence. Runtime confirmation that it explains every reported shake/dropout is still needed.
+## Black strip: do not conceal it
 
-## Changes
+The supplied final screenshot has five RGB-zero columns immediately inside its right yellow focus border, for all 600 rows sampled. This does NOT establish that the raw focus source contains black. An initial uniformly-black-padding detector/clamp was implemented, then removed after the user explicitly rejected masking the defect. Do not reinstate it as a root-cause fix.
 
-1. Edge V2 combines the original fraction-based feather with its pixel-based inward feather (the wider effective feather wins). The original control now works alongside automatic color matching. B31 modes retain their previous semantics.
-2. GPU analysis checks twelve separated raw source probes per candidate border column/row. Only an exactly-zero continuous rim, ending within sixteen source pixels and within one eighth of the view dimension, with lit content at at least six first-valid probes, qualifies. A whole dark scene, isolated black objects and a broken/nonuniform rim do not qualify. Each eye/side is independent.
-3. Focus center and sharpening taps clamp to the detected valid source rectangle. Coordinates inside that rectangle are unchanged: no recentering, stretching, new Unreal render, larger crop or target resizing. The missing margin is filled from nearest valid focus pixels; lost detail is not reconstructed. The matcher uses this same repaired appearance. Temporal broad correction resets when rim widths change.
-4. New saved toggle **Repair uniform black source padding** defaults on. Turn it off for comparison or if a legitimate uniform-black narrow border is misclassified. This detector is deliberately conservative but remains a heuristic, not producer metadata.
-5. Capture reserves the newest still-eligible submitted depth while recording a replacement. Other slots retain the original producer fence and consumer lease reuse checks. The latest selector, 250 ms age, size tolerance, queue rules and twelve-slot cap are unchanged. No stale snapshot is made eligible, no CPU/GPU wait or per-frame heap allocation is added. A singleton pool may allocate one additional normal pool slot under the existing cap.
+Independent B31→B35 source comparison found `AtlasUvKnownSize`, `ReadFocus`, `GlamSharpenFocus`, `CorrectFocusColor`, `SeamFocusWeight`, `ScenePixel` and PSMain unchanged. At a fully opaque focus pixel (`weight==1`), ScenePixel does not call context matching: it returns the focus source through the same sharpening/color correction. Thus the V2 context correction cannot independently paint an opaque focus pixel black given identical actual resources/constants. Pixels within the feather region remain a separate case. Runtime source bindings, valid rendered rectangles, NR/SR output coverage and downstream composition are not proven by this source invariant.
 
-## Cost and validation
+Required evidence: existing B35 snapshot from a bad frame, containing `src2_fovea_left`, `src3_fovea_right`, `eyes_final`, periphery/depth when available, and rect/crop metadata. Include current seam/inward feather, standard feather, sharpening and NR settings (B35 snapshot metadata does not record all these controls).
 
-Fixed, small additional GPU border probes; statistics grow from146 to148 float4 records. No image readback or GPU history synchronization change. No measured RTX cost claim before headset timing.
+- Stripe in raw focus: inspect producer/upscaler output coverage and valid rectangles; compare NR on/off or pre/post-NR data to isolate that stage.
+- Healthy focus, striped final at an opaque pixel: inspect actual shader constants, resource descriptors/formats and sharpening.
+- Healthy final, striped mirror/headset: inspect downstream runtime composition.
 
-Extended production WARP tests cover five/eight-column rims, both eyes, compact source origins/allocation margins, signed RGB and sharpening, padding toggle/zero strength, ordinary black scenes/interior objects/nonuniform rims, original feather, and history reset on rim-width change. Existing Edge V2 and B31 tests remain. Portable depth-policy tests cover a singleton, Record/Present/Submit at44ms intervals, replacement promotion, expiration, resize, failed evaluation and incomplete foreign fences. Windows FXC /WX, GPU WARP and complete backend/frontend build gates must pass before recommending the artifact.
+Do not claim a root-cause fix or publish a complete B36 release before identifying the first failing stage. The clamp-bearing candidate is withdrawn. Build/test work is held to avoid spending another full Windows build on an unproven workaround.
 
-Depth and color still lack exact per-frame provenance in the inherited selector. Reserving a valid depth closes the verified availability gap; it does not prove all stale-depth motion artifacts are eliminated. Projection invalidity, prolonged missing depth or expired/unsafe snapshots still legitimately disable depth warp.
+## Local verification
 
-## Headset check
-
-Keep B35/B31 backups and existing anti-vignette settings. Use Edge V2 Temporal and your usual Context/focus blend feather. Leave padding repair on. Check the yellow crop's outer sides/corners and the dark spill with fovea-only NR before SR, then compare the padding toggle. The crop must remain in the same place and the interior remain sharp.
-
-Compare feather0 versus your usual value to confirm the standard blend responds. Test normal motion and22.5-to90 reprojection without resizing/restarting solely for stress. Compare total compositor GPU time/VRAM with B35. If depth still switches, retain the ordinary UEVR log (existing depth age/reason/warp fields are relevant); do not infer that a passing synthetic test proves headset stability.
+B31 anti-vignette byte identity, generated overlay anchors, restored-feather source gates, depth continuity portable tests and inherited source/settings checks pass locally. Production WARP has standard-feather coverage added; current revised B36 Windows shader/backend execution is pending. B35's prior passing tests do not certify these new changes or solve the user-reported strip.

@@ -294,7 +294,7 @@ public:
         D3D12_HEAP_PROPERTIES gpu{};
         gpu.Type = D3D12_HEAP_TYPE_DEFAULT;
         gpu.CreationNodeMask = gpu.VisibleNodeMask = 1;
-        buffer.Width = 148 * 4 * sizeof(float);
+        buffer.Width = 146 * 4 * sizeof(float);
         buffer.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         if (FAILED(device->CreateCommittedResource(&gpu, D3D12_HEAP_FLAG_NONE, &buffer,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&seam_stats_))))
@@ -302,7 +302,7 @@ public:
         D3D12_SHADER_RESOURCE_VIEW_DESC match_srv{};
         match_srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
         match_srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        match_srv.Buffer.NumElements = 148;
+        match_srv.Buffer.NumElements = 146;
         match_srv.Buffer.StructureByteStride = 4 * sizeof(float);
         const auto descriptor_stride = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         auto match_descriptor = srv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -311,7 +311,7 @@ public:
         match_descriptor.ptr += descriptor_stride;
         D3D12_UNORDERED_ACCESS_VIEW_DESC match_uav{};
         match_uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-        match_uav.Buffer.NumElements = 148;
+        match_uav.Buffer.NumElements = 146;
         match_uav.Buffer.StructureByteStride = 4 * sizeof(float);
         device->CreateUnorderedAccessView(seam_stats_.Get(), nullptr, &match_uav, match_descriptor);
         D3D12_RANGE no_read{0, 0};
@@ -480,7 +480,7 @@ public:
         for (float v : constants.sharpen_eye) hash_float(v);
         hash_float(settings.edge_rate); hash_float(settings.edge_hysteresis);
         hash_float(settings.edge_reach_px); hash_float(settings.edge_fast_px); hash_float(settings.seam_strength);
-        hash_float(settings.seam_transition_px); hash_float(settings.feather_fraction); hash_word(settings.edge_padding_guard);
+        hash_float(settings.seam_transition_px); hash_float(settings.feather_fraction);
         hash_word(layout.shared_context);
         for (const auto& rect : constants.rectangles) for (auto v : rect) hash_word(v);
         hash_word(layout.eye_width); hash_word(layout.eye_height);
@@ -497,7 +497,6 @@ public:
         constants.focus_lift[3]=settings.focus_lift_onset;
         constants.focus_profile[0]=settings.focus_lift_power;
         constants.focus_profile[1]=settings.focus_lift_strength;
-        constants.focus_profile[2]=settings.edge_padding_guard ? 1.f : 0.f;
         std::memcpy(mapped_, &constants, sizeof(constants));
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format = source_format_;
@@ -530,7 +529,7 @@ public:
         // Strength zero is visually neutral; skip statistics work unless the
         // confidence diagnostic explicitly needs these values.
         const bool analyze = settings.seam_mode >= 2 &&
-            ((settings.seam_strength > 0.f || settings.seam_debug) || (settings.seam_mode>=3 && settings.edge_padding_guard)) &&
+            (settings.seam_strength > 0.f || settings.seam_debug) &&
             settings.diagnostic_view == 0 && !(depth && depth->show);
         const auto sample_state = analyze ? D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE
                                          : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;

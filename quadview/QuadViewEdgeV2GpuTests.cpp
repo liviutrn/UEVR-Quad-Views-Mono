@@ -101,28 +101,13 @@ static SourceSet make_sources(Gpu& gpu, const Layout& layout, std::array<std::ar
                         color={uint8_t(40.f+180.f*u),uint8_t(30.f+180.f*v),
                                uint8_t(40.f+80.f*u+80.f*v),255};
                 }
-                // B36 fixtures use source-local integer pixels, including dark
-                // allocation margins outside the logical native focus rectangle.
-                if (focus_gradient >= 3 && i >= 2) {
+                // B36: high-frequency focus content makes feather blending
+                // observable even when edge matching aligns the broad colors.
+                if (focus_gradient==8 && i>=2) {
                     const auto& r=layout.views[i];
-                    const bool inside=x>=r.x && x<r.x+r.width && y>=r.y && y<r.y+r.height;
-                    if (!inside) color={0,0,0,255};
-                    else {
-                        const uint32_t sx=x-r.x, sy=y-r.y;
-                        const uint32_t rim=focus_gradient==4 ? (i==2 ? 8u : 5u) : (i==2 ? 5u : 8u);
-                        if ((focus_gradient==3 || focus_gradient==4) && sx>=r.width-rim)
-                            color={0,0,0,255};
-                        if (focus_gradient==5) color={0,0,0,255};
-                        if (focus_gradient==6 && sx>=r.width/3 && sx<2*r.width/3 &&
-                            sy>=r.height/3 && sy<2*r.height/3) color={0,0,0,255};
-                        // The rim is black only on separated horizontal bands;
-                        // multiple detector probes see lit edge content.
-                        if (focus_gradient==7 && sx>=r.width-rim && (sy/16u)%2u==0u)
-                            color={0,0,0,255};
-                        if (focus_gradient==8)
-                            color=(sx/2u)%2u ? std::array<uint8_t,4>{210,55,170,255}
-                                                       : std::array<uint8_t,4>{45,160,70,255};
-                    }
+                    const uint32_t sx=x>=r.x ? x-r.x : 0u;
+                    color=(sx/2u)%2u ? std::array<uint8_t,4>{210,55,170,255}
+                                               : std::array<uint8_t,4>{45,160,70,255};
                 }
                 std::memcpy(mapped + size_t(y) * row_pitch + size_t(x) * 4, color.data(), 4);
             }
@@ -407,66 +392,13 @@ int main() try {
     const auto fresh=draw(gpu,immediate,dark,output.Get(),sharedLayout,instant,nullptr,9,7064);
     check(recovered.rgba==fresh.rgba,"Invalid depth failed to invalidate temporal history");
 
-    // B36: observed five-column rim and a wider eight-column variant in
-    // both eyes. Compare repaired sampling with independently generated clean
-    // sources; preserve all pixels safely inside the valid source rectangle.
     const std::array<Color,4> nrColors{{{65,80,105,255},{85,65,95,255},
                                       {145,105,165,255},{110,155,125,255}}};
     Layout compact=layout; check(apply_native_local(compact),"Create compact native layout");
-    for (const Layout* testLayout:std::array<const Layout*,2>{&layout,&compact}) {
-        const auto& l=*testLayout;
-        const auto clean=make_sources(gpu,l,nrColors,9);
-        Settings guarded=instant; guarded.edge_padding_guard=true; guarded.sharpen_strength=1.4f;
-        Settings unguarded=guarded; unguarded.edge_padding_guard=false;
-        const auto cleanImage=render(immediate,clean,l,guarded);
-        for (int pattern:{3,4}) {
-            const auto padded=make_sources(gpu,l,nrColors,pattern);
-            const auto repaired=render(immediate,padded,l,guarded);
-            const auto damaged=render(immediate,padded,l,unguarded);
-            check_border(repaired,l,3);
-            for (uint32_t eye=0;eye<2;++eye) {
-                // The actual right crop boundary is x=192, independent of
-                // source allocation size, rect offset, or guard width.
-                const uint32_t base=eye*l.eye_width;
-                for (uint32_t x:{190u,191u,192u,193u,200u})
-                    close_rgb(repaired.at(base+x,128),cleanImage.at(base+x,128),2,
-                              "Blank rim leaked into focus edge or outside context");
-                check(int(repaired.at(base+191,128)[0])-int(damaged.at(base+191,128)[0])>40,
-                      "Blank-rim fixture failed to exercise dark focus strip");
-                check(int(repaired.at(base+193,128)[0])-int(damaged.at(base+193,128)[0])>20,
-                      "Blank-rim fixture failed to exercise outside dark spill");
-                for (uint32_t x=80;x<175;++x)
-                    check(repaired.at(base+x,128)==damaged.at(base+x,128),
-                          "Padding guard moved an interior focus sample");
-            }
-            // Guard sampling remains useful even with edge correction zero.
-            Settings zero=guarded; zero.seam_strength=0.f;
-            const auto zeroImage=render(immediate,padded,l,zero);
-            for (uint32_t eye=0;eye<2;++eye)
-                close_rgb(zeroImage.at(eye*256+191,128),nrColors[eye+2],2,
-                          "Zero-strength draw skipped padding analysis");
-        }
-        for (int pattern:{5,6,7}) {
-            const auto scene=make_sources(gpu,l,nrColors,pattern);
-            const auto preserved=render(immediate,scene,l,guarded);
-            check(preserved.rgba==render(immediate,scene,l,unguarded).rgba,
-                  "Padding guard discarded black scene, interior object, or nonuniform edge");
-            if (pattern==5 || pattern==6) for (uint32_t eye=0;eye<2;++eye)
-                close_rgb(preserved.at(eye*256+128,128),{0,0,0,255},0,
-                          "Padding guard erased an interior black sample");
-        }
-        // A wholly black scene must stay black with either control position.
-        const auto black=make_sources(gpu,l,{{{0,0,0,255},{0,0,0,255},
-                                            {0,0,0,255},{0,0,0,255}}},5);
-        const auto blackImage=render(immediate,black,l,guarded);
-        for (size_t p=0;p<blackImage.rgba.size();p+=4)
-            check(blackImage.rgba[p]==0 && blackImage.rgba[p+1]==0 && blackImage.rgba[p+2]==0,
-                  "Padding guard brightened a wholly black scene");
-    }
     // Standard Context/focus feather must affect high-frequency edge blending
     // with V2's explicit transition set to zero, while the opaque center stays.
     const auto highFrequency=make_sources(gpu,compact,nrColors,8);
-    Settings hard=instant; hard.sharpen_strength=1.4f; hard.edge_padding_guard=true;
+    Settings hard=instant; hard.sharpen_strength=1.4f;
     Settings feathered=hard; feathered.feather_fraction=.3f;
     const auto hardImage=render(immediate,highFrequency,compact,hard);
     const auto featherImage=render(immediate,highFrequency,compact,feathered);
@@ -480,19 +412,6 @@ int main() try {
             check(hardImage.at(eye*256+x,128)==featherImage.at(eye*256+x,128),
                   "Standard feather altered opaque focus center");
     }
-    // A detected width change must discard stale broad temporal color, even
-    // though layout, settings, and scene generation all remain identical.
-    auto rimHistory=uevr::quadview::dx12::EdgeHistoryState::create(gpu.device.Get(),gpu.queue.Get());
-    check(bool(rimHistory),"Create rim-width history"); Compositor rimTemporal;
-    prepare(rimTemporal); rimTemporal.set_edge_history(rimHistory);
-    const auto rimFive=make_sources(gpu,compact,nrColors,3);
-    auto changedColors=nrColors; changedColors[2]={210,40,180,255}; changedColors[3]={35,195,95,255};
-    const auto rimEight=make_sources(gpu,compact,changedColors,4);
-    draw(gpu,rimTemporal,rimFive,output.Get(),compact,temporal,nullptr,21,10000);
-    const auto widthChanged=draw(gpu,rimTemporal,rimEight,output.Get(),compact,temporal,nullptr,21,10016);
-    const auto widthFresh=draw(gpu,immediate,rimEight,output.Get(),compact,instant,nullptr,21,10032);
-    check(widthChanged.rgba==widthFresh.rgba,"Guard-width change failed to reset temporal history");
-
     if (info) for (UINT64 i=0,n=info->GetNumStoredMessages();i<n;++i) {
         SIZE_T size{}; info->GetMessage(i,nullptr,&size); std::vector<uint8_t> storage(size);
         auto* message=reinterpret_cast<D3D12_MESSAGE*>(storage.data());
@@ -500,7 +419,7 @@ int main() try {
         if (message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)
             throw std::runtime_error(std::string("D3D12 Edge V2 validation: ")+message->pDescription);
     }
-    std::cout<<"Edge V2 WARP: signed RGB borders/corners, opaque focus, appearance, temporal slew, shared slots, resets, invalid depth, blank rims, compact margins and standard feather passed.\n";
+    std::cout<<"Edge V2 WARP: signed RGB borders/corners, opaque focus, appearance, temporal slew, shared slots, resets, invalid depth and standard feather passed.\n";
     return 0;
 } catch (const std::exception& e) {
     std::cerr<<"Edge V2 WARP FAILED: "<<e.what()<<'\n'; return 1;

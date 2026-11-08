@@ -5,9 +5,6 @@ Texture2D<float4> FocusRightSource : register(t3);
 Texture2D<float> PeripheryDepth : register(t4); // B7: DLSS depth input of the periphery render (reversed-Z)
 StructuredBuffer<float4> SeamMatch : register(t5); // per eye: global + eight boundary gains
 SamplerState LinearClamp : register(s0);
-#ifdef SEAM_COMPUTE
-groupshared float EdgeGuard[4]; // top, right, bottom, left; current eye group only
-#endif
 
 cbuffer QuadViewConstants : register(b0) {
     uint4 EyeAndAtlas;
@@ -179,27 +176,11 @@ float3 GlamEncode(float3 color) {
     return lerp(low, high, float3(color.r > 0.0031308, color.g > 0.0031308, color.b > 0.0031308));
 }
 
-// B36: clamp only detected blank padding, without stretching/recentering the
-// valid fovea. The crop and every interior UV remain exactly where they were.
-float2 FocusSampleUv(uint sourceIndex, float2 size, uint4 rect, float2 local) {
-    float4 guard=0.0;
-    [branch] if (Seam.x>2.5 && FocusProfile.z>0.5 && Options.y<0.5 && DepthOptions.y==0u) {
-#ifdef SEAM_COMPUTE
-        guard=float4(EdgeGuard[0],EdgeGuard[1],EdgeGuard[2],EdgeGuard[3]);
-#else
-        guard=SeamMatch[146u+sourceIndex-2u];
-#endif
-    }
-    const float2 lo=float2(rect.xy)+0.5+guard.wx;
-    const float2 hi=float2(rect.xy+rect.zw)-0.5-guard.yz;
-    return clamp(float2(rect.xy)+saturate(local)*float2(rect.zw),lo,hi)/size;
-}
-
 float3 ReadFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float2 pixelOffset, float2 sourceSize) {
     // Share crop/output normalization across the six sharpening taps.
     // AtlasUv still clamps taps to this eye's focus rectangle.
     const float2 local = focusUv + pixelOffset * tapScale;
-    return GlamDecode(ReadSource(sourceIndex, FocusSampleUv(sourceIndex, sourceSize, rect, local)).rgb);
+    return GlamDecode(ReadSource(sourceIndex, AtlasUvKnownSize(sourceSize, rect, local)).rgb);
 }
 
 float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float3 center,
@@ -294,7 +275,7 @@ float3 CorrectFocusColor(float3 color, float2 focusUv) {
 // anti-vignette-corrected reference. No changes to B31 CorrectFocusColor.
 float4 DisplayFocus(uint eye, uint4 rect, float2 focusUv, float4 crop) {
     const float2 size = SourceSize(2u + eye);
-    float4 f = ReadSource(2u + eye, FocusSampleUv(2u+eye, size, rect, focusUv));
+    float4 f = ReadSource(2u + eye, AtlasUvKnownSize(size, rect, focusUv));
     const float strength = eye == 0u ? SharpenEye.x : SharpenEye.y;
     const float change = eye == 0u ? SharpenEye.z : SharpenEye.w;
     [branch] if (strength > 0.0) {
@@ -479,7 +460,7 @@ float4 ScenePixel(VertexOut input) {
     const float2 focusUv = (eyeUv - crop.xy) / (crop.zw - crop.xy);
     // Share the same source extent across center and all six sharpening taps.
     const float2 focusSourceSize = SourceSize(2u + eye);
-    float4 focus = ReadSource(2u + eye, FocusSampleUv(2u+eye, focusSourceSize, focusRect, focusUv));
+    float4 focus = ReadSource(2u + eye, AtlasUvKnownSize(focusSourceSize, focusRect, focusUv));
     const float eyeStrength = eye == 0u ? SharpenEye.x : SharpenEye.y;
     const float eyeMaxChange = eye == 0u ? SharpenEye.z : SharpenEye.w;
     [branch] if (eyeStrength > 0.0) {
@@ -573,35 +554,6 @@ bool SeamPatch(uint eye, float2 center, float4 crop, out float3 focus, out float
     return valid;
 }
 
-// Only a uniformly zero rim across twelve separated probes qualifies.
-// Nearby real content must be lit at least at half the probes, and the rim
-// must end within sixteen source pixels (also <=1/8 of the focus dimension).
-// Uniform dark scenes / isolated black objects are left alone.
-float DetectBlankFocusRim(uint eye,uint side) {
-    const uint4 rect=eye==0u ? FocusLeft : FocusRight;
-    const float2 size=SourceSize(2u+eye);
-    const uint extent=(side&1u)==0u ? rect.w : rect.z;
-    const uint limit=min(16u,extent/8u);
-    uint width=0u, lit=0u;
-    bool ended=false;
-    [loop] for(uint inset=0u;inset<=limit && !ended;++inset) {
-        bool black=true; lit=0u;
-        [unroll] for(uint probe=0u;probe<12u;++probe) {
-            const float t=(float(probe)+0.5)/12.0;
-            float2 texel=float2(rect.xy)+0.5;
-            if(side==0u) texel+=float2(t*float(rect.z-1u),float(inset));
-            else if(side==1u) texel+=float2(float(rect.z-1u-inset),t*float(rect.w-1u));
-            else if(side==2u) texel+=float2(t*float(rect.z-1u),float(rect.w-1u-inset));
-            else texel+=float2(float(inset),t*float(rect.w-1u));
-            const float3 c=ReadSource(2u+eye,texel/size).rgb;
-            black=black && all(abs(c)<0.0001);
-            if(max(c.r,max(c.g,c.b))>0.01) ++lit;
-        }
-        if(black) width=inset+1u; else ended=true;
-    }
-    return FocusProfile.z>0.5 && ended && width>0u && width<=limit && lit>=6u ? float(width) : 0.0;
-}
-
 // One lane owns each knot, no inter-lane history dependencies. A shared UAV
 // barrier before/after dispatch orders updates in actual queue execution order.
 void UpdateEdgeV2(uint eye,uint lane) {
@@ -624,8 +576,7 @@ void UpdateEdgeV2(uint eye,uint lane) {
         const uint4 stamp=asuint(EdgeState[h+2u]);
         const uint elapsed=EdgeHistory.y-stamp.y;
         const float4 previousCrop=EdgeState[h+1u];
-        const uint guardKey=(uint(EdgeGuard[0]) | (uint(EdgeGuard[1])<<8u) | (uint(EdgeGuard[2])<<16u) | (uint(EdgeGuard[3])<<24u));
-        const bool reset=stamp.z!=guardKey || stamp.w!=0x35ed6e01u || stamp.x!=EdgeHistory.x || elapsed>250u ||
+        const bool reset=stamp.w!=0x35ed6e01u || stamp.x!=EdgeHistory.x || elapsed>250u ||
             any(abs(previousCrop-crop)*float4(EyeAndAtlas.xy,EyeAndAtlas.xy)>0.5);
         [branch] if (!reset && valid) {
             const float4 old=EdgeState[h];
@@ -638,7 +589,7 @@ void UpdateEdgeV2(uint eye,uint lane) {
         // Invalid geometry resets immediately; no stale-world/occlusion hold.
         EdgeState[h]=float4(stable,tracking ? 1.0 : 0.0);
         EdgeState[h+1u]=crop;
-        EdgeState[h+2u]=asfloat(uint4(EdgeHistory.x,EdgeHistory.y,guardKey,valid ? 0x35ed6e01u : 0u));
+        EdgeState[h+2u]=asfloat(uint4(EdgeHistory.x,EdgeHistory.y,0u,valid ? 0x35ed6e01u : 0u));
     }
     const uint outIndex=18u+eye*64u+lane*2u;
     SeamOutput[outIndex]=float4(valid ? target : 0.0,valid ? 1.0 : 0.0);
@@ -650,12 +601,7 @@ void UpdateEdgeV2(uint eye,uint lane) {
 // reductions for a global estimate instead of sampling the image again.
 void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
     const uint eye = group.x;
-    [branch] if (Seam.x > 2.5) {
-        if(lane<4u) EdgeGuard[lane]=FocusProfile.z>0.5 ? DetectBlankFocusRim(eye,lane) : 0.0;
-        GroupMemoryBarrierWithGroupSync();
-        if(lane==0u) SeamOutput[146u+eye]=float4(EdgeGuard[0],EdgeGuard[1],EdgeGuard[2],EdgeGuard[3]);
-        UpdateEdgeV2(eye,lane); return;
-    }
+    [branch] if (Seam.x > 2.5) { UpdateEdgeV2(eye,lane); return; }
     // Alignment usability is uniform across both dispatch groups. All lanes
     // return together, before any groupshared barrier or texture/depth probe.
     // Initialize every record, including after an earlier valid frame.
