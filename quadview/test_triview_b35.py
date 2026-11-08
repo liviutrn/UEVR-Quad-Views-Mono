@@ -36,8 +36,6 @@ if len(sys.argv)>1:
  assert cc.index('auto command_queue = std::exchange')<cc.index('command_queue->ExecuteCommandLists')<cc.index('command_queue->Signal')
  assert 'this->quadview_edge_history.reset()' in dx
  expected=h.replace('constants.sharpen[2] = .10f;', 'constants.sharpen[2] = settings.sharpen_max_change;').replace('constants.sharpen_eye[1] = settings.sharpen_strength;', 'constants.sharpen_eye[1] = settings.sharpen_link_right ? settings.sharpen_strength : settings.sharpen_right_strength;').replace('constants.sharpen_eye[2] = .10f;', 'constants.sharpen_eye[2] = settings.sharpen_max_change;').replace('constants.sharpen_eye[3] = .10f;', 'constants.sharpen_eye[3] = settings.sharpen_link_right ? settings.sharpen_max_change : settings.sharpen_right_max_change;')
- expected=expected.replace('constants.seam_local[1] = settings.seam_local_strength;',
- 'constants.seam_local[1] = settings.seam_local_strength;\n        constants.seam_local[2] = settings.legacy_inward_anchor_px;\n        constants.seam_local[3] = settings.legacy_inward_feather ? 1.f : 0.f;')
  assert (b/'vr/QuadViewD3D12.hpp').read_text()==expected
 # Independent arithmetic identities, not substitutes for GPU behavior.
 for target in (-100.,-2.,-.1,0.,.1,2.,100.):
