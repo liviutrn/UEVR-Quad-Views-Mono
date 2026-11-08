@@ -57,12 +57,24 @@ if len(sys.argv)>1:
     for field in ('ambient_radius_px','ambient_inside_px','ambient_time_ms'):
         assert 'requested.'+field+'=' in ui
     assert 'm_quadview_ambient_time->draw("Ambient temporal average (ms)")' in ui
-    # B8 legitimately generates extra independent per-eye sharpen settings.
-    # B38 verifies its exact source transformation; here verify new V3
-    # runtime fields all survive that generator.
     generated=(b/'vr/QuadViewSettings.hpp').read_text()
-    for field in ('ambient_radius_px','ambient_inside_px','ambient_time_ms'):
-        assert ('Settings::'+field) in generated
-        assert ('a.'+field+'==b.'+field) in generated
-    assert 'unsigned_integer(requested.seam_mode,0u,5u' in generated
+    # The generated header intentionally adds B8 per-eye sharpen fields.
+    # Verify the NEW settings' source-to-backend parity, not whole-file identity.
+    for marker in (
+        'bool legacy_inward_feather{true}',
+        'float legacy_inward_anchor_px{12.f}',
+        'float ambient_radius_px{48.f}',
+        'float ambient_inside_px{32.f}',
+        'uint32_t ambient_time_ms{350u}',
+        'out.legacy_inward_feather=requested.legacy_inward_feather;',
+        'scalar(requested.legacy_inward_anchor_px,2.f,64.f',
+        'scalar(requested.ambient_radius_px,8.f,128.f',
+        'scalar(requested.ambient_inside_px,8.f,96.f',
+        'unsigned_integer(requested.ambient_time_ms,50u,1500u',
+        'unsigned_integer(requested.seam_mode,0u,5u',
+        'a.ambient_radius_px==b.ambient_radius_px',
+        'a.ambient_inside_px==b.ambient_inside_px',
+        'a.ambient_time_ms==b.ambient_time_ms',
+    ):
+        assert marker in generated and marker in settings, marker
 print('B39 static source / UI: 15 area samples, no live pixel mirroring, temporal averaging, B38 inward and B37 warp/queue preserved; WARP still required')
