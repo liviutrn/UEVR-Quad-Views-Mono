@@ -277,7 +277,41 @@ float3 SeamSideGain(uint baseIndex, uint side, float along, float3 fallback) {
 }
 
 float4 MatchContext(uint eye, float2 uv, float4 crop, float4 color) {
-    [branch] if (Seam.x > 0.5) {
+    // B34: bounded, stateless per-eye boundary color model. This cannot
+    // change the original stereo fovea or distant periphery.
+    [branch] if (Seam.x > 2.5) {
+        const float2 outside = max(max(crop.xy - uv, uv - crop.zw), 0.0) * float2(EyeAndAtlas.xy);
+        const float distanceSq = dot(outside, outside);
+        [branch] if ((Seam.y > 0.0 || SeamOptions.z > 0.5) && distanceSq < SeamLocal.x * SeamLocal.x) {
+            const uint baseIndex = eye * 9u;
+            const float4 estimate = SeamMatch[baseIndex];
+            // Model RGB: luminance gain, red chroma residual, blue chroma residual.
+            const float3 neutral = float3(1.0, 0.0, 0.0);
+            float3 model = lerp(neutral, estimate.rgb, estimate.a);
+            const float2 along = saturate((uv - crop.xy) / (crop.zw - crop.xy));
+            const float4 d = abs(float4(uv.y - crop.y, uv.x - crop.z, uv.y - crop.w, uv.x - crop.x)) *
+                             float4(EyeAndAtlas.y, EyeAndAtlas.x, EyeAndAtlas.y, EyeAndAtlas.x);
+            const float4 weights = 1.0 / (1.0 + d * d);
+            const float3 local = (
+                SeamSideGain(baseIndex, 0u, along.x, model) * weights.x +
+                SeamSideGain(baseIndex, 1u, along.y, model) * weights.y +
+                SeamSideGain(baseIndex, 2u, along.x, model) * weights.z +
+                SeamSideGain(baseIndex, 3u, along.y, model) * weights.w) /
+                dot(weights, float4(1.0, 1.0, 1.0, 1.0));
+            model = lerp(model, local, SeamLocal.y);
+            const float t = saturate(sqrt(max(distanceSq, 0.0)) / max(SeamLocal.x, 1.0));
+            const float fade = 1.0 - t * t * (3.0 - 2.0 * t);
+            const float amount = Seam.y * fade;
+            const float gain = lerp(1.0, model.r, amount);
+            const float redBias = model.g * amount;
+            const float blueBias = model.b * amount;
+            const float greenBias = -(0.2126 * redBias + 0.0722 * blueBias) / 0.7152;
+            const float darkGuard = saturate(dot(color.rgb, GlamLuma) * 4.0);
+            color.rgb = max(color.rgb * gain + float3(redBias, greenBias, blueBias) * darkGuard, 0.0);
+            [branch] if (SeamOptions.z > 0.5)
+                color.rgb = lerp(float3(0.7, 0.05, 0.05), float3(0.05, 0.7, 0.05), estimate.a);
+        }
+    } else if (Seam.x > 0.5) {
         float3 gain = 1.0;
         float confidence = 0.0;
         [branch] if (Seam.x > 1.5 && (Seam.y > 0.0 || SeamOptions.z > 0.5)) {
@@ -490,7 +524,17 @@ void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
                                      sc.g > count * 0.03 ? sf.g / max(sc.g, 1.0e-5) : lumGain,
                                      sc.b > count * 0.03 ? sf.b / max(sc.b, 1.0e-5) : lumGain);
         const float3 gain = clamp(lerp(lumGain.xxx, rgbGain, SeamOptions.x), 1.0 - Seam.z, 1.0 + Seam.z);
-        SeamOutput[eye * 9u + 1u + lane / 16u] = float4(count > 4.0 ? gain : float3(1.0, 1.0, 1.0), saturate((count - 4.0) / 8.0));
+        const float boundedLum = clamp(lumGain, 1.0 - Seam.z, 1.0 + Seam.z);
+        const float3 chromaResidual = (sf - sc * boundedLum) / max(count, 1.0);
+        const float residualMagnitude = max(abs(chromaResidual.r), max(abs(chromaResidual.g), abs(chromaResidual.b)));
+        const float agreement = 1.0 - smoothstep(0.15, 0.35, residualMagnitude);
+        const float3 boundaryModel = float3(boundedLum,
+            clamp(chromaResidual.r, -0.18, 0.18) * SeamOptions.x,
+            clamp(chromaResidual.b, -0.18, 0.18) * SeamOptions.x);
+        const float confidence = saturate((count - 4.0) / 8.0) * (Seam.x > 2.5 ? agreement : 1.0);
+        SeamOutput[eye * 9u + 1u + lane / 16u] =
+            float4(count > 4.0 ? (Seam.x > 2.5 ? boundaryModel : gain) :
+                   (Seam.x > 2.5 ? float3(1.0, 0.0, 0.0) : float3(1.0, 1.0, 1.0)), confidence);
     }
     GroupMemoryBarrierWithGroupSync();
     if (lane < 8u) {
@@ -513,8 +557,17 @@ void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
                                      sc.g > count * 0.03 ? sf.g / max(sc.g, 1.0e-5) : lumGain,
                                      sc.b > count * 0.03 ? sf.b / max(sc.b, 1.0e-5) : lumGain);
         const float3 gain = clamp(lerp(lumGain.xxx, rgbGain, SeamOptions.x), 1.0 - Seam.z, 1.0 + Seam.z);
-        const float confidence = saturate((count - 8.0) / 40.0);
-        SeamOutput[eye * 9u] = float4(count > 8.0 ? gain : float3(1.0, 1.0, 1.0), confidence);
+        const float boundedLum = clamp(lumGain, 1.0 - Seam.z, 1.0 + Seam.z);
+        const float3 chromaResidual = (sf - sc * boundedLum) / max(count, 1.0);
+        const float residualMagnitude = max(abs(chromaResidual.r), max(abs(chromaResidual.g), abs(chromaResidual.b)));
+        const float agreement = 1.0 - smoothstep(0.15, 0.35, residualMagnitude);
+        const float3 boundaryModel = float3(boundedLum,
+            clamp(chromaResidual.r, -0.18, 0.18) * SeamOptions.x,
+            clamp(chromaResidual.b, -0.18, 0.18) * SeamOptions.x);
+        const float confidence = saturate((count - 8.0) / 40.0) * (Seam.x > 2.5 ? agreement : 1.0);
+        SeamOutput[eye * 9u] =
+            float4(count > 8.0 ? (Seam.x > 2.5 ? boundaryModel : gain) :
+                   (Seam.x > 2.5 ? float3(1.0, 0.0, 0.0) : float3(1.0, 1.0, 1.0)), confidence);
     }
 }
 #endif

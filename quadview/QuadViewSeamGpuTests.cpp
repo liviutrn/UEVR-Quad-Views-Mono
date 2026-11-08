@@ -201,6 +201,32 @@ int main() try {
         check(corrected.at(x_focus, eye_h / 2)[0] == 102, "Seam correction changed opaque focus pixels");
     }
 
+    // B34: automatic boundary RGB correction, no cross-frame state.
+    Settings boundary=off; boundary.seam_mode=3; boundary.seam_strength=1.f;
+    boundary.seam_max_gain=.5f; boundary.seam_color_strength=1.f;
+    boundary.seam_local_strength=.9f; boundary.seam_radius_px=16.f;
+    boundary.seam_transition_px=6.f;
+    const auto boundary_px=draw(gpu,compositor,base,output.Get(),layout,boundary);
+    check(boundary_px.at(15,32)[0]>baseline.at(15,32)[0]+10,
+          "B34 failed to brighten context close to the foveal boundary");
+    check(boundary_px.at(0,32)==baseline.at(0,32),
+          "B34 changed context outside correction band");
+    check(boundary_px.at(32,32)==baseline.at(32,32),
+          "B34 altered original opaque foveal pixels");
+    check(draw(gpu,compositor,base,output.Get(),layout,boundary).rgba==boundary_px.rgba,
+          "B34 output changed between identical input frames");
+    Settings boundary_off=boundary; boundary_off.seam_strength=0.f;
+    const auto boundary_neutral=draw(gpu,compositor,base,output.Get(),layout,boundary_off);
+    check(boundary_neutral.at(4,32)==baseline.at(4,32),
+          "B34 zero-strength periphery differs from B31 seam-off");
+    const auto chromatic=make_sources(gpu, layout, {{{77,77,77,255},{77,77,77,255},
+                                                     {104,92,83,255},{104,92,83,255}}});
+    const auto chromatic_px=draw(gpu,compositor,chromatic,output.Get(),layout,boundary);
+    check(chromatic_px.at(15,32)[0]>chromatic_px.at(15,32)[2],
+          "B34 failed to correct warm-color mismatch");
+    check(chromatic_px.at(32,32)[0]==104 && chromatic_px.at(32,32)[2]==83,
+          "B34 color correction modified real stereo fovea core");
+
     Settings lifted = off; lifted.focus_lift_enabled = true; lifted.focus_brightness = 1.05f;
     const auto lifted_off = draw(gpu, compositor, base, output.Get(), layout, lifted);
     Settings disabled_lift = lifted; disabled_lift.focus_lift_enabled = false;

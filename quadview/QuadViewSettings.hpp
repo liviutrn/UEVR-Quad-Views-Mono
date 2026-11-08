@@ -23,7 +23,7 @@ struct Settings {
     float focus_corner_gain{focus_lift::default_corner_gain};
     float focus_lift_onset{focus_lift::default_onset};
     float focus_lift_power{focus_lift::default_power};
-    uint32_t seam_mode{0}; // Off=0, Manual=1, Adaptive=2
+    uint32_t seam_mode{0}; // Off=0, Manual=1, Adaptive B31=2, Boundary B34=3
     float seam_strength{.85f};
     float seam_max_gain{.20f};
     float seam_brightness_ev{};
@@ -150,7 +150,7 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.seam_local_strength,0.f,1.f,reject_seam,&Settings::seam_local_strength);
     scalar(requested.seam_radius_px,16.f,512.f,reject_seam,&Settings::seam_radius_px);
     scalar(requested.seam_transition_px,0.f,64.f,reject_seam,&Settings::seam_transition_px);
-    unsigned_integer(requested.seam_mode,0u,2u,reject_seam,&Settings::seam_mode);
+    unsigned_integer(requested.seam_mode,0u,3u,reject_seam,&Settings::seam_mode);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
     scalar(requested.gaze_offset_v,-.25f,.25f,reject_offset_v,&Settings::gaze_offset_v);

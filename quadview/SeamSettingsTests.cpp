@@ -90,6 +90,11 @@ int main() {
     assert(!same_settings(defaults, changed));
     changed = defaults; changed.seam_transition_px = 1.f;
     assert(!same_settings(defaults, changed));
+    changed = defaults; changed.seam_mode = 3;
+    assert(!same_settings(defaults, changed));
+    auto boundary = defaults; boundary.seam_mode = 3;
+    const auto accepted = reconcile_settings(boundary, defaults, 1810, 1440);
+    assert(accepted.settings.seam_mode == 3);
     changed = defaults; changed.seam_debug = true;
     assert(!same_settings(defaults, changed));
 }

@@ -465,7 +465,7 @@ public:
         destination_ = destination;
         // Strength zero is visually neutral; skip statistics work unless the
         // confidence diagnostic explicitly needs these values.
-        const bool analyze = settings.seam_mode == 2 &&
+        const bool analyze = settings.seam_mode >= 2 &&
             (settings.seam_strength > 0.f || settings.seam_debug) &&
             settings.diagnostic_view == 0 && !(depth && depth->show);
         const auto sample_state = analyze ? D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE
