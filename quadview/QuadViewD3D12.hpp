@@ -54,13 +54,43 @@ struct alignas(16) ShaderConstants {
     float seam_options[4]{};
     float seam_local[4]{};
     float focus_lift[4]{};
+    float edge_v2[4]{};
+    uint32_t edge_history[4]{};
     float focus_profile[4]{};
 };
-static_assert(sizeof(ShaderConstants) == 480);
+static_assert(sizeof(ShaderConstants) == 512);
 static_assert(sizeof(ShaderConstants) <= 512); // slot-local, CB-aligned allocation
 
 // B7: optional periphery depth for reprojection. texture is R32_TYPELESS and
 // stays in D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE between uses.
+
+// B35: one tiny state object per XR session. Every compositor retains it,
+// including while in flight. It is touched only by command lists explicitly
+// pinned to queue. State remains UAV; pixels consume a slot-local copy.
+struct EdgeHistoryState {
+    ComPtr<ID3D12Device> device;
+    ComPtr<ID3D12CommandQueue> queue;
+    ComPtr<ID3D12Resource> buffer;
+    static std::shared_ptr<EdgeHistoryState> create(ID3D12Device* device, ID3D12CommandQueue* queue) {
+        if (!device || !queue) return {};
+        auto state=std::make_shared<EdgeHistoryState>();
+        state->device=device; state->queue=queue;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type=D3D12_HEAP_TYPE_DEFAULT;
+        heap.CreationNodeMask=heap.VisibleNodeMask=1;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width=64u*3u*4u*sizeof(float);
+        desc.Height=desc.DepthOrArraySize=desc.MipLevels=1;
+        desc.SampleDesc.Count=1; desc.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        // Committed resources are zero initialized (no CREATE_NOT_ZEROED).
+        if (FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,nullptr,IID_PPV_ARGS(&state->buffer)))) return {};
+        state->buffer->SetName(L"TriView B35 queue-owned edge history");
+        return state;
+    }
+};
 
 struct SnapshotItem {
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
@@ -141,6 +171,9 @@ public:
     const char* error() const { return error_; }
     bool prepared() const { return device_ && root_ && pipeline_ && seam_pipeline_ && seam_stats_ && mapped_; }
     bool commands_recorded() const { return recorded_; }
+    void set_edge_history(std::shared_ptr<EdgeHistoryState> state) { if (!owner_) edge_history_=std::move(state); }
+    ID3D12CommandQueue* edge_submission_queue() const { return edge_history_ ? edge_history_->queue.Get() : nullptr; }
+
 
     bool prewarm(ID3D12Device* device, DXGI_FORMAT source_srv_format, DXGI_FORMAT output_format,
                  UINT64 timestamp_frequency = 0) {
@@ -174,7 +207,7 @@ public:
         D3D12_DESCRIPTOR_RANGE seam_uav{};
         seam_uav.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
         seam_uav.NumDescriptors = 1;
-        D3D12_ROOT_PARAMETER parameters[3]{};
+        D3D12_ROOT_PARAMETER parameters[4]{};
         parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -185,6 +218,9 @@ public:
         parameters[2].DescriptorTable.NumDescriptorRanges = 1;
         parameters[2].DescriptorTable.pDescriptorRanges = &seam_uav;
         parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        parameters[3].ParameterType=D3D12_ROOT_PARAMETER_TYPE_UAV;
+        parameters[3].Descriptor.ShaderRegister=1;
+        parameters[3].ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;
         D3D12_STATIC_SAMPLER_DESC sampler{};
         sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
         sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -193,7 +229,7 @@ public:
         sampler.MaxLOD = D3D12_FLOAT32_MAX;
         sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         D3D12_ROOT_SIGNATURE_DESC signature{};
-        signature.NumParameters = 3;
+        signature.NumParameters = 4;
         signature.pParameters = parameters;
         signature.NumStaticSamplers = 1;
         signature.pStaticSamplers = &sampler;
@@ -258,7 +294,7 @@ public:
         D3D12_HEAP_PROPERTIES gpu{};
         gpu.Type = D3D12_HEAP_TYPE_DEFAULT;
         gpu.CreationNodeMask = gpu.VisibleNodeMask = 1;
-        buffer.Width = 18 * 4 * sizeof(float);
+        buffer.Width = 146 * 4 * sizeof(float);
         buffer.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         if (FAILED(device->CreateCommittedResource(&gpu, D3D12_HEAP_FLAG_NONE, &buffer,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&seam_stats_))))
@@ -266,7 +302,7 @@ public:
         D3D12_SHADER_RESOURCE_VIEW_DESC match_srv{};
         match_srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
         match_srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        match_srv.Buffer.NumElements = 18;
+        match_srv.Buffer.NumElements = 146;
         match_srv.Buffer.StructureByteStride = 4 * sizeof(float);
         const auto descriptor_stride = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         auto match_descriptor = srv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -275,7 +311,7 @@ public:
         match_descriptor.ptr += descriptor_stride;
         D3D12_UNORDERED_ACCESS_VIEW_DESC match_uav{};
         match_uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-        match_uav.Buffer.NumElements = 18;
+        match_uav.Buffer.NumElements = 146;
         match_uav.Buffer.StructureByteStride = 4 * sizeof(float);
         device->CreateUnorderedAccessView(seam_stats_.Get(), nullptr, &match_uav, match_descriptor);
         D3D12_RANGE no_read{0, 0};
@@ -320,7 +356,7 @@ public:
                 const Layout& layout, const Settings& settings,
                 D3D12_RESOURCE_STATES source_state, D3D12_RESOURCE_STATES destination_state,
                 std::shared_ptr<const void> owner, UINT64 timestamp_frequency = 0,
-                const DepthInput* depth = nullptr) {
+                const DepthInput* depth = nullptr, uint64_t scene_generation = 0, uint32_t history_time_ms = 0) {
         recorded_ = false;
         if (!prepared() || !commands || !destination || !sources[0] || !sources[1] || !sources[2] || !sources[3] || !owner)
             return fail("Unprepared compositor or invalid source/destination ownership");
@@ -426,6 +462,33 @@ public:
         constants.seam_options[2] = settings.seam_debug ? 1.f : 0.f;
         constants.seam_options[3] = depth && depth->reproject && layout.shared_context &&
             !constants.depth_options[0] ? 0.f : 1.f;
+        constants.edge_v2[0]=settings.edge_reach_px;
+        constants.edge_v2[1]=settings.edge_fast_px;
+        constants.edge_v2[2]=settings.edge_rate;
+        constants.edge_v2[3]=settings.edge_hysteresis;
+        // Epoch includes appearance/settings and source geometry, never gaze or
+        // elapsed time. Crops are checked against previous GPU state separately.
+        uint32_t epoch=2166136261u;
+        const auto hash_word=[&](uint32_t word) { epoch=(epoch^word)*16777619u; };
+        hash_word(static_cast<uint32_t>(scene_generation));
+        hash_word(static_cast<uint32_t>(scene_generation>>32u));
+        const auto hash_float=[&](float value) { uint32_t bits; std::memcpy(&bits,&value,sizeof(bits)); hash_word(bits); };
+        hash_word(settings.seam_mode);
+        hash_word(settings.focus_lift_enabled);
+        hash_float(settings.focus_brightness); hash_float(settings.focus_lift_strength);
+        hash_float(settings.focus_corner_gain); hash_float(settings.focus_lift_onset); hash_float(settings.focus_lift_power);
+        for (float v : constants.sharpen_eye) hash_float(v);
+        hash_float(settings.edge_rate); hash_float(settings.edge_hysteresis);
+        hash_float(settings.edge_reach_px); hash_float(settings.edge_fast_px); hash_float(settings.seam_strength);
+        hash_float(settings.seam_transition_px);
+        hash_word(layout.shared_context);
+        for (const auto& rect : constants.rectangles) for (auto v : rect) hash_word(v);
+        hash_word(layout.eye_width); hash_word(layout.eye_height);
+        for (auto* resource : sources) { const auto desc=resource->GetDesc(); hash_word(static_cast<uint32_t>(desc.Width)); hash_word(desc.Height); }
+        constants.edge_history[0]=epoch;
+        constants.edge_history[1]=history_time_ms ? history_time_ms : static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+        constants.edge_history[2]=settings.seam_mode==4 && edge_history_ && edge_history_->device.Get()==device_.Get() ? 1u : 0u;
         constants.seam_local[0] = settings.seam_radius_px;
         constants.seam_local[1] = settings.seam_local_strength;
         constants.focus_lift[0]=settings.focus_lift_enabled ? 1.f : 0.f;
@@ -465,7 +528,7 @@ public:
         destination_ = destination;
         // Strength zero is visually neutral; skip statistics work unless the
         // confidence diagnostic explicitly needs these values.
-        const bool analyze = settings.seam_mode == 2 &&
+        const bool analyze = settings.seam_mode >= 2 &&
             (settings.seam_strength > 0.f || settings.seam_debug) &&
             settings.diagnostic_view == 0 && !(depth && depth->show);
         const auto sample_state = analyze ? D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE
@@ -493,7 +556,17 @@ public:
             auto uav = srv_heap_->GetGPUDescriptorHandleForHeapStart();
             uav.ptr += UINT64(6) * stride;
             commands->SetComputeRootDescriptorTable(2, uav);
+            auto* history=constants.edge_history[2] ? edge_history_->buffer.Get() : seam_stats_.Get();
+            commands->SetComputeRootUnorderedAccessView(3,history->GetGPUVirtualAddress());
+            if (constants.edge_history[2]) {
+                D3D12_RESOURCE_BARRIER order{}; order.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                order.UAV.pResource=history; commands->ResourceBarrier(1,&order);
+            }
             commands->Dispatch(2, 1, 1);
+            if (constants.edge_history[2]) {
+                D3D12_RESOURCE_BARRIER order{}; order.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                order.UAV.pResource=history; commands->ResourceBarrier(1,&order);
+            }
             // The transition orders UAV writes before the pixel SRV read.
             barrier(commands, seam_stats_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
@@ -714,6 +787,7 @@ private:
     ComPtr<ID3D12DescriptorHeap> srv_heap_, rtv_heap_;
     ComPtr<ID3D12Resource> constants_, destination_, timestamps_;
     ComPtr<ID3D12Resource> seam_stats_;
+    std::shared_ptr<EdgeHistoryState> edge_history_; // retained through slot retirement and session teardown
     std::array<ComPtr<ID3D12Resource>, 4> sources_;
     ComPtr<ID3D12QueryHeap> queries_;
     void* mapped_{};

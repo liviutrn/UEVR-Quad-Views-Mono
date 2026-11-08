@@ -31,6 +31,10 @@ struct Settings {
     float seam_local_strength{.5f};
     float seam_radius_px{120.f};
     float seam_transition_px{};
+    float edge_reach_px{240.f};
+    float edge_fast_px{32.f};
+    float edge_rate{.15f}; // sample-domain RGB units per second, no amplitude ceiling
+    float edge_hysteresis{.004f};
     bool seam_debug{};
     bool gpu_timing{};
     bool debug_border{};
@@ -143,6 +147,10 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.focus_corner_gain,1.f,1.5f,reject_focus_lift,&Settings::focus_corner_gain);
     scalar(requested.focus_lift_onset,0.f,.9f,reject_focus_lift,&Settings::focus_lift_onset);
     scalar(requested.focus_lift_power,.5f,3.f,reject_focus_lift,&Settings::focus_lift_power);
+    scalar(requested.edge_reach_px,16.f,1024.f,reject_seam,&Settings::edge_reach_px);
+    scalar(requested.edge_fast_px,1.f,256.f,reject_seam,&Settings::edge_fast_px);
+    scalar(requested.edge_rate,.001f,4.f,reject_seam,&Settings::edge_rate);
+    scalar(requested.edge_hysteresis,0.f,.05f,reject_seam,&Settings::edge_hysteresis);
     scalar(requested.seam_strength,0.f,1.f,reject_seam,&Settings::seam_strength);
     scalar(requested.seam_max_gain,.01f,.5f,reject_seam,&Settings::seam_max_gain);
     scalar(requested.seam_brightness_ev,-.5f,.5f,reject_seam,&Settings::seam_brightness_ev);
@@ -150,7 +158,7 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.seam_local_strength,0.f,1.f,reject_seam,&Settings::seam_local_strength);
     scalar(requested.seam_radius_px,16.f,512.f,reject_seam,&Settings::seam_radius_px);
     scalar(requested.seam_transition_px,0.f,64.f,reject_seam,&Settings::seam_transition_px);
-    unsigned_integer(requested.seam_mode,0u,2u,reject_seam,&Settings::seam_mode);
+    unsigned_integer(requested.seam_mode,0u,4u,reject_seam,&Settings::seam_mode);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
     scalar(requested.gaze_offset_v,-.25f,.25f,reject_offset_v,&Settings::gaze_offset_v);
@@ -184,6 +192,8 @@ inline bool same_settings(const Settings& a, const Settings& b) {
         a.focus_lift_enabled==b.focus_lift_enabled && a.focus_brightness==b.focus_brightness &&
         a.focus_lift_strength==b.focus_lift_strength && a.focus_corner_gain==b.focus_corner_gain &&
         a.focus_lift_onset==b.focus_lift_onset && a.focus_lift_power==b.focus_lift_power &&
+        a.edge_reach_px==b.edge_reach_px && a.edge_fast_px==b.edge_fast_px &&
+        a.edge_rate==b.edge_rate && a.edge_hysteresis==b.edge_hysteresis &&
         a.seam_mode==b.seam_mode && a.seam_strength==b.seam_strength &&
         a.seam_max_gain==b.seam_max_gain && a.seam_brightness_ev==b.seam_brightness_ev &&
         a.seam_color_strength==b.seam_color_strength && a.seam_local_strength==b.seam_local_strength &&

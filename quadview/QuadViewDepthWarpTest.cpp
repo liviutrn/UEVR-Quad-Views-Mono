@@ -76,9 +76,11 @@ struct alignas(16) Constants {
     float seam_options[4]{};
     float seam_local[4]{};
     float focus_lift[4]{};
+    float edge_v2[4]{};
+    uint32_t edge_history[4]{};
     float focus_profile[4]{};
 };
-static_assert(sizeof(Constants) == 480);
+static_assert(sizeof(Constants) == 512);
 
 int main(int argc, char** argv) try {
     if (argc != 2) throw std::runtime_error("Pass the QuadViewComposite.hlsl path");

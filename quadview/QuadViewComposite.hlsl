@@ -31,6 +31,8 @@ cbuffer QuadViewConstants : register(b0) {
     float4 SeamOptions; // color strength, reserved rendered-edge pixels, confidence debug, alignment usable
     float4 SeamLocal;   // outward residual radius in output pixels, local strength, reserved
     float4 FocusLift;    // enabled, overall brightness, corner gain minus one, onset r^2
+    float4 EdgeV2; // broad reach, fast reach, RGB slew/sec, hysteresis inner threshold
+    uint4 EdgeHistory; // generation/settings epoch, timestamp ms, shared history enabled, reserved
     float4 FocusProfile; // exponent, anti-vignette strength, reserved
 };
 
@@ -269,6 +271,109 @@ float3 CorrectFocusColor(float3 color, float2 focusUv) {
 // Appearance changes affect only sampled peripheral colors. Estimate and apply
 // in the same source-sample domain; preserve B28's final output encoding. This
 // costs one multiply per channel, without per-output-pixel gamma conversions.
+// B35: both analysis and display use this exact post-NR/SR, sharpened,
+// anti-vignette-corrected reference. No changes to B31 CorrectFocusColor.
+float4 DisplayFocus(uint eye, uint4 rect, float2 focusUv, float4 crop) {
+    const float2 size = SourceSize(2u + eye);
+    float4 f = ReadSource(2u + eye, AtlasUvKnownSize(size, rect, focusUv));
+    const float strength = eye == 0u ? SharpenEye.x : SharpenEye.y;
+    const float change = eye == 0u ? SharpenEye.z : SharpenEye.w;
+    [branch] if (strength > 0.0) {
+        const float2 taps = 1.0 / (float2(EyeAndAtlas.xy) * (crop.zw - crop.xy));
+        f.rgb = GlamSharpenFocus(2u + eye, rect, focusUv, taps, f.rgb, strength, change, size);
+    }
+    f.rgb = CorrectFocusColor(f.rgb, focusUv);
+    return f;
+}
+
+// Project onto the closest *displayed* focus border, including noninteger
+// crops. Pixel centers are used, not a context-footprint-dependent inset.
+float2 EdgeAnchor(float2 uv, float4 crop, out uint side, out float along) {
+    const float2 size = float2(EyeAndAtlas.xy);
+    const float2 lo = (ceil(crop.xy * size - 0.5) + 0.5) / size;
+    const float2 hi = (ceil(crop.zw * size - 0.5) - 0.5) / size;
+    float2 p = clamp(uv, lo, hi);
+    const float4 d = abs(float4(uv.y-lo.y, uv.x-hi.x, uv.y-hi.y, uv.x-lo.x)) * size.yxyx;
+    side = 0u;
+    float best = d.x;
+    if (d.y < best) { side=1u; best=d.y; }
+    if (d.z < best) { side=2u; best=d.z; }
+    if (d.w < best) side=3u;
+    // Outside the rectangle, clamping already gives the nearest border.
+    // Infinite-line distances are only valid for points inside the crop.
+    if (uv.y < lo.y) side=0u;
+    else if (uv.y > hi.y) side=2u;
+    else if (uv.x > hi.x) side=1u;
+    else if (uv.x < lo.x) side=3u;
+    if (side == 0u) p.y=lo.y;
+    else if (side == 1u) p.x=hi.x;
+    else if (side == 2u) p.y=hi.y;
+    else p.x=lo.x;
+    const float2 a = saturate((p-lo)/max(hi-lo,1.0/size));
+    along = side == 0u ? a.x : side == 1u ? a.y : side == 2u ? 1.0-a.x : 1.0-a.y;
+    return p;
+}
+
+// Low-frequency RGB residual from corresponding positions on the displayed
+// border. Tangential taps do not move the analysis inward from the seam.
+// Validity is geometric/finite; large valid color differences are never capped.
+bool EdgeDifference(uint eye, float2 anchor, uint side, float4 crop, out float3 delta) {
+    const uint4 fr = eye == 0u ? FocusLeft : FocusRight;
+    const uint4 cr = eye == 0u ? ContextLeft : ContextRight;
+    const uint cs = eye == 0u ? ContextSource.x : ContextSource.y;
+    const float2 size = float2(EyeAndAtlas.xy);
+    const float2 lo = (ceil(crop.xy*size-0.5)+0.5)/size;
+    const float2 hi = (ceil(crop.zw*size-0.5)-0.5)/size;
+    float2 tangent = (side & 1u) == 0u ? float2(2.0/size.x,0.0) : float2(0.0,2.0/size.y);
+    // Both adjoining sides share one corner reference, without tangent bias.
+    if ((anchor.x <= lo.x || anchor.x >= hi.x) && (anchor.y <= lo.y || anchor.y >= hi.y)) tangent=0.0;
+    delta=0.0;
+    bool valid = SeamOptions.w > 0.5;
+    [unroll] for (int i=-1;i<=1;++i) {
+        const float2 p = clamp(anchor+float(i)*tangent,lo,hi);
+        float fill=0.0;
+        const float2 cu=WarpContextUv(eye,ContextUv(eye,p),fill);
+        const float2 fu=(p-crop.xy)/(crop.zw-crop.xy);
+        const float3 f=DisplayFocus(eye,fr,fu,crop).rgb;
+        const float3 c=ReadSource(cs,AtlasUv(cs,cr,cu)).rgb;
+        valid=valid && fill==0.0 && all(cu>=0.0) && all(cu<=1.0) && all(isfinite(f)) && all(isfinite(c));
+        delta+=(f-c)*(i==0 ? 0.5 : 0.25);
+    }
+    return valid;
+}
+
+float EdgeFade(float distance, float reach) {
+    const float t=saturate(distance/max(reach,1.0));
+    return 1.0-t*t*(3.0-2.0*t);
+}
+
+float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
+    [branch] if (Seam.y <= 0.0 && SeamOptions.z < 0.5) return color;
+    // Unit plateau includes the first exterior pixel centers for fractional
+    // crops too: do not attenuate correction between the two displayed sides.
+    const float2 outside=max(max(max(crop.xy-uv,uv-crop.zw),0.0)*float2(EyeAndAtlas.xy)-1.0,0.0);
+    const float distance=length(outside);
+    [branch] if (distance >= EdgeV2.x || SeamOptions.w <= 0.5) return color;
+    uint side; float along;
+    const float2 anchor=EdgeAnchor(uv,crop,side,along);
+    const float k=float(side*8u)+along*8.0;
+    const uint i=((uint)floor(k))%32u, j=(i+1u)%32u;
+    const uint base=18u+eye*64u;
+    const float4 a=SeamMatch[base+i*2u+1u], b=SeamMatch[base+j*2u+1u];
+    const float3 stable=lerp(a.rgb,b.rgb,frac(k));
+    const float slow=EdgeFade(distance,EdgeV2.x);
+    const float fast=EdgeFade(distance,min(EdgeV2.y,EdgeV2.x));
+    float3 target=stable;
+    bool valid=true;
+    [branch] if (fast > 0.0) valid=EdgeDifference(eye,anchor,side,crop,target);
+    // At distance zero slow=fast=1: history cancels exactly. Farther out
+    // only the slew-limited broad field remains. No focus pixels are blurred.
+    const float3 correction=slow*stable+fast*(target-stable);
+    color.rgb=max(color.rgb+Seam.y*(valid ? correction : slow*stable),0.0);
+    [branch] if (SeamOptions.z > 0.5) color.rgb=valid ? float3(0.05,0.7,0.05) : float3(0.7,0.05,0.05);
+    return color;
+}
+
 float3 SeamSideGain(uint baseIndex, uint side, float along, float3 fallback) {
     const float4 a = SeamMatch[baseIndex + 1u + side * 2u];
     const float4 b = SeamMatch[baseIndex + 2u + side * 2u];
@@ -277,6 +382,7 @@ float3 SeamSideGain(uint baseIndex, uint side, float along, float3 fallback) {
 }
 
 float4 MatchContext(uint eye, float2 uv, float4 crop, float4 color) {
+    [branch] if (Seam.x > 2.5) return MatchEdgeV2(eye,uv,crop,color);
     [branch] if (Seam.x > 0.5) {
         float3 gain = 1.0;
         float confidence = 0.0;
@@ -410,6 +516,7 @@ float4 PSMain(VertexOut input) : SV_TARGET0 {
 
 #ifdef SEAM_COMPUTE
 RWStructuredBuffer<float4> SeamOutput : register(u0);
+RWStructuredBuffer<float4> EdgeState : register(u1); // shared on one pinned submission queue
 groupshared float4 SeamFocusSums[128];
 groupshared float4 SeamContextSums[128];
 
@@ -446,11 +553,54 @@ bool SeamPatch(uint eye, float2 center, float4 crop, out float3 focus, out float
     return valid;
 }
 
+// One lane owns each knot, no inter-lane history dependencies. A shared UAV
+// barrier before/after dispatch orders updates in actual queue execution order.
+void UpdateEdgeV2(uint eye,uint lane) {
+    if (lane >= 32u) return;
+    const float4 crop=eye==0u ? CropUvLeft : CropUvRight;
+    const uint side=lane/8u;
+    const float t=float(lane%8u)/8.0;
+    float2 p=side==0u ? float2(lerp(crop.x,crop.z,t),crop.y) :
+             side==1u ? float2(crop.z,lerp(crop.y,crop.w,t)) :
+             side==2u ? float2(lerp(crop.z,crop.x,t),crop.w) :
+                        float2(crop.x,lerp(crop.w,crop.y,t));
+    uint unusedSide; float unusedAlong;
+    p=EdgeAnchor(p,crop,unusedSide,unusedAlong);
+    float3 target;
+    const bool valid=EdgeDifference(eye,p,side,crop,target);
+    const uint h=(eye*32u+lane)*3u;
+    float3 stable=valid ? target : 0.0;
+    bool tracking=false;
+    [branch] if (EdgeHistory.z != 0u) {
+        const uint4 stamp=asuint(EdgeState[h+2u]);
+        const uint elapsed=EdgeHistory.y-stamp.y;
+        const float4 previousCrop=EdgeState[h+1u];
+        const bool reset=stamp.w!=0x35ed6e01u || stamp.x!=EdgeHistory.x || elapsed>250u ||
+            any(abs(previousCrop-crop)*float4(EyeAndAtlas.xy,EyeAndAtlas.xy)>0.5);
+        [branch] if (!reset && valid) {
+            const float4 old=EdgeState[h];
+            stable=old.rgb;
+            const float3 delta=target-stable;
+            const float error=max(abs(delta.x),max(abs(delta.y),abs(delta.z)));
+            tracking=old.a>0.5 ? error>EdgeV2.w : error>2.0*EdgeV2.w;
+            if (tracking) stable+=clamp(delta,-EdgeV2.z*float(elapsed)*0.001,EdgeV2.z*float(elapsed)*0.001);
+        }
+        // Invalid geometry resets immediately; no stale-world/occlusion hold.
+        EdgeState[h]=float4(stable,tracking ? 1.0 : 0.0);
+        EdgeState[h+1u]=crop;
+        EdgeState[h+2u]=asfloat(uint4(EdgeHistory.x,EdgeHistory.y,0u,valid ? 0x35ed6e01u : 0u));
+    }
+    const uint outIndex=18u+eye*64u+lane*2u;
+    SeamOutput[outIndex]=float4(valid ? target : 0.0,valid ? 1.0 : 0.0);
+    SeamOutput[outIndex+1u]=float4(stable,valid ? 1.0 : 0.0);
+}
+
 [numthreads(128, 1, 1)]
 // Groups contain eight independent 16-sample boundary segments. Reuse their
 // reductions for a global estimate instead of sampling the image again.
 void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
     const uint eye = group.x;
+    [branch] if (Seam.x > 2.5) { UpdateEdgeV2(eye,lane); return; }
     // Alignment usability is uniform across both dispatch groups. All lanes
     // return together, before any groupshared barrier or texture/depth probe.
     // Initialize every record, including after an earlier valid frame.

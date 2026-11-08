@@ -91,9 +91,11 @@ struct alignas(16) Constants {
     float seam_options[4]{};
     float seam_local[4]{};
     float focus_lift[4]{};
+    float edge_v2[4]{};
+    uint32_t edge_history[4]{};
     float focus_profile[4]{};
 };
-static_assert(sizeof(Constants) == 480);
+static_assert(sizeof(Constants) == 512);
 
 using Color = std::array<uint8_t, 4>;
 static Color source_color(unsigned view, unsigned x, unsigned y) {
