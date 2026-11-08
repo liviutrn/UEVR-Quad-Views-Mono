@@ -289,6 +289,16 @@ using SourceExtents = std::array<std::array<uint32_t, 2>, 4>;
 inline constexpr uint32_t compact_source_margin = 8;
 inline constexpr uint32_t compact_source_granularity = 64;
 
+// Engine construction rectangles retain their role-identifying origins.
+// A standalone Native Stereo Fix family's final color image is presented at
+// texture origin; these are different coordinate contracts. Snapshot B35-125:
+// 2030x1614 color at (0,0), although engine roles start at x16/x24.
+inline Rect color_source_rect(const Layout& layout, size_t role) {
+    auto rect=layout.views[role];
+    if(layout.native_local) { rect.x=0; rect.y=0; }
+    return rect;
+}
+
 inline SourceExtents source_extents(const Layout& layout) {
     SourceExtents extents{};
     for (size_t i = 0; i != 4; ++i) {

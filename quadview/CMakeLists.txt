@@ -26,6 +26,10 @@ else()
   message(WARNING "Recovery ZIP lacks production DuoView headers: QuadViewProducerTests are UNAVAILABLE (not passed)")
 endif()
 enable_testing()
+add_executable(QuadViewDepthContinuityTests QuadViewDepthContinuityTests.cpp)
+add_test(NAME quadview-depth-submission-continuity COMMAND QuadViewDepthContinuityTests)
+add_executable(ColorSourceRectTests ColorSourceRectTests.cpp)
+add_test(NAME quadview-final-color-rectangles COMMAND ColorSourceRectTests)
 # Recovery-session property tests; independent of DuoView and restricted SDK headers.
 add_executable(QuadViewResumeContractTests ResumeContractTests.cpp)
 # This test uses assert() for geometric invariants; Release must execute them.
@@ -73,6 +77,12 @@ if(WIN32)
   target_link_libraries(QuadViewFocusLiftGpuTests PRIVATE d3d12 dxgi d3dcompiler)
   add_test(NAME quadview-focus-lift-production-gpu COMMAND QuadViewFocusLiftGpuTests)
   set_tests_properties(quadview-focus-lift-production-gpu PROPERTIES TIMEOUT 120)
+  add_executable(QuadViewEdgeV2GpuTests QuadViewEdgeV2GpuTests.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/QuadViewShaderBytecode.hpp")
+  target_include_directories(QuadViewEdgeV2GpuTests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+  target_link_libraries(QuadViewEdgeV2GpuTests PRIVATE d3d12 dxgi d3dcompiler)
+  add_test(NAME quadview-edge-v2-production-gpu COMMAND QuadViewEdgeV2GpuTests)
+  set_tests_properties(quadview-edge-v2-production-gpu PROPERTIES TIMEOUT 180)
   add_executable(QuadViewSeamGpuTests QuadViewSeamGpuTests.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/QuadViewShaderBytecode.hpp")
   target_include_directories(QuadViewSeamGpuTests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")

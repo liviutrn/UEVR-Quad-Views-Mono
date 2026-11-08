@@ -56,7 +56,7 @@ int main() {
         assert(rejected.rejected & uevr::quadview::reject_seam);
         check_preserved(rejected.settings);
     };
-    rejects([](Settings& s) { s.seam_mode = 3; },
+    rejects([](Settings& s) { s.seam_mode = 5; },
         [](const Settings& s) { assert(s.seam_mode == 0); });
     rejects([](Settings& s) { s.seam_strength = -0.01f; },
         [](const Settings& s) { assert(s.seam_strength == .85f); });
