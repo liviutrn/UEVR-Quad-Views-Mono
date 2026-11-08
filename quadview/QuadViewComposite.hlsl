@@ -455,8 +455,11 @@ groupshared float4 SeamContextSums[128];
 
 // B34-R2: smooth current-frame noise rejection without any history state.
 float QuietGate(float difference, float threshold) {
-    [branch] if (threshold <= 0.0) return 1.0;
-    return smoothstep(threshold, threshold * 2.0, abs(difference));
+    // FXC-safe branchless form, including a well-defined zero threshold.
+    const float safe = max(threshold, 0.0001);
+    const float x = saturate((abs(difference) - safe) / safe);
+    const float smooth = x * x * (3.0 - 2.0 * x);
+    return threshold > 0.0 ? smooth : 1.0;
 }
 
 // Four low-frequency patch samples, solely for analysis: displayed focus
