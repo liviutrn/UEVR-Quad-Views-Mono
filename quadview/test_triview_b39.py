@@ -35,7 +35,8 @@ assert 'AmbientEdgeDifference(eye,p,side,crop,target)' in update
 assert 'EdgeDifference(eye,p,side,crop,target)' in update
 assert 'step*=float(elapsed)/(float(max(EdgeHistory.w,1u))+float(elapsed))' in update
 assert 'stable+=clamp(step,-EdgeV2.z*seconds,EdgeV2.z*seconds)' in update
-assert 'elapsed>250u' in update and 'any(abs(previousCrop-crop)' in update
+assert 'elapsed>250u' in update and 'any(cropDelta>motionTolerance)' in update
+assert 'Seam.x>4.5 ? max(1.0,min(FocusProfile.z*0.25,12.0)) : 0.5' in update
 h=(root/'QuadViewD3D12.hpp').read_text(encoding='utf-8')
 assert 'settings.seam_mode==4 || settings.seam_mode==5' in h
 assert 'constants.edge_history[3]=settings.ambient_time_ms;' in h

@@ -533,6 +533,17 @@ int main() try {
         check(std::abs(f-p)<16,"Ambient temporal correction jumped in one frame");
         check(l>f+3,"Ambient temporal correction failed to track sustained change");
     }
+    // Eye tracking shifts the crop by a few pixels nearly every frame.
+    // Preserve area-history for a small movement, while the B37 pixel mode
+    // retains its exact 0.5px reset contract.
+    Layout nudged=compact;
+    for (auto& c:nudged.focus_crops) { c.u0+=3.f/256.f; c.u1+=3.f/256.f; }
+    const auto gentlyMoved=render(ambient,brightSources,nudged,ambientSettings);
+    for (unsigned eye=0;eye<2;++eye) {
+        const uint32_t x=eye*256+48,y=128;
+        const int delta=std::abs(int(gentlyMoved.at(x,y)[0])-int(later.at(x,y)[0]));
+        check(delta<15,"Ambient history reset and flashed on tiny gaze movement");
+    }
     Settings ambientZero=ambientSettings; ambientZero.seam_strength=0.f;
     Settings ambientOff=ambientSettings; ambientOff.seam_mode=0u;
     check(render(immediate,tinySpotSources,compact,ambientZero).rgba==

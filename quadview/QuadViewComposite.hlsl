@@ -627,8 +627,13 @@ void UpdateEdgeV2(uint eye,uint lane) {
         const uint4 stamp=asuint(EdgeState[h+2u]);
         const uint elapsed=EdgeHistory.y-stamp.y;
         const float4 previousCrop=EdgeState[h+1u];
+        // Spatial pooling covers a broad neighborhood. Retain ambient history
+        // through small gaze motion rather than flashing to a new raw estimate.
+        // B37 exact-border modes keep the original 0.5px provenance reset.
+        const float4 cropDelta=abs(previousCrop-crop)*float4(EyeAndAtlas.xy,EyeAndAtlas.xy);
+        const float motionTolerance=Seam.x>4.5 ? max(1.0,min(FocusProfile.z*0.25,12.0)) : 0.5;
         const bool reset=stamp.w!=0x35ed6e01u || stamp.x!=EdgeHistory.x || elapsed>250u ||
-            any(abs(previousCrop-crop)*float4(EyeAndAtlas.xy,EyeAndAtlas.xy)>0.5);
+            any(cropDelta>motionTolerance);
         [branch] if (!reset && valid) {
             const float4 old=EdgeState[h];
             stable=old.rgb;
