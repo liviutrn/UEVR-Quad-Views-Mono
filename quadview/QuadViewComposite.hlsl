@@ -718,7 +718,7 @@ void UpdateEdgeB40(uint eye, uint lane) {
             const float limit=(100.0/tau)*(float(dt)*0.001);
             // Single time-domain EMA with bounded per-frame rate. A preset
             // controls both response and slew; no secondary temporal buffer.
-            stable+=clamp((target-stable)*alpha,-limit.xxx,limit.xxx);
+            stable+=clamp((target-stable)*alpha,float3(-limit,-limit,-limit),float3(limit,limit,limit));
         }
         EdgeState[h]=float4(stable,1.0);
         EdgeState[h+1u]=crop; // diagnostic only; NEVER used to invalidate

@@ -108,7 +108,7 @@ def main():
         '    scalar(requested.seam_local_strength,0.f,1.f,reject_seam,&Settings::seam_local_strength);\n',
         '    scalar(requested.seam_radius_px,16.f,512.f,reject_seam,&Settings::seam_radius_px);\n',
         '    scalar(requested.seam_transition_px,0.f,64.f,reject_seam,&Settings::seam_transition_px);\n',
-        '    unsigned_integer(requested.seam_mode,0u,5u,reject_seam,&Settings::seam_mode);\n',
+        '    unsigned_integer(requested.seam_mode,0u,6u,reject_seam,&Settings::seam_mode);\n',
         '        a.seam_mode==b.seam_mode && a.seam_strength==b.seam_strength &&\n',
         '        a.seam_max_gain==b.seam_max_gain && a.seam_brightness_ev==b.seam_brightness_ev &&\n',
         '        a.seam_color_strength==b.seam_color_strength && a.seam_local_strength==b.seam_local_strength &&\n',
