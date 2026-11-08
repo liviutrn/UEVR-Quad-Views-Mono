@@ -17,7 +17,8 @@ assert h.count('order.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV')==2
 assert 'SetComputeRootUnorderedAccessView(3,history->GetGPUVirtualAddress())' in h
 assert 'float3 correction=slow*stable+fast*(target-stable)' in s
 assert 'error>EdgeV2.w : error>2.0*EdgeV2.w' in s
-assert 'clamp(delta,-EdgeV2.z*float(elapsed)*0.001,EdgeV2.z*float(elapsed)*0.001)' in s
+assert 'stable+=clamp(step,-EdgeV2.z*seconds,EdgeV2.z*seconds)' in s
+assert 'float3 step=delta;' in s
 assert '((uint)floor(k))%32u' in s
 v2=function(s,'void UpdateEdgeV2(')+function(s,'bool EdgeDifference(')+function(s,'float4 MatchEdgeV2(')
 assert 'Seam.z' not in v2,'Legacy amplitude cap leaked into V2'
