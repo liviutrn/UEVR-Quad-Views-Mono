@@ -60,9 +60,9 @@ def main():
     p=r/'vr/D3D12Component.cpp';s=p.read_text()
     anchor='    auto& context=it->second;\n    for (size_t i=0; i<context.texture_contexts.size()'
     s=once(s,anchor,'''    const auto hook=g_framework->get_d3d12_hook();
-    const auto queue=hook ? hook->get_command_queue() : nullptr;
-    if (!quadview_edge_history || quadview_edge_history->device.Get()!=device || quadview_edge_history->queue.Get()!=queue.Get())
-        quadview_edge_history=uevr::quadview::dx12::EdgeHistoryState::create(device,queue.Get());
+    ID3D12CommandQueue* const queue=hook ? hook->get_command_queue() : nullptr;
+    if (!quadview_edge_history || quadview_edge_history->device.Get()!=device || quadview_edge_history->queue.Get()!=queue)
+        quadview_edge_history=uevr::quadview::dx12::EdgeHistoryState::create(device,queue);
     auto& context=it->second;
     for (size_t i=0; i<context.texture_contexts.size()''')
     anchor='        if (!comp->prewarm(device,source_format,output_format,timestamp_frequency))\n            SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadView][Prewarm] {}",comp->error());'
