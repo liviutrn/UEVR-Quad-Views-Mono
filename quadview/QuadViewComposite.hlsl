@@ -387,7 +387,7 @@ float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
     // crops too: do not attenuate correction between the two displayed sides.
     const float2 outside=max(max(max(crop.xy-uv,uv-crop.zw),0.0)*float2(EyeAndAtlas.xy)-1.0,0.0);
     const float distance=length(outside);
-    [branch] if ((Seam.y > 0.0 || SeamOptions.z > 0.5) && distance < EdgeV2.x && SeamOptions.w > 0.5) {
+    [branch] if ((Seam.y > 0.0 || SeamOptions.z > 0.5) && distance < EdgeV2.x && (SeamOptions.w > 0.5 || Seam.x > 5.5)) {
     uint side=0u; float along=0.0;
     const float2 anchor=EdgeAnchor(uv,crop,side,along);
     const float k=float(side*8u)+along*8.0;
@@ -660,11 +660,83 @@ void UpdateEdgeV2(uint eye,uint lane) {
     SeamOutput[outIndex+1u]=float4(stable,valid ? 1.0 : 0.0);
 }
 
+// B40: 128 spatial sampling locations (4 per knot x 32) but only 32
+// persistent temporal correction knots per eye. Group values use per-channel
+// trimmed means, so a single bright/dark/color outlier cannot dominate.
+void UpdateEdgeB40(uint eye, uint lane) {
+    if (lane >= 32u) return;
+    const float4 crop=eye==0u ? CropUvLeft : CropUvRight;
+    const uint side=lane/8u;
+    const float segment=float(lane%8u);
+    float3 q0=0.0, q1=0.0, q2=0.0, q3=0.0;
+    uint count=0u;
+    [loop] for (uint sub=0u;sub<4u;++sub) {
+        // Four sub-anchors cover a substantial part of each of the 32
+        // interpolated boundary segments, with no temporal sampling jitter.
+        const float t=saturate((segment+(float(sub)-1.5)*0.25)/8.0);
+        float2 p=side==0u ? float2(lerp(crop.x,crop.z,t),crop.y) :
+                 side==1u ? float2(crop.z,lerp(crop.y,crop.w,t)) :
+                 side==2u ? float2(lerp(crop.z,crop.x,t),crop.w) :
+                            float2(crop.x,lerp(crop.w,crop.y,t));
+        uint anchorSide=0u; float anchorAlong=0.0;
+        p=EdgeAnchor(p,crop,anchorSide,anchorAlong);
+        float3 sampleDelta=0.0;
+        [branch] if (AmbientEdgeDifference(eye,p,side,crop,sampleDelta)) {
+            if (count==0u) q0=sampleDelta;
+            else if (count==1u) q1=sampleDelta;
+            else if (count==2u) q2=sampleDelta;
+            else q3=sampleDelta;
+            ++count;
+        }
+    }
+    // Group-of-four trimmed mean, or a componentwise median with three
+    // usable sub-anchors. This rejects isolated RGB outliers, not just luma.
+    const bool valid=count>=2u;
+    float3 target=0.0;
+    if (count==4u) {
+        target=0.5*(q0+q1+q2+q3-
+            min(min(q0,q1),min(q2,q3))-max(max(q0,q1),max(q2,q3)));
+    } else if (count==3u) {
+        target=q0+q1+q2-min(q0,min(q1,q2))-max(q0,max(q1,q2));
+    } else if (count==2u) {
+        target=0.5*(q0+q1);
+    }
+
+    const uint h=(eye*32u+lane)*3u;
+    float3 stable=valid ? target : 0.0;
+    if (EdgeHistory.z!=0u) {
+        const uint4 stamp=asuint(EdgeState[h+2u]);
+        const bool initialized=stamp.w==0x40b04001u;
+        // Only allocation/startup initializes history. Motion, scene epochs,
+        // crop geometry, invalid samples and long frame gaps NEVER reset it.
+        stable=initialized ? EdgeState[h].rgb : float3(0.0,0.0,0.0);
+        const uint elapsed=initialized ? EdgeHistory.y-stamp.y : 16u;
+        const uint dt=min(elapsed,50u); // a stalled frame must not jump
+        if (valid && dt>0u) {
+            const float tau=float(max(EdgeHistory.w,50u));
+            const float alpha=float(dt)/(tau+float(dt));
+            const float limit=(100.0/tau)*(float(dt)*0.001);
+            // Single time-domain EMA with bounded per-frame rate. A preset
+            // controls both response and slew; no secondary temporal buffer.
+            stable+=clamp((target-stable)*alpha,-limit.xxx,limit.xxx);
+        }
+        EdgeState[h]=float4(stable,1.0);
+        EdgeState[h+1u]=crop; // diagnostic only; NEVER used to invalidate
+        EdgeState[h+2u]=asfloat(uint4(EdgeHistory.x,EdgeHistory.y,0u,0x40b04001u));
+    }
+    const uint outIndex=18u+eye*64u+lane*2u;
+    SeamOutput[outIndex]=float4(target,valid ? 1.0 : 0.0);
+    // Hold and DISPLAY the previous correction even with invalid new
+    // geometry; no instantaneous raw target can bypass the temporal path.
+    SeamOutput[outIndex+1u]=float4(stable,1.0);
+}
+
 [numthreads(128, 1, 1)]
 // Groups contain eight independent 16-sample boundary segments. Reuse their
 // reductions for a global estimate instead of sampling the image again.
 void CSSeam(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
     const uint eye = group.x;
+    [branch] if (Seam.x > 5.5) { UpdateEdgeB40(eye,lane); return; }
     [branch] if (Seam.x > 2.5) { UpdateEdgeV2(eye,lane); return; }
     // Alignment usability is uniform across both dispatch groups. All lanes
     // return together, before any groupshared barrier or texture/depth probe.

@@ -226,8 +226,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B38 exact shader and generated UI safety contracts failed' }
           python workspace/quadview/apply_triview_b39_ambient.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B39 Ambient V3 UI overlay failed' }
+          python workspace/quadview/apply_triview_b40_continuous.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B40 simplified UI/presets integration failed' }
           python workspace/quadview/test_triview_b39.py backend
-          if ($LASTEXITCODE -ne 0) { throw 'B39 ambient source/temporal/ownership regression checks failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'B39 backward-compatibility regression checks failed' }
+          python workspace/quadview/test_triview_b40.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B40 continuous temporal/robust groups/generated UI regression checks failed' }
           python workspace/quadview/test_triview_b35.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B35 generated edge/history/queue contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp

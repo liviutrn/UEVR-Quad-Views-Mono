@@ -168,7 +168,7 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.seam_local_strength,0.f,1.f,reject_seam,&Settings::seam_local_strength);
     scalar(requested.seam_radius_px,16.f,512.f,reject_seam,&Settings::seam_radius_px);
     scalar(requested.seam_transition_px,0.f,64.f,reject_seam,&Settings::seam_transition_px);
-    unsigned_integer(requested.seam_mode,0u,5u,reject_seam,&Settings::seam_mode);
+    unsigned_integer(requested.seam_mode,0u,6u,reject_seam,&Settings::seam_mode);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
     scalar(requested.gaze_offset_v,-.25f,.25f,reject_offset_v,&Settings::gaze_offset_v);

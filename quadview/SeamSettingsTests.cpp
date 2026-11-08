@@ -59,7 +59,7 @@ int main() {
     maximum.ambient_radius_px = 128.f;
     maximum.ambient_inside_px = 96.f;
     maximum.ambient_time_ms = 1500u;
-    maximum.seam_mode = 5u;
+    maximum.seam_mode = 6u;
     result = reconcile_settings(maximum, defaults, 1920, 1080);
     assert(result.rejected == 0);
     assert(same_settings(result.settings, maximum));
@@ -71,7 +71,7 @@ int main() {
         assert(rejected.rejected & uevr::quadview::reject_seam);
         check_preserved(rejected.settings);
     };
-    rejects([](Settings& s) { s.seam_mode = 6; },
+    rejects([](Settings& s) { s.seam_mode = 7; },
         [](const Settings& s) { assert(s.seam_mode == 0); });
     rejects([](Settings& s) { s.seam_strength = -0.01f; },
         [](const Settings& s) { assert(s.seam_strength == .85f); });

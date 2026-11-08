@@ -45,14 +45,14 @@ assert 'constants.focus_profile[3]=settings.ambient_inside_px;' in h
 assert 'hash_float(settings.ambient_radius_px)' in h and 'hash_word(settings.ambient_time_ms)' in h
 assert 'sizeof(ShaderConstants) == 512' in h
 settings=(root/'QuadViewSettings.hpp').read_text(encoding='utf-8')
-assert 'unsigned_integer(requested.seam_mode,0u,5u' in settings
+assert 'unsigned_integer(requested.seam_mode,0u,6u' in settings
 for field in ('ambient_radius_px','ambient_inside_px','ambient_time_ms'):
     assert 'a.'+field+'==b.'+field in settings
 if len(sys.argv)>1:
     b=Path(sys.argv[1])/'src/mods'
     ui=(b/'VR.cpp').read_text(encoding='utf-8')
     opts=(b/'VR.hpp').read_text(encoding='utf-8')
-    assert 's_quadview_edge_mode_names, 3)' in opts
+    assert 's_quadview_edge_mode_names, 4)' in opts
     assert 'Edge V3 Ambient Temporal' in opts
     for field in ('ambient_radius_px','ambient_inside_px','ambient_time_ms'):
         assert 'requested.'+field+'=' in ui
@@ -64,5 +64,5 @@ if len(sys.argv)>1:
     for field in ('ambient_radius_px','ambient_inside_px','ambient_time_ms'):
         assert ('Settings::'+field) in generated
         assert ('a.'+field+'==b.'+field) in generated
-    assert 'unsigned_integer(requested.seam_mode,0u,5u' in generated
+    assert 'unsigned_integer(requested.seam_mode,0u,6u' in generated
 print('B39 static source / UI: 15 area samples, no live pixel mirroring, temporal averaging, B38 inward and B37 warp/queue preserved; WARP still required')

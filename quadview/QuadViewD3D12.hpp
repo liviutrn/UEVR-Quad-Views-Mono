@@ -490,7 +490,7 @@ public:
         constants.edge_history[0]=epoch;
         constants.edge_history[1]=history_time_ms ? history_time_ms : static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
-        constants.edge_history[2]=(settings.seam_mode==4 || settings.seam_mode==5) &&
+        constants.edge_history[2]=(settings.seam_mode==4 || settings.seam_mode==5 || settings.seam_mode==6) &&
             edge_history_ && edge_history_->device.Get()==device_.Get() ? 1u : 0u;
         constants.edge_history[3]=settings.ambient_time_ms;
         constants.seam_local[0] = settings.seam_radius_px;
