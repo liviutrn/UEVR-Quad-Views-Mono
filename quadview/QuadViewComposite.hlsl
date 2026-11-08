@@ -288,18 +288,24 @@ float4 MatchContext(uint eye, float2 uv, float4 crop, float4 color) {
             // Model RGB: luminance gain, red chroma residual, blue chroma residual.
             const float3 neutral = float3(1.0, 0.0, 0.0);
             float3 model = lerp(neutral, estimate.rgb, estimate.a);
-            const float2 along = saturate((uv - crop.xy) / (crop.zw - crop.xy));
-            const float4 d = abs(float4(uv.y - crop.y, uv.x - crop.z, uv.y - crop.w, uv.x - crop.x)) *
-                             float4(EyeAndAtlas.y, EyeAndAtlas.x, EyeAndAtlas.y, EyeAndAtlas.x);
-            const float4 weights = 1.0 / (1.0 + d * d);
-            const float3 local = (
-                SeamSideGain(baseIndex, 0u, along.x, model) * weights.x +
-                SeamSideGain(baseIndex, 1u, along.y, model) * weights.y +
-                SeamSideGain(baseIndex, 2u, along.x, model) * weights.z +
-                SeamSideGain(baseIndex, 3u, along.y, model) * weights.w) /
-                dot(weights, float4(1.0, 1.0, 1.0, 1.0));
-            model = lerp(model, local, SeamLocal.y);
             const float t = saturate(sqrt(max(distanceSq, 0.0)) / max(SeamLocal.x, 1.0));
+            // Efficient 2-band field: fit local color at the border, smoothly
+            // hand off to global luminance/chroma, then to unchanged periphery.
+            // Skip eight local SRV reads beyond 70% of the outward radius.
+            const float localFade = SeamLocal.y * (1.0 - smoothstep(0.45, 0.70, t));
+            [branch] if (localFade > 0.0) {
+                const float2 along = saturate((uv - crop.xy) / (crop.zw - crop.xy));
+                const float4 d = abs(float4(uv.y - crop.y, uv.x - crop.z, uv.y - crop.w, uv.x - crop.x)) *
+                                 float4(EyeAndAtlas.y, EyeAndAtlas.x, EyeAndAtlas.y, EyeAndAtlas.x);
+                const float4 weights = 1.0 / (1.0 + d * d);
+                const float3 local = (
+                    SeamSideGain(baseIndex, 0u, along.x, model) * weights.x +
+                    SeamSideGain(baseIndex, 1u, along.y, model) * weights.y +
+                    SeamSideGain(baseIndex, 2u, along.x, model) * weights.z +
+                    SeamSideGain(baseIndex, 3u, along.y, model) * weights.w) /
+                    dot(weights, float4(1.0, 1.0, 1.0, 1.0));
+                model = lerp(model, local, localFade);
+            }
             const float fade = 1.0 - t * t * (3.0 - 2.0 * t);
             const float amount = Seam.y * fade;
             const float gain = lerp(1.0, model.r, amount);
