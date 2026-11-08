@@ -226,8 +226,8 @@ int main(int argc, char** argv) try {
             D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 
-    // Tri-view B6: compact per-role targets with target-local rectangles. Same
-    // source content per role; everything outside the role's rectangle is poison.
+    // Final compact color images start at zero, independently of engine role
+    // origins. Captured B35 textures prove this; allocation padding stays poison.
     auto compact_layout = *layout;
     if (!uevr::quadview::apply_native_local(compact_layout)) throw std::runtime_error("Compact layout rejected");
     const auto compact_extents = uevr::quadview::source_extents(compact_layout);
@@ -245,7 +245,8 @@ int main(int argc, char** argv) try {
             D3D12_RESOURCE_STATE_GENERIC_READ);
         require(compact_uploads[view]->Map(0, &no_read, &mapped), "Map compact upload");
         std::memset(mapped, 0, static_cast<size_t>(compact_bytes));
-        const auto& rect = compact_layout.views[view];
+        const auto logical = compact_layout.views[view];
+        const uevr::quadview::Rect rect{0,0,logical.width,logical.height};
         for (uint32_t y = 0; y < ch; ++y) for (uint32_t x = 0; x < cw; ++x) {
             Color color{255, 0, 255, 255};
             if (x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height)
