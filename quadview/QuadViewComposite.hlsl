@@ -348,13 +348,12 @@ float EdgeFade(float distance, float reach) {
 }
 
 float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
-    [branch] if (Seam.y <= 0.0 && SeamOptions.z < 0.5) return color;
     // Unit plateau includes the first exterior pixel centers for fractional
     // crops too: do not attenuate correction between the two displayed sides.
     const float2 outside=max(max(max(crop.xy-uv,uv-crop.zw),0.0)*float2(EyeAndAtlas.xy)-1.0,0.0);
     const float distance=length(outside);
-    [branch] if (distance >= EdgeV2.x || SeamOptions.w <= 0.5) return color;
-    uint side; float along;
+    [branch] if ((Seam.y > 0.0 || SeamOptions.z > 0.5) && distance < EdgeV2.x && SeamOptions.w > 0.5) {
+    uint side=0u; float along=0.0;
     const float2 anchor=EdgeAnchor(uv,crop,side,along);
     const float k=float(side*8u)+along*8.0;
     const uint i=((uint)floor(k))%32u, j=(i+1u)%32u;
@@ -371,6 +370,7 @@ float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
     const float3 correction=slow*stable+fast*(target-stable);
     color.rgb=max(color.rgb+Seam.y*(valid ? correction : slow*stable),0.0);
     [branch] if (SeamOptions.z > 0.5) color.rgb=valid ? float3(0.05,0.7,0.05) : float3(0.7,0.05,0.05);
+    }
     return color;
 }
 
@@ -382,8 +382,8 @@ float3 SeamSideGain(uint baseIndex, uint side, float along, float3 fallback) {
 }
 
 float4 MatchContext(uint eye, float2 uv, float4 crop, float4 color) {
-    [branch] if (Seam.x > 2.5) return MatchEdgeV2(eye,uv,crop,color);
-    [branch] if (Seam.x > 0.5) {
+    [branch] if (Seam.x > 2.5) color=MatchEdgeV2(eye,uv,crop,color);
+    else if (Seam.x > 0.5) {
         float3 gain = 1.0;
         float confidence = 0.0;
         [branch] if (Seam.x > 1.5 && (Seam.y > 0.0 || SeamOptions.z > 0.5)) {
@@ -564,7 +564,7 @@ void UpdateEdgeV2(uint eye,uint lane) {
              side==1u ? float2(crop.z,lerp(crop.y,crop.w,t)) :
              side==2u ? float2(lerp(crop.z,crop.x,t),crop.w) :
                         float2(crop.x,lerp(crop.w,crop.y,t));
-    uint unusedSide; float unusedAlong;
+    uint unusedSide=0u; float unusedAlong=0.0;
     p=EdgeAnchor(p,crop,unusedSide,unusedAlong);
     float3 target;
     const bool valid=EdgeDifference(eye,p,side,crop,target);
