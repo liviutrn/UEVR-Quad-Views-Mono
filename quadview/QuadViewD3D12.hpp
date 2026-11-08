@@ -491,6 +491,8 @@ public:
         constants.edge_history[2]=settings.seam_mode==4 && edge_history_ && edge_history_->device.Get()==device_.Get() ? 1u : 0u;
         constants.seam_local[0] = settings.seam_radius_px;
         constants.seam_local[1] = settings.seam_local_strength;
+        constants.seam_local[2] = settings.legacy_inward_anchor_px;
+        constants.seam_local[3] = settings.legacy_inward_feather ? 1.f : 0.f;
         constants.focus_lift[0]=settings.focus_lift_enabled ? 1.f : 0.f;
         constants.focus_lift[1]=settings.focus_brightness;
         constants.focus_lift[2]=settings.focus_corner_gain-1.f;

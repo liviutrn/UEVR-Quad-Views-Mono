@@ -20,6 +20,8 @@ int main() {
     assert(result.settings.seam_radius_px == 120.f);
     assert(result.settings.seam_transition_px == 0.f);
     assert(!result.settings.seam_debug);
+    assert(result.settings.legacy_inward_feather);
+    assert(result.settings.legacy_inward_anchor_px == 12.f);
 
     Settings minimum = defaults;
     minimum.seam_mode = 1;
@@ -31,6 +33,8 @@ int main() {
     minimum.seam_radius_px = 16.f;
     minimum.seam_transition_px = 0.f;
     minimum.seam_debug = true;
+    minimum.legacy_inward_feather = false;
+    minimum.legacy_inward_anchor_px = 2.f;
     result = reconcile_settings(minimum, defaults, 1920, 1080);
     assert(result.rejected == 0);
     assert(same_settings(result.settings, minimum));
@@ -45,6 +49,7 @@ int main() {
     maximum.seam_radius_px = 512.f;
     maximum.seam_transition_px = 64.f;
     maximum.seam_debug = true;
+    maximum.legacy_inward_anchor_px = 64.f;
     result = reconcile_settings(maximum, defaults, 1920, 1080);
     assert(result.rejected == 0);
     assert(same_settings(result.settings, maximum));
@@ -72,6 +77,8 @@ int main() {
         [](const Settings& s) { assert(s.seam_radius_px == 120.f); });
     rejects([](Settings& s) { s.seam_transition_px = 64.01f; },
         [](const Settings& s) { assert(s.seam_transition_px == 0.f); });
+    rejects([](Settings& s) { s.legacy_inward_anchor_px = -1.f; },
+        [](const Settings& s) { assert(s.legacy_inward_anchor_px == 12.f); });
 
     Settings changed = defaults;
     changed.seam_mode = 1;
@@ -89,6 +96,10 @@ int main() {
     changed = defaults; changed.seam_radius_px += 1.f;
     assert(!same_settings(defaults, changed));
     changed = defaults; changed.seam_transition_px = 1.f;
+    assert(!same_settings(defaults, changed));
+    changed = defaults; changed.legacy_inward_feather = false;
+    assert(!same_settings(defaults, changed));
+    changed = defaults; changed.legacy_inward_anchor_px = 20.f;
     assert(!same_settings(defaults, changed));
     changed = defaults; changed.seam_debug = true;
     assert(!same_settings(defaults, changed));

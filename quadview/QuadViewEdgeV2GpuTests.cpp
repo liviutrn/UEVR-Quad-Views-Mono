@@ -447,6 +447,43 @@ int main() try {
                   "Standard feather altered opaque focus center");
     }
 
+    // B38: compare the actual production shader outputs, not a replicated formula.
+    // The B37 exterior and fully opaque focus MUST remain byte-for-byte identical.
+    Settings originalB37=feathered; originalB37.legacy_inward_feather=false;
+    Settings restored=feathered; restored.legacy_inward_feather=true;
+    restored.legacy_inward_anchor_px=12.f;
+    Settings oldFeather=feathered; oldFeather.seam_mode=0;
+    const auto outerOriginal=render(immediate,highFrequency,compact,originalB37);
+    const auto inwardRestored=render(immediate,highFrequency,compact,restored);
+    const auto originalSoft=render(immediate,highFrequency,compact,oldFeather);
+    int restoredPixels=0;
+    for (uint32_t eye=0;eye<2;++eye) {
+        for (uint32_t x=0;x<256;++x) {
+            const auto current=inwardRestored.at(eye*256+x,128);
+            const auto prior=outerOriginal.at(eye*256+x,128);
+            if (x<64 || x>=192 || (x>=103 && x<153))
+                check(current==prior,"B38 changed B37 exterior or opaque focus");
+            // Beyond the narrow continuity strip, this must be EXACT original
+            // uncorrected-context/focus feather, not a visual approximation.
+            if (x>=77 && x<=95) {
+                check(current==originalSoft.at(eye*256+x,128),
+                      "B38 failed to restore original inward fovea feather");
+                for (unsigned channel=0;channel<3;++channel)
+                    restoredPixels+=std::abs(int(current[channel])-int(prior[channel]));
+            }
+        }
+    }
+    check(restoredPixels>100,"B38 inward toggle had no visible effect");
+    check_border(inwardRestored,compact,4);
+    Settings b31Feather=oldFeather; b31Feather.legacy_inward_feather=false;
+    check(render(immediate,highFrequency,compact,b31Feather).rgba==originalSoft.rgba,
+          "B38 new toggle unexpectedly changed legacy B31 seam modes");
+    Settings noFeather=restored; noFeather.feather_fraction=0.f;
+    Settings plainB37=noFeather; plainB37.legacy_inward_feather=false;
+    check(render(immediate,highFrequency,compact,noFeather).rgba==
+          render(immediate,highFrequency,compact,plainB37).rgba,
+          "B38 legacy toggle unexpectedly changed zero-feather rendering");
+
     if (info) for (UINT64 i=0,n=info->GetNumStoredMessages();i<n;++i) {
         SIZE_T size{}; info->GetMessage(i,nullptr,&size); std::vector<uint8_t> storage(size);
         auto* message=reinterpret_cast<D3D12_MESSAGE*>(storage.data());
@@ -454,7 +491,7 @@ int main() try {
         if (message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)
             throw std::runtime_error(std::string("D3D12 Edge V2 validation: ")+message->pDescription);
     }
-    std::cout<<"Edge V2 WARP: signed RGB borders/corners, opaque focus, appearance, temporal slew, shared slots, resets, invalid depth, captured native color origins and standard feather passed.\n";
+    std::cout<<"Edge V2 WARP: signed RGB borders/corners, opaque focus, appearance, temporal slew, shared slots, resets, invalid depth, captured native color origins, unchanged B37 exterior and B27 inward feather passed.\n";
     return 0;
 } catch (const std::exception& e) {
     std::cerr<<"Edge V2 WARP FAILED: "<<e.what()<<'\n'; return 1;

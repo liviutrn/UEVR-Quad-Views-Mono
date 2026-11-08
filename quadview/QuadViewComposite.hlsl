@@ -469,7 +469,17 @@ float4 ScenePixel(VertexOut input) {
     if (debugMode == 0u) focus.rgb = CorrectFocusColor(focus.rgb, focusUv);
     float4 output = focus;
     [branch] if (debugMode != 2 && weight < 1.0) {
-        const float4 context = MatchContext(eye, eyeUv, crop, ReadContext(eye, contextSource, contextRect, eyeUv));
+        // B38: preserve B27's original uncorrected context within most of the
+        // inward feather. B37's corrected context remains untouched outside.
+        const float4 rawContext = ReadContext(eye, contextSource, contextRect, eyeUv);
+        float4 context = MatchContext(eye, eyeUv, crop, rawContext);
+        [branch] if (Seam.x > 2.5 && SeamLocal.w > 0.5) {
+            const float2 insidePx = min(eyeUv - crop.xy, crop.zw - eyeUv) * float2(EyeAndAtlas.xy);
+            const float distance = max(min(insidePx.x, insidePx.y), 0.0);
+            const float t = saturate(distance / max(SeamLocal.z, 1.0));
+            const float anchor = 1.0 - t*t*(3.0 - 2.0*t);
+            context = lerp(rawContext, context, anchor);
+        }
         output = lerp(context, focus, weight);
     }
     if (Options.w > 0.5) {

@@ -1,6 +1,6 @@
-name: TriView B37 B31-base color rectangles, blend and depth continuity
+name: TriView B38 original inward feather and B37 outer seam
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B37 B31-base repairs (${{ github.run_number }})
+run-name: TriView B38 old inward feather + B37 outside (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -220,6 +220,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B37 preserve submitted depth overlay failed' }
           python workspace/quadview/test_triview_b37.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B37 color rectangle, blend and safety contracts failed' }
+          python workspace/quadview/apply_triview_b38_inward.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B38 isolated old inward feather UI overlay failed' }
+          python workspace/quadview/test_triview_b38.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B38 exact shader and generated UI safety contracts failed' }
           python workspace/quadview/test_triview_b35.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B35 generated edge/history/queue contracts failed' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
@@ -333,6 +337,7 @@ jobs:
           Copy-Item workspace/quadview/B31_OPTIMIZATION_NOTES.md package/B31_OPTIMIZATION_NOTES.md
           Copy-Item workspace/quadview/B35_EDGE_MATCH_NOTES.md package/B35_EDGE_MATCH_NOTES.md
           Copy-Item workspace/quadview/B37_ROOT_CAUSE_NOTES.md package/B37_ROOT_CAUSE_NOTES.md
+          Copy-Item workspace/quadview/B38_INWARD_FEATHER_NOTES.md package/B38_INWARD_FEATHER_NOTES.md
           Copy-Item workspace/quadview/focus_lift_calibration.json package/focus_lift_calibration.json
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
@@ -348,12 +353,12 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B37-B31-Final-Color-Rectangles'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B31-110 user-tested'; baselineSource='008c9f7548c43f5977c1197c4180cddb435c64de'; sourceParent='008c9f7548c43f5977c1197c4180cddb435c64de'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B31 renderer/anti-vignette preserved; B35 displayed-edge RGB residual, queue-pinned GPU hysteresis and rate-limited broad field; headset test pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B38-B37-Outer-B27-Inward'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B31-110 user-tested'; baselineSource='008c9f7548c43f5977c1197c4180cddb435c64de'; sourceParent='008c9f7548c43f5977c1197c4180cddb435c64de'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B37 outside seam, original B27 inward softness with continuity strip, B37 depth/color fixes; headset test pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          UEVR ID7 / TriView B37 - B31 base, corrected final-color rectangles and standard blend.
+          UEVR ID7 / TriView B38 - B37 depth/color rect fixes plus the original B27 inward feather.
           Includes B29 efficiency/XYZ and tested B28-103 lifecycle safeguards.
           Focus correction starts ENABLED with the screenshot-fitted profile.
           Edge matcher starts TEMPORAL, strength1, outward240px, immediate32px.
@@ -383,21 +388,21 @@ jobs:
           Read B30_COMBINED_NOTES.md for scope and B31_OPTIMIZATION_NOTES.md for
           shader fast paths, regression checks and remaining headset limitations.
           '@ | Set-Content package/READ_FIRST.txt
-          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json','B31_OPTIMIZATION_NOTES.md','B37_ROOT_CAUSE_NOTES.md')
+          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json','B31_OPTIMIZATION_NOTES.md','B37_ROOT_CAUSE_NOTES.md','B38_INWARD_FEATHER_NOTES.md')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B37-B31-ColorRect-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B38-InwardFeather-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B37-B31-ColorRect-${{ github.run_number }}
+          name: UEVR-TriView-B38-InwardFeather-${{ github.run_number }}
           path: |
-            UEVR-TriView-B37-B31-ColorRect-*.zip
-            UEVR-TriView-B37-B31-ColorRect-*.zip.sha256
+            UEVR-TriView-B38-InwardFeather-*.zip
+            UEVR-TriView-B38-InwardFeather-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4

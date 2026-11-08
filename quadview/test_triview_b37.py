@@ -9,7 +9,7 @@ def body(text,name):
  start=text.index(name);a=text.index('{',start);i=a+1;level=1
  while level: level+=(text[i]=='{')-(text[i]=='}');i+=1
  return text[start:i]
-for name in ['float2 AtlasUvKnownSize(','float3 ReadFocus(','float3 GlamSharpenFocus(','float3 CorrectFocusColor(','float4 ScenePixel(']:
+for name in ['float2 AtlasUvKnownSize(','float3 ReadFocus(','float3 GlamSharpenFocus(','float3 CorrectFocusColor(']:
  assert body(s,name)==body(baseline,name),name
 assert 'Seam.x < 0.5 || Seam.x > 2.5' in s
 assert 'const auto rect = color_source_rect(layout,view == 1 && layout.shared_context ? 0 : view);' in h
@@ -21,4 +21,4 @@ if len(sys.argv)>1:
  assert '(!slot->foreign_queue || depth_copy_complete(completed, slot->producer_fence_value))' in depth
  assert 'm_quadview_edge_feather' not in vr
  assert 'requested.feather_fraction=m_quadview_feather->value();' in vr
-print('B37: original B31 focus sampling/sharpen/anti-vignette/display code identical; final color rect separated from engine role, original feather and depth safety preserved; WARP still required')
+print('B37: original B31 focus sampling/sharpen/anti-vignette code identical (B38 separately checks intentional display blend change); final color rect separated from engine role, original feather and depth safety preserved; WARP still required')

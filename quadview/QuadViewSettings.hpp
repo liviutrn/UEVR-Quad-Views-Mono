@@ -35,6 +35,8 @@ struct Settings {
     float edge_fast_px{32.f};
     float edge_rate{.15f}; // sample-domain RGB units per second, no amplitude ceiling
     float edge_hysteresis{.004f};
+    bool legacy_inward_feather{true}; // B38: restore B27 raw-context inward feather
+    float legacy_inward_anchor_px{12.f}; // color-continuity strip next to crop
     bool seam_debug{};
     bool gpu_timing{};
     bool debug_border{};
@@ -128,6 +130,7 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     out.stabilize_crop=requested.stabilize_crop;
     out.focus_lift_enabled=requested.focus_lift_enabled;
     out.seam_debug=requested.seam_debug;
+    out.legacy_inward_feather=requested.legacy_inward_feather;
     const auto scalar = [&](float value,float lo,float hi,uint32_t mask,float Settings::* field) {
         if (valid(value,lo,hi)) out.*field=value;
         else result.rejected|=mask;
@@ -151,6 +154,7 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.edge_fast_px,1.f,256.f,reject_seam,&Settings::edge_fast_px);
     scalar(requested.edge_rate,.001f,4.f,reject_seam,&Settings::edge_rate);
     scalar(requested.edge_hysteresis,0.f,.05f,reject_seam,&Settings::edge_hysteresis);
+    scalar(requested.legacy_inward_anchor_px,2.f,64.f,reject_seam,&Settings::legacy_inward_anchor_px);
     scalar(requested.seam_strength,0.f,1.f,reject_seam,&Settings::seam_strength);
     scalar(requested.seam_max_gain,.01f,.5f,reject_seam,&Settings::seam_max_gain);
     scalar(requested.seam_brightness_ev,-.5f,.5f,reject_seam,&Settings::seam_brightness_ev);
@@ -194,6 +198,8 @@ inline bool same_settings(const Settings& a, const Settings& b) {
         a.focus_lift_onset==b.focus_lift_onset && a.focus_lift_power==b.focus_lift_power &&
         a.edge_reach_px==b.edge_reach_px && a.edge_fast_px==b.edge_fast_px &&
         a.edge_rate==b.edge_rate && a.edge_hysteresis==b.edge_hysteresis &&
+        a.legacy_inward_feather==b.legacy_inward_feather &&
+        a.legacy_inward_anchor_px==b.legacy_inward_anchor_px &&
         a.seam_mode==b.seam_mode && a.seam_strength==b.seam_strength &&
         a.seam_max_gain==b.seam_max_gain && a.seam_brightness_ev==b.seam_brightness_ev &&
         a.seam_color_strength==b.seam_color_strength && a.seam_local_strength==b.seam_local_strength &&
