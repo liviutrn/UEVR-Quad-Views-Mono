@@ -59,7 +59,7 @@ def main():
     s=once(s,anchor,'        std::shared_ptr<uevr::quadview::dx12::EdgeHistoryState> quadview_edge_history;\n'+anchor);p.write_text(s)
     p=r/'vr/D3D12Component.cpp';s=p.read_text()
     anchor='    auto& context=it->second;\n    for (size_t i=0; i<context.texture_contexts.size()'
-    s=once(s,anchor,'''    const auto hook=g_framework->get_d3d12_hook();
+    s=once(s,anchor,'''    const auto& hook=g_framework->get_d3d12_hook();
     ID3D12CommandQueue* const queue=hook ? hook->get_command_queue() : nullptr;
     if (!quadview_edge_history || quadview_edge_history->device.Get()!=device || quadview_edge_history->queue.Get()!=queue)
         quadview_edge_history=uevr::quadview::dx12::EdgeHistoryState::create(device,queue);

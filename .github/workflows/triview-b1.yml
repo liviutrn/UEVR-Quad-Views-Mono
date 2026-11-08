@@ -351,11 +351,14 @@ jobs:
           UEVR ID7 / TriView B35 - Edge Match V2 (B31 anti-vignette preserved).
           Includes B29 efficiency/XYZ and tested B28-103 lifecycle safeguards.
           Focus correction starts ENABLED with the screenshot-fitted profile.
-          Seam matching starts ADAPTIVE, strength0.85, local0.5, radius120px.
-          The matcher compares against the corrected foveas, not their old colors.
+          Edge matcher starts TEMPORAL, strength1, outward240px, immediate32px.
+          Inward feather2px; response0.15 RGB units/sec; hysteresis0.004.
+          It compares the displayed post-NR/SR, sharpened, corrected fovea edge.
+          Select Edge matcher B31 for the inherited Off/Manual/Adaptive modes.
           Overall fovea brightness defaults neutral1; optional slider adjusts it.
           Exactly the existing three views. No new Unreal render or crop resizing.
-          Tiny slot-local GPU analysis; no image-history or CPU stats readback.
+          Tiny queue-owned GPU correction history; no CPU statistics readback.
+          Existing command-slot fences retain resources; no new CPU GPU wait.
 
           No initial slider configuration is required. Advanced Seam Matching
           and Fovea brightness / anti-vignette allow independent comparisons.
@@ -364,7 +367,9 @@ jobs:
           its fully sharp interior; they add no physical outward guard pixels.
           Enable GPU timing for total composite+analysis and analysis-only time.
           A screenshot preset does not guarantee exact runtime correction.
-          Compare the same scene ON/OFF; keep B28 and take updated screenshots.
+          Compare the same scene B31/Instant/Temporal; keep B31 as rollback.
+          Test NR before SR only on foveas, then gaze/head/light changes.
+          Headset stability, seam visibility and GPU cost remain unverified.
           Read B35_EDGE_MATCH_NOTES.md for defaults, scope and test checklist.
           Read B30_COMBINED_NOTES.md for scope and B31_OPTIMIZATION_NOTES.md for
           shader fast paths, regression checks and remaining headset limitations.
