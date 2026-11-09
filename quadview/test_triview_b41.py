@@ -35,4 +35,7 @@ if len(sys.argv) > 1:
     assert 'TriViewHold::set_window_ms(' in vr
     assert 'requested.edge_reach_px=std::min(m_quadview_edge_reach->value()*m_quadview_b41_reach_scale->value(),1024.f);' in vr
     assert '[TriView][Build] B41' in vr
+    hk = (Path(sys.argv[1]) / 'src/hooks/D3D12Hook.cpp').read_text()
+    assert 'swap_chain->GetDevice(IID_PPV_ARGS(&d3d12->m_device));' not in hk
+    assert 'if (present_device != nullptr) d3d12->m_device = present_device;' in hk
 print('B41: B40 shader kept, hold window, queue pin 4-6, split rejection log, blend distance, build log')

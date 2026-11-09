@@ -49,3 +49,15 @@ any option is not found exactly once.
 - Added TriViewHoldTests.cpp (CTest triview-b41-hold-window): behavioural tests for missed frames, timeout, no refresh while holding, generation/swapchain change, reset, recovery.
 - Queue pin 4-6 (source-read): CommandContext::execute submits AND signals its fence on the pinned queue; nothing in that path depends on the seam mode.
 - Code of the shipped DLL is unchanged by this follow-up (labels + test only).
+
+## B41.1 (9 Nov night): root cause of black flashes and ~0.5-1 s pauses (LOG, Liviu's B41 session 22:58-23:03)
+- 35 TargetLifetime rejections in ~5 min, ALL reason=D3D12-device-mismatch with hook_device=0 (or the valid
+  device again by log time) while resource_device was the valid device. Each rejection retired the target set and
+  rebuilt all three source targets (allocation 2 -> 20, ~43 MB each); ~0.67 s without a new frame; with the 250 ms
+  hold window that became black (16 BlankFrame lines).
+- Cause (SOURCE-READ): D3D12Hook::present refreshed m_device with swap_chain->GetDevice(IID_PPV_ARGS(&m_device))
+  every frame. COM clears the out pointer before filling it, so other threads can read nullptr for an instant.
+- Fix: fetch into a local and publish only a non-null device (D3D12Hook.cpp, TriView workflow only; DuoView
+  workflows untouched). Covers all ~11 readers of hook->get_device() in the backend.
+- Expected: no more device-mismatch rejections, no periodic target rebuilds, no 0.67 s pauses. Frequent target
+  rebuilds were the same path as changing crop live; whether this also explains the BSODs is NOT known.

@@ -114,14 +114,30 @@ def main():
             }
             {
                 static std::once_flag b41_build_logged;
-                std::call_once(b41_build_logged,[]{ spdlog::info("[TriView][Build] B41 (B40 + hold window, rejection diagnostics, queue pin 4-6, blend distance)"); });
+                std::call_once(b41_build_logged,[]{ spdlog::info("[TriView][Build] B41.1 (B40 + device-race fix + hold window, rejection diagnostics, queue pin 4-6, blend distance)"); });
             }
             if (m_quadview_edge_mode->value()!=0) {
                 requested.seam_mode=static_cast<uint32_t>(m_quadview_edge_mode->value()+2);''', 'per-draw settings')
     s = once(s, '#include "vr/Stalker2NativePolicy.hpp"\n',
              '#include "vr/Stalker2NativePolicy.hpp"\n#include "vr/TriViewHold.hpp"\n', 'VR include')
     p.write_text(s, encoding='utf-8', newline='\n')
-    print('Applied B41: hold window, rejection diagnostics, queue pin 4-6, blend distance UI, build log')
+    # 5. B41.1: UEVR's Present hook refreshed m_device with GetDevice(&m_device)
+    # every frame. COM clears the out pointer before filling it, so other
+    # threads could read nullptr for a moment: TriView's target lifetime check
+    # then saw "device changed" (log: hook_device=0, resource_device valid),
+    # rejected the frame and rebuilt all source targets (~0.67 s, black after
+    # the hold window). Fetch into a local and publish only a non-null device.
+    p = backend / 'src/hooks/D3D12Hook.cpp'
+    s = p.read_text(encoding='utf-8')
+    s = once(s, '    swap_chain->GetDevice(IID_PPV_ARGS(&d3d12->m_device));\n',
+             '    {\n'
+             '        // B41.1: never let other threads observe a transient nullptr device.\n'
+             '        ID3D12Device4* present_device{nullptr};\n'
+             '        swap_chain->GetDevice(IID_PPV_ARGS(&present_device));\n'
+             '        if (present_device != nullptr) d3d12->m_device = present_device;\n'
+             '    }\n', 'present device refresh')
+    p.write_text(s, encoding='utf-8', newline='\n')
+    print('Applied B41.1: device-race fix, hold window, rejection diagnostics, queue pin 4-6, blend distance UI, build log')
 
 
 if __name__ == '__main__':
