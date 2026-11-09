@@ -13,17 +13,16 @@ Labels: SOURCE-READ / REPLAYED (patch scripts run locally) / CI / HEADSET.
    and a total count. Failure path only. Nothing is bypassed.
 3. Queue pin. The shared colour history is submitted on its owning queue for seam modes 4, 5 and 6
    (B35 pinned only 4).
-4. (Deferred) B40 colour matching on 128 GPU lanes instead of 32. The first B41 CI run (42594056723)
-   compiled it, but QuadViewEdgeV2GpuTests failed in mode 4 ("Broad field jumped directly to the
-   changed target"), which passed in B40. B41 therefore keeps B40's serial loop; the speedup returns
-   in a later build once the cause is known. The test now prints the two values it compares.
-5. Neutral fallback: without shared history B40 mode shows no correction (B40 showed the raw target).
-6. Sliders in B40 mode: "Colour blend distance (x B40)" 1..3 (multiplies Outward reach, capped
-   1024 px) and "Colour blend shape (1 = B40)" 0.5..2 (t^shape inside the same smoothstep; >1 keeps
-   the correction strong farther out). Defaults reproduce B40 exactly. The shape travels in
-   the V2 hysteresis value as shape*0.02 (EdgeV2.w), which mode 6 never read; the compositor and
-   settings headers are unchanged from B40 (suspected: the edge_shape settings change broke the mode-3/4 WARP
-   test in CI runs 42594056723/42597953163/42599410860, cause not yet understood).
+4. Blend distance: slider "Colour blend distance (x B40)" 1..3 in B40 mode multiplies Outward
+   reach (capped 1024 px). Setting-only; default 1 = B40.
+5. Shader, compositor and settings headers are IDENTICAL to B40.
+
+Deferred to B42 (need shader changes): 128-lane B40 sampling (faster), blend SHAPE slider, neutral
+fallback when shared history is missing. Every B41 attempt that changed QuadViewComposite.hlsl
+(runs 42594056723, 42597953163, 42599410860, 42602127570) failed QuadViewEdgeV2GpuTests in mode 3/4
+("Broad field jumped directly to the changed target: temporal=40 instant=40") although the changed
+lines only run in mode 6; unchanged B40 passed the same test on 9 Nov (control run 42602648757).
+Cause unknown (compiler codegen or a latent mode-3/4 shader bug exposed by any change).
 7. Labels: workflow, zip, artifact and QUADVIEW_BUILD.json say B41; log line `[TriView][Build] B41`.
 
 ## Not changed

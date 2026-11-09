@@ -382,11 +382,6 @@ float EdgeFade(float distance, float reach) {
     return 1.0-t*t*(3.0-2.0*t);
 }
 
-float EdgeFadeShaped(float distance, float reach, float shape) {
-    const float t=pow(saturate(distance/max(reach,1.0)),clamp(shape,0.25,4.0));
-    return 1.0-t*t*(3.0-2.0*t);
-}
-
 float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
     // Unit plateau includes the first exterior pixel centers for fractional
     // crops too: do not attenuate correction between the two displayed sides.
@@ -413,15 +408,8 @@ float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
     [branch] if (Seam.x>4.5) {
         valid=a.a>0.5 && b.a>0.5;
         correction=slow*stable;
-        // B41, B40 mode only: mode 6 never used the V2 hysteresis, so the UI
-        // sends the blend shape in it as shape*0.02 (shape 1 = B40 curve;
-        // >1 keeps more correction farther out, <1 fades sooner).
-        const float shape=EdgeV2.w*50.0;
-        [branch] if (Seam.x>5.5 && abs(shape-1.0)>0.001)
-            correction=EdgeFadeShaped(distance,EdgeV2.x,shape)*stable;
     }
-    // B41: B40 mode always shows its (shaped) held correction; modes 3-5 unchanged.
-    color.rgb=max(color.rgb+Seam.y*((valid || Seam.x>5.5) ? correction : slow*stable),0.0);
+    color.rgb=max(color.rgb+Seam.y*(valid ? correction : slow*stable),0.0);
     [branch] if (SeamOptions.z > 0.5) color.rgb=valid ? float3(0.05,0.7,0.05) : float3(0.7,0.05,0.05);
     }
     return color;
@@ -715,9 +703,7 @@ void UpdateEdgeB40(uint eye, uint lane) {
     }
 
     const uint h=(eye*32u+lane)*3u;
-    // B41: without shared history show NO correction (B40 showed the raw
-    // current-frame target here, an instant jump).
-    float3 stable=float3(0.0,0.0,0.0);
+    float3 stable=valid ? target : 0.0;
     if (EdgeHistory.z!=0u) {
         const uint4 stamp=asuint(EdgeState[h+2u]);
         const bool initialized=stamp.w==0x40b04001u;
