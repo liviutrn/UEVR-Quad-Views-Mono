@@ -31,13 +31,12 @@ assert 'valid ? target : 0.0' not in b
 for forbidden in ('stamp.x!=', 'elapsed>250', 'cropDelta>', 'motionTolerance', '!valid)', 'reset='):
     assert forbidden not in b, forbidden
 # Blend shape only in mode 6; shape 1 equals the B40 curve.
-assert 'correction=EdgeFadeShaped(distance,EdgeV2.x,EdgeV2.w)*stable;' in s and '    const float slow=EdgeFade(distance,EdgeV2.x);' in s
+assert 'correction=EdgeFadeShaped(distance,EdgeV2.x,shape)*stable;' in s and '    const float slow=EdgeFade(distance,EdgeV2.x);' in s
 h = (root / 'QuadViewD3D12.hpp').read_text()
-assert 'constants.edge_v2[3]=settings.seam_mode==6 ? settings.edge_shape : settings.edge_hysteresis;' in h
+assert 'constants.edge_v2[3]=settings.edge_hysteresis;' in h  # compositor unchanged from B40
 assert 'sizeof(ShaderConstants) == 512' in h
-st = (root / 'QuadViewSettings.hpp').read_text()
-assert 'float edge_shape{1.f};' in st and 'scalar(requested.edge_shape,.5f,2.f' in st
-assert 'a.edge_shape==b.edge_shape' in st
+assert 'edge_shape' not in (root / 'QuadViewSettings.hpp').read_text()
+assert 'const float shape=EdgeV2.w*50.0;' in s
 
 
 def fade(d, reach, shape=None):
@@ -101,5 +100,5 @@ if len(sys.argv) > 1:
     assert 'requested.edge_reach_px=std::min(m_quadview_edge_reach->value()*m_quadview_b41_reach_scale->value(),1024.f);' in vr
     assert '[TriView][Build] B41' in vr
     gen = (mods / 'vr/QuadViewSettings.hpp').read_text()
-    assert 'edge_shape' in gen
+    assert 'requested.edge_hysteresis=std::clamp(m_quadview_b41_shape->value(),.5f,2.f)*.02f;' in vr
 print('B41: B40 sampling kept, neutral fallback, blend distance/shape, hold window, queue pin 4-6, split rejection log')

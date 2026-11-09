@@ -40,7 +40,6 @@ struct Settings {
     float ambient_radius_px{48.f}; // B39: pooled along-edge width (output px)
     float ambient_inside_px{32.f}; // inward sample reach (output px)
     uint32_t ambient_time_ms{350u}; // temporal RGB average time constant
-    float edge_shape{1.f}; // B41: B40 outward blend curve (1 = B40, >1 holds farther)
     bool seam_debug{};
     bool gpu_timing{};
     bool debug_border{};
@@ -162,7 +161,6 @@ inline Reconciled reconcile_settings(const Settings& requested, const Settings& 
     scalar(requested.ambient_radius_px,8.f,128.f,reject_seam,&Settings::ambient_radius_px);
     scalar(requested.ambient_inside_px,8.f,96.f,reject_seam,&Settings::ambient_inside_px);
     unsigned_integer(requested.ambient_time_ms,50u,1500u,reject_seam,&Settings::ambient_time_ms);
-    scalar(requested.edge_shape,.5f,2.f,reject_seam,&Settings::edge_shape);
     scalar(requested.seam_strength,0.f,1.f,reject_seam,&Settings::seam_strength);
     scalar(requested.seam_max_gain,.01f,.5f,reject_seam,&Settings::seam_max_gain);
     scalar(requested.seam_brightness_ev,-.5f,.5f,reject_seam,&Settings::seam_brightness_ev);
@@ -210,7 +208,7 @@ inline bool same_settings(const Settings& a, const Settings& b) {
         a.legacy_inward_anchor_px==b.legacy_inward_anchor_px &&
         a.ambient_radius_px==b.ambient_radius_px &&
         a.ambient_inside_px==b.ambient_inside_px &&
-        a.ambient_time_ms==b.ambient_time_ms && a.edge_shape==b.edge_shape &&
+        a.ambient_time_ms==b.ambient_time_ms &&
         a.seam_mode==b.seam_mode && a.seam_strength==b.seam_strength &&
         a.seam_max_gain==b.seam_max_gain && a.seam_brightness_ev==b.seam_brightness_ev &&
         a.seam_color_strength==b.seam_color_strength && a.seam_local_strength==b.seam_local_strength &&

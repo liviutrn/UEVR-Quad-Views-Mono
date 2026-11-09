@@ -21,7 +21,9 @@ Labels: SOURCE-READ / REPLAYED (patch scripts run locally) / CI / HEADSET.
 6. Sliders in B40 mode: "Colour blend distance (x B40)" 1..3 (multiplies Outward reach, capped
    1024 px) and "Colour blend shape (1 = B40)" 0.5..2 (t^shape inside the same smoothstep; >1 keeps
    the correction strong farther out). Defaults reproduce B40 exactly. The shape travels in
-   EdgeV2.w, which mode 6 never read (constant buffer stays 512 bytes).
+   the V2 hysteresis value as shape*0.02 (EdgeV2.w), which mode 6 never read; the compositor and
+   settings headers are unchanged from B40 (suspected: the edge_shape settings change broke the mode-3/4 WARP
+   test in CI runs 42594056723/42597953163/42599410860, cause not yet understood).
 7. Labels: workflow, zip, artifact and QUADVIEW_BUILD.json say B41; log line `[TriView][Build] B41`.
 
 ## Not changed

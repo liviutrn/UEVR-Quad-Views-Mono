@@ -413,10 +413,12 @@ float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
     [branch] if (Seam.x>4.5) {
         valid=a.a>0.5 && b.a>0.5;
         correction=slow*stable;
-        // B41, B40 mode only: EdgeV2.w is the blend shape (1 = B40 curve;
+        // B41, B40 mode only: mode 6 never used the V2 hysteresis, so the UI
+        // sends the blend shape in it as shape*0.02 (shape 1 = B40 curve;
         // >1 keeps more correction farther out, <1 fades sooner).
-        [branch] if (Seam.x>5.5 && EdgeV2.w!=1.0)
-            correction=EdgeFadeShaped(distance,EdgeV2.x,EdgeV2.w)*stable;
+        const float shape=EdgeV2.w*50.0;
+        [branch] if (Seam.x>5.5 && abs(shape-1.0)>0.001)
+            correction=EdgeFadeShaped(distance,EdgeV2.x,shape)*stable;
     }
     // B41: B40 mode always shows its (shaped) held correction; modes 3-5 unchanged.
     color.rgb=max(color.rgb+Seam.y*((valid || Seam.x>5.5) ? correction : slow*stable),0.0);

@@ -110,11 +110,11 @@ def main():
              'blend slider UI')
     s = once(s, '            if (m_quadview_edge_mode->value()!=0) {\n                requested.seam_mode=static_cast<uint32_t>(m_quadview_edge_mode->value()+2);',
              '''            uevr::quadview::TriViewHold::set_window_ms(static_cast<uint32_t>(m_quadview_b41_hold_ms->value()));
-            requested.edge_shape=1.f;
             if (m_quadview_edge_mode->value()==4) {
-                // B41: B40 blend distance multiplier (x1..x3) and shape.
+                // B41: B40 blend distance multiplier (x1..x3). Mode 6 never reads the V2
+                // hysteresis, so it carries the blend shape as shape*0.02 (0.01..0.04).
                 requested.edge_reach_px=std::min(m_quadview_edge_reach->value()*m_quadview_b41_reach_scale->value(),1024.f);
-                requested.edge_shape=std::clamp(m_quadview_b41_shape->value(),.5f,2.f);
+                requested.edge_hysteresis=std::clamp(m_quadview_b41_shape->value(),.5f,2.f)*.02f;
             }
             {
                 static std::once_flag b41_build_logged;
