@@ -400,9 +400,7 @@ float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
     const uint base=18u+eye*64u;
     const float4 a=SeamMatch[base+i*2u+1u], b=SeamMatch[base+j*2u+1u];
     const float3 stable=lerp(a.rgb,b.rgb,frac(k));
-    // B41: in B40 mode EdgeV2.w is the blend shape (1 = B40 curve; >1 keeps
-    // more correction farther out, <1 fades sooner). Other modes unchanged.
-    const float slow=(Seam.x>5.5 && EdgeV2.w!=1.0) ? EdgeFadeShaped(distance,EdgeV2.x,EdgeV2.w) : EdgeFade(distance,EdgeV2.x);
+    const float slow=EdgeFade(distance,EdgeV2.x);
     const float fast=EdgeFade(distance,min(EdgeV2.y,EdgeV2.x));
     float3 target=stable;
     bool valid=true;
@@ -415,8 +413,13 @@ float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
     [branch] if (Seam.x>4.5) {
         valid=a.a>0.5 && b.a>0.5;
         correction=slow*stable;
+        // B41, B40 mode only: EdgeV2.w is the blend shape (1 = B40 curve;
+        // >1 keeps more correction farther out, <1 fades sooner).
+        [branch] if (Seam.x>5.5 && EdgeV2.w!=1.0)
+            correction=EdgeFadeShaped(distance,EdgeV2.x,EdgeV2.w)*stable;
     }
-    color.rgb=max(color.rgb+Seam.y*(valid ? correction : slow*stable),0.0);
+    // B41: B40 mode always shows its (shaped) held correction; modes 3-5 unchanged.
+    color.rgb=max(color.rgb+Seam.y*((valid || Seam.x>5.5) ? correction : slow*stable),0.0);
     [branch] if (SeamOptions.z > 0.5) color.rgb=valid ? float3(0.05,0.7,0.05) : float3(0.7,0.05,0.05);
     }
     return color;

@@ -31,7 +31,7 @@ assert 'valid ? target : 0.0' not in b
 for forbidden in ('stamp.x!=', 'elapsed>250', 'cropDelta>', 'motionTolerance', '!valid)', 'reset='):
     assert forbidden not in b, forbidden
 # Blend shape only in mode 6; shape 1 equals the B40 curve.
-assert '(Seam.x>5.5 && EdgeV2.w!=1.0) ? EdgeFadeShaped(distance,EdgeV2.x,EdgeV2.w) : EdgeFade(distance,EdgeV2.x)' in s
+assert 'correction=EdgeFadeShaped(distance,EdgeV2.x,EdgeV2.w)*stable;' in s and '    const float slow=EdgeFade(distance,EdgeV2.x);' in s
 h = (root / 'QuadViewD3D12.hpp').read_text()
 assert 'constants.edge_v2[3]=settings.seam_mode==6 ? settings.edge_shape : settings.edge_hysteresis;' in h
 assert 'sizeof(ShaderConstants) == 512' in h
