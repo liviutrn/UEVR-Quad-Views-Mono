@@ -231,6 +231,8 @@ add_executable(QuadViewDepthWarpSceneTests DepthWarpSceneTests.cpp)
 add_test(NAME quadview-depth-warp-scene-reference COMMAND QuadViewDepthWarpSceneTests)
 add_executable(QuadViewResizeGateTests ResizeGateTests.cpp)
 add_test(NAME quadview-settled-single-build-resize COMMAND QuadViewResizeGateTests)
+add_executable(QuadViewTriViewHoldTests TriViewHoldTests.cpp)
+add_test(NAME triview-b41-hold-window COMMAND QuadViewTriViewHoldTests)
 add_executable(QuadViewPoseSlotTests PoseSlotTests.cpp)
 add_test(NAME quadview-triview-current-head-pose COMMAND QuadViewPoseSlotTests)
 

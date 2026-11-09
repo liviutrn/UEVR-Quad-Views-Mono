@@ -42,3 +42,10 @@ standing-origin key 226 (<> key), XYZ head scaling on X3 Y1 Z1.5, TriView focus 
 scale 0.30, feather 0.10, gaze breakout 0.25, micro gain 0.25, B27 inward feather OFF, sharpen
 eyes unlinked, right eye sharpen 10 / max change 0.40. The script runs last and fails the build if
 any option is not found exactly once.
+
+## Review follow-up (9 Nov evening, after ChatGPT review)
+- Final B41 commit fbe8b7b: CI run 42604637715 SUCCESS (both jobs), artifact UEVR-TriView-B41-Hold-143.
+- Fixed: QUADVIEW_BUILD.json / READ_FIRST still described 128-lane sampling and the shape slider (removed).
+- Added TriViewHoldTests.cpp (CTest triview-b41-hold-window): behavioural tests for missed frames, timeout, no refresh while holding, generation/swapchain change, reset, recovery.
+- Queue pin 4-6 (source-read): CommandContext::execute submits AND signals its fence on the pinned queue; nothing in that path depends on the seam mode.
+- Code of the shipped DLL is unchanged by this follow-up (labels + test only).
