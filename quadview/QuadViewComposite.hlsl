@@ -382,6 +382,11 @@ float EdgeFade(float distance, float reach) {
     return 1.0-t*t*(3.0-2.0*t);
 }
 
+float EdgeFadeShaped(float distance, float reach, float shape) {
+    const float t=pow(saturate(distance/max(reach,1.0)),clamp(shape,0.25,4.0));
+    return 1.0-t*t*(3.0-2.0*t);
+}
+
 float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
     // Unit plateau includes the first exterior pixel centers for fractional
     // crops too: do not attenuate correction between the two displayed sides.
@@ -395,7 +400,9 @@ float4 MatchEdgeV2(uint eye, float2 uv, float4 crop, float4 color) {
     const uint base=18u+eye*64u;
     const float4 a=SeamMatch[base+i*2u+1u], b=SeamMatch[base+j*2u+1u];
     const float3 stable=lerp(a.rgb,b.rgb,frac(k));
-    const float slow=EdgeFade(distance,EdgeV2.x);
+    // B41: in B40 mode EdgeV2.w is the blend shape (1 = B40 curve; >1 keeps
+    // more correction farther out, <1 fades sooner). Other modes unchanged.
+    const float slow=(Seam.x>5.5 && EdgeV2.w!=1.0) ? EdgeFadeShaped(distance,EdgeV2.x,EdgeV2.w) : EdgeFade(distance,EdgeV2.x);
     const float fast=EdgeFade(distance,min(EdgeV2.y,EdgeV2.x));
     float3 target=stable;
     bool valid=true;
@@ -664,28 +671,38 @@ void UpdateEdgeV2(uint eye,uint lane) {
 // persistent temporal correction knots per eye. Group values use per-channel
 // trimmed means, so a single bright/dark/color outlier cannot dominate.
 void UpdateEdgeB40(uint eye, uint lane) {
-    if (lane >= 32u) return;
+    // B41: the same 32 knots x 4 sub-anchors as B40, but sampled by all 128
+    // lanes in parallel (lane = knot*4 + sub) instead of 32 lanes looping 4x.
+    // Lane 0 of each knot then combines the four results in sub order, so the
+    // robust estimate and the temporal history below are unchanged.
     const float4 crop=eye==0u ? CropUvLeft : CropUvRight;
-    const uint side=lane/8u;
-    const float segment=float(lane%8u);
+    const uint knot=lane>>2u;
+    const uint sub=lane&3u;
+    const uint side=knot/8u;
+    const float segment=float(knot%8u);
+    // Four sub-anchors cover a substantial part of each of the 32
+    // interpolated boundary segments, with no temporal sampling jitter.
+    const float tt=saturate((segment+(float(sub)-1.5)*0.25)/8.0);
+    float2 p=side==0u ? float2(lerp(crop.x,crop.z,tt),crop.y) :
+             side==1u ? float2(crop.z,lerp(crop.y,crop.w,tt)) :
+             side==2u ? float2(lerp(crop.z,crop.x,tt),crop.w) :
+                        float2(crop.x,lerp(crop.w,crop.y,tt));
+    uint anchorSide=0u; float anchorAlong=0.0;
+    p=EdgeAnchor(p,crop,anchorSide,anchorAlong);
+    float3 sampleDelta=0.0;
+    const bool sampled=AmbientEdgeDifference(eye,p,side,crop,sampleDelta);
+    SeamFocusSums[lane]=sampled ? float4(sampleDelta,1.0) : float4(0.0,0.0,0.0,0.0);
+    GroupMemoryBarrierWithGroupSync();
+    [branch] if (sub==0u) {
     float3 q0=0.0, q1=0.0, q2=0.0, q3=0.0;
     uint count=0u;
-    [loop] for (uint sub=0u;sub<4u;++sub) {
-        // Four sub-anchors cover a substantial part of each of the 32
-        // interpolated boundary segments, with no temporal sampling jitter.
-        const float t=saturate((segment+(float(sub)-1.5)*0.25)/8.0);
-        float2 p=side==0u ? float2(lerp(crop.x,crop.z,t),crop.y) :
-                 side==1u ? float2(crop.z,lerp(crop.y,crop.w,t)) :
-                 side==2u ? float2(lerp(crop.z,crop.x,t),crop.w) :
-                            float2(crop.x,lerp(crop.w,crop.y,t));
-        uint anchorSide=0u; float anchorAlong=0.0;
-        p=EdgeAnchor(p,crop,anchorSide,anchorAlong);
-        float3 sampleDelta=0.0;
-        [branch] if (AmbientEdgeDifference(eye,p,side,crop,sampleDelta)) {
-            if (count==0u) q0=sampleDelta;
-            else if (count==1u) q1=sampleDelta;
-            else if (count==2u) q2=sampleDelta;
-            else q3=sampleDelta;
+    [unroll] for (uint k=0u;k<4u;++k) {
+        const float4 r=SeamFocusSums[lane+k];
+        if (r.a>0.5) {
+            if (count==0u) q0=r.rgb;
+            else if (count==1u) q1=r.rgb;
+            else if (count==2u) q2=r.rgb;
+            else q3=r.rgb;
             ++count;
         }
     }
@@ -702,8 +719,10 @@ void UpdateEdgeB40(uint eye, uint lane) {
         target=0.5*(q0+q1);
     }
 
-    const uint h=(eye*32u+lane)*3u;
-    float3 stable=valid ? target : 0.0;
+    const uint h=(eye*32u+knot)*3u;
+    // B41: without shared history show NO correction (B40 showed the raw
+    // current-frame target here, an instant jump).
+    float3 stable=float3(0.0,0.0,0.0);
     if (EdgeHistory.z!=0u) {
         const uint4 stamp=asuint(EdgeState[h+2u]);
         const bool initialized=stamp.w==0x40b04001u;
@@ -724,11 +743,12 @@ void UpdateEdgeB40(uint eye, uint lane) {
         EdgeState[h+1u]=crop; // diagnostic only; NEVER used to invalidate
         EdgeState[h+2u]=asfloat(uint4(EdgeHistory.x,EdgeHistory.y,0u,0x40b04001u));
     }
-    const uint outIndex=18u+eye*64u+lane*2u;
+    const uint outIndex=18u+eye*64u+knot*2u;
     SeamOutput[outIndex]=float4(target,valid ? 1.0 : 0.0);
     // Hold and DISPLAY the previous correction even with invalid new
     // geometry; no instantaneous raw target can bypass the temporal path.
     SeamOutput[outIndex+1u]=float4(stable,1.0);
+    }
 }
 
 [numthreads(128, 1, 1)]

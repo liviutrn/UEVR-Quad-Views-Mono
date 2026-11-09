@@ -11,7 +11,8 @@ def body(source, needle):
         j+=1
     return source[i:j]
 b=body(s,'void UpdateEdgeB40(')
-assert 'sub<4u' in b and 'AmbientEdgeDifference(eye,p,side,crop,sampleDelta)' in b
+# B41 samples the four sub-anchors on parallel lanes (lane&3u) instead of a loop.
+assert ('sub<4u' in b or 'const uint sub=lane&3u;' in b) and 'AmbientEdgeDifference(eye,p,side,crop,sampleDelta)' in b
 assert 'count>=2u' in b and 'min(min(q0,q1),min(q2,q3))' in b
 assert 'min(q0,min(q1,q2))' in b
 assert 'stamp.w==0x40b04001u' in b

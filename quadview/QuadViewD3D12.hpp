@@ -465,7 +465,8 @@ public:
         constants.edge_v2[0]=settings.edge_reach_px;
         constants.edge_v2[1]=settings.edge_fast_px;
         constants.edge_v2[2]=settings.edge_rate;
-        constants.edge_v2[3]=settings.edge_hysteresis;
+        // B41: mode 6 never reads the V2 hysteresis; that slot carries the blend shape.
+        constants.edge_v2[3]=settings.seam_mode==6 ? settings.edge_shape : settings.edge_hysteresis;
         // Epoch includes appearance/settings and source geometry, never gaze or
         // elapsed time. Crops are checked against previous GPU state separately.
         uint32_t epoch=2166136261u;
@@ -482,7 +483,7 @@ public:
         hash_float(settings.edge_reach_px); hash_float(settings.edge_fast_px); hash_float(settings.seam_strength);
         hash_float(settings.seam_transition_px); hash_float(settings.feather_fraction);
         hash_float(settings.ambient_radius_px); hash_float(settings.ambient_inside_px);
-        hash_word(settings.ambient_time_ms);
+        hash_word(settings.ambient_time_ms); hash_float(settings.edge_shape);
         hash_word(layout.shared_context);
         for (const auto& rect : constants.rectangles) for (auto v : rect) hash_word(v);
         hash_word(layout.eye_width); hash_word(layout.eye_height);
