@@ -238,6 +238,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B41 hold window/diagnostics/queue pin/blend UI overlay failed' }
           python workspace/quadview/test_triview_b41.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B41 generated and shader contracts failed' }
+          python workspace/quadview/apply_liviu_defaults.py backend
+          if ($LASTEXITCODE -ne 0) { throw "Liviu's standard UEVR defaults could not be applied" }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py

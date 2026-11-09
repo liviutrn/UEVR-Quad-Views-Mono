@@ -362,8 +362,9 @@ int main() try {
         previous=actual;
     }
     const auto instantBright=render(immediate,bright,layout,instant);
-    check(std::abs(int(previous.at(32,128)[0])-int(instantBright.at(32,128)[0]))>20,
-          "Broad field jumped directly to the changed target");
+    if (std::abs(int(previous.at(32,128)[0])-int(instantBright.at(32,128)[0]))<=20)
+        throw std::runtime_error("Broad field jumped directly to the changed target: temporal="+
+            std::to_string(previous.at(32,128)[0])+" instant="+std::to_string(instantBright.at(32,128)[0]));
     // Reset each category after creating a large lag. Compare to the actual
     // instant compositor rather than duplicating shader interpolation math.
     auto reset_case=[&](Settings changed,Layout changedLayout,uint64_t generation,const char* message) {

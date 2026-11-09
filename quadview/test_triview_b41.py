@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""B41 contracts: parallel B40 sampling keeps B40 maths, neutral fallback,
+"""B41 contracts: B40 maths kept, neutral fallback,
 mode-6 blend shape, hold window, queue pin 4-6, split rejection log, UI."""
 from pathlib import Path
 import sys
@@ -17,17 +17,13 @@ def body(source, needle):
 
 
 b = body(s, 'void UpdateEdgeB40(')
-# Parallel layout: every lane samples one sub-anchor, lane 0 of a knot combines.
-assert 'const uint knot=lane>>2u;' in b and 'const uint sub=lane&3u;' in b
-assert 'lane >= 32u' not in b, 'B41 must use all 128 lanes'
-assert b.index('GroupMemoryBarrierWithGroupSync();') < b.index('[branch] if (sub==0u)')
-assert b.count('GroupMemoryBarrierWithGroupSync();') == 1
-assert 'SeamFocusSums[lane+k]' in b and 'k<4u' in b
+# B41 keeps B40's serial sub-anchor loop (parallel version deferred, see B41_NOTES.md).
+assert 'sub<4u' in b
 # B40 maths unchanged.
 for keep in ('min(min(q0,q1),min(q2,q3))', 'min(q0,min(q1,q2))', 'count>=2u', 'stamp.w==0x40b04001u',
              'min(elapsed,50u)', 'const float alpha=float(dt)/(tau+float(dt))',
              'stable+=clamp((target-stable)*alpha', 'SeamOutput[outIndex+1u]=float4(stable,1.0)',
-             'const uint h=(eye*32u+knot)*3u;', 'const uint outIndex=18u+eye*64u+knot*2u;'):
+             'const uint h=(eye*32u+lane)*3u;'):
     assert keep in b, keep
 # Neutral fallback, never the raw target.
 assert 'float3 stable=float3(0.0,0.0,0.0);' in b
@@ -106,4 +102,4 @@ if len(sys.argv) > 1:
     assert '[TriView][Build] B41' in vr
     gen = (mods / 'vr/QuadViewSettings.hpp').read_text()
     assert 'edge_shape' in gen
-print('B41: parallel B40 sampling (same maths), neutral fallback, blend distance/shape, hold window, queue pin 4-6, split rejection log')
+print('B41: B40 sampling kept, neutral fallback, blend distance/shape, hold window, queue pin 4-6, split rejection log')
