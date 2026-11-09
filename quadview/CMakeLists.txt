@@ -233,6 +233,8 @@ add_executable(QuadViewResizeGateTests ResizeGateTests.cpp)
 add_test(NAME quadview-settled-single-build-resize COMMAND QuadViewResizeGateTests)
 add_executable(QuadViewTriViewHoldTests TriViewHoldTests.cpp)
 add_test(NAME triview-b41-hold-window COMMAND QuadViewTriViewHoldTests)
+add_executable(QuadViewTriViewVramGuardTests TriViewVramGuardTests.cpp)
+add_test(NAME triview-b42-vram-guard COMMAND QuadViewTriViewVramGuardTests)
 add_executable(QuadViewPoseSlotTests PoseSlotTests.cpp)
 add_test(NAME quadview-triview-current-head-pose COMMAND QuadViewPoseSlotTests)
 

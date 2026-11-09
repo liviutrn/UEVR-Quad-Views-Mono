@@ -83,6 +83,29 @@ int main() try {
         g.reset();
         check(!g.latched() && !g.update(ext(640), ext(768), sizes(.30f), 0).hold);
     }
+    {   // 6. B42 cooldown: after a publish the next build waits for the pause; reset keeps it
+        ResizeGate g; g.set_cooldown_ms(1500); g.confirm_live(ext(640), sizes(.25f));
+        uint64_t t = 10000;
+        (void)g.update(ext(640), ext(768), sizes(.30f), t);
+        check(g.update(ext(640), ext(768), sizes(.30f), t += 500).request);
+        auto d = g.update(ext(768), ext(896), sizes(.35f), t += 16);   // 768 published, user wants 896
+        check(d.hold && !d.request);
+        d = g.update(ext(768), ext(896), sizes(.35f), t += 600);       // settled, but inside the pause
+        check(d.hold && !d.request);
+        d = g.update(ext(768), ext(896), sizes(.35f), t += 1000);      // pause over
+        check(d.request && d.request_extents == ext(896));
+        g.reset(); check(g.cooldown_ms() == 1500);
+    }
+    {   // 7. B42 cancel_latch: a refused build is dropped and a new wish settles normally
+        ResizeGate g; g.confirm_live(ext(640), sizes(.25f));
+        (void)g.update(ext(640), ext(1024), sizes(.40f), 0);
+        check(g.update(ext(640), ext(1024), sizes(.40f), 500).request);
+        g.cancel_latch(); check(!g.latched());
+        auto d = g.update(ext(640), ext(768), sizes(.30f), 520);      // smaller wish, keeps drawing live
+        check(d.hold && !d.request && d.draw.context_scale == .25f);
+        d = g.update(ext(640), ext(768), sizes(.30f), 1000);
+        check(d.request && d.request_extents == ext(768));
+    }
     std::cout << "resize gate: ok\n";
     return 0;
 } catch (const std::exception& e) {

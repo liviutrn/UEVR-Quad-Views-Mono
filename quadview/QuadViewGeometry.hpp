@@ -404,7 +404,14 @@ public:
     void confirm_live(const SourceExtents& extents, const ResizeSizes& sizes) {
         live_valid_ = true; live_extents_ = extents; live_sizes_ = sizes;
     }
-    void reset() { *this = ResizeGate{}; }
+    // B42: minimum pause after a new set was published before the next build is
+    // latched (0 = off, B14 behaviour). Survives reset().
+    void set_cooldown_ms(uint64_t ms) { cooldown_ms_ = ms; }
+    uint64_t cooldown_ms() const { return cooldown_ms_; }
+    // B42: the caller refused the latched build (VRAM guard): forget it and let the
+    // current wish settle again, so a later, different wish is not blocked for 35 s.
+    void cancel_latch() { latched_ = false; seen_ = false; }
+    void reset() { const auto c = cooldown_ms_; *this = ResizeGate{}; cooldown_ms_ = c; }
     // published: extents of the set published right now (nullopt = none).
     Decision update(const std::optional<SourceExtents>& published, const SourceExtents& wanted,
                     const ResizeSizes& wanted_sizes, uint64_t now_ms) {
@@ -415,6 +422,7 @@ public:
         if (latched_ && *published == latched_extents_) {
             confirm_live(*published, latched_sizes_);
             latched_ = false;
+            published_ms_ = now_ms; // B42 cooldown starts when the new set is live
         }
         if (latched_ && now_ms - latched_ms_ > latch_timeout_ms) latched_ = false;
         if (latched_ && now_ms - requested_ms_ >= retry_ms) {
@@ -425,7 +433,8 @@ public:
         if (wanted == live_extents_) { seen_ = false; return d; }
         d.hold = true; d.draw = live_sizes_;
         if (!seen_ || wanted != seen_extents_) { seen_ = true; seen_extents_ = wanted; seen_ms_ = now_ms; return d; }
-        if (!latched_ && now_ms - seen_ms_ >= settle_ms) {
+        if (!latched_ && now_ms - seen_ms_ >= settle_ms &&
+            (cooldown_ms_ == 0 || now_ms - published_ms_ >= cooldown_ms_)) {
             latched_ = true; latched_extents_ = wanted; latched_sizes_ = wanted_sizes; latched_ms_ = now_ms;
             requested_ms_ = now_ms;
             d.request = true; d.request_extents = wanted;
@@ -437,6 +446,7 @@ private:
     bool live_valid_{}; SourceExtents live_extents_{}; ResizeSizes live_sizes_{};
     bool latched_{}; SourceExtents latched_extents_{}; ResizeSizes latched_sizes_{}; uint64_t latched_ms_{}, requested_ms_{};
     bool seen_{}; SourceExtents seen_extents_{}; uint64_t seen_ms_{};
+    uint64_t cooldown_ms_{}, published_ms_{}; // B42
 };
 
 // Tri-view B15: which pose-ring frame answers "where is the head now" (recenter,

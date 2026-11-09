@@ -1,6 +1,6 @@
-name: TriView B41.1 device-race fix + hold window + B40 continuous ambient edge
+name: TriView B42 VRAM safety (guard, size snapping, low-resolution start)
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B41.1 device-race fix (${{ github.run_number }})
+run-name: TriView B42 VRAM safety (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -238,6 +238,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B41 hold window/diagnostics/queue pin/blend UI overlay failed' }
           python workspace/quadview/test_triview_b41.py backend
           if ($LASTEXITCODE -ne 0) { throw 'B41 generated and shader contracts failed' }
+          python workspace/quadview/apply_triview_b42.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B42 VRAM safety overlay failed' }
+          python workspace/quadview/test_triview_b42.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'B42 generated contracts failed' }
           python workspace/quadview/apply_liviu_defaults.py backend
           if ($LASTEXITCODE -ne 0) { throw "Liviu's standard UEVR defaults could not be applied" }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
@@ -355,6 +359,7 @@ jobs:
           Copy-Item workspace/quadview/B39_AMBIENT_EDGE_NOTES.md package/B39_AMBIENT_EDGE_NOTES.md
           Copy-Item workspace/quadview/B40_CONTINUOUS_AMBIENT_NOTES.md package/B40_CONTINUOUS_AMBIENT_NOTES.md
           Copy-Item workspace/quadview/B41_NOTES.md package/B41_NOTES.md
+          Copy-Item workspace/quadview/B42_NOTES.md package/B42_NOTES.md
           Copy-Item workspace/quadview/focus_lift_calibration.json package/focus_lift_calibration.json
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
@@ -370,11 +375,16 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B41.1-Device-Race-Fix-B40-Continuous-Ambient'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B31-110 user-tested'; baselineSource='008c9f7548c43f5977c1197c4180cddb435c64de'; sourceParent='008c9f7548c43f5977c1197c4180cddb435c64de'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B41.1: device-race fix (no false TargetLifetime rejections / target rebuilds) + B40 image (shader identical) + hold window 250 ms (100-1000) + rejection diagnostics + queue pin 4-6 + blend distance slider + Liviu defaults; headset test pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B42-VRAM-Safety'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B31-110 user-tested'; baselineSource='008c9f7548c43f5977c1197c4180cddb435c64de'; sourceParent='008c9f7548c43f5977c1197c4180cddb435c64de'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B42: B41.1 + VRAM guard for resizes (85% of DXGI budget), 0.05 size snapping, 1.5 s rebuild pause, low-resolution start (0.3, one switch when loaded and VRAM allows), VRAM logs every 2 s and per build; headset test pending'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
+          UEVR ID7 / TriView B42 = B41.1 + VRAM safety against the BSOD when video memory fills up:
+          resize guard (menu: VRAM limit %), sizes snap to 0.05 steps, 1.5 s pause between rebuilds,
+          low-resolution start (menu: Start TriView at low resolution / Start resolution scale). Read B42_NOTES.md.
+          The UEVR log line [TriView][Build] B42 proves which build is installed.
+          --- B41.1 (included) ---
           UEVR ID7 / TriView B41.1 = B41 + fix for the black flashes/pauses (false 'device changed' rejections).
           B41 = B40 picture (shader unchanged) + longer hold of the last image on a missed frame
           (fewer black flashes, slider 100-1000 ms), rejection diagnostics, Colour blend distance slider, Liviu's defaults.
@@ -414,16 +424,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-TriView-B41-Hold-${{ github.run_number }}.zip"
+          $zip="UEVR-TriView-B42-VRAM-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-TriView-B41-Hold-${{ github.run_number }}
+          name: UEVR-TriView-B42-VRAM-${{ github.run_number }}
           path: |
-            UEVR-TriView-B41-Hold-*.zip
-            UEVR-TriView-B41-Hold-*.zip.sha256
+            UEVR-TriView-B42-VRAM-*.zip
+            UEVR-TriView-B42-VRAM-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
