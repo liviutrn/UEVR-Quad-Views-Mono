@@ -210,7 +210,19 @@ public:
         if (snapshot == nullptr || !family || !scene || !target || !view || !state || !projection_hash ||
             (snapshot->scene != 0 && scene != snapshot->scene) ||
             (snapshot->target != 0 && target != snapshot->target)) return false;
-        const auto index = view_index_for_rect(snapshot->layout, rect);
+        // B42.5: roles share origin 0, so several roles can have the same rectangle.
+        // Pick the first not-yet-constructed role with this rectangle whose expected
+        // projection hash matches (left/right foveas differ by projection; the
+        // engine constructs views in index order).
+        std::optional<uint32_t> index;
+        for (uint32_t i = 0; i != 4; ++i) {
+            if (!(snapshot->layout.views[i] == rect)) continue;
+            if ((snapshot->constructor_mask & static_cast<uint8_t>(1u << i)) != 0) continue;
+            if ((snapshot->expected_projection_mask & static_cast<uint8_t>(1u << i)) == 0 ||
+                snapshot->expected_projection_hashes[i] != projection_hash) continue;
+            index = i;
+            break;
+        }
         if (!index) return false;
         if ((snapshot->expected_projection_mask & static_cast<uint8_t>(1u << *index)) == 0 ||
             snapshot->expected_projection_hashes[*index] != projection_hash) return false;

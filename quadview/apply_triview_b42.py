@@ -347,7 +347,7 @@ uint32_t VR::get_hmd_width() const {
             if (const auto error=reinitialize_openxr()) {''', 'restart re-arm')
         # build identity
         s = once(s, 'spdlog::info("[TriView][Build] B41.1 (B40 + device-race fix + hold window, rejection diagnostics, queue pin 4-6, blend distance)");',
-            'spdlog::info("[TriView][Build] B42.4 (B42.3 + no black blink when a frame has no located views)");',
+            'spdlog::info("[TriView][Build] B42.5 (B42.4 + all source views at origin 0: no black bar at the crop edge)");',
             'build log')
         return s
     edit(mods / 'VR.cpp', vr_cpp)

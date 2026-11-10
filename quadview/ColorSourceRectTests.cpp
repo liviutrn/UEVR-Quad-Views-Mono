@@ -17,11 +17,13 @@ int main() try {
     Layout native=atlas;
     check(apply_native_local(native),"Native layout rejected");
     const auto identity=native.views;
-    check(identity[2]==Rect{16,0,2030,1614},"Left engine identity changed");
-    check(identity[3]==Rect{24,0,2030,1614},"Right engine identity changed");
+    // B42.5: every native role starts at 0 (no x16/x24 role tags), so the final
+    // colour position cannot differ from the engine rectangle any more.
+    check(identity[2]==Rect{0,0,2030,1614},"Left fovea not at origin");
+    check(identity[3]==Rect{0,0,2030,1614},"Right fovea not at origin");
     const auto extents=source_extents(native);
-    check(extents[2]==std::array<uint32_t,2>{2112,1664} && extents[3]==extents[2],
-          "Captured source allocation changed");
+    check(extents[2]==std::array<uint32_t,2>{2048,1664} && extents[3]==extents[2],
+          "Source allocation is not the picture rounded to 64 px");
     for (size_t role=0;role<4;++role) {
         const Rect expected{0,0,identity[role].width,identity[role].height};
         const Rect actual=color_source_rect(native,role);
@@ -37,9 +39,9 @@ int main() try {
         const auto role=eye+2;
         const auto rect=color_source_rect(native,role);
         check(rect.x==0 && rect.x+rect.width-1==2029,"Captured first/last image column lost");
-        check(identity[role].x+identity[role].width-1>=2030,"Fixture no longer exposes old overrun");
+        check(identity[role].x==0 && rect==identity[role],"Engine and colour rectangles differ");
     }
-    std::cout<<"Color source rectangles: captured 2030x1614 origin, role identity and atlas coordinates passed\n";
+    std::cout<<"Color source rectangles: all native roles at origin 0, atlas coordinates passed\n";
     return 0;
 } catch (const std::exception& e) {
     std::cerr<<"Color source rectangles FAILED: "<<e.what()<<'\n';

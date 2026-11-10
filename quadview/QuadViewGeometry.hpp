@@ -289,10 +289,9 @@ using SourceExtents = std::array<std::array<uint32_t, 2>, 4>;
 inline constexpr uint32_t compact_source_margin = 8;
 inline constexpr uint32_t compact_source_granularity = 64;
 
-// Engine construction rectangles retain their role-identifying origins.
-// A standalone Native Stereo Fix family's final color image is presented at
-// texture origin; these are different coordinate contracts. Snapshot B35-125:
-// 2030x1614 color at (0,0), although engine roles start at x16/x24.
+// B37: final colour of a standalone native family is at texture origin.
+// B42.5: engine roles now also start at origin 0 (no x8/x16/x24 role tags), so
+// both contracts agree; this function stays for the shared-atlas path.
 inline Rect color_source_rect(const Layout& layout, size_t role) {
     auto rect=layout.views[role];
     if(layout.native_local) { rect.x=0; rect.y=0; }
@@ -307,7 +306,7 @@ inline SourceExtents source_extents(const Layout& layout) {
             continue;
         }
         const auto& size_from = layout.views[i < 2 ? 0 : 2];
-        const auto pad = i < 2 ? compact_source_margin : 3 * compact_source_margin;
+        const uint64_t pad = 0; // B42.5: no role tag offsets any more
         const auto up = [](uint64_t v) {
             return static_cast<uint32_t>((v + compact_source_granularity - 1) / compact_source_granularity * compact_source_granularity);
         };
@@ -336,10 +335,15 @@ inline bool apply_native_local(Layout& layout) {
         layout.views[1].width != context.width || layout.views[1].height != context.height ||
         layout.views[3].width != focus.width || layout.views[3].height != focus.height ||
         uint64_t(context.width) + m > layout.atlas_width || uint64_t(focus.width) + 3 * m > layout.atlas_width) return false;
+    // B42.5: every role at origin 0. The old x = 8/16/24 role tags made the final
+    // colour position ambiguous (sometimes at 0, sometimes at the tag) -> black bar
+    // on the left crop edge. Roles are now identified by projection hash + order
+    // (QuadViewProducer::constructed), so the picture can only ever be at 0.
+    (void)m;
     layout.views[0] = {0, 0, context.width, context.height};
-    layout.views[1] = {m, 0, context.width, context.height};
-    layout.views[2] = {2 * m, 0, focus.width, focus.height};
-    layout.views[3] = {3 * m, 0, focus.width, focus.height};
+    layout.views[1] = {0, 0, context.width, context.height};
+    layout.views[2] = {0, 0, focus.width, focus.height};
+    layout.views[3] = {0, 0, focus.width, focus.height};
     layout.native_local = true;
     return true;
 }

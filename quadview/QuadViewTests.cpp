@@ -84,18 +84,18 @@ int main() {
         assert(uevr::quadview::apply_native_local(local) && local.native_local);
         const auto e=uevr::quadview::source_extents(local);
         assert(e[0]==e[1] && e[2]==e[3]);
-        assert(e[0][0]>=layout->views[0].width+8 && e[0][0]<layout->views[0].width+8+64 && e[0][0]%64==0);
+        assert(e[0][0]>=layout->views[0].width && e[0][0]<layout->views[0].width+64 && e[0][0]%64==0); // B42.5: no role tag pad
         assert(e[0][1]>=layout->views[0].height && e[0][1]<layout->views[0].height+64 && e[0][1]%64==0);
-        assert(e[2][0]>=layout->views[2].width+24 && e[2][0]<layout->views[2].width+24+64 && e[2][1]%64==0);
+        assert(e[2][0]>=layout->views[2].width && e[2][0]<layout->views[2].width+64 && e[2][1]%64==0);
         assert(e[0][0]*e[0][1]+e[2][0]*e[2][1] < 8120u*3228u/2);
         for (size_t i=0;i!=4;++i) assert(local.views[i].y==0);
         // a small slider step keeps the same extents (no target rebuild)
-        auto nudged=uevr::quadview::make_layout(4060,3228,.505f,.5f,.2f,1.f,.3f,.7f);
+        auto nudged=uevr::quadview::make_layout(4060,3228,.502f,.5f,.2f,1.f,.3f,.7f); // B42.5: stays in the same 64 px bucket without the old 24 px tag pad
         assert(nudged && uevr::quadview::apply_native_local(*nudged) && uevr::quadview::source_extents(*nudged)==e);
         for (size_t i=0;i!=4;++i) {
             assert(local.views[i].width==layout->views[i].width && local.views[i].height==layout->views[i].height);
             assert(local.views[i].x+local.views[i].width<=e[i][0] && local.views[i].y+local.views[i].height<=e[i][1]);
-            for (size_t j=0;j!=i;++j) assert(!(local.views[i]==local.views[j]));
+            assert(local.views[i].x==0); // B42.5: every role at origin 0
         }
         assert(local.focus_crops==layout->focus_crops);
         // equal requested context and focus sizes must still give four distinct
@@ -103,8 +103,9 @@ int main() {
         // so the periphery's DLSS output size is unique.
         auto same=uevr::quadview::make_layout(1000,1000,.2f,.2f,.2f,1.f,.5f,.5f);
         assert(same && same->views[2].width==200 && same->views[0].width==186);
+        for (size_t i=0;i!=4;++i) for (size_t j=0;j!=i;++j) assert(!(same->views[i]==same->views[j])); // atlas layout
         assert(uevr::quadview::apply_native_local(*same));
-        for (size_t i=0;i!=4;++i) for (size_t j=0;j!=i;++j) assert(!(same->views[i]==same->views[j]));
+        for (size_t i=0;i!=4;++i) assert(same->views[i].x==0 && same->views[i].y==0); // B42.5: native roles share origin 0
     }
     {   // Tri-view B7: periphery depth selection and shift
         using uevr::quadview::ngx::matches_periphery;
@@ -441,6 +442,30 @@ int main() {
     }
     assert(!producer.main_family(duplicate_key, 93, 0x300, 0x200, 0x100, views));
 
+    {   // B42.5: native-local roles all sit at origin 0 (identical rects for 0/1 and
+        // 2/3); the projection hash, not the rectangle, decides the role.
+        auto native_layout=*layout;
+        assert(uevr::quadview::apply_native_local(native_layout));
+        for (const bool reverse : {false, true}) {
+            const Key nk{7, reverse ? 17u : 16u};
+            assert(producer.begin(nk, reverse ? 97 : 96, 0x100, 0x200, native_layout));
+            for (uint32_t i = 0; i != 4; ++i)
+                assert(producer.projection_call(nk, static_cast<int32_t>(i), 0xabc0 + i, projection_for_test(i)));
+            assert(producer.camera(nk, 0, CameraPose{{1.0, 2.0, 3.0}, {-0.032, 0.0, 0.0}, true}));
+            assert(producer.camera(nk, 1, CameraPose{{1.0, 2.0, 3.0}, {0.032, 0.0, 0.0}, true}));
+            for (uint32_t i = 0; i != 4; ++i) assert(producer.rectangle_call(nk, static_cast<int32_t>(i)));
+            for (uint32_t k = 0; k != 4; ++k) {
+                const uint32_t i = reverse ? 3 - k : k;
+                assert(producer.constructed(nk, 0x300, 0x200, 0x100, views[i],
+                    static_cast<uintptr_t>(0x70 + i), native_layout.views[i], 0xabc0 + i));
+            }
+            const auto s = producer.snapshot(nk);
+            assert(s && s->construction_complete());
+            for (uint32_t i = 0; i != 4; ++i) assert(s->views[i].view == views[i]); // role kept by hash
+            // the same view constructed again is rejected (role already constructed)
+            assert(!producer.constructed(nk, 0x300, 0x200, 0x100, views[2], 0x72, native_layout.views[2], 0xabc2));
+        }
+    }
     const Key mixed_family{7, 15};
     assert(producer.begin(mixed_family, 94, 0x100, 0x200, *layout));
     for (uint32_t i = 0; i != 4; ++i)
