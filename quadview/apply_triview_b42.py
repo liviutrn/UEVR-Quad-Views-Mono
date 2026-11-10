@@ -53,7 +53,11 @@ def main():
             '    // B42: TriView low-resolution start. > 0 = this scale is used instead of the\n'
             '    // saved OpenXR_ResolutionScale (which is never changed). Ends once.\n'
             '    static inline std::atomic<float> triview_warmup_scale{0.f};\n'
-            '    bool finish_triview_warmup(const char* reason);\n', 'OpenXR decl')
+            '    bool finish_triview_warmup(const char* reason);\n'
+            '    // B42.4: last non-empty submit views (TriView): an empty submit used to end the\n'
+            '    // frame without a projection layer -> one black frame ("blink").\n'
+            '    std::vector<XrView> triview_last_stage_views{};\n'
+            '    uint64_t triview_reused_stage_views{};\n', 'OpenXR decl')
     edit(mods / 'vr/runtimes/OpenXR.hpp', openxr_hpp)
 
     def openxr_cpp(s):
@@ -76,6 +80,25 @@ def main():
             '                spdlog::info("[TriView][LowStart] resolution slider moved by the user: low-resolution start ended");\n'
             '            }\n\n'
             '            if (auto vr = VR::get(); vr != nullptr) {\n', 'UI apply')
+        s = once(s, '''    const auto submit_state = this->get_submit_state();
+    const auto& pipelined_stage_views = submit_state.stage_views;''', '''    const auto submit_state = this->get_submit_state();
+    // B42.4: TriView never ends a frame without the game image. If this frame has no
+    // located views, reuse the last valid ones (one frame of slightly old pose instead
+    // of a black frame); the frame timing (frame_state) stays current.
+    std::vector<XrView> triview_views_fallback{};
+    const std::vector<XrView>* triview_views = &submit_state.stage_views;
+    if (auto vr_b42 = VR::get(); vr_b42 != nullptr && vr_b42->is_quadview_mode_selected()) {
+        if (!submit_state.stage_views.empty()) {
+            this->triview_last_stage_views = submit_state.stage_views;
+        } else if (!this->triview_last_stage_views.empty()) {
+            triview_views_fallback = this->triview_last_stage_views;
+            triview_views = &triview_views_fallback;
+            ++this->triview_reused_stage_views;
+            SPDLOG_WARNING_EVERY_N_SEC(2, "[TriView][Submit] frame had no located views: reused last valid views instead of an empty (black) frame (total {})",
+                this->triview_reused_stage_views);
+        }
+    }
+    const auto& pipelined_stage_views = *triview_views;''', 'submit views fallback')
         s = once(s, 'uint32_t OpenXR::get_width() const {\n',
             '''// B42: one-shot switch from the low-resolution start to the saved scale, same
 // path as the menu slider (VR::on_openxr_resolution_scale_changed).
@@ -324,7 +347,7 @@ uint32_t VR::get_hmd_width() const {
             if (const auto error=reinitialize_openxr()) {''', 'restart re-arm')
         # build identity
         s = once(s, 'spdlog::info("[TriView][Build] B41.1 (B40 + device-race fix + hold window, rejection diagnostics, queue pin 4-6, blend distance)");',
-            'spdlog::info("[TriView][Build] B42.3 (B42.2 + safe recovery drain when the headset is taken off)");',
+            'spdlog::info("[TriView][Build] B42.4 (B42.3 + no black blink when a frame has no located views)");',
             'build log')
         return s
     edit(mods / 'VR.cpp', vr_cpp)

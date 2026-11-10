@@ -33,3 +33,5 @@ of a crash? 3) send the log.
 B42.2: a runtime restart ("Reinitialize Runtime", e.g. after changing SteamVR resolution) used to create the new XR session directly at full size while TriView resources were still being released -> BSOD (log 10 Nov 11:59). Now the new session starts at the low start scale (armed inside reinitialize_openxr only after the old session is destroyed) and TriView switches up through the VRAM check.
 
 B42.3: taking the headset off (XR session loses focus) left one frame without a TriView producer snapshot; the Build 48 recovery drain then rendered the raw 4-view family (incl. the never-rendered placeholder role) -> crash ~50 ms later (log 10 Nov 12:22, the only drain in four logs). The drain now renders view 0 only (count mutation + restore, same as dispatch slot 0); nothing is published.
+
+B42.4: "[VR] No stage views to submit" (24x in 15 min, log 10 Nov 19:16-19:32) ended the frame without a projection layer -> one black frame (Liviu: short blink). In TriView the submit now reuses the last valid located views for that frame; frame timing stays current. Log: [TriView][Submit] ... reused last valid views (total N).
