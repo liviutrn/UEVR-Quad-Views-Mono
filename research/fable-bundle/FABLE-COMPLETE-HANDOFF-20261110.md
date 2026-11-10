@@ -30426,6 +30426,1864 @@ struct NrGuidePass {
 
 ---
 
+
+
+---
+
+# PART H — ACTUAL SOURCE OF POST-SNAPSHOT CHEEKY DELTA
+
+These are ten complete scripts, tests, and the build workflow from `liviutrn/OpenNR` branch `experiment/cheeky-v063-faithful-hdr-stability-20261110`, pinned commit `1fd03a392d0a9652c7b52b2e05cc4dcf51314e7d` (10 Nov 2026, 15:07 UTC). They were added because the original Part F records an earlier NR Lite build. **These are patch scripts, not the newly generated patched C++ tree, and they are not a headset-validation record.**
+
+
+## SOURCE .github/workflows/cheeky-v063-nr-lite.yml
+
+~~~~yaml
+name: Cheeky 0.6.3 NR Lite native-SR and atlas readiness
+on:
+  push:
+    branches:
+      - experiment/cheeky-v063-triview-nr-lite-vram-20261110
+      - experiment/cheeky-v063-independent-pass-routing-gpu-trace-20261110
+      - experiment/cheeky-v063-faithful-hdr-stability-20261110
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned Cheeky 0.6.3
+        uses: actions/checkout@v4
+        with:
+          repository: ClarkCheekyKent/CheekyFoveatedDLSS
+          ref: 39bfc96214498e5e21cf861f0eb21f875697b428
+          path: upstream-cheeky
+      - name: Apply TriView dual-fovea NR routing and VRAM cleanup
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_view.py
+          if ($LASTEXITCODE -ne 0) { throw "Patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_view.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Strict patch failed" }
+          # Upstream v0.6.3 tag still carries an old 0.6.2 version.h.
+          # Correct release identity in the isolated test package before compiling.
+          $header = "upstream-cheeky/shared/version.h"
+          $text = Get-Content $header -Raw
+          if (-not $text.Contains('#define CHEEKY_VERSION "0.6.2"')) {
+            throw "Unexpected upstream source-version header: review before packaging"
+          }
+          $text = $text.Replace('#define CHEEKY_VERSION "0.6.2"', '#define CHEEKY_VERSION "0.6.3"')
+          [IO.File]::WriteAllText((Resolve-Path $header), $text, [Text.UTF8Encoding]::new($false))
+      - name: Apply NR-only GPU lifetime and atlas probe
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_lite.py
+          if ($LASTEXITCODE -ne 0) { throw "NR-Lite patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_lite.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "NR-Lite strict patch failed" }
+          python CheekyPort/tests/test_v063_nr_lite.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "NR-Lite static checks failed" }
+      - name: Apply full-fovea defaults and actual-state diagnostics
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_visibility.py
+          if ($LASTEXITCODE -ne 0) { throw "NR diagnostics patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_visibility.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "NR diagnostics strict patch failed" }
+      - name: Apply independent NR view masks and pass-2 crop
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_independent.py
+          if ($LASTEXITCODE -ne 0) { throw "Independent-pass patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_independent.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Independent-pass strict patch failed" }
+      - name: Install GPU stage timing and regression assertions
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_gpu_trace.py
+          if ($LASTEXITCODE -ne 0) { throw "GPU profiler patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_gpu_trace.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "GPU profiler strict patch failed" }
+          python CheekyPort/tests/test_v063_perpass.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "NR pass routing regression assertions failed" }
+      - name: Apply TriView safety, exposure tracing and Faithful HDR reconstruction
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_safety.py CheekyPort/scripts/apply_v063_nr_faithful.py
+          if ($LASTEXITCODE -ne 0) { throw "NR safety/HDR patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_safety.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "TriView safety strict patch failed" }
+          python CheekyPort/scripts/apply_v063_nr_faithful.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Faithful HDR strict patch failed" }
+          python CheekyPort/tests/test_v063_faithful.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Safety/HDR source & math regression failed" }
+      - name: Recompile every embedded HLSL shader from modified sources
+        working-directory: upstream-cheeky
+        shell: pwsh
+        run: |
+          $sdk = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Windows Kits/10/bin'
+          $fxc = @(Get-ChildItem -Path $sdk -Filter fxc.exe -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]fxc[.]exe
+
+This is an unabridged consolidation of the original A–G documents and all supplied Cheeky source/patch attachments. The newer Cheeky delta is linked and explicitly excluded from any claim of exact current generated-source coverage.
+ } |
+            Sort-Object -Property FullName -Descending | Select-Object -First 1)
+          if ($fxc.Count -ne 1) { throw "Windows SDK x64 fxc.exe missing" }
+          python scripts/build-d3d-shaders.py --fxc $fxc[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "Embedded shader regeneration failed" }
+          python scripts/build-d3d-shaders.py --fxc $fxc[0].FullName --check
+          if ($LASTEXITCODE -ne 0) { throw "Generated shader bytes differ from source" }
+      - name: Independently compile generated Lua (Lua 5.1 and 5.4)
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --only-binary=:all: lupa==2.8
+          if ($LASTEXITCODE -ne 0) { throw "Lua compiler dependency unavailable" }
+          python CheekyPort/tests/lua_release_gate.py source upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Generated Lua syntax gate failed" }
+      - name: Exercise generated Lua UI with mocked UEVR event bridge
+        shell: pwsh
+        run: |
+          python CheekyPort/tests/lua_ui_smoke.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Real generated Lua UI smoke test failed" }
+      - name: Compile full upstream solution (no unrelated FG hardware tests)
+        working-directory: upstream-cheeky
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild/**/Bin/MSBuild.exe' | Select-Object -First 1
+          if (-not $msbuild) { throw "MSBuild not found" }
+          & $msbuild CheekyFoveatedDLSS.sln /m /nr:false /nologo /verbosity:minimal /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+          if ($LASTEXITCODE -ne 0) { throw "Compilation failed" }
+      - name: Run focused NR and source-view regressions
+        working-directory: upstream-cheeky
+        shell: pwsh
+        run: |
+          foreach ($suite in @('--opennr-v063', '--nr-processing', '--d3d12-history', '--stereo-support', '--alignment-history')) {
+            Write-Host "Checking: $suite"
+            ./bin/Release/CheekyTests.exe $suite
+            if ($LASTEXITCODE -ne 0) { throw "Failed regression suite: $suite" }
+          }
+          Write-Host "Testing UEVR host bridge, mode switching and saved setting across reload"
+          ./bin/Release/CheekyUEVRTests.exe
+          if ($LASTEXITCODE -ne 0) { throw "Real UEVR runtime integration failed" }
+      - name: Install Inno Setup if absent
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "Installer tool failed" }
+          }
+      - name: Build matching OpenXR installer
+        working-directory: upstream-cheeky
+        shell: pwsh
+        run: |
+          ./scripts/build-installer.ps1 -SkipBuild
+          if ($LASTEXITCODE -ne 0) { throw "OpenXR installer failed" }
+      - name: Package UEVR
+        working-directory: upstream-cheeky
+        shell: pwsh
+        run: |
+          # The upstream PowerShell packager verifies its ZIP hashes internally.
+          # Its last cmdlet may retain an unrelated native LASTEXITCODE, so verify
+          # the actual output rather than trusting that inherited exit code.
+          ./scripts/package-uevr.ps1 -Configuration Release -Label v063-triview-nr-lite
+          $zip = @(Get-ChildItem bin/Release/*-UEVR-v063-triview-nr-lite.zip)
+          if ($zip.Count -ne 1) { throw "Missing or ambiguous UEVR archive" }
+          if ($zip[0].Name -ne "CheekyFoveatedDLSS-0.6.3-UEVR-v063-triview-nr-lite.zip") {
+            throw "Incorrect version-stamped UEVR archive: $($zip[0].Name)"
+          }
+          $test = [IO.Compression.ZipFile]::OpenRead($zip[0].FullName)
+          try {
+            foreach ($expected in @("plugins/CheekyFoveatedDLSS.dll",
+                                  "plugins/CheekyFoveatedDLSS/CheekyFoveatedDLSSRuntime.dll",
+                                  "scripts/cheeky_foveated_dlss.lua",
+                                  "OpenXR/CheekyOpenXRSetup.exe")) {
+              if (-not @($test.Entries | Where-Object FullName -EQ $expected).Count) {
+                throw "Missing required UEVR payload: $expected"
+              }
+            }
+          } finally { $test.Dispose() }
+          $zip[0] | Get-FileHash -Algorithm SHA256
+      - name: Verify exact packaged Lua bytes and compile every packaged script
+        shell: pwsh
+        run: |
+          python CheekyPort/tests/lua_release_gate.py package upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Packaged Lua release gate failed" }
+      - name: Upload experimental headset-test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cheeky-0.6.3-UEVR-FaithfulHDR-Safety-Experimental
+          path: |
+            upstream-cheeky/bin/Release/*-UEVR-v063-triview-nr-lite.zip
+            upstream-cheeky/bin/installer/CheekyOpenXRSetup.exe
+          if-no-files-found: error
+          retention-days: 20
+~~~~
+
+
+## SOURCE CheekyPort/scripts/apply_v063_nr_visibility.py
+
+~~~~python
+#!/usr/bin/env python3
+"""NR Lite full-fovea defaults and applied-state diagnostics.
+Runs after apply_v063_nr_view.py and apply_v063_nr_lite.py.
+Strict anchors: fail CI if upstream changes, rather than silently making a bad build.
+"""
+import sys
+from pathlib import Path
+root = Path(sys.argv[1]).resolve()
+
+def edit(name, old, new):
+    p = root / name
+    text = p.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f"{name}: expected exactly one anchor, found {count}: {old[:90]!r}")
+    p.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+    print(f"NR-TRACE patched: {name}: {old[:68]!r}")
+
+# New installations use full source-fovea NR, before STALKER 2's native DLSS SR.
+# Existing saved settings remain unchanged and can be switched via the UI,
+# subject to the VRAM admission guard.
+edit("src/settings.hpp", "NrProcessingOrder nr_processing_order{NrProcessingOrder::after_upscaling};",
+     "NrProcessingOrder nr_processing_order{NrProcessingOrder::before_upscaling};")
+edit("src/settings.hpp", "bool nr_foveated{true};", "bool nr_foveated{false};")
+# TriView defaults to stereo foveas only (explicit All mode is still available).
+edit("src/settings.hpp", "std::uint32_t eye_processing_mode{0U}; // All=0",
+     "std::uint32_t eye_processing_mode{3U}; // All=0")
+edit("src/settings.cpp", "std::atomic<std::uint32_t> eye_processing_mode{0U};",
+     "std::atomic<std::uint32_t> eye_processing_mode{3U};")
+edit("src/settings.cpp", "std::atomic<NrProcessingOrder> nr_order{NrProcessingOrder::after_upscaling};",
+     "std::atomic<NrProcessingOrder> nr_order{NrProcessingOrder::before_upscaling};")
+edit("src/settings.cpp", "std::atomic<bool> nr_foveated{true};",
+     "std::atomic<bool> nr_foveated{false};")
+
+# Model and codec resources already allocate region.width/height and scaled working
+# sizes, NOT the full resolution, when cropped. The separate BEFORE-SR *input*
+# texture is source-sized by design because native game DLSS consumes that
+# complete texture; do not risk invalid SR subrect/base semantics by shrinking it.
+edit("src/dlss_nr.hpp",
+     "    std::uint32_t requested_passes{1U}, active_passes{};",
+     """    std::uint32_t requested_passes{1U}, active_passes{};
+    // Diagnostics updated under nr_mutex; counters refer to successful
+    // model+codec output, not merely a requested setting or created feature.
+    std::uint64_t decoded_frames{}, completed_two_pass_frames{}, before_sr_processed_frames{};
+    std::uint64_t view_a_id{}, view_a_frames{}, view_b_id{}, view_b_frames{};""")
+edit("src/dlss_nr.cpp",
+     "    ++diagnostics.evaluation_calls;\n    view.history = history;",
+     """    ++diagnostics.evaluation_calls;
+    ++diagnostics.decoded_frames;
+    if (pass_count >= 2U) ++diagnostics.completed_two_pass_frames;
+    if (before) ++diagnostics.before_sr_processed_frames;
+    const auto id = static_cast<std::uint64_t>(frame.view_id);
+    if (id == diagnostics.view_a_id) ++diagnostics.view_a_frames;
+    else if (id == diagnostics.view_b_id) ++diagnostics.view_b_frames;
+    else if (!diagnostics.view_a_id) {
+        diagnostics.view_a_id = id; ++diagnostics.view_a_frames;
+    } else {
+        // View B can change after a runtime reload; keep view A stable.
+        diagnostics.view_b_id = id; diagnostics.view_b_frames = 1U;
+    }
+    view.history = history;""")
+
+# Runtime JSON reports applied configuration, actual output coverage and actual
+# successful passes. It does not mistake an NR evaluation for verified SR output.
+edit("uevr/runtime.cpp",
+     r'        << ",\"vram_bytes\":" << nr.intermediate_vram_bytes << "}"',
+     r'''        << ",\"vram_bytes\":" << nr.intermediate_vram_bytes
+        << ",\"requested_passes\":" << nr.requested_passes
+        << ",\"active_passes\":" << nr.active_passes
+        << ",\"decoded_frames\":" << nr.decoded_frames
+        << ",\"completed_two_pass_frames\":" << nr.completed_two_pass_frames
+        << ",\"before_sr_processed_frames\":" << nr.before_sr_processed_frames
+        << ",\"view_a_id\":" << nr.view_a_id << ",\"view_a_frames\":" << nr.view_a_frames
+        << ",\"view_b_id\":" << nr.view_b_id << ",\"view_b_frames\":" << nr.view_b_frames << "}"''')
+
+# Rejection message survives frequent snapshots until a successful transaction
+# or an explicit Discard, so a user cannot mistake a requested change for one
+# that the VRAM guard refused.
+edit("uevr/scripts/cheeky_foveated_dlss.lua",
+     "local error_text = nil",
+     "local error_text = nil\nlocal last_apply_error = nil")
+edit("uevr/scripts/cheeky_foveated_dlss.lua",
+     "    error_text = nil\nend\n\nlocal function set_enabled",
+     "    error_text, last_apply_error = nil, nil\nend\n\nlocal function set_enabled")
+edit("uevr/scripts/cheeky_foveated_dlss.lua",
+     """        if value.applied_request == pending_apply.id then
+            for key, sent in pairs(pending_apply.values) do
+                if dirty[key] == sent then dirty[key] = nil end
+            end
+        end
+        pending_apply = nil""",
+     """        if value.applied_request == pending_apply.id then
+            last_apply_error = nil
+            for key, sent in pairs(pending_apply.values) do
+                if dirty[key] == sent then dirty[key] = nil end
+            end
+        else
+            last_apply_error = "NOT APPLIED: " .. tostring(value.message or "Settings rejected")
+        end
+        pending_apply = nil""")
+edit("uevr/scripts/cheeky_foveated_dlss.lua",
+     '        if status then for k, v in pairs(status.settings) do draft[k] = v end end',
+     '        if status then for k, v in pairs(status.settings) do draft[k] = v end end\n        last_apply_error = nil')
+edit("uevr/scripts/cheeky_foveated_dlss.lua",
+     '    text("NR status: " .. tostring(status.nr or "Waiting"))',
+     '''    text("NR status: " .. tostring(status.nr or "Waiting"))
+    if last_apply_error then text(last_apply_error) end
+    local applied = status.settings or {}
+    local nd = status.nr_details or {}
+    text("APPLIED: NR " .. (applied.NrEnabled and "ON" or "OFF")
+        .. " | views " .. tostring(applied.EyeProcessingMode or "?")
+        .. " | crop " .. (applied.NrFoveated and "ON" or "OFF")
+        .. " | passes " .. tostring(applied.NrPasses or "?")
+        .. " | " .. (applied.NrProcessingOrder == 1 and "before SR" or "after SR"))
+    if draft.NrFoveated ~= applied.NrFoveated or draft.NrPasses ~= applied.NrPasses
+        or draft.EyeProcessingMode ~= applied.EyeProcessingMode then
+        text("PENDING/REJECTED EDITS DIFFER FROM THE APPLIED VALUES ABOVE")
+    end
+    local pw, ph = tonumber(nd.processing_width) or 0, tonumber(nd.processing_height) or 0
+    local rw, rh = tonumber(nd.region_width) or 0, tonumber(nd.region_height) or 0
+    if pw > 0 and ph > 0 and rw > 0 and rh > 0 then
+        text(string.format("Actual NR region: %dx%d of %dx%d (%.1f%% source pixels), working %dx%d",
+            rw, rh, pw, ph, 100.0 * rw * rh / (pw * ph),
+            tonumber(nd.working_width) or 0, tonumber(nd.working_height) or 0))
+    end
+    text(string.format("Output decoded: %d | completed 2-pass frames: %d | NR-before-SR processed: %d",
+        tonumber(nd.decoded_frames) or 0, tonumber(nd.completed_two_pass_frames) or 0,
+        tonumber(nd.before_sr_processed_frames) or 0))
+    text(string.format("Source A: %.0f (%d frames) | Source B: %.0f (%d frames)",
+        tonumber(nd.view_a_id) or 0, tonumber(nd.view_a_frames) or 0,
+        tonumber(nd.view_b_id) or 0, tonumber(nd.view_b_frames) or 0))
+    local mem = status.gpu_memory and status.gpu_memory["local"]
+    if mem and mem.valid then
+        text(string.format("Current DXGI VRAM headroom: %.0f MiB (excludes future model allocations)",
+            (tonumber(mem.headroom_bytes) or 0) / 1048576))
+    end
+    if applied.NrEnabled and (tonumber(nd.decoded_frames) or 0) == 0 then
+        text("NR enabled but no successful output decoded yet; inspect route/skip reason.")
+    end
+    if applied.NrPasses == 2 and (tonumber(nd.active_passes) or 0) < 2 then
+        text("2 passes requested but most recent NR evaluation did NOT execute two passes.")
+    end
+    text("NR crop allocates crop-sized model/codec working surfaces; before-SR input handoff stays source-sized.")''')
+edit("uevr/scripts/cheeky_foveated_dlss.lua",
+     '        check("Enable NR subregion", "NrFoveated")',
+     '''        check("Crop NR inside each source fovea (OFF = full fovea)", "NrFoveated")
+        if not draft.NrFoveated then
+            text("Full-source NR requires more VRAM. If refused, reduce TriView resolution first.")
+        end''')
+
+# Local safety assertions: ensure the build did not accidentally enable FG or
+# replace native SR, and check that the new visibility contract was applied.
+test = (root / "uevr/scripts/cheeky_foveated_dlss.lua").read_text(encoding="utf-8")
+runtime = (root / "uevr/runtime.cpp").read_text(encoding="utf-8")
+nr = (root / "src/dlss_nr.cpp").read_text(encoding="utf-8")
+assert "last_apply_error" in test and "APPLIED: NR " in test
+assert "completed_two_pass_frames" in runtime and "before_sr_processed_frames" in nr
+assert 'fg_settings.enabled = false' in (root / "src/settings.cpp").read_text(encoding="utf-8")
+assert "NR-LITE: game-native DLSS SR is always authoritative" in (root / "src/hooks.cpp").read_text(encoding="utf-8")
+print("NR-TRACE PASS: full-fovea defaults, rejection acknowledgement and real pass/output counters")
+~~~~
+
+
+## SOURCE CheekyPort/scripts/apply_v063_nr_independent.py
+
+~~~~python
+#!/usr/bin/env python3
+"""TriView independent per-pass view masks and optional pass-2 crop.
+Apply strictly after view, Lite and visibility scripts against pinned Cheeky 0.6.3.
+"""
+from pathlib import Path
+import sys
+root=Path(sys.argv[1]).resolve()
+def patch(path, before, after):
+    file=root/path; text=file.read_text(encoding="utf-8")
+    count=text.count(before)
+    if count!=1: raise RuntimeError(f"{path}: strict anchor count={count}: {before[:110]!r}")
+    file.write_text(text.replace(before,after,1),encoding="utf-8",newline="\n")
+    print("NR-PASS patched",path)
+
+patch("src/settings.hpp",
+    "    std::array<NrExtraPass, max_nr_passes - 1U> nr_extra_passes{};",
+    """    std::array<NrExtraPass, max_nr_passes - 1U> nr_extra_passes{};
+    // Source mask: 1=fovea A, 2=fovea B, 4=mono periphery.
+    // A/B are stable sorted source IDs, not unverified anatomical left/right.
+    // 7=all, 3=both foveas, 4=periphery, 0=none.
+    std::uint32_t nr_pass1_views{3U};
+    std::uint32_t nr_pass2_views{3U};
+    bool nr_pass2_foveated{false};
+    float nr_pass2_width{0.56F}, nr_pass2_height{0.56F};
+    float nr_pass2_roundness{}, nr_pass2_transition_width{0.08F};""")
+
+patch("src/settings.hpp",
+    "[[nodiscard]] bool cheeky_triview_fovea(std::uint64_t) noexcept;",
+    """[[nodiscard]] bool cheeky_triview_fovea(std::uint64_t) noexcept;
+[[nodiscard]] std::uint32_t cheeky_nr_source_role(std::uint64_t) noexcept;
+[[nodiscard]] std::uint32_t cheeky_nr_selected_passes(const Settings&, std::uint64_t) noexcept;
+[[nodiscard]] bool evaluate_nr_selected_passes(const DlssNrFrame&, const Settings&) noexcept;""".replace(
+    '[[nodiscard]] bool evaluate_nr_selected_passes(const DlssNrFrame&, const Settings&) noexcept;', ''))
+# API for evaluator is in dlss_nr.hpp (Settings header cannot depend on DlssNrFrame).
+patch("src/settings.cpp",
+    "std::array<NrExtraPass, max_nr_passes - 1U> nr_extra_passes{}; // settings_mutex",
+    """std::array<NrExtraPass, max_nr_passes - 1U> nr_extra_passes{}; // settings_mutex
+std::uint32_t nr_pass1_views{3U}, nr_pass2_views{3U};
+bool nr_pass2_foveated{};
+float nr_pass2_width{0.56F}, nr_pass2_height{0.56F};
+float nr_pass2_roundness{}, nr_pass2_transition_width{0.08F};""")
+patch("src/settings.cpp",
+    "    settings.nr_extra_passes = nr_extra_passes;",
+    """    settings.nr_extra_passes = nr_extra_passes;
+    settings.nr_pass1_views = nr_pass1_views;
+    settings.nr_pass2_views = nr_pass2_views;
+    settings.nr_pass2_foveated = nr_pass2_foveated;
+    settings.nr_pass2_width = nr_pass2_width;
+    settings.nr_pass2_height = nr_pass2_height;
+    settings.nr_pass2_roundness = nr_pass2_roundness;
+    settings.nr_pass2_transition_width = nr_pass2_transition_width;""")
+patch("src/settings.cpp",
+    "    nr_passes = std::clamp(settings.nr_passes, 1U, max_nr_passes);",
+    """    nr_passes = std::clamp(settings.nr_passes, 1U, max_nr_passes);
+    nr_pass1_views = settings.nr_pass1_views & 7U;
+    nr_pass2_views = settings.nr_pass2_views & 7U;
+    nr_pass2_foveated = settings.nr_pass2_foveated;
+    nr_pass2_width = std::clamp(settings.nr_pass2_width, 0.2F, 1.0F);
+    nr_pass2_height = std::clamp(settings.nr_pass2_height, 0.2F, 1.0F);
+    nr_pass2_roundness = std::clamp(settings.nr_pass2_roundness, 0.0F, 1.0F);
+    nr_pass2_transition_width = std::clamp(settings.nr_pass2_transition_width, 0.0F, 0.3F);""")
+
+patch("uevr/settings_fields.inc",
+    'CHEEKY_SETTING("NrPasses", nr_passes)',
+    '''CHEEKY_SETTING("NrPasses", nr_passes)
+CHEEKY_SETTING("NrPass1Views", nr_pass1_views)
+CHEEKY_SETTING("NrPass2Views", nr_pass2_views)
+CHEEKY_SETTING("NrPass2Foveated", nr_pass2_foveated)
+CHEEKY_SETTING("NrPass2Width", nr_pass2_width)
+CHEEKY_SETTING("NrPass2Height", nr_pass2_height)
+CHEEKY_SETTING("NrPass2Roundness", nr_pass2_roundness)
+CHEEKY_SETTING("NrPass2TransitionWidth", nr_pass2_transition_width)''')
+patch("uevr/settings_io.cpp",
+    '    if(key=="FgDlssgPreset")',
+    '''    if(key=="NrPass1Views" || key=="NrPass2Views"){
+        unsigned mask{}; if(!parse(value, mask) || mask > 7U)return false;
+        (key=="NrPass1Views" ? s.nr_pass1_views : s.nr_pass2_views)=mask;return true;
+    }
+    if(key=="FgDlssgPreset")''')
+
+# Independent masks require classifying the full 3-source TriView set. A mask
+# of 7 can be applied before classification; partial masks fail closed.
+patch("src/settings.cpp",
+    "bool cheeky_processing_allowed_for_view(const Settings& settings,",
+    """std::uint32_t cheeky_nr_source_role(const std::uint64_t id) noexcept {
+    if (!id) return 0U;
+    const auto quad = quad_view_snapshot();
+    if (quad.active) {
+        if (quad.status != 2) return 0U;
+        const auto* role = quad_view_assignment(quad,id,stereo_view_generation(id));
+        if (!role) return 0U;
+        return role->focus ? (role->eye_index == 0 ? 1U : 2U) : 4U;
+    }
+    std::lock_guard lock(stereo_views_mutex);
+    const auto now = GetTickCount64();
+    const StereoView* v[3]{};
+    unsigned n{};
+    for (const auto& src : stereo_views) {
+        if (!src.evaluation_calls || src.graphics_api != 12U ||
+            !src.evaluation_output_width || !src.evaluation_output_height ||
+            src.last_evaluation_ms > now ||
+            now-src.last_evaluation_ms > 2000U) continue;
+        if (n==3U) return 0U;
+        v[n++]=&src;
+    }
+    if(n!=3U) return 0U;
+    const auto same=[](const StereoView* a,const StereoView* b) noexcept {
+        return a->evaluation_output_width==b->evaluation_output_width &&
+               a->evaluation_output_height==b->evaluation_output_height;
+    };
+    const bool ab=same(v[0],v[1]),ac=same(v[0],v[2]),bc=same(v[1],v[2]);
+    const StereoView *a{}, *b{}, *p{};
+    if (ab&&!ac&&!bc) {a=v[0];b=v[1];p=v[2];}
+    else if(ac&&!ab&&!bc){a=v[0];b=v[2];p=v[1];}
+    else if(bc&&!ab&&!ac){a=v[1];b=v[2];p=v[0];}
+    else return 0U;
+    if(a->view_id > b->view_id)std::swap(a,b);
+    if(id==a->view_id)return 1U;
+    if(id==b->view_id)return 2U;
+    if(id==p->view_id)return 4U;
+    return 0U;
+}
+
+std::uint32_t cheeky_nr_selected_passes(const Settings& settings,
+    const std::uint64_t view_id) noexcept {
+    if (!settings.nr_enabled) return 0U;
+    const auto first = settings.nr_pass1_views & 7U;
+    const auto second = settings.nr_passes >= 2U
+        ? (settings.nr_pass2_views & 7U) : 0U;
+    const auto role = cheeky_nr_source_role(view_id);
+    // Even mask=7 targets only the three VERIFIED TriView source IDs.
+    // Unknown/desktop sources never allocate an extra NVIDIA NR feature.
+    const bool run_first = role != 0U && (first & role)!=0U;
+    const bool run_second = role != 0U && (second & role)!=0U;
+    return (run_first ? 1U : 0U) | (run_second ? 2U : 0U);
+}
+
+bool cheeky_processing_allowed_for_view(const Settings& settings,""")
+# Keep native game SR intact, even when NR is disabled. Only NR-selected calls
+# need Cheeky's intermediate preparation.
+patch("src/settings.cpp",
+    "    if (settings.eye_processing_mode == 0U) return true;",
+    """    if (settings.nr_enabled) return cheeky_nr_selected_passes(settings, view_id) != 0U;
+    // Preserve legacy routing behavior while NR is disabled (existing regressions).
+    if (settings.eye_processing_mode == 0U) return true;""")
+# Quad role used to suppress periphery NR; honor independent pass masks instead.
+patch("src/settings.cpp",
+    "        result.nr_enabled=settings.nr_enabled&&role&&role->focus;",
+    "        result.nr_enabled=settings.nr_enabled&&role&&cheeky_nr_selected_passes(settings,view_id)!=0U;")
+
+patch("src/dlss_nr.hpp",
+    "    std::uint32_t view_output_base_x{}, view_output_base_y{}; // Retained when Before NR switches color to input space.",
+    """    std::uint32_t view_output_base_x{}, view_output_base_y{}; // Retained when Before NR switches color to input space.
+    // Appended to preserve layout of existing aggregate DlssNrFrame initializers.
+    std::uint32_t logical_pass{1U};
+    std::uint32_t source_role{};
+    bool first_pass_completed{};""")
+patch("src/dlss_nr.hpp",
+    '[[nodiscard]] bool evaluate_dlss_nr(',
+    '''[[nodiscard]] bool evaluate_nr_selected_passes(const DlssNrFrame&, const Settings&) noexcept;
+[[nodiscard]] bool evaluate_dlss_nr(''')
+# Evaluate actual NR twice, each time with independently configured region and
+# distinct view ID/history. Deliberately do not reuse NVIDIA's temporal feature.
+patch("src/dlss_nr.cpp",
+    "void draw_dlss_nr_border(const DlssNrFrame& input_frame,",
+    """bool evaluate_nr_selected_passes(const DlssNrFrame& frame,
+    const Settings& settings) noexcept {
+    const auto chosen = cheeky_nr_selected_passes(settings, frame.view_id);
+    if (!chosen) {
+        skip_dlss_nr_history(frame.view_id);
+        skip_dlss_nr_history(frame.view_id ^ (1ULL << 63U));
+        return false;
+    }
+    const auto role = cheeky_nr_source_role(frame.view_id);
+    // Same region: reuse the upstream optimized single-codec two-pass chain.
+    // The two model features/histories remain independent (view.pass=0 and 1).
+    // Different pass crops still require two distinct codec evaluations.
+    const bool same_region = settings.nr_foveated == settings.nr_pass2_foveated &&
+        (!settings.nr_foveated ||
+         (!settings.nr_use_sr_foveation &&
+          settings.nr_width==settings.nr_pass2_width &&
+          settings.nr_height==settings.nr_pass2_height &&
+          settings.nr_roundness==settings.nr_pass2_roundness &&
+          settings.nr_transition_width==settings.nr_pass2_transition_width));
+    if (chosen==3U && same_region) {
+        auto shared_frame=frame;
+        shared_frame.logical_pass=1U;
+        shared_frame.source_role=role;
+        return evaluate_dlss_nr(shared_frame,settings);
+    }
+    bool first_ok = false;
+    bool second_ok = false;
+    if (chosen & 1U) {
+        auto first = settings;
+        first.nr_passes = 1U;
+        auto pass_frame = frame;
+        pass_frame.logical_pass = 1U;
+        pass_frame.source_role = role;
+        first_ok = evaluate_dlss_nr(pass_frame, first);
+    } else {
+        skip_dlss_nr_history(frame.view_id);
+    }
+    if ((chosen & 2U) && (!(chosen & 1U) || first_ok)) {
+        auto second = nr_pass_settings(settings, 1U);
+        second.nr_passes = 1U;
+        second.nr_foveated = settings.nr_pass2_foveated;
+        second.nr_use_sr_foveation = false;
+        second.nr_width = settings.nr_pass2_width;
+        second.nr_height = settings.nr_pass2_height;
+        second.nr_roundness = settings.nr_pass2_roundness;
+        second.nr_transition_width = settings.nr_pass2_transition_width;
+        auto pass_frame = frame;
+        pass_frame.view_id ^= (1ULL << 63U); // Second NR history separate from source and pass 1.
+        pass_frame.logical_pass = 2U;
+        pass_frame.source_role = role;
+        pass_frame.first_pass_completed = first_ok;
+        second_ok = evaluate_dlss_nr(pass_frame, second);
+    } else {
+        skip_dlss_nr_history(frame.view_id ^ (1ULL << 63U));
+    }
+    static std::atomic<std::uint64_t> trace_counter{};
+    const auto count = trace_counter.fetch_add(1U,std::memory_order_relaxed)+1U;
+    if (count <= 12U || count % 300U == 0U)
+        trace_event("[CheekyNR][PerPass] source=%llu role=%u selected=%u first=%u second=%u pass2Crop=%u model=%u area=%ux%u",
+            static_cast<unsigned long long>(frame.view_id), role, chosen,
+            first_ok?1U:0U, second_ok?1U:0U, settings.nr_pass2_foveated?1U:0U,
+            settings.nr_preset, frame.processing_width, frame.processing_height);
+    return first_ok || second_ok;
+}
+
+void draw_dlss_nr_border(const DlssNrFrame& input_frame,""")
+# Correct success reporting for logical pass 2, even though the helper runs
+# one model evaluation per invocation.
+patch("src/dlss_nr.cpp",
+    '    diagnostics.active_passes = pass_count;',
+    '''    diagnostics.active_passes = pass_count +
+        (frame.logical_pass == 2U && frame.first_pass_completed ? 1U : 0U);''')
+patch("src/dlss_nr.cpp",
+    '    if (pass_count >= 2U) ++diagnostics.completed_two_pass_frames;',
+    '''    if (pass_count >= 2U || (frame.logical_pass == 2U && frame.first_pass_completed))
+        ++diagnostics.completed_two_pass_frames;''')
+
+patch("src/dlss_nr_input.cpp",
+    '    return evaluate_dlss_nr(frame, processing_settings) ? private_color : nullptr;',
+    '    return evaluate_nr_selected_passes(frame, processing_settings) ? private_color : nullptr;')
+patch("src/hooks.cpp",
+    '    const bool evaluated = evaluate_dlss_nr(frame, evaluation.settings);',
+    '    const bool evaluated = evaluate_nr_selected_passes(frame, evaluation.settings);')
+patch("src/hooks.cpp",
+    '    const bool evaluated = evaluate_dlss_nr(\n        frame,\n        view_settings\n    );',
+    '    const bool evaluated = evaluate_nr_selected_passes(\n        frame,\n        view_settings\n    );')
+
+# Independent source masks can instantiate additional opaque NVIDIA NR features.
+# Preserve the existing conservative guard on every expanding setting change.
+patch("uevr/nr_lite_budget_policy.hpp",
+    "    // Enabling NR instantiates model histories and is always budget-gated.",
+    """    // Guard reconfiguration that adds any new per-source model feature.
+    // Reducing the source set is always a memory-recovery operation.
+    const auto first_new = requested.nr_pass1_views & ~(current.nr_pass1_views);
+    const auto second_new = requested.nr_passes>=2U
+        ? requested.nr_pass2_views &
+            ~(current.nr_passes>=2U ? current.nr_pass2_views : 0U) : 0U;
+    const bool pass2_grows = current.nr_pass2_foveated && !requested.nr_pass2_foveated;
+    const bool pass2_region_grows = requested.nr_pass2_foveated && current.nr_pass2_foveated &&
+        (requested.nr_pass2_width > current.nr_pass2_width + 0.0001F ||
+         requested.nr_pass2_height > current.nr_pass2_height + 0.0001F);
+    if (current.nr_enabled && (first_new || second_new || pass2_grows || pass2_region_grows))
+        return (first_new && second_new ? 3072ULL : 2048ULL) * nr_lite_mib;
+    // Enabling NR instantiates model histories and is always budget-gated.""")
+patch("uevr/nr_lite_budget_policy.hpp",
+    """    if (!current.nr_enabled)
+        return (requested.nr_foveated
+            ? (requested.eye_processing_mode == 0U ? 2048ULL : 1024ULL)
+            : (requested.eye_processing_mode == 0U ? 3072ULL : 2304ULL)) * nr_lite_mib;""",
+    """    if (!current.nr_enabled) {
+        const auto source_count=[](unsigned m) noexcept {
+            return (m&1U?1U:0U)+(m&2U?1U:0U)+(m&4U?1U:0U);
+        };
+        const auto features=source_count(requested.nr_pass1_views) +
+            (requested.nr_passes>=2U ? source_count(requested.nr_pass2_views) : 0U);
+        // Admission headroom is deliberately larger than measured resource
+        // bytes: NVIDIA's internal NGX allocations are not observable.
+        return (features>=5U ? 4096ULL : features==4U ? 3072ULL :
+            features==3U ? 2304ULL : features>=2U ?
+            (requested.nr_foveated ? 1024ULL : 2304ULL) :
+            features==1U ? (requested.nr_foveated ? 1024ULL : 1536ULL) : 0ULL) * nr_lite_mib;
+    }""")
+
+# Execute against the actual runtime source-view observation code, not mocks.
+patch("tests/gaze_tests.cpp",
+    '''        note_stereo_view_evaluation(99004,12U,1000U,600U,4000U,2000U);
+        expect(cheeky_processing_allowed_for_view(s,99001) &&''',
+    '''        note_stereo_view_evaluation(99004,12U,1000U,600U,4000U,2000U);
+        s.nr_enabled=true; s.nr_passes=2U;
+        s.nr_pass1_views=7U; s.nr_pass2_views=3U;
+        expect(cheeky_nr_selected_passes(s,99001)==3U &&
+               cheeky_nr_selected_passes(s,99002)==3U &&
+               cheeky_nr_selected_passes(s,99004)==1U,
+               "Pass1 all, pass2 foveas excludes peripheral pass2");
+        s.nr_pass1_views=4U; s.nr_pass2_views=3U;
+        expect(cheeky_nr_selected_passes(s,99001)==2U &&
+               cheeky_nr_selected_passes(s,99002)==2U &&
+               cheeky_nr_selected_passes(s,99004)==1U,
+               "Independent pass mask routing");
+        s.nr_pass1_views=0U; s.nr_pass2_views=4U;
+        expect(cheeky_nr_selected_passes(s,99001)==0U &&
+               cheeky_nr_selected_passes(s,99004)==2U,
+               "Pass2-only peripheral routing");
+        s.nr_enabled=false; s.nr_pass1_views=3U; s.nr_pass2_views=3U;
+        expect(cheeky_processing_allowed_for_view(s,99001) &&''')
+
+# The previous build had intentionally changed defaults to Before SR, and this
+# test was still asserting upstream's After SR default. Update only that check.
+patch("tests/nr_processing_tests.cpp",
+    'require(settings.nr_processing_order == NrProcessingOrder::after_upscaling,\n            "Default order changed");',
+    'require(settings.nr_processing_order == NrProcessingOrder::before_upscaling,\n            "TriView NR Lite must default to Before SR");')
+
+# Unit-test executables do not link hooks.cpp or NVIDIA's NR implementation.
+# Mirror their established fake evaluator and GPU profiler no-op contracts.
+patch("tests/nr_processing_tests.cpp",
+    """    return nr_test_succeeds && frame.color != nullptr;
+}""",
+    """    return nr_test_succeeds && frame.color != nullptr;
+}
+bool evaluate_nr_selected_passes(const DlssNrFrame& f,const Settings& s) noexcept {
+    return evaluate_dlss_nr(f,s);
+}
+void* nr_gpu_stage_begin(ID3D12GraphicsCommandList*,NrGpuStage,
+    std::uint32_t,std::uint32_t,bool,std::uint32_t,std::uint32_t) noexcept {return nullptr;}
+void nr_gpu_stage_end(void*,bool) noexcept {}""")
+patch("tests/nr_observer_tests.cpp",
+    """    return nr_test_succeeds && frame.color;
+}""",
+    """    return nr_test_succeeds && frame.color;
+}
+bool evaluate_nr_selected_passes(const DlssNrFrame& f,const Settings& s) noexcept {
+    return evaluate_dlss_nr(f,s);
+}
+void* nr_gpu_stage_begin(ID3D12GraphicsCommandList*,NrGpuStage,
+    std::uint32_t,std::uint32_t,bool,std::uint32_t,std::uint32_t) noexcept {return nullptr;}
+void nr_gpu_stage_end(void*,bool) noexcept {}""")
+# The feature's chosen default is Before SR. The old test for an explicit
+# After-SR scenario must now opt into After SR, not rely on the new default.
+patch("tests/nr_processing_tests.cpp",
+    """        settings = Settings{};
+        update_settings(settings);
+        const int calls = nr_test_evaluations;""",
+    """        settings = Settings{};
+        settings.nr_processing_order = NrProcessingOrder::after_upscaling;
+        update_settings(settings);
+        const int calls = nr_test_evaluations;""")
+# Reset NR uses the new Settings{} Before-SR default (unlike old-file migration).
+patch("tests/uevr_tests.cpp",
+    '''field(received,"NrIntensity")==1 && field(received,"NrProcessingOrder")==0 && field(received,"GazeSmoothingMs")==60,''',
+    '''field(received,"NrIntensity")==1 && field(received,"NrProcessingOrder")==1 && field(received,"GazeSmoothingMs")==60,''')
+
+# Keep the upstream UEVR legacy migration test: files lacking NR order
+# intentionally migrate to After SR, despite fresh NR-Lite defaulting Before SR.
+
+# Editor: each pass has an independent source mask. Old global source selector
+# is hidden (but retained on disk for backwards compatibility).
+p=root/"uevr/scripts/cheeky_foveated_dlss.lua"
+s=p.read_text(encoding="utf-8")
+start=s.index('    if draft.EyeProcessingMode ~= nil then',s.index('Cheeky TriView NR Lite'))
+end=s.index('    if draft.NrProcessingOrder ~= nil then', start)
+s=s[:start]+'''    text("Each model pass has independent source coverage. A/B are stable source IDs, not verified left/right eyes.")
+    local mask_labels = {[0]="None", [1]="Fovea A", [2]="Fovea B", [3]="Both foveas",
+        [4]="Periphery only", [5]="Fovea A + periphery",
+        [6]="Fovea B + periphery", [7]="All three views"}
+    combo("Pass 1 source views", "NrPass1Views", mask_labels, {3,7,4,1,2,5,6,0})
+    text("Pass 1 crop is configured below. OFF processes each selected source in full.")
+    if (draft.NrPasses or 1) >= 2 then
+        combo("Pass 2 source views", "NrPass2Views", mask_labels, {3,7,4,1,2,5,6,0})
+        check("Crop pass 2 inside selected views", "NrPass2Foveated")
+        if draft.NrPass2Foveated then
+            slider("Pass 2 crop width", "NrPass2Width", 0.2, 1)
+            slider("Pass 2 crop height", "NrPass2Height", 0.2, 1)
+            slider("Pass 2 roundness", "NrPass2Roundness", 0, 1)
+            slider("Pass 2 transition", "NrPass2TransitionWidth", 0, 0.3)
+        end
+        text("Passes run sequentially per source, with separate NVIDIA histories.")
+        text("If pass 1 does not target a source, pass 2 runs alone there.")
+    end
+''' + s[end:]
+s=s.replace('        .. " | views " .. tostring(applied.EyeProcessingMode or "?")' + "\n", '')
+s=s.replace('    text("APPLIED: NR " .. (applied.NrEnabled and "ON" or "OFF")',
+'''    text("ACTIVE TARGETS pass 1=" .. tostring(applied.NrPass1Views or 0)
+       .. " pass 2=" .. tostring(applied.NrPass2Views or 0)
+       .. " | pass 2 crop=" .. (applied.NrPass2Foveated and "ON" or "OFF"))
+    text("APPLIED: NR " .. (applied.NrEnabled and "ON" or "OFF")''',1)
+s=s.replace('    if draft.NrFoveated ~= applied.NrFoveated or draft.NrPasses ~= applied.NrPasses',
+'''    if draft.NrPass1Views ~= applied.NrPass1Views or draft.NrPass2Views ~= applied.NrPass2Views
+       or draft.NrPass2Foveated ~= applied.NrPass2Foveated
+       or draft.NrFoveated ~= applied.NrFoveated or draft.NrPasses ~= applied.NrPasses''',1)
+s=s.replace('        or draft.EyeProcessingMode ~= applied.EyeProcessingMode then', '        then')
+p.write_text(s,encoding="utf-8",newline="\n")
+
+# Independently reviewed lifecycle: pass 2's synthetic view ID is deliberately
+# separate for NVIDIA history isolation. When the physical NGX view is released,
+# BOTH IDs must be retired; otherwise reloading scenes/saves retains orphaned
+# model features indefinitely (VRAM leak on a 12-GB card).
+patch("src/dlss_nr.cpp",
+    "    for (auto& view : views) if (view.view_id == view_id) view.retired = true;",
+    """    const auto pass2_view_id = view_id ^ (1ULL << 63U);
+    for (auto& view : views)
+        if (view.view_id == view_id || view.view_id == pass2_view_id)
+            view.retired = true;""")
+# A failed/missing physical source must invalidate both temporal histories;
+# selective skips *inside* evaluate_nr_selected_passes must not invalidate the
+# other pass (pass-2-only and pass-1-only must retain their own histories).
+patch("src/dlss_nr.hpp",
+    "void skip_dlss_nr_history(DlssViewId view_id) noexcept;",
+    """void skip_dlss_nr_history(DlssViewId) noexcept;
+inline void skip_dlss_nr_source_history(const DlssViewId id) noexcept {
+    skip_dlss_nr_history(id);
+    if (id && (id & (1ULL << 63U)) == 0ULL)
+        skip_dlss_nr_history(id ^ (1ULL << 63U));
+}""")
+for path in ("src/hooks.cpp", "src/dlss_nr_input.cpp"):
+    f=root/path; data=f.read_text(encoding="utf-8")
+    prior=data.count("skip_dlss_nr_history(")
+    if prior < 1:
+        raise RuntimeError(f"{path}: no source skip sites to make pass-safe")
+    f.write_text(data.replace("skip_dlss_nr_history(", "skip_dlss_nr_source_history("),
+                 encoding="utf-8", newline="\n")
+    print(f"NR-LIFETIME: source skip now invalidates both histories in {path}: {prior} sites")
+
+print("PASS NR independent view selection, separate logical histories, per-pass crops, persisted UI")
+~~~~
+
+
+## SOURCE CheekyPort/scripts/apply_v063_nr_gpu_trace.py
+
+~~~~python
+#!/usr/bin/env python3
+"""TriView NR GPU timestamp breakdown, no GPU waits; patch after independent routing."""
+from pathlib import Path
+import sys
+root=Path(sys.argv[1]).resolve()
+def patch(path,old,new):
+    f=root/path;s=f.read_text(encoding="utf-8")
+    n=s.count(old)
+    if n!=1: raise RuntimeError(f"{path} strict anchor count {n}: {old[:100]!r}")
+    f.write_text(s.replace(old,new,1),encoding="utf-8",newline="\n")
+    print("NR-PROFILE",path)
+
+patch("src/dlss_nr.hpp","struct DlssNrFrame {",
+"""enum class NrGpuStage : std::uint32_t { before_input_copy, encode, model_pass1, model_pass2, decode };
+void* nr_gpu_stage_begin(ID3D12GraphicsCommandList*, NrGpuStage,
+    std::uint32_t role, std::uint32_t preset, bool crop,
+    std::uint32_t width, std::uint32_t height) noexcept;
+void nr_gpu_stage_end(void*, bool valid=true) noexcept;
+struct DlssNrFrame {""")
+patch("src/hooks.cpp","#include <mutex>\n#include <vector>","#include <mutex>\n#include <new>\n#include <vector>")
+patch("src/hooks.cpp","    native_peripheral_dlss,\n};",
+"""    native_peripheral_dlss,
+    nr_stage_copy, nr_stage_encode, nr_stage_model1, nr_stage_model2, nr_stage_decode
+};""")
+patch("src/hooks.cpp","    D3D12TimingKind kind{D3D12TimingKind::full_nr};",
+"""    D3D12TimingKind kind{D3D12TimingKind::full_nr};
+    std::uint32_t stage_role{}, stage_preset{}, stage_crop{}, stage_width{}, stage_height{};""")
+patch("src/hooks.cpp","GpuTimingStatus timing_status;",
+"""GpuTimingStatus timing_status;
+// Group by role, model, crop, resolution and GPU stage. Timings are measured by
+// GPU timestamps and published only after the owning queue fence completes.
+struct NrGpuStageGroup {
+    std::uint32_t kind{},role{},preset{},crop{},width{},height{};
+    std::uint64_t samples{},last_serial{};
+    double sum{},lowest{},highest{};
+};
+std::array<NrGpuStageGroup,128> nr_stage_groups{};
+std::uint64_t nr_stage_serial{};
+void nr_stage_measurement(const D3D12NrTimingSlot& slot,double ms) noexcept {
+    NrGpuStageGroup *found{},*empty{},*oldest{};
+    for(auto& g:nr_stage_groups){
+        if(!g.samples){if(!empty)empty=&g;continue;}
+        if(g.kind==static_cast<std::uint32_t>(slot.kind)&&g.role==slot.stage_role&&
+           g.preset==slot.stage_preset&&g.crop==slot.stage_crop&&
+           g.width==slot.stage_width&&g.height==slot.stage_height){found=&g;break;}
+        if(!oldest||g.last_serial<oldest->last_serial)oldest=&g;
+    }
+    if(!found){
+        found=empty?empty:oldest;
+        if(!found)return;
+        *found={};
+        found->kind=static_cast<std::uint32_t>(slot.kind);
+        found->role=slot.stage_role;found->preset=slot.stage_preset;
+        found->crop=slot.stage_crop;found->width=slot.stage_width;found->height=slot.stage_height;
+    }
+    ++found->samples;found->sum+=ms;found->last_serial=++nr_stage_serial;
+    found->lowest=found->samples==1?ms:(std::min)(found->lowest,ms);
+    found->highest=(std::max)(found->highest,ms);
+    if(found->samples==4U||found->samples%16U==0U){
+        const char* stage="unknown";
+        switch(slot.kind){
+        case D3D12TimingKind::nr_stage_copy:stage="input_copy";break;
+        case D3D12TimingKind::nr_stage_encode:stage="encode";break;
+        case D3D12TimingKind::nr_stage_model1:stage="model_pass1";break;
+        case D3D12TimingKind::nr_stage_model2:stage="model_pass2";break;
+        case D3D12TimingKind::nr_stage_decode:stage="decode";break;
+        default:break;}
+        trace_event("[CheekyNR][GPUStage] stage=%s role=%u preset=%u cropped=%u work=%ux%u samples=%llu avg_ms=%.4f min_ms=%.4f max_ms=%.4f",
+            stage,found->role,found->preset,found->crop,found->width,found->height,
+            static_cast<unsigned long long>(found->samples),
+            found->sum/found->samples,found->lowest,found->highest);
+    }
+}""")
+patch("src/hooks.cpp",
+'''            if (slot.kind == D3D12TimingKind::before_pipeline || slot.kind == D3D12TimingKind::after_pipeline) {''',
+'''            if (slot.kind>=D3D12TimingKind::nr_stage_copy) {
+                nr_stage_measurement(slot,milliseconds);
+            } else if (slot.kind == D3D12TimingKind::before_pipeline || slot.kind == D3D12TimingKind::after_pipeline) {''')
+patch("src/hooks.cpp",
+'''        if (command_list == nullptr ||
+            !diagnostic_should_sample_gpu_time(
+                kind == D3D12TimingKind::native_peripheral_dlss''',
+'''        if (command_list == nullptr ||
+            (kind<D3D12TimingKind::nr_stage_copy && !diagnostic_should_sample_gpu_time(
+                kind == D3D12TimingKind::native_peripheral_dlss''')
+patch("src/hooks.cpp",
+'''                        : DiagnosticGpuTiming::d3d12_peripheral_dlaa
+            )) {''',
+'''                        : DiagnosticGpuTiming::d3d12_peripheral_dlaa
+            ))) {''')
+# Stage token uses the existing fence-safe query ring. All calls are nonblocking.
+patch("src/hooks.cpp",
+'''struct NrPipelineTimingScope {''',
+'''struct NrStageToken {
+    D3D12PeripheralTimingScope timer;
+    NrStageToken(ID3D12GraphicsCommandList* l,D3D12TimingKind k) noexcept:timer(l,k){timer.begin();}
+};
+struct NrPipelineTimingScope {''')
+# Export out of the unnamed namespace; all implementation types remain TU-local.
+patch("src/hooks.cpp",
+'''}  // namespace
+
+HMODULE find_loaded_ngx_core_runtime() noexcept''',
+'''}  // namespace
+
+void* nr_gpu_stage_begin(ID3D12GraphicsCommandList* list,NrGpuStage stage,
+    std::uint32_t role,std::uint32_t preset,bool crop,
+    std::uint32_t width,std::uint32_t height) noexcept {
+    const auto index=static_cast<unsigned>(stage);
+    if(!list||index>4U)return nullptr;
+    static std::array<std::atomic<std::uint64_t>,5> samples{};
+    // Sample one of every 16 stage evaluations; no readback stall.
+    if((samples[index].fetch_add(1U,std::memory_order_relaxed)&15U)!=0U)return nullptr;
+    const auto kind=static_cast<D3D12TimingKind>(
+        static_cast<unsigned>(D3D12TimingKind::nr_stage_copy)+index);
+    auto* token=new(std::nothrow) NrStageToken(list,kind);
+    if(!token)return nullptr;
+    if(!token->timer.slot){delete token;return nullptr;}
+    auto* slot=token->timer.slot;
+    slot->stage_role=role;slot->stage_preset=preset;
+    slot->stage_crop=crop?1U:0U;slot->stage_width=width;slot->stage_height=height;
+    return token;
+}
+void nr_gpu_stage_end(void* opaque,bool valid) noexcept {
+    auto* token=static_cast<NrStageToken*>(opaque);
+    if(!token)return;
+    token->timer.finish(valid);
+    delete token;
+}
+
+HMODULE find_loaded_ngx_core_runtime() noexcept''')
+patch("src/dlss_nr_input.cpp",
+'''    transition(frame.command_list, frame.color, frame.color_state, D3D12_RESOURCE_STATE_COPY_SOURCE);''',
+'''    auto* copy_timing=nr_gpu_stage_begin(frame.command_list,NrGpuStage::before_input_copy,
+        cheeky_nr_source_role(frame.view_id),settings.nr_preset,settings.nr_foveated,
+        frame.input_width,frame.input_height);
+    transition(frame.command_list, frame.color, frame.color_state, D3D12_RESOURCE_STATE_COPY_SOURCE);''')
+patch("src/dlss_nr_input.cpp",
+'''    frame.color = private_color;
+    auto processing_settings = settings;''',
+'''    nr_gpu_stage_end(copy_timing);
+    frame.color = private_color;
+    auto processing_settings = settings;''')
+patch("src/dlss_nr.cpp",
+'''    uav_barrier(frame.command_list, frame.color);
+    transition(
+        frame.command_list,
+        frame.color,
+        frame.color_state,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+    );
+    dispatch_codec(''',
+'''    auto* encode_timing=nr_gpu_stage_begin(frame.command_list,NrGpuStage::encode,
+        frame.source_role,settings.nr_preset,settings.nr_foveated,working_width,working_height);
+    uav_barrier(frame.command_list, frame.color);
+    transition(
+        frame.command_list,
+        frame.color,
+        frame.color_state,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+    );
+    dispatch_codec(''')
+patch("src/dlss_nr.cpp",
+'''    // Alternate model outputs so the last pass always writes neural_output,''',
+'''    nr_gpu_stage_end(encode_timing);
+    // Alternate model outputs so the last pass always writes neural_output,''')
+patch("src/dlss_nr.cpp",
+'''        result = runtime.evaluate_feature(
+            frame.command_list,
+            model.view->handle,
+            parameters,
+            nullptr
+        );
+        if (!ngx_succeeded(result)) { failed_pass = pass; break; }''',
+'''        auto* inference_timing=nr_gpu_stage_begin(frame.command_list,
+            (frame.logical_pass==2U||pass==1U) ? NrGpuStage::model_pass2 : NrGpuStage::model_pass1,
+            frame.source_role,model.settings.nr_preset,model.settings.nr_foveated,
+            working_width,working_height);
+        result = runtime.evaluate_feature(
+            frame.command_list,
+            model.view->handle,
+            parameters,
+            nullptr
+        );
+        nr_gpu_stage_end(inference_timing,ngx_succeeded(result));
+        if (!ngx_succeeded(result)) { failed_pass = pass; break; }''')
+patch("src/dlss_nr.cpp",
+'''    move_model_output(gpu->neural_output, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    transition(
+        frame.command_list,
+        frame.color,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+    );''',
+'''    auto* decode_timing=nr_gpu_stage_begin(frame.command_list,NrGpuStage::decode,
+        frame.source_role,settings.nr_preset,settings.nr_foveated,working_width,working_height);
+    move_model_output(gpu->neural_output, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    transition(
+        frame.command_list,
+        frame.color,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+    );''')
+patch("src/dlss_nr.cpp",
+'''    ++diagnostics.evaluation_calls;
+    ++diagnostics.decoded_frames;''',
+'''    nr_gpu_stage_end(decode_timing);
+    ++diagnostics.evaluation_calls;
+    ++diagnostics.decoded_frames;''')
+print("PASS GPU timestamp instrumentation added")
+~~~~
+
+
+## SOURCE CheekyPort/scripts/apply_v063_nr_safety.py
+
+~~~~python
+#!/usr/bin/env python3
+"""Cheeky v0.6.3 TriView safety hardening. Run after independent + GPU trace patches.
+
+No new live synchronization, no waits, and no change to NVIDIA SR.
+"""
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1]).resolve()
+
+def patch(path, before, after, occurrences=1):
+    file = root / path
+    data = file.read_text(encoding="utf-8")
+    count = data.count(before)
+    if count != occurrences:
+        raise RuntimeError(f"{path}: expected {occurrences} anchors, got {count}: {before[:120]!r}")
+    file.write_text(data.replace(before, after), encoding="utf-8", newline="\n")
+    print(f"NR-SAFETY patched {path}")
+
+# The upstream supports 3 passes, but this TriView NR-Lite product promises
+# precisely 1 or 2. Enforce at BOTH persisted-settings consumption and the real
+# NVIDIA evaluator boundary, not only in the Lua menu.
+patch("src/settings.cpp",
+    "nr_passes = std::clamp(settings.nr_passes, 1U, max_nr_passes);",
+    "nr_passes = std::clamp(settings.nr_passes, 1U, 2U);")
+patch("src/dlss_nr.cpp",
+    "const auto requested_passes = std::clamp(settings.nr_passes, 1U, max_nr_passes);",
+    "const auto requested_passes = std::clamp(settings.nr_passes, 1U, 2U);")
+
+# Upstream GPU lifetime already retains a fence-aware uses token for each
+# ViewState. Attach source/pass identity so a mask reduction can retire only
+# obsolete features, including synthetic pass-2 IDs, without flushing the GPU.
+patch("src/dlss_nr.cpp",
+    "    std::uint64_t gpu_use_sequence{};\n};",
+    """    std::uint64_t gpu_use_sequence{};
+    std::uint32_t source_role{};
+    std::uint32_t logical_pass{1U};
+};""")
+patch("src/dlss_nr.cpp",
+    """    auto& view = find_or_create_view(frame.view_id);
+    // Any rejected/failed NR evaluation breaks consecutive temporal history.""",
+    """    auto& view = find_or_create_view(frame.view_id);
+    view.source_role = frame.source_role;
+    view.logical_pass = frame.logical_pass;
+    // Any rejected/failed NR evaluation breaks consecutive temporal history.""")
+patch("src/dlss_nr.cpp",
+    "        auto& pass_view = find_or_create_view(frame.view_id, pass);",
+    """        auto& pass_view = find_or_create_view(frame.view_id, pass);
+        pass_view.source_role = frame.source_role;
+        pass_view.logical_pass = pass + 1U;""")
+
+patch("src/dlss_nr.cpp",
+    """    if (disabled)
+        for (auto& view : views) view.retired = true;
+    collect_retired_views();""",
+    """    if (disabled) {
+        for (auto& view : views) view.retired = true;
+    } else {
+        // This runs after settings application. Do not reclassify DX12 view
+        // geometry while holding nr_mutex. Roles were fixed at actual source
+        // evaluation. Decommission removed pass/source NGX features only.
+        const auto live = current_settings();
+        for (auto& view : views) {
+            if (view.retired || view.source_role == 0U) continue;
+            const auto mask = view.logical_pass == 2U
+                ? (live.nr_passes >= 2U ? live.nr_pass2_views : 0U)
+                : live.nr_pass1_views;
+            if ((mask & view.source_role) == 0U) view.retired = true;
+        }
+    }
+    // Existing GPU-fence retirement; never release a live recording.
+    collect_retired_views();""")
+
+# Verify second-pass effective model tuning, which was missed by the original
+# budget policy. Shader-only color-reconstruction settings are intentionally
+# excluded, so tweaking brightness cannot force another NGX allocation.
+patch("uevr/nr_lite_budget_policy.hpp",
+    "    // Enabling NR instantiates model histories and is always budget-gated.",
+    """    // Pass 2 has its own feature key. Changes here can allocate a new opaque
+    // NVIDIA model even when the dimensions and source masks do not grow.
+    if (current.nr_enabled && requested.nr_enabled && requested.nr_passes >= 2U &&
+        requested.nr_pass2_views != 0U) {
+        const auto old_tuning = nr_pass_settings(current, 1U);
+        const auto new_tuning = nr_pass_settings(requested, 1U);
+        if (old_tuning.nr_style != new_tuning.nr_style ||
+            old_tuning.nr_intensity != new_tuning.nr_intensity ||
+            old_tuning.nr_local_structure_strength != new_tuning.nr_local_structure_strength ||
+            old_tuning.nr_local_tone_strength != new_tuning.nr_local_tone_strength)
+            return 1536ULL * nr_lite_mib;
+    }
+    // Enabling NR instantiates model histories and is always budget-gated.""")
+
+# The fallback classifier previously required EXACTLY 3 DX12 views, which
+# suppressed both foveae if the game maintained an additional desktop DLSS
+# source. When 4 views are present, identify the unique equal-size foveal pair
+# only; the fourth-source situation cannot reliably distinguish periphery from
+# desktop, so fail closed for the periphery. A verified bridge takes priority.
+classifier = r"""std::uint32_t cheeky_nr_source_role(const std::uint64_t id) noexcept {
+    if (!id) return 0U;
+    const auto quad = quad_view_snapshot();
+    if (quad.active) {
+        if (quad.status != 2) return 0U;
+        const auto* role = quad_view_assignment(quad, id, stereo_view_generation(id));
+        if (!role) return 0U;
+        return role->focus ? (role->eye_index == 0 ? 1U : 2U) : 4U;
+    }
+    std::lock_guard lock(stereo_views_mutex);
+    const auto now = GetTickCount64();
+    const StereoView* v[4]{};
+    unsigned n{};
+    for (const auto& src : stereo_views) {
+        if (!src.evaluation_calls || src.graphics_api != 12U ||
+            !src.evaluation_output_width || !src.evaluation_output_height ||
+            src.last_evaluation_ms > now ||
+            now - src.last_evaluation_ms > 2000U) continue;
+        if (n == 4U) return 0U; // >4 unknown roles, do not touch desktop
+        v[n++] = &src;
+    }
+    if (n != 3U && n != 4U) return 0U;
+    const auto same = [](const StereoView* a, const StereoView* b) noexcept {
+        return a->evaluation_output_width == b->evaluation_output_width &&
+               a->evaluation_output_height == b->evaluation_output_height;
+    };
+    unsigned pairs{}, ia{}, ib{};
+    for (unsigned i = 0U; i < n; ++i)
+        for (unsigned j = i + 1U; j < n; ++j)
+            if (same(v[i], v[j])) { ++pairs; ia = i; ib = j; }
+    if (pairs != 1U) return 0U; // Ambiguous: must not guess an eye
+    const StereoView *a = v[ia], *b = v[ib];
+    if (a->view_id > b->view_id) std::swap(a, b);
+    if (id == a->view_id) return 1U;
+    if (id == b->view_id) return 2U;
+    if (n == 3U) {
+        for (unsigned i = 0U; i < n; ++i)
+            if (i != ia && i != ib && id == v[i]->view_id) return 4U;
+    }
+    // With 4 sources, unknown whether this is desktop or periphery.
+    return 0U;
+}
+
+"""
+path = root / "src/settings.cpp"
+data = path.read_text(encoding="utf-8")
+start = data.index("std::uint32_t cheeky_nr_source_role(const std::uint64_t id) noexcept {")
+end = data.index("std::uint32_t cheeky_nr_selected_passes(", start)
+data = data[:start] + classifier + data[end:]
+path.write_text(data, encoding="utf-8", newline="\n")
+print("NR-SAFETY 3/4-view fail-closed classifier installed")
+
+# Decoder-only controls must not change NVIDIA inference histories.
+patch("src/nr_parameters.hpp",
+    """            settings.nr_paper_white_scale,
+            settings.nr_hdr_transfer_strength,
+            settings.nr_color_strength,""",
+    """            settings.nr_paper_white_scale,""")
+
+
+# Test real source-role observer logic with a fourth live desktop DLSS view,
+# not a mock of the role classifier. In this case the foveae stay selectable,
+# but the 2 unknown non-foveal sources must be excluded.
+patch("tests/gaze_tests.cpp",
+    """        s.nr_enabled=false; s.nr_pass1_views=3U; s.nr_pass2_views=3U;
+        expect(cheeky_processing_allowed_for_view(s,99001) &&""",
+    """        register_stereo_view(99005);
+        note_stereo_view_evaluation(99005,12U,800U,500U,2560U,1440U);
+        s.nr_enabled=true; s.nr_passes=1U;
+        s.nr_pass1_views=3U; s.nr_pass2_views=3U;
+        expect(cheeky_nr_selected_passes(s,99001)==1U &&
+               cheeky_nr_selected_passes(s,99002)==1U &&
+               cheeky_nr_selected_passes(s,99004)==0U &&
+               cheeky_nr_selected_passes(s,99005)==0U,
+               "Fourth desktop view must not suppress foveal NR or receive NR");
+        unregister_stereo_view(99005);
+        s.nr_enabled=false; s.nr_passes=2U;
+        expect(cheeky_processing_allowed_for_view(s,99001) &&""")
+
+# Upstream's test asserts 3 models because upstream supports 3; NR Lite
+# intentionally limits it to 2. Check the actual contract, not the old bound.
+patch("tests/nr_processing_tests.cpp",
+    "require(actual.nr_passes == max_nr_passes && actual.nr_extra_passes[0] == second &&",
+    "require(actual.nr_passes == 2U && actual.nr_extra_passes[0] == second &&")
+
+print("PASS NR safety: no third inference, mask retire, pass2 budget, 3/4 source routing")
+~~~~
+
+
+## SOURCE CheekyPort/scripts/apply_v063_nr_faithful.py
+
+~~~~python
+#!/usr/bin/env python3
+"""Add backwards-compatible Faithful HDR result reconstruction to Cheeky NR-Lite.
+
+Legacy shader remains bit-for-bit available in mode 0. Model inference,
+frame cadence and game's native DLSS SR remain untouched. No temporal cache.
+"""
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1]).resolve()
+
+def patch(path, before, after, occurrences=1):
+    file = root / path
+    data = file.read_text(encoding="utf-8")
+    n = data.count(before)
+    if n != occurrences:
+        raise RuntimeError(f"{path}: expected {occurrences} anchors, found {n}: {before[:120]!r}")
+    file.write_text(data.replace(before, after), encoding="utf-8", newline="\n")
+    print("NR-FAITHFUL patched", path)
+
+# Persist reconstructed look independently of NVIDIA's feature key and history.
+# Mode 0: exact legacy. Mode 1: faithful HDR / game-color preservation.
+patch("src/settings.hpp",
+    "    float nr_color_strength{1.0F};",
+    """    float nr_color_strength{1.0F};
+    std::uint32_t nr_reconstruction_mode{1U};
+    float nr_shoulder_knee{0.75F};
+    float nr_edit_brighten{0.40F};
+    float nr_edit_darken{0.40F};
+    float nr_edit_chroma{0.15F};
+    float nr_edit_hue{0.0F};
+    float nr_detail_preservation{0.0F}; // experimental, off until profiled""")
+patch("src/settings.cpp",
+    "std::atomic<std::uint32_t> nr_color_strength_bits{0x3F800000U};",
+    """std::atomic<std::uint32_t> nr_color_strength_bits{0x3F800000U};
+std::atomic<std::uint32_t> nr_reconstruction_mode{1U};
+std::atomic<std::uint32_t> nr_shoulder_knee_bits{0x3F400000U};
+std::atomic<std::uint32_t> nr_edit_brighten_bits{0x3ECCCCCDU};
+std::atomic<std::uint32_t> nr_edit_darken_bits{0x3ECCCCCDU};
+std::atomic<std::uint32_t> nr_edit_chroma_bits{0x3E19999AU};
+std::atomic<std::uint32_t> nr_edit_hue_bits{};
+std::atomic<std::uint32_t> nr_detail_preservation_bits{};""")
+patch("src/settings.cpp",
+    "    settings.nr_color_strength = load_float(nr_color_strength_bits);",
+    """    settings.nr_color_strength = load_float(nr_color_strength_bits);
+    settings.nr_reconstruction_mode = nr_reconstruction_mode.load(std::memory_order_acquire);
+    settings.nr_shoulder_knee = load_float(nr_shoulder_knee_bits);
+    settings.nr_edit_brighten = load_float(nr_edit_brighten_bits);
+    settings.nr_edit_darken = load_float(nr_edit_darken_bits);
+    settings.nr_edit_chroma = load_float(nr_edit_chroma_bits);
+    settings.nr_edit_hue = load_float(nr_edit_hue_bits);
+    settings.nr_detail_preservation = load_float(nr_detail_preservation_bits);""")
+patch("src/settings.cpp",
+    """    nr_depth_convention.store(
+        (std::min)(settings.nr_depth_convention, 2U),""",
+    """    nr_reconstruction_mode.store((std::min)(settings.nr_reconstruction_mode, 1U), std::memory_order_release);
+    store_float(nr_shoulder_knee_bits, std::clamp(settings.nr_shoulder_knee, 0.5F, 0.95F));
+    store_float(nr_edit_brighten_bits, std::clamp(settings.nr_edit_brighten, 0.0F, 2.0F));
+    store_float(nr_edit_darken_bits, std::clamp(settings.nr_edit_darken, 0.0F, 2.0F));
+    store_float(nr_edit_chroma_bits, std::clamp(settings.nr_edit_chroma, 0.0F, 2.0F));
+    store_float(nr_edit_hue_bits, std::clamp(settings.nr_edit_hue, 0.0F, 2.0F));
+    store_float(nr_detail_preservation_bits, std::clamp(settings.nr_detail_preservation, 0.0F, 1.0F));
+    nr_depth_convention.store(
+        (std::min)(settings.nr_depth_convention, 2U),""")
+patch("uevr/settings_fields.inc",
+    'CHEEKY_SETTING("NrColorStrength", nr_color_strength)',
+    '''CHEEKY_SETTING("NrColorStrength", nr_color_strength)
+CHEEKY_SETTING("NrReconstructionMode", nr_reconstruction_mode)
+CHEEKY_SETTING("NrShoulderKnee", nr_shoulder_knee)
+CHEEKY_SETTING("NrEditBrighten", nr_edit_brighten)
+CHEEKY_SETTING("NrEditDarken", nr_edit_darken)
+CHEEKY_SETTING("NrEditChroma", nr_edit_chroma)
+CHEEKY_SETTING("NrEditHue", nr_edit_hue)
+CHEEKY_SETTING("NrDetailPreservation", nr_detail_preservation)''')
+patch("uevr/settings_io.cpp",
+    '    if(key=="NrPass1Views" || key=="NrPass2Views"){',
+    '''    if(key=="NrReconstructionMode") {
+        unsigned mode{};
+        if (!parse(value, mode) || mode > 1U) return false;
+        s.nr_reconstruction_mode = mode;
+        return true;
+    }
+    if(key=="NrPass1Views" || key=="NrPass2Views"){''')
+
+# Existing UEVR layout retains paper white, HDR transfer, and color strength.
+# New faithful controls are shown only when the new mode is active.
+patch("uevr/scripts/cheeky_foveated_dlss.lua",
+    '        slider("Color strength", "NrColorStrength", 0, 2)',
+    '''        slider("Color strength", "NrColorStrength", 0, 2)
+        section("HDR reconstruction — game colour preservation")
+        combo("NR HDR reconstruction", "NrReconstructionMode",
+            {[0]="Legacy (original Cheeky)", [1]="Faithful HDR (recommended)"}, {1,0})
+        if (draft.NrReconstructionMode or 0) == 1 then
+            text("Keeps original game color; new controls edit only the NR result.")
+            slider("Highlight shoulder knee", "NrShoulderKnee", 0.5, 0.95)
+            slider("Neural brighten", "NrEditBrighten", 0, 2)
+            slider("Neural darken", "NrEditDarken", 0, 2)
+            slider("Neural saturation change", "NrEditChroma", 0, 2)
+            slider("Neural hue change", "NrEditHue", 0, 2)
+            text("Detail-preservation filter is experimental and OFF until GPU/visual validation.")
+            text("Experimental 4-neighbour spatial detail. OFF until cost/halos are verified.")
+            slider("Spatial detail preservation", "NrDetailPreservation", 0, 1)
+        end''')
+
+# Embed eight more shader constants in the SAME root-constants block.
+# No extra resource descriptors, command lists or GPU texture allocations.
+patch("src/nr_codec_shader.hpp",
+    "        float mask_bounds[4][4];",
+    """        float mask_bounds[4][4];
+        std::uint32_t reconstruction_mode;
+        float shoulder_knee, edit_brighten, edit_darken;
+        float edit_chroma, edit_hue, detail_preservation;
+        float reserved_faithful;""")
+patch("src/nr_codec_shader.hpp",
+    "static_assert(sizeof(CodecConstants) == 40U * sizeof(std::uint32_t));",
+    "static_assert(sizeof(CodecConstants) == 48U * sizeof(std::uint32_t));")
+patch("src/nr_codec_shader.hpp",
+    "    float4 MaskBounds[4];",
+    """    float4 MaskBounds[4];
+    uint ReconstructionMode;
+    float ShoulderKnee;
+    float EditBrighten;
+    float EditDarken;
+    float EditChroma;
+    float EditHue;
+    float DetailPreservation;
+    float ReservedFaithful;""")
+
+faithful_code = r"""
+// The network sees a bounded, hue-preserving proxy rather than hard-clipped
+// scene-linear RGB channels. The original HDR source remains unmodified.
+float3 FaithfulShoulder(float3 linear_color) {
+    const float3 c = max(linear_color, 0.0);
+    const float y = Luminance(c);
+    const float k = clamp(ShoulderKnee, 0.5, 0.95);
+    const float roll = y <= k ? y :
+        k + (1.0 - k) * (1.0 - exp(-(y - k) / max(1.0 - k, 1e-4)));
+    float3 mapped = c * (roll / max(y, 1e-6));
+    // Preserve RGB ratios, including very saturated HDR primaries.
+    const float peak = max(mapped.r, max(mapped.g, mapped.b));
+    return peak > 1.0 ? mapped / peak : mapped;
+}
+
+// Decode-space result editor. Every edit is measured against the ORIGINAL
+// proxy fed to NGX, not against the game frame, making no-edit exact identity.
+// A luminance-only result preserves the game's hue and saturation.
+
+// Same-frame, edge-gated four-neighbour high-frequency NR edit. No history,
+// no persistent GPU surface and no second NR evaluation. Costs extra texture
+// reads ONLY when DetailPreservation > 0; do not enable as default until timed.
+float FaithfulSpatialDetail(float2 position) {
+    const int2 size = int2(ProxySize);
+    const int2 texel = clamp(int2(round(position)), int2(0, 0), size - 1);
+    const float3 cp = Source1.Load(int3(texel, 0)).rgb;
+    const float3 cn = Source2.Load(int3(texel, 0)).rgb;
+    const float base = max(Luminance(cp), 1e-4);
+    const float center = clamp(log2(max(Luminance(cn), 1e-4) / base), -2.0, 2.0);
+    float sum = center;
+    float weight_sum = 1.0;
+    [unroll] for (int i = 0; i < 4; ++i) {
+        const int2 offset = i == 0 ? int2(-2, 0) :
+                            i == 1 ? int2(2, 0) :
+                            i == 2 ? int2(0, -2) : int2(0, 2);
+        const int2 q = clamp(texel + offset, int2(0, 0), size - 1);
+        const float yp = max(Luminance(Source1.Load(int3(q, 0)).rgb), 1e-4);
+        const float yn = max(Luminance(Source2.Load(int3(q, 0)).rgb), 1e-4);
+        // Similar original materials only. Reject sky/grass boundaries to
+        // avoid leaking the brightness edit across an actual scene edge.
+        const float same = saturate(1.0 - 2.5 * abs(log2(yp / base)));
+        sum += same * clamp(log2(yn / yp), -2.0, 2.0);
+        weight_sum += same;
+    }
+    const float broad = sum / max(weight_sum, 1.0);
+    // Convert encoded-domain log contrast to approximate linear detail.
+    return clamp(1.5 * (center - broad), -1.0, 1.0);
+}
+
+float3 FaithfulUpgrade(float3 original, float3 proxy, float3 neural,
+                       float2 proxy_position) {
+    const float eps = 1e-5;
+    if (!all(isfinite(original)) || !all(isfinite(proxy)) || !all(isfinite(neural)))
+        return original;
+    const float py = Luminance(max(proxy, 0.0));
+    const float ny = Luminance(max(neural, 0.0));
+    const float oy = Luminance(max(original, 0.0));
+    const float trust = smoothstep(0.002, 0.035, py);
+    float stops = clamp(log2(max(ny, eps) / max(py, eps)), -2.0, 2.0);
+    // Guard against the heavy NR darkening of highlights on Natural/Cinematic.
+    const float hi = smoothstep(0.65, 0.98, py);
+    const float lighten = stops >= 0.0 ? EditBrighten :
+        EditDarken * lerp(1.0, 0.5, hi);
+    stops *= lighten * trust * TransferStrength * ColorStrength;
+    if (DetailPreservation > 0.0001 && trust > 0.01) {
+        const float fine = FaithfulSpatialDetail(proxy_position);
+        stops += fine * DetailPreservation * trust * TransferStrength * ColorStrength;
+    }
+
+    const float3 ln_p = log2(max(proxy, eps));
+    const float3 ln_n = log2(max(neural, eps));
+    const float3 w = float3(0.2126, 0.7152, 0.0722);
+    float3 color_edit = clamp(ln_n - ln_p, -1.0, 1.0);
+    color_edit -= dot(color_edit, w);
+    float3 direction = ln_p - dot(ln_p, w);
+    const float norm = dot(direction * direction, w);
+    float3 radial = norm > 1e-5 ?
+        direction * (dot(color_edit * direction, w) / norm) : 0.0;
+    float3 tangent = color_edit - radial;
+    const float3 limited = clamp(EditChroma * radial + EditHue * tangent,
+                                 -0.6, 0.6);
+    const float3 directionally_edited =
+        max(original, 0.0) * exp2(limited * trust * TransferStrength * ColorStrength);
+    const float lum = Luminance(directionally_edited);
+    // Renormalize the chroma edit so it cannot secretly shift brightness.
+    float3 result = directionally_edited * (oy / max(lum, eps));
+    result *= exp2(stops);
+    // Preserve signed out-of-gamut HDR channels when the NR edit is neutral.
+    return result + min(original, 0.0);
+}
+"""
+
+patch("src/nr_codec_shader.hpp",
+    "[numthreads(16, 16, 1)]\nvoid EncodeMain",
+    faithful_code + "\n[numthreads(16, 16, 1)]\nvoid EncodeMain")
+patch("src/nr_codec_shader.hpp",
+    "        const float3 encoded = HdrMode != 0 ? SrgbEncode(linear_color) : proxy_source.rgb;",
+    """        const float3 encoded = HdrMode != 0
+            ? SrgbEncode(ReconstructionMode == 1U
+                ? FaithfulShoulder(linear_color) : linear_color)
+            : proxy_source.rgb;""")
+patch("src/nr_codec_shader.hpp",
+    """    const float3 upgraded = UpgradeToneMap(original, proxy, neural);
+    const float3 decoded = lerp(original, upgraded, ColorStrength) * CodecWhite();""",
+    """    const float3 upgraded = ReconstructionMode == 1U
+        ? FaithfulUpgrade(original, proxy, neural, proxy_position)
+        : UpgradeToneMap(original, proxy, neural);
+    const float3 decoded = (ReconstructionMode == 1U
+        ? upgraded : lerp(original, upgraded, ColorStrength)) * CodecWhite();""")
+
+# Note: The optional spatial pass is deliberately not activated yet. A real
+# detail/halo/frametime comparison is required before enabling it. Its setting
+# remains 0 and this initial build does not allocate any extra textures.
+
+# SDR/uncertain-HDR NGX paths need the same faithful controls, otherwise a
+# misreported HDR flag silently falls back to the uncorrected legacy transfer.
+# Preserve the exact old behavior when ReconstructionMode is 0.
+patch("src/nr_codec_shader.hpp",
+    """    if (HdrMode == 0) {
+        const float4 processed = float4(lerp(original_sample.rgb, neural_sample.rgb,
+            TransferStrength * ColorStrength), original_sample.a);
+        Output0[SourceBase + dispatch_id.xy] = lerp(original_sample, processed, foveation_weight);
+        return;
+    }""",
+    """    if (HdrMode == 0) {
+        const float3 faithful = FaithfulUpgrade(original_sample.rgb,
+            proxy_sample.rgb, neural_sample.rgb, proxy_position);
+        const float3 color = ReconstructionMode == 1U
+            ? saturate(faithful)
+            : lerp(original_sample.rgb, neural_sample.rgb, TransferStrength * ColorStrength);
+        const float4 processed = float4(color, original_sample.a);
+        Output0[SourceBase + dispatch_id.xy] = lerp(original_sample, processed, foveation_weight);
+        return;
+    }""")
+
+patch("src/dlss_nr.cpp",
+    "    root_parameters[2].Constants.Num32BitValues = 40U;",
+    "    root_parameters[2].Constants.Num32BitValues = 48U;")
+patch("src/dlss_nr.cpp",
+    "    frame.command_list->SetComputeRoot32BitConstants(2U, 40U, &constants, 0U);",
+    """    constants.reconstruction_mode = settings.nr_reconstruction_mode;
+    constants.shoulder_knee = settings.nr_shoulder_knee;
+    constants.edit_brighten = settings.nr_edit_brighten;
+    constants.edit_darken = settings.nr_edit_darken;
+    constants.edit_chroma = settings.nr_edit_chroma;
+    constants.edit_hue = settings.nr_edit_hue;
+    constants.detail_preservation = settings.nr_detail_preservation;
+    constants.reserved_faithful = 0.0F;
+    frame.command_list->SetComputeRoot32BitConstants(2U, 48U, &constants, 0U);""")
+
+# Exposure: log verifiable CPU metadata and actual shader path, without a GPU
+# readback stall. Texture contents remain GPU-only, so DO NOT claim that the
+# final scalar CodecWhite was measured on CPU.
+patch("src/dlss_nr.cpp",
+    "    const auto exposure_state = debug_exposure.state;",
+    """    if (pipeline == gpu.encode_pipeline) {
+        static std::array<std::atomic<std::uint64_t>, 5> exposure_log_counter{};
+        const auto idx = (std::min)(frame.source_role, 4U);
+        const auto sequence = exposure_log_counter[idx].fetch_add(1U, std::memory_order_relaxed);
+        if ((sequence & 127ULL) == 0ULL) {
+            const bool valid = gpu.exposure &&
+                debug_exposure_supported(debug_exposure);
+            const float basis = valid ? debug_exposure.pre / debug_exposure.scale : 0.0F;
+            trace_event("[CheekyNR][Exposure] source=%llu role=%u pass=%u hdr=%u route=%u sourceValid=%u exposureTexture=%p pre=%.7g scale=%.7g ratio=%.7g paperWhite=%.7g GPUwhiteFormula=%s",
+                static_cast<unsigned long long>(frame.view_id), frame.source_role,
+                frame.logical_pass, unsigned((frame.create_flags & 1U) != 0U),
+                unsigned(frame.route), unsigned(valid), gpu.exposure.Get(),
+                debug_exposure.pre, debug_exposure.scale, basis,
+                settings.nr_paper_white_scale,
+                valid ? "paperWhite*ratio/texture.r" : "paperWhite(fallback)");
+        }
+    }
+    const auto exposure_state = debug_exposure.state;""")
+
+# Switching the input shoulder changes NVIDIA inference input, so reset the
+# neural history ONLY when the HDR input encoding/mode changes. Shader-only
+# result sliders must preserve histories and feature keys.
+patch("src/nr_parameters.hpp",
+    "    append(static_cast<std::uint32_t>(settings.nr_processing_order));",
+    """    append(static_cast<std::uint32_t>(settings.nr_processing_order));
+    append(settings.nr_reconstruction_mode);
+    std::uint32_t shoulder_bits{};
+    std::memcpy(&shoulder_bits, &settings.nr_shoulder_knee, sizeof(shoulder_bits));
+    append(shoulder_bits);""")
+
+# The checked-in Vulkan SPIR-V remains the pinned upstream 40-DWORD codec.
+# The extended 48-DWORD root block is for regenerated D3D12 HLSL ONLY.
+# Preserve Vulkan's original push-constant interface and legacy behavior.
+vulkan = root / "src/vulkan_nr.cpp"
+source = vulkan.read_text(encoding="utf-8")
+if source.count("sizeof(CodecConstants)") != 3 or source.count("sizeof(codec)") != 3:
+    raise RuntimeError("Vulkan codec ABI uses unexpected number of push-constant sites")
+source = source.replace("sizeof(CodecConstants)", "(40U * sizeof(std::uint32_t))")
+source = source.replace("sizeof(codec)", "(40U * sizeof(std::uint32_t))")
+vulkan.write_text(source, encoding="utf-8", newline="\n")
+print("PASS Vulkan retained original 40-DWORD codec ABI")
+
+print("PASS Faithful HDR shader result editor, persisted controls, exposure metadata")
+~~~~
+
+
+## SOURCE CheekyPort/tests/lua_release_gate.py
+
+~~~~python
+#!/usr/bin/env python3
+"""Independent preflight for compiled Lua source and actual distributed ZIP payload.
+
+DO NOT import or reuse Cheeky's patch helpers: this checks their *output*.
+Compile with the real Lua 5.1 and 5.4 parsers (no execution), and compare ZIP
+bytes against the generated source. Fails closed for absent/mismatched Lua.
+"""
+from pathlib import Path
+import hashlib
+import sys
+import zipfile
+
+from lupa.lua51 import LuaRuntime as Lua51Runtime
+from lupa.lua54 import LuaRuntime as Lua54Runtime
+
+def check_lua(data: bytes, label: str) -> None:
+    text = data.decode("utf-8-sig")
+    for ver, constructor in (("Lua 5.1", Lua51Runtime), ("Lua 5.4", Lua54Runtime)):
+        runtime = constructor(unpack_returned_tuples=True)
+        # Compile only; do not execute the UEVR plugin or its entry points.
+        compile_chunk = runtime.eval(
+            "function(src, chunk) "
+            "local fn, err = (loadstring or load)(src, chunk); "
+            "return fn ~= nil, err end"
+        )
+        ok, error = compile_chunk(text, "@" + label)
+        if not ok:
+            raise RuntimeError(f"{label}: {ver} syntax error: {error}")
+        print(f"LUA COMPILE OK {ver}: {label} sha256={hashlib.sha256(data).hexdigest()[:16]}")
+
+def negative_fixture() -> None:
+    invalid = b"local mem = status.gpu_memory.local\n"
+    for version, creator in (("5.1", Lua51Runtime), ("5.4", Lua54Runtime)):
+        rt = creator(unpack_returned_tuples=True)
+        valid, _ = rt.eval("function(s) local f,e=(loadstring or load)(s); return f~=nil,e end")(
+            invalid.decode("ascii")
+        )
+        if valid:
+            raise RuntimeError(f"Lua {version} rejected-keyword negative fixture falsely accepted")
+    print("LUA NEGATIVE FIXTURE OK: .local correctly rejected by both compilers")
+
+def main() -> None:
+    if len(sys.argv) != 3 or sys.argv[1] not in {"source", "package"}:
+        raise SystemExit("usage: lua_release_gate.py source|package <upstream-cheeky-directory>")
+    mode = sys.argv[1]
+    root = Path(sys.argv[2]).resolve()
+    key = Path("uevr/scripts/cheeky_foveated_dlss.lua")
+    source_path = root / key
+    if not source_path.is_file():
+        raise RuntimeError(f"Missing generated Lua: {source_path}")
+    source_bytes = source_path.read_bytes()
+    negative_fixture()
+    lua_files = sorted((root / "uevr/scripts").rglob("*.lua"))
+    if not lua_files:
+        raise RuntimeError("No Lua files to compile")
+    for path in lua_files:
+        check_lua(path.read_bytes(), str(path.relative_to(root)))
+    if mode == "source":
+        print(f"PASS source Lua release gate: {len(lua_files)} files compiled in two Lua runtimes")
+        return
+
+    archives = list((root / "bin/Release").glob("*-UEVR-v063-triview-nr-lite.zip"))
+    if len(archives) != 1:
+        raise RuntimeError(f"Expected exactly one UEVR ZIP, found {len(archives)}")
+    archive = archives[0]
+    with zipfile.ZipFile(archive) as z:
+        bad_member = z.testzip()
+        if bad_member is not None:
+            raise RuntimeError(f"Corrupt ZIP member: {bad_member}")
+        members = [i.filename for i in z.infolist()]
+        expected = "scripts/cheeky_foveated_dlss.lua"
+        if members.count(expected) != 1:
+            raise RuntimeError(f"Expected exactly one {expected} in ZIP, found {members.count(expected)}")
+        packed_source = z.read(expected)
+        if packed_source != source_bytes:
+            raise RuntimeError(
+                f"ZIP Lua is not generated Lua: source={hashlib.sha256(source_bytes).hexdigest()}; "
+                f"package={hashlib.sha256(packed_source).hexdigest()}"
+            )
+        checked = 0
+        for member in members:
+            if member.endswith(".lua"):
+                check_lua(z.read(member), f"ZIP:{member}")
+                checked += 1
+        needed = {
+            "plugins/CheekyFoveatedDLSS.dll",
+            "plugins/CheekyFoveatedDLSS/CheekyFoveatedDLSSRuntime.dll",
+            "OpenXR/CheekyOpenXRSetup.exe",
+        }
+        missing = needed - set(members)
+        if missing:
+            raise RuntimeError(f"Missing payload entries: {sorted(missing)}")
+    if not checked:
+        raise RuntimeError("No Lua scripts inside release")
+    print(f"PASS packaged Lua release gate: {checked} scripts compiled, source ZIP bytes identical")
+
+if __name__ == "__main__":
+    main()
+~~~~
+
+
+## SOURCE CheekyPort/tests/lua_ui_smoke.py
+
+~~~~python
+#!/usr/bin/env python3
+"""UEVR Lua panel smoke test against real GENERATED script, not patch snippets.
+
+Runs with Lua 5.4 and mocked UEVR/ImGui event bridge. Exercises both the
+NR and Stereo menus with pass 1 and pass 2 enabled. No GPU/UEVR simulation
+is claimed: only GUI execution and control registration are checked.
+"""
+from pathlib import Path
+import sys
+from lupa.lua54 import LuaRuntime
+
+source = Path(sys.argv[1]) / "uevr/scripts/cheeky_foveated_dlss.lua"
+if not source.is_file():
+    raise RuntimeError(f"Missing generated script: {source}")
+lua = LuaRuntime(unpack_returned_tuples=True)
+lua.execute(r'''
+__seen = {}
+__cb = {}
+fs = {
+    read=function(path) return "disableMod=0" end,
+    write=function(path,data) return true end
+}
+imgui = {
+    ColumnFlags = nil,
+    tree_node = function(label)
+        return label == "Cheeky Foveated DLSS"
+          or label == "DLSS 5 NR — game-native SR"
+          or label == "Stereo and gaze"
+          or label == "Pass 2 settings"
+    end,
+    tree_pop = function() end,
+    text = function(s) end,
+    text_colored = function(...) end,
+    separator = function() end,
+    spacing = function() end,
+    same_line = function() end,
+    begin_disabled = function(...) end,
+    end_disabled = function(...) end,
+    is_item_active = function() return false end,
+    checkbox = function(label,v) __seen[label]=true; return false,v end,
+    slider_float = function(label,v) __seen[label]=true; return false,v end,
+    slider_int = function(label,v) __seen[label]=true; return false,v end,
+    combo = function(label,v,values) __seen[label]=true; return false,v end,
+    button = function(label) __seen[label]=true;return false end,
+    begin_table = function(...) return false end
+}
+uevr = {
+    api = {dispatch_custom_event=function(...) end},
+    sdk = {callbacks = {
+        on_lua_event=function(f) __cb.event=f end,
+        on_frame=function(f) __cb.frame=f end
+    }},
+    lua = {add_script_panel=function(label, f) __cb.panel=f end}
+}
+__snap = {
+    protocol=1,request=0,applied_request=0,ready=true,renderer=1,
+    version="0.6.3",message="Ready.",nr="Active",
+    settings={
+        NrEnabled=true,NrPasses=2,NrPass1Views=7,NrPass2Views=3,
+        NrPass2Foveated=true,NrPass2Width=0.5,NrPass2Height=0.5,
+        NrPass2Roundness=0,NrPass2TransitionWidth=0.1,
+        NrFoveated=false,NrWorkingScale=1,NrProcessingOrder=1,
+        EyeProcessingMode=3,CenterMode=0,AutoStereoAlignment=false,
+        NrPreset=1,ManualStereoMapping=false,
+        FgEnabled=false,D3D11D3D12Transport=false,
+        NrPass2SameAsPass1=true, NrIntensity=1
+    },
+    nr_details={
+        processing_width=1355,processing_height=1077,
+        region_width=1355,region_height=1077,
+        working_width=1355,working_height=1077,
+        decoded_frames=1024,completed_two_pass_frames=512,
+        before_sr_processed_frames=1024,
+        view_a_id=1234,view_b_id=5678,view_a_frames=512,view_b_frames=512,
+        active_passes=2
+    },
+    gpu_memory={["local"]={valid=true,headroom_bytes=1073741824}},
+    afw_experiment={},apis={{},{}},frame={},fg={},gaze={},support={}
+}
+json = {load_string=function(s) return __snap end}
+''')
+lua.execute(source.read_text(encoding="utf-8-sig"))
+cb = lua.globals().__cb
+if cb.event is None or cb.panel is None:
+    raise RuntimeError("Generated Lua did not register UEVR panel + snapshot callback")
+cb.event("cheeky.foveated_dlss.load_state.v1", "enabled")
+cb.event("cheeky.foveated_dlss.snapshot.v1", "{}")
+cb.panel()
+seen = lua.globals().__seen
+expected = [
+    "Pass 1 source views",
+    "Pass 2 source views",
+    "Crop pass 2 inside selected views",
+    "Pass 2 crop width",
+    "Pass 2 crop height",
+    "Model passes",
+]
+absent = [name for name in expected if seen[name] is None]
+if absent:
+    raise RuntimeError(f"Generated UI missing {absent}; observed controls={list(seen.keys())}")
+print("PASS Lua 5.4 UI smoke: loaded enabled runtime, decoded snapshot, rendered real NR UI,"
+      " validated both source masks, pass-2 crop and 2-pass controls")
+~~~~
+
+
+## SOURCE CheekyPort/tests/test_v063_faithful.py
+
+~~~~python
+#!/usr/bin/env python3
+"""CI release gate for generated Faithful NR codec and TriView safety.
+
+This validates actual patched code and synthetic HDR math, not NVIDIA inference.
+Actual NGX performance and in-game quality require a GPU/game validation later.
+"""
+from pathlib import Path
+import math
+import sys
+
+root=Path(sys.argv[1]).resolve()
+read=lambda p:(root/p).read_text(encoding="utf-8")
+
+settings=read("src/settings.hpp")
+state=read("src/settings.cpp")
+decoder=read("src/nr_codec_shader.hpp")
+nr=read("src/dlss_nr.cpp")
+budget=read("uevr/nr_lite_budget_policy.hpp")
+ui=read("uevr/scripts/cheeky_foveated_dlss.lua")
+
+checks={
+ "actual inference capped at two": "const auto requested_passes = std::clamp(settings.nr_passes, 1U, 2U);" in nr,
+ "stored pass setting capped at two": "nr_passes = std::clamp(settings.nr_passes, 1U, 2U);" in state,
+ "retire inactive features behind existing fences": "if ((mask & view.source_role) == 0U) view.retired = true;" in nr and "collect_retired_views();" in nr,
+ "separate second-pass history": "pass_frame.view_id ^= (1ULL << 63U)" in nr,
+ "budget checks pass two tuning": "old_tuning.nr_style != new_tuning.nr_style" in budget,
+ "fovea pair survives 4-source layout": "if (n != 3U && n != 4U) return 0U;" in state,
+ "ambiguous fourth source skipped": "if (n == 3U)" in state and "unknown whether this is desktop or periphery" in state,
+ "all GPU root constants updated": "Num32BitValues = 48U;" in nr and "SetComputeRoot32BitConstants(2U, 48U" in nr,
+ "codec root block shape": "48U * sizeof(std::uint32_t)" in decoder,
+ "legacy decoder remains": "UpgradeToneMap(original, proxy, neural)" in decoder,
+ "faithful decoder can be selected": "FaithfulUpgrade(original, proxy, neural, proxy_position)" in decoder,
+ "HDR input soft shoulder": "FaithfulShoulder(linear_color)" in decoder,
+ "shader-only controls exclude NR history": "settings.nr_hdr_transfer_strength," not in read("src/nr_parameters.hpp").split("inline NgxResult neural_scaling_ratio_callback")[1],
+ "UI switches Legacy and Faithful": 'NrReconstructionMode' in ui and 'NrEditChroma' in ui,
+ "no temporal cache in faithful reconstruction": "Reproject" not in decoder and "FrameCache" not in decoder,
+ "exposure metadata logged": "[CheekyNR][Exposure]" in nr and "GPUwhiteFormula" in nr,
+}
+for name,ok in checks.items():
+ print(("PASS" if ok else "FAIL"),name)
+if not all(checks.values()):raise SystemExit("Faithful NR static contract failed")
+
+w=(.2126,.7152,.0722)
+def lum(v):return sum(a*b for a,b in zip(w,v))
+def shoulder(c,k):
+ y=lum(c)
+ v=y if y<=k else k+(1-k)*(1-math.exp(-(y-k)/(1-k)))
+ z=[x*v/max(y,1e-6) for x in c]
+ mx=max(z)
+ return [x/max(1,mx) for x in z]
+for c in [(4,.8,.1),(.02,.7,.15),(10,10,10),(.00001,.001,.00001)]:
+ out=shoulder(c,.75)
+ assert all(math.isfinite(x) and 0<=x<=1.00001 for x in out)
+ assert max(out)>0
+ if c[0] and c[1]:
+  assert abs((out[0]/out[1])-(c[0]/c[1]))<.00001
+print("PASS HDR shoulder preserves positive RGB ratios without per-channel clipping")
+print("PASS SOURCE PATCHES AND SYNTHETIC HDR FIXTURES (NOT NVIDIA GPU EVALUATION)")
+~~~~
+
+
+## SOURCE CheekyPort/tests/test_v063_perpass.py
+
+~~~~python
+#!/usr/bin/env python3
+"""Static contracts supplement (not replace) real Windows/UEVR test suites."""
+from pathlib import Path
+import sys
+root=Path(sys.argv[1])
+def has(path, fragments):
+    data=(root/path).read_text(encoding="utf-8")
+    for fragment in fragments:
+        assert fragment in data, f"{path}: missing {fragment}"
+has("src/settings.hpp",["nr_pass1_views{3U}","nr_pass2_views{3U}","nr_pass2_foveated{false}"])
+has("src/settings.cpp",["cheeky_nr_source_role","cheeky_nr_selected_passes",
+                        "const auto role = cheeky_nr_source_role(view_id);","return 4U"])
+has("src/dlss_nr.cpp",["evaluate_nr_selected_passes","frame.view_id ^ (1ULL << 63U)",
+                       "pass_frame.view_id ^= (1ULL << 63U)",
+                       "second.nr_foveated = settings.nr_pass2_foveated",
+                       "second.nr_passes = 1U",
+                       "evaluate_dlss_nr(pass_frame, second)",
+                       "nr_gpu_stage_begin","nr_gpu_stage_end"])
+has("src/dlss_nr_input.cpp",["evaluate_nr_selected_passes","before_input_copy"])
+has("src/hooks.cpp",["nr_stage_measurement","nr_stage_model1","nr_stage_model2",
+                     "nr_gpu_stage_begin","nr_gpu_stage_end",
+                     "[CheekyNR][GPUStage]"])
+has("uevr/runtime.cpp",["nr_lite_check_budget"])
+has("uevr/nr_lite_budget_policy.hpp",["first_new","second_new","pass2_grows"])
+has("uevr/scripts/cheeky_foveated_dlss.lua",["Pass 1 source views",
+    "Pass 2 source views","NrPass2Foveated","last_apply_error",
+    "ACTIVE TARGETS pass 1="])
+has("tests/gaze_tests.cpp",["Pass1 all, pass2 foveas excludes peripheral pass2",
+    "Independent pass mask routing","Pass2-only peripheral routing"])
+# Review regression: logical pass 2 must be released with its physical source.
+has("src/dlss_nr.cpp", ["const auto pass2_view_id = view_id ^ (1ULL << 63U);",
+                        "view.view_id == pass2_view_id"])
+has("src/dlss_nr.hpp", ["inline void skip_dlss_nr_source_history",
+                        "skip_dlss_nr_history(id ^ (1ULL << 63U))"])
+has("src/hooks.cpp", ["skip_dlss_nr_source_history("])
+has("src/dlss_nr_input.cpp", ["skip_dlss_nr_source_history("])
+# No shared NVIDIA feature: synthetic pass-2 view ID preserves history isolation.
+# No forced NR on periphery; masks select every source independently.
+print("NR independent-mask and GPU trace static contracts: OK")
+~~~~
+
+
+# END OF POST-SNAPSHOT CHEEKY DELTA
+
+
 # END OF FABLE BUNDLE
 
 This is an unabridged consolidation of the original A–G documents and all supplied Cheeky source/patch attachments. The newer Cheeky delta is linked and explicitly excluded from any claim of exact current generated-source coverage.
