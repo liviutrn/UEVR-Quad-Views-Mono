@@ -324,7 +324,7 @@ uint32_t VR::get_hmd_width() const {
             if (const auto error=reinitialize_openxr()) {''', 'restart re-arm')
         # build identity
         s = once(s, 'spdlog::info("[TriView][Build] B41.1 (B40 + device-race fix + hold window, rejection diagnostics, queue pin 4-6, blend distance)");',
-            'spdlog::info("[TriView][Build] B42.2 (B41.1 + VRAM guard, size snapping, rebuild pause, low-resolution start at game start AND runtime restart, VRAM logs)");',
+            'spdlog::info("[TriView][Build] B42.3 (B42.2 + safe recovery drain when the headset is taken off)");',
             'build log')
         return s
     edit(mods / 'VR.cpp', vr_cpp)
@@ -384,6 +384,26 @@ uint32_t VR::get_hmd_width() const {
 
     # --- VRAM on every set build / publication ---------------------------------
     def hook(s):
+        # B42.3: the recovery drain (incomplete producer snapshot, e.g. headset taken
+        # off -> XR session loses focus) used to hand Unreal the raw 4-view family,
+        # including the never-rendered placeholder role -> crash ~50 ms later (log
+        # 10 Nov 12:22). Drain with view 0 only (a plain singleton render, same
+        # count mutation + restore as dispatch_main_views); never published.
+        s = once(s, '''                    SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadViews][Recovery] drain-only generation={} serial={} views={}",
+                        key.generation,key.draw_serial,identities[drain_route.index].view_count);
+                    call_original(); return;''', '''                    SPDLOG_WARNING_EVERY_N_SEC(2,"[QuadViews][Recovery] drain-only generation={} serial={} views={} (B42.3: rendering view 0 only)",
+                        key.generation,key.draw_serial,identities[drain_route.index].view_count);
+                    auto* drain_family=view_families[drain_route.index];
+                    auto drain_views=drain_family ? drain_family->get_views() : nullptr;
+                    if (drain_views!=nullptr && drain_views->data!=nullptr && drain_views->count>1 &&
+                        drain_views->count<=16 && drain_views->data[0]!=nullptr) {
+                        const int32_t drain_saved_count=drain_views->count;
+                        drain_views->count=1;
+                        utility::ScopeGuard restore_drain_count{[&]() { drain_views->count=drain_saved_count; }};
+                        call_original();
+                        return;
+                    }
+                    call_original(); return;''', 'drain view 0 only')
         s = once(s, '''    SPDLOG_INFO("[TriView][Resources] build={} reuse_mask={} new_color_mib={:.1f} (payload estimate)",
         build->generation,unsigned(build->reuse_plan.reuse_mask),double(build->reuse_plan.new_color_bytes)/(1024.0*1024.0));''',
             '''    {   // B42: VRAM (last 1 s DXGI sample) at every set build.
