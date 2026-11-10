@@ -23,6 +23,8 @@ What B42 does
   [TriView][Resources] build and Published line; [TriView][VRAM] build allowed /
   resize REFUSED; [TriView][LowStart].
 
+B42.1: low-resolution start now detects a saved TriView (B42 checked the active mode, which is Native Stereo during the warm-up, so it never started low).
+
 Status: CI only, NOT headset-tested.
 Headset test: 1) start in TriView at 0.6x0.6: low start then switch to 1.0, no BSOD?
 2) change crop fast many times: VRAM stays below the limit, refusals shown instead

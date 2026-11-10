@@ -236,8 +236,11 @@ uint32_t OpenXR::get_width() const {
 ''', 'menu')
         # 4. start low: set before OpenXR swapchains are created
         s = once(s, '    if (get_runtime() != nullptr && get_runtime()->loaded) {\n        get_runtime()->on_config_load(cfg, set_defaults);\n',
-            '''    if (m_first_config_load && m_triview_b42_low_start->value() &&
-        m_rendering_method->value() == RenderingMethod::QUAD_VIEWS_STEREO) {
+            '''    // B42.1: a saved ID7 loads as a REQUEST (active stays Native Stereo until the
+    // autostart commits), so value() is not 7 here - check the request too.
+    if (m_first_config_load && m_triview_b42_low_start->value() &&
+        (m_rendering_method->value() == RenderingMethod::QUAD_VIEWS_STEREO ||
+         m_rendering_method->requested_value() == RenderingMethod::QUAD_VIEWS_STEREO)) {
         // B42: TriView saved -> start the headset at a low resolution (before swapchains exist).
         const float warm = std::clamp(m_triview_b42_low_start_scale->value(), .1f, 1.f);
         if (warm < .999f && runtimes::OpenXR::triview_warmup_scale.exchange(warm) != warm) {
@@ -309,7 +312,7 @@ uint32_t VR::get_hmd_width() const {
 ''', 'service fn')
         # build identity
         s = once(s, 'spdlog::info("[TriView][Build] B41.1 (B40 + device-race fix + hold window, rejection diagnostics, queue pin 4-6, blend distance)");',
-            'spdlog::info("[TriView][Build] B42 (B41.1 + VRAM guard, size snapping, rebuild pause, low-resolution start, VRAM logs)");',
+            'spdlog::info("[TriView][Build] B42.1 (B41.1 + VRAM guard, size snapping, rebuild pause, low-resolution start fixed for saved ID7, VRAM logs)");',
             'build log')
         return s
     edit(mods / 'VR.cpp', vr_cpp)
