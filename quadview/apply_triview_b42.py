@@ -260,7 +260,8 @@ void VR::service_triview_low_start() {
     const auto now = clock::now();
     if (first == clock::time_point{}) first = now;
     const int stage = m_triview_autostart_stage;
-    const bool transitioning = stage == 1 || stage == 2 || is_mono_transition_pending();
+    const bool transitioning = stage == 1 || stage == 2 || is_mono_transition_pending() ||
+        m_triview_restart_phase.load(std::memory_order_acquire) != 0; // B42.2: runtime restart in progress
     const bool triview = is_quadview_mode_selected();
     if (transitioning) { set_since = {}; return; }
     if (!triview) {
@@ -310,12 +311,43 @@ void VR::service_triview_low_start() {
 
 uint32_t VR::get_hmd_width() const {
 ''', 'service fn')
+        # B42.2: a runtime restart (UEVR "Reinitialize Runtime", e.g. after a SteamVR
+        # resolution change) also comes back at the low start scale; the checked
+        # switch-up then runs once TriView is loaded again.
+        s = once(s, '''            const uint64_t old_serial=m_fake_stereo_hook ?
+                m_fake_stereo_hook->native_stereo_publication_serial() : 0;
+            if (const auto error=reinitialize_openxr()) {''', '''            const uint64_t old_serial=m_fake_stereo_hook ?
+                m_fake_stereo_hook->native_stereo_publication_serial() : 0;
+            // B42.2: arm the low start inside reinitialize_openxr, only after the old
+            // session is really destroyed (it may refuse and keep running at its size).
+            m_triview_b42_arm_on_reinit=m_triview_b42_low_start->value();
+            if (const auto error=reinitialize_openxr()) {''', 'restart re-arm')
         # build identity
         s = once(s, 'spdlog::info("[TriView][Build] B41.1 (B40 + device-race fix + hold window, rejection diagnostics, queue pin 4-6, blend distance)");',
-            'spdlog::info("[TriView][Build] B42.1 (B41.1 + VRAM guard, size snapping, rebuild pause, low-resolution start fixed for saved ID7, VRAM logs)");',
+            'spdlog::info("[TriView][Build] B42.2 (B41.1 + VRAM guard, size snapping, rebuild pause, low-resolution start at game start AND runtime restart, VRAM logs)");',
             'build log')
         return s
     edit(mods / 'VR.cpp', vr_cpp)
+
+    # B42.2: arm the low start between old-session teardown and new-session creation.
+    def vr_hpp_reinit(s):
+        s = once(s, '        m_openxr.reset();\n        m_runtime.reset();\n        m_runtime = std::make_shared<VRRuntime>();',
+            '        m_openxr.reset();\n        m_runtime.reset();\n        m_runtime = std::make_shared<VRRuntime>();\n'
+            '        if (m_triview_b42_arm_on_reinit) { // B42.2: old session is gone\n'
+            '            m_triview_b42_arm_on_reinit = false;\n'
+            '            float warm = m_triview_b42_low_start_scale->value();\n'
+            '            warm = warm < .1f ? .1f : (warm > 1.f ? 1.f : warm);\n'
+            '            if (warm < .999f) {\n'
+            '                runtimes::OpenXR::triview_warmup_scale.store(warm);\n'
+            '                m_triview_b42_low_start_state.store(1, std::memory_order_relaxed);\n'
+            '                spdlog::info("[TriView][LowStart] runtime restart: new XR session starts at resolution scale {:.2f} until TriView is loaded", warm);\n'
+            '            }\n'
+            '        }', 'reinit arm')
+        s = once(s, "    void service_triview_low_start(); // present thread, every frame\n",
+            "    void service_triview_low_start(); // present thread, every frame\n"
+            "    bool m_triview_b42_arm_on_reinit{}; // B42.2: set by the TriView restart, consumed in reinitialize_openxr\n", 'arm flag')
+        return s
+    edit(mods / 'VR.hpp', vr_hpp_reinit)
 
     # --- depth pool usage -----------------------------------------------------
     def depth(s):

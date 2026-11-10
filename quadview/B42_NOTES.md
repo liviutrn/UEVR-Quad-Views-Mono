@@ -29,3 +29,5 @@ Status: CI only, NOT headset-tested.
 Headset test: 1) start in TriView at 0.6x0.6: low start then switch to 1.0, no BSOD?
 2) change crop fast many times: VRAM stays below the limit, refusals shown instead
 of a crash? 3) send the log.
+
+B42.2: a runtime restart ("Reinitialize Runtime", e.g. after changing SteamVR resolution) used to create the new XR session directly at full size while TriView resources were still being released -> BSOD (log 10 Nov 11:59). Now the new session starts at the low start scale (armed inside reinitialize_openxr only after the old session is destroyed) and TriView switches up through the VRAM check.
