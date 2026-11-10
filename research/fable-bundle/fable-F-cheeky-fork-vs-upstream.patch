@@ -1,0 +1,2078 @@
+diff --git a/src/dlss_nr.cpp b/src/dlss_nr.cpp
+--- a/src/dlss_nr.cpp
++++ b/src/dlss_nr.cpp
+@@ -131,6 +131,7 @@
+     NrGuidePass guides;
+     NrLifetime uses;
+     std::uint64_t last_use{};
++    std::uint64_t last_use_tick_ms{};
+     ID3D12Resource* game_output{};
+     ID3D12Resource* original_output{};
+     ID3D12Resource* color_proxy{};
+@@ -190,7 +191,7 @@
+ DlssNrSnapshot diagnostics;
+ // One active feature plus one alternate for full/foveated toggling. Pending
+ // recordings count against this budget too; exhausted caches fall back to SR.
+-constexpr std::size_t retired_feature_capacity = 1U;
++constexpr std::size_t retired_feature_capacity = 0U; // no idle old A/B NR model
+ // Two configurations across four rotating private input textures per eye.
+ constexpr std::size_t gpu_resource_cache_capacity = 8U;
+ 
+@@ -253,6 +254,48 @@
+     }
+ }
+ 
++std::uint64_t nr_tracked_allocation(ID3D12Device* device, ID3D12Resource* resource) noexcept {
++    if (!device || !resource) return 0U;
++    const auto desc = resource->GetDesc();
++    const auto info = device->GetResourceAllocationInfo(0U, 1U, &desc);
++    return info.SizeInBytes < (1ULL << 40U) ? info.SizeInBytes : 0ULL;
++}
++void log_nr_lite_memory() noexcept {
++    static ULONGLONG next_log_ms{};
++    const auto now = GetTickCount64();
++    if (now < next_log_ms) return;
++    next_log_ms = now + 2000U;
++    std::uint64_t scratch_bytes{}, busy_bytes{};
++    std::uint32_t scratch_sets{}, busy_sets{}, live_features{}, retired_features{}, second_pass_outputs{};
++    for (auto& view : views) {
++        if (view.handle) ++live_features;
++        retired_features += static_cast<std::uint32_t>(view.retired_features.size());
++        for (auto& gpu : view.gpu_resources) {
++            auto* resource = gpu.original_output ? gpu.original_output : gpu.neural_output;
++            if (!resource) continue;
++            Microsoft::WRL::ComPtr<ID3D12Device> device;
++            if (FAILED(resource->GetDevice(IID_PPV_ARGS(&device)))) continue;
++            const auto size = nr_tracked_allocation(device.Get(), gpu.original_output) +
++                nr_tracked_allocation(device.Get(), gpu.color_proxy) +
++                nr_tracked_allocation(device.Get(), gpu.neural_output) +
++                nr_tracked_allocation(device.Get(), gpu.pass_output) +
++                nr_tracked_allocation(device.Get(), gpu.guides.motion.Get()) +
++                nr_tracked_allocation(device.Get(), gpu.guides.depth.Get());
++            scratch_bytes += size;
++            ++scratch_sets;
++            if (gpu.pass_output) ++second_pass_outputs;
++            gpu.uses.collect();
++            if (!gpu.uses.empty()) { busy_bytes += size; ++busy_sets; }
++        }
++    }
++    const auto inputs = dlss_nr_input_memory_stats();
++    trace_event("[CheekyNR][VRAM] scratchMiB=%.1f scratchSets=%u busyMiB=%.1f busySets=%u beforeMiB=%.1f beforeSlots=%u beforeBusyMiB=%.1f beforeBusy=%u beforeRetired=%u ngxFeatures=%u ngxRetired=%u pass2Outputs=%u (NGX opaque allocations excluded)",
++        static_cast<double>(scratch_bytes) / 1048576.0, scratch_sets,
++        static_cast<double>(busy_bytes) / 1048576.0, busy_sets,
++        static_cast<double>(inputs.bytes) / 1048576.0, inputs.resources,
++        static_cast<double>(inputs.busy_bytes) / 1048576.0, inputs.busy_resources,
++        inputs.retired_resources, live_features, retired_features, second_pass_outputs);
++}
+ void evict_retired_features(ViewState& view) noexcept {
+     for (auto it = view.retired_features.begin(); it != view.retired_features.end();) {
+         it->uses.collect();
+@@ -770,9 +813,60 @@
+     const NrRegion& region,
+     const std::uint32_t working_width,
+     const std::uint32_t working_height,
+-    const bool border_only = false
++    const bool border_only = false,
++    const bool need_second_pass = false
+ ) noexcept {
++    // Do not retain a spare second-pass output after switching to one pass.
++    // The resources are still owned by any incomplete command-list recording.
++    if (!border_only && !need_second_pass) {
++        for (auto& cached : view.gpu_resources) {
++            if (!cached.pass_output) continue;
++            cached.uses.collect();
++            if (cached.uses.empty()) release(cached.pass_output);
++        }
++    }
+     auto* exposure = debug_exposure_supported(debug_exposure) ? debug_exposure.texture : nullptr;
++    if (!border_only) {
++        for (auto it = view.gpu_resources.begin(); it != view.gpu_resources.end();) {
++            const bool stale = !it->border_only &&
++                (it->width != region.width || it->height != region.height ||
++                 it->working_width != working_width ||
++                 it->working_height != working_height);
++            if (stale) {
++                it->uses.collect();
++                if (it->uses.empty()) {
++                    release_gpu(*it);
++                    it = view.gpu_resources.erase(it);
++                    continue;
++                }
++            }
++            ++it;
++        }
++    }
++    if (!border_only) {
++        const auto now = GetTickCount64();
++        unsigned warm_idle{};
++        for (auto& cached : view.gpu_resources) {
++            if (cached.border_only || cached.width != region.width ||
++                cached.height != region.height ||
++                cached.working_width != working_width ||
++                cached.working_height != working_height) continue;
++            cached.uses.collect();
++            if (cached.uses.empty()) ++warm_idle;
++        }
++        for (auto it = view.gpu_resources.begin(); it != view.gpu_resources.end();) {
++            if (warm_idle <= 1U) break;
++            if (it->border_only || it->width != region.width || it->height != region.height ||
++                it->working_width != working_width || it->working_height != working_height ||
++                now < it->last_use_tick_ms ||
++                now - it->last_use_tick_ms < 3000U) { ++it; continue; }
++            it->uses.collect();
++            if (!it->uses.empty()) { ++it; continue; }
++            release_gpu(*it);
++            it = view.gpu_resources.erase(it);
++            --warm_idle;
++        }
++    }
+     for (auto& gpu : view.gpu_resources) {
+         if (gpu.exposure.Get() != exposure) continue;
+         if (gpu.border_only == border_only && gpu.game_output == frame.color &&
+@@ -782,6 +876,7 @@
+             gpu.guides.source_depth.Get() == frame.depth))) {
+             if (!gpu.uses.record(frame.command_list)) return nullptr;
+             gpu.last_use = ++view.gpu_use_sequence;
++            gpu.last_use_tick_ms = GetTickCount64();
+             return &gpu;
+         }
+     }
+@@ -821,6 +916,7 @@
+         ++diagnostics.resource_rebinds;
+         if (!gpu.uses.record(frame.command_list)) return nullptr;
+         gpu.last_use = ++view.gpu_use_sequence;
++        gpu.last_use_tick_ms = GetTickCount64();
+         return &gpu;
+     }
+     if (std::count_if(view.gpu_resources.begin(), view.gpu_resources.end(),
+@@ -866,6 +962,7 @@
+         return nullptr;
+     }
+     gpu.last_use = ++view.gpu_use_sequence;
++    gpu.last_use_tick_ms = GetTickCount64();
+     if (border_only) ++diagnostics.border_creations; else ++diagnostics.codec_creations;
+     return &gpu;
+ }
+@@ -1035,6 +1132,7 @@
+     std::lock_guard execution_lock(calibration12_execution_mutex());
+     std::lock_guard lock(nr_mutex);
+     collect_retired_views();
++    log_nr_lite_memory();
+     diagnostics.skip_reason = nullptr;
+     diagnostics.route = frame.route;
+     diagnostics.hdr_input = (frame.create_flags & 1U) != 0U;
+@@ -1053,6 +1151,12 @@
+     diagnostics.working_width = diagnostics.working_height = 0U;
+     diagnostics.last_result = 0U;
+     ++diagnostics.candidate_calls;
++    const auto wanted_passes = std::clamp(settings.nr_passes, 1U, max_nr_passes);
++    for (auto& stale_pass : views) {
++        if (stale_pass.view_id == frame.view_id && stale_pass.pass >= wanted_passes)
++            stale_pass.retired = true;
++    }
++    collect_retired_views(); // no GPU wait; incomplete recordings stay alive
+     auto& view = find_or_create_view(frame.view_id);
+     // Any rejected/failed NR evaluation breaks consecutive temporal history.
+     struct HistoryGuard {
+@@ -1161,7 +1265,9 @@
+         frame,
+         codec_region,
+         working_width,
+-        working_height
++        working_height,
++        false,
++        settings.nr_passes > 1U
+     );
+     if (gpu == nullptr) return false;
+     const auto depth_x = frame.color_is_region
+diff --git a/src/dlss_nr_input.cpp b/src/dlss_nr_input.cpp
+--- a/src/dlss_nr_input.cpp
++++ b/src/dlss_nr_input.cpp
+@@ -187,6 +187,24 @@
+     processing_settings.nr_alignment_border_enabled = false;
+     return evaluate_dlss_nr(frame, processing_settings) ? private_color : nullptr;
+ }
++NrInputMemoryStats dlss_nr_input_memory_stats() noexcept {
++    std::lock_guard lock(mutex);
++    NrInputMemoryStats stats{};
++    for (auto& input : inputs) {
++        if (!input.color || !input.device) continue;
++        ++stats.resources;
++        if (input.retired) ++stats.retired_resources;
++        const auto desc = input.color->GetDesc();
++        const auto info = input.device->GetResourceAllocationInfo(0U, 1U, &desc);
++        const auto bytes = info.SizeInBytes < (1ULL << 40U) ? info.SizeInBytes : 0ULL;
++        stats.bytes += bytes;
++        if (!complete(input)) {
++            ++stats.busy_resources;
++            stats.busy_bytes += bytes;
++        }
++    }
++    return stats;
++}
+ void collect_dlss_nr_input_submissions() noexcept {
+     std::lock_guard execution_lock(calibration12_execution_mutex());
+     std::lock_guard lock(mutex);
+diff --git a/src/dlss_nr_input.hpp b/src/dlss_nr_input.hpp
+--- a/src/dlss_nr_input.hpp
++++ b/src/dlss_nr_input.hpp
+@@ -76,6 +76,11 @@
+ // The source is never written. A null result means SR must use original color.
+ // Record the SR consumer on frame.command_list before preparing this view again:
+ // sequential evaluations within one recording reuse the same scratch texture.
++struct NrInputMemoryStats {
++    std::uint64_t bytes{}, busy_bytes{};
++    std::uint32_t resources{}, busy_resources{}, retired_resources{};
++};
++[[nodiscard]] NrInputMemoryStats dlss_nr_input_memory_stats() noexcept;
+ [[nodiscard]] ID3D12Resource* prepare_dlss_nr_input(
+     DlssNrFrame frame, const Settings& settings) noexcept;
+ void collect_dlss_nr_input_submissions() noexcept;
+diff --git a/src/hooks.cpp b/src/hooks.cpp
+--- a/src/hooks.cpp
++++ b/src/hooks.cpp
+@@ -3470,6 +3470,23 @@
+     }
+     const DebugExposureScope exposure_scope(current_streamline_debug_exposure(frame, inputs, input_count));
+     const auto live_settings = current_settings();
++    if (live_settings.eye_processing_mode != 0U) {
++        const auto id = static_cast<DlssViewId>(cached_sl_options_viewport.value) + 1U;
++        register_stereo_view(id);
++        if (!cheeky_processing_allowed_for_view(live_settings, id)) {
++            for (auto& history : streamline_crop_history) {
++                if (history.viewport != cached_sl_options_viewport.value) continue;
++                history.valid = false;
++                history.afw_skipped = true;
++            }
++            skip_d3d12_history(id);
++            skip_dlss_nr_history(id);
++            StreamlineEvaluationScope native_scope;
++            const auto result = original(feature, frame, inputs, input_count, command_buffer);
++            stamp_streamline_output(static_cast<ID3D12GraphicsCommandList*>(command_buffer), result);
++            return result;
++        }
++    }
+     NrPipelineTimingScope pipeline_timing{static_cast<ID3D12GraphicsCommandList*>(command_buffer), live_settings};
+     StreamlineNrInputScope nr_input{static_cast<ID3D12GraphicsCommandList*>(command_buffer),
+         frame, inputs, input_count, live_settings};
+@@ -4169,6 +4186,11 @@
+     }
+     note_evaluation_begin(DiagnosticApi::d3d11, parameters, handle, d3d11_game_output_extent(handle));
+     const auto settings = settings_for_view(current_settings(),reinterpret_cast<uintptr_t>(handle));
++    if (!cheeky_processing_allowed_for_view(settings,
++            static_cast<DlssViewId>(reinterpret_cast<std::uintptr_t>(handle)))) {
++        skip_dlss_nr_history(static_cast<DlssViewId>(reinterpret_cast<std::uintptr_t>(handle)));
++        return original(context, handle, parameters, callback);
++    }
+ 
+     if (!settings.enabled && !settings.fg.enabled &&
+         !(settings.nr_enabled && settings.d3d11_use_d3d12_transport)) {
+@@ -4322,6 +4344,11 @@
+     }
+     note_evaluation_begin(DiagnosticApi::d3d11, parameters, handle, d3d11_game_output_extent(handle));
+     const auto settings = settings_for_view(current_settings(),reinterpret_cast<uintptr_t>(handle));
++    if (!cheeky_processing_allowed_for_view(settings,
++            static_cast<DlssViewId>(reinterpret_cast<std::uintptr_t>(handle)))) {
++        skip_dlss_nr_history(static_cast<DlssViewId>(reinterpret_cast<std::uintptr_t>(handle)));
++        return original(context, handle, parameters, callback);
++    }
+ 
+     if (!settings.enabled && !settings.fg.enabled &&
+         !(settings.nr_enabled && settings.d3d11_use_d3d12_transport)) {
+@@ -4770,6 +4797,19 @@
+         }
+         frame = native_nr_frame(list, handle, params);
+         original_color = get_d3d12_parameter_resource(params, "Color");
++        static std::atomic<std::uint64_t> atlas_probe_counter{};
++        const auto probe = atlas_probe_counter.fetch_add(1U, std::memory_order_relaxed) + 1U;
++        if (probe <= 32U || probe % 256U == 0U) {
++            const auto input_desc = original_color ? original_color->GetDesc() : D3D12_RESOURCE_DESC{};
++            trace_event("[CheekyNR][AtlasProbe] seq=%llu view=%llu list=%p color=%p depth=%p mv=%p source=%llux%u input=%ux%u output=%ux%u offset=%u,%u",
++                static_cast<unsigned long long>(probe),
++                static_cast<unsigned long long>(frame.view_id),
++                static_cast<void*>(list), static_cast<void*>(original_color),
++                static_cast<void*>(frame.depth), static_cast<void*>(frame.motion_vectors),
++                static_cast<unsigned long long>(input_desc.Width), input_desc.Height,
++                frame.input_width, frame.input_height, frame.output_width, frame.output_height,
++                frame.color_base_x, frame.color_base_y);
++        }
+         auto* processed = prepare(list, params, settings);
+         if (!processed && settings.eye_independent_coverage) skip_dlss_nr_history(frame.view_id);
+         const bool reset = dlss_nr_input_history_reset(frame.view_id, settings.nr_processing_order,
+@@ -4861,225 +4901,20 @@
+     timing.finish(evaluated);
+ }
+ 
++// NR-LITE: game-native DLSS SR is always authoritative. The caller has
++// already prepared the optional NR-before-SR color substitution. Returning
++// false here drives the existing, lifetime-aware native SR fallback.
+ [[nodiscard]] bool evaluate_native_d3d12_canonical(
+-    ID3D12GraphicsCommandList* const command_list,
+-    const NgxHandle* const handle,
+-    const NgxParameters* const parameters,
+-    const Settings& settings,
+-    const D3D12BackendCallbacks& callbacks,
+-    NgxResult& result,
++    ID3D12GraphicsCommandList*,
++    const NgxHandle*,
++    const NgxParameters*,
++    const Settings&,
++    const D3D12BackendCallbacks&,
++    NgxResult&,
+     bool& private_attempted
+ ) noexcept {
+     private_attempted = false;
+-    if (!settings.enabled || command_list == nullptr || handle == nullptr ||
+-        parameters == nullptr || callbacks.create_feature == nullptr ||
+-        callbacks.evaluate_feature == nullptr ||
+-        callbacks.release_feature == nullptr) return false;
+-
+-    AfwPrivateWorkScope afw_private_work;
+-    DlssFrameContract contract{};
+-    if (!read_ngx_frame_contract(parameters, reinterpret_cast<std::uintptr_t>(handle),
+-            d3d12_game_feature(handle), contract)) return false;
+-
+-    const bool rr = contract.feature_id == 13U;
+-    if (rr && !rr_crop_supported(parameters, contract)) {
+-        static std::atomic<unsigned> unsupported_rr{};
+-        if (unsupported_rr.fetch_add(1) < 8)
+-            trace_event("RR crop unavailable: missing/invalid guides, output alpha, high-resolution motion or legacy research input; keeping native RR and optional NR");
+-        return false;
+-    }
+-
+-    const auto effective_settings = settings_for_view(settings, contract.view_id);
+-    if(effective_settings.quad_view_region==1)skip_d3d12_history(contract.view_id);
+-
+-    auto* const full_color = get_d3d12_parameter_resource(parameters, "Color");
+-    auto* const full_depth = get_d3d12_parameter_resource(parameters, "Depth");
+-    auto* const full_motion =
+-        get_d3d12_parameter_resource(parameters, "MotionVectors");
+-    auto* const full_output = get_d3d12_parameter_resource(parameters, "Output");
+-    if (!full_color || !full_depth || !full_motion || !full_output) return false;
+-    // Check tracking before peripheral DLSS as well as center allocation. A
+-    // rejected center must not leave private work recorded on an untracked list.
+-    if (!ensure_dlss_nr_recording(command_list)) {
+-        static std::atomic<unsigned> rejected{};
+-        if (rejected.fetch_add(1) < 8)
+-            trace_event("D3D12 SR preparation rejected: command-list recording/observer unavailable list=%p", command_list);
+-        return false;
+-    }
+-    const auto full_color_x = contract.color_base_x;
+-    const auto full_color_y = contract.color_base_y;
+-    const auto full_depth_x = contract.depth_base_x;
+-    const auto full_depth_y = contract.depth_base_y;
+-    const auto full_mv_x = contract.mv_base_x;
+-    const auto full_mv_y = contract.mv_base_y;
+-
+-    const bool motion_vectors_output_space = !contract.motion_vectors_low_res;
+-
+-    PeripheralDlaaResources peripheral{};
+-    bool peripheral_ready{};
+-    if ((effective_settings.quad_view_region==1 ||
+-            (!effective_settings.quad_view_mode&&(rr || effective_settings.peripheral_dlaa_enabled))) &&
+-        (contract.feature_id == 1U || rr) &&
+-        full_color != nullptr && full_depth != nullptr &&
+-        full_motion != nullptr && full_output != nullptr) {
+-        PeripheralDlaaRequest peripheral_request{};
+-        peripheral_request.view_id = contract.view_id;
+-        peripheral_request.feature_id = contract.feature_id;
+-        peripheral_request.command_list = command_list;
+-        peripheral_request.color = full_color;
+-        peripheral_request.depth = full_depth;
+-        peripheral_request.motion_vectors = full_motion;
+-        peripheral_request.output_template = full_output;
+-        peripheral_request.render_width = contract.render_width;
+-        peripheral_request.render_height = contract.render_height;
+-        peripheral_request.source_output_width = contract.output_width;
+-        peripheral_request.source_output_height = contract.output_height;
+-        peripheral_request.scale = rr && !effective_settings.peripheral_dlaa_enabled ? 1.F : effective_settings.peripheral_dlaa_scale;
+-        peripheral_request.preset = rr ? effective_settings.rr_peripheral_preset : effective_settings.peripheral_dlaa_preset;
+-        peripheral_request.color_base_x = full_color_x;
+-        peripheral_request.color_base_y = full_color_y;
+-        peripheral_request.depth_base_x = full_depth_x;
+-        peripheral_request.depth_base_y = full_depth_y;
+-        peripheral_request.mv_base_x = full_mv_x;
+-        peripheral_request.mv_base_y = full_mv_y;
+-        peripheral_request.motion_vectors_output_space =
+-            motion_vectors_output_space;
+-        peripheral_request.motion_vector_scale_x =
+-            contract.motion_vector_scale_x;
+-        peripheral_request.motion_vector_scale_y =
+-            contract.motion_vector_scale_y;
+-        peripheral_request.depth_inverted = contract.depth_inverted;
+-        peripheral_request.reset = contract.reset;
+-        peripheral_request.create_flags = contract.create_flags;
+-        peripheral_request.parameters =
+-            const_cast<NgxParameters*>(parameters);
+-        peripheral_request.callbacks = callbacks;
+-        D3D12PeripheralTimingScope peripheral_timing{command_list};
+-        NgxResult peripheral_result{};
+-        peripheral_ready = evaluate_peripheral_dlaa_ngx(
+-            peripheral_request,
+-            peripheral,
+-            peripheral_result,
+-            peripheral_timing.backend()
+-        );
+-        peripheral_timing.finish(peripheral_ready);
+-    }
+-
+-    if(effective_settings.quad_view_region==1){
+-        private_attempted=true;
+-        const bool composed=peripheral_ready&&compose_d3d12_peripheral_view(command_list,peripheral.output,full_output,
+-            contract.output_width,contract.output_height,contract.output_base_x,contract.output_base_y,
+-            contract.view_id,effective_settings);
+-        if(peripheral_ready)restore_peripheral_dlaa_output(command_list,peripheral);
+-        if(composed){result=1U;return true;}
+-        static std::atomic<unsigned> failures{};const auto n=++failures;
+-        if(n<=8||n%300==0)trace_event("Quad D3D12 peripheral full-view DLSS rejected view=%llu preset=%u scale=%.3f; retaining game DLSS",
+-            contract.view_id,effective_settings.peripheral_dlaa_preset,effective_settings.peripheral_dlaa_scale);
+-        return false;
+-    }
+-
+-    // No raw noisy ray-traced color may become the RR composite background.
+-    if (rr && !effective_settings.quad_view_mode && !peripheral_ready) return false;
+-
+-    // The periphery owns a separate temporal feature. Skipping it invalidates
+-    // that history even when the center continues to evaluate successfully.
+-    if (!peripheral_ready) skip_d3d12_history(peripheral_dlaa_view_id(contract.view_id));
+-
+-    NgxPresetOverrideScope center_preset{
+-        parameters, rr ? effective_settings.rr_center_preset : effective_settings.center_preset, rr
+-    };
+-    auto* const evaluation = prepare_d3d12(
+-        command_list,
+-        parameters,
+-        contract.view_id,
+-        settings
+-    );
+-    if (evaluation == nullptr) {
+-        if (peripheral_ready) {
+-            restore_peripheral_dlaa_output(command_list, peripheral);
+-        }
+-        return false;
+-    }
+-    contract.reset = contract.reset || d3d12_evaluation_gaze_reset(evaluation);
+-    contract.motion_vectors_low_res = d3d12_evaluation_low_res_motion(evaluation);
+-    // RR also accumulates temporal history. Its cropped projection/guide bases
+-    // and the backend's crop-relative vectors must describe the same movement.
+-    // Resetting on every small movement prevents the denoiser from converging.
+-    contract.preserve_history_on_crop_move =
+-        rr || uses_coordinated_center(settings) || settings.eye_independent_coverage;
+-    private_attempted = true;
+-
+-    if (peripheral_ready && !d3d12_set_composite_base(
+-            evaluation,
+-            peripheral.output,
+-            0U,
+-            0U
+-        )) {
+-        restore_peripheral_dlaa_output(command_list, peripheral);
+-        peripheral_ready = false;
+-        if (rr) {
+-            finish_d3d12(command_list, parameters, evaluation, 0xBAD00005U);
+-            return false;
+-        }
+-    }
+-
+-    D3D12DlssInputs inputs{};
+-    inputs.fix_motion_blur = !rr && effective_settings.fix_motion_blur;
+-    inputs.color = get_d3d12_parameter_resource(parameters, "Color");
+-    inputs.depth = get_d3d12_parameter_resource(parameters, "Depth");
+-    inputs.motion_vectors = get_d3d12_parameter_resource(parameters, "MotionVectors");
+-    inputs.exposure = get_d3d12_parameter_resource(parameters, "ExposureTexture");
+-    inputs.output = d3d12_private_output(evaluation);
+-    inputs.color_base_x = get_ui(parameters, "DLSS.Input.Color.Subrect.Base.X");
+-    inputs.color_base_y = get_ui(parameters, "DLSS.Input.Color.Subrect.Base.Y");
+-    inputs.depth_base_x = get_ui(parameters, "DLSS.Input.Depth.Subrect.Base.X");
+-    inputs.depth_base_y = get_ui(parameters, "DLSS.Input.Depth.Subrect.Base.Y");
+-    inputs.mv_base_x = get_ui(parameters, "DLSS.Input.MV.Subrect.Base.X");
+-    inputs.mv_base_y = get_ui(parameters, "DLSS.Input.MV.Subrect.Base.Y");
+-
+-    const auto crop = d3d12_evaluation_crop(evaluation);
+-    note_stereo_view_geometry(
+-        contract.view_id,
+-        contract.render_width,
+-        contract.render_height,
+-        contract.output_width,
+-        contract.output_height,
+-        crop
+-    );
+-    D3D12PeripheralTimingScope sr_timing{
+-        command_list, D3D12TimingKind::foveated_dlss
+-    };
+-    const auto evaluate_center = [&] { return evaluate_d3d12_backend(
+-        command_list, contract, inputs,
+-        const_cast<NgxParameters*>(parameters),
+-        d3d12_reconstruction_crop(evaluation), callbacks, sr_timing.backend(), &crop
+-    ); };
+-    if (rr) {
+-        d3d12_align_reconstruction_grid(evaluation);
+-        RrCropScope rr_crop{const_cast<NgxParameters*>(parameters), contract, crop};
+-        RrInputCopiesScope copies{command_list,const_cast<NgxParameters*>(parameters),crop};
+-        if (copies.ready()) {
+-            inputs.color=get_d3d12_parameter_resource(parameters,"Color");
+-            inputs.depth=get_d3d12_parameter_resource(parameters,"Depth");
+-            inputs.motion_vectors=get_d3d12_parameter_resource(parameters,"MotionVectors");
+-            inputs.color_base_x=inputs.color_base_y=inputs.depth_base_x=inputs.depth_base_y=inputs.mv_base_x=inputs.mv_base_y=0;
+-            result = evaluate_center();
+-        } else result=0xBAD00005U;
+-    } else result = evaluate_center();
+-    sr_timing.finish(ngx_succeeded(result));
+-    diagnostic_note_private_result(DiagnosticApi::d3d12, result);
+-    const auto nr_center = d3d12_evaluation_center(evaluation);
+-    const auto nr_center_reset = d3d12_evaluation_gaze_reset(evaluation);
+-    finish_d3d12(command_list, parameters, evaluation, result);
+-    if (peripheral_ready) {
+-        restore_peripheral_dlaa_output(command_list, peripheral);
+-    }
+-    if (!ngx_succeeded(result)) return false;
+-    evaluate_nr_after_native_d3d12(
+-        command_list, handle, parameters, settings, result, &nr_center, nr_center_reset, &crop
+-    );
+-    diagnostic_note_activation(DiagnosticApi::d3d12, crop);
+-    return true;
++    return false;
+ }
+ 
+ [[nodiscard]] D3D12BackendCallbacks d3d12_backend_callbacks(
+@@ -5172,6 +5007,13 @@
+         return result;
+     }
+     auto settings = current_settings();
++    const auto id = static_cast<DlssViewId>(reinterpret_cast<std::uintptr_t>(call.handle));
++    if (!cheeky_processing_allowed_for_view(settings, id)) {
++        skip_d3d12_history(id);
++        skip_d3d12_history(peripheral_dlaa_view_id(id));
++        skip_dlss_nr_history(id);
++        return original(call.command_list, call.handle, call.parameters, call.callback);
++    }
+     if(quad_view_snapshot().active)settings=settings_for_view(settings,reinterpret_cast<std::uintptr_t>(call.handle));
+     if (!settings.quad_view_mode && afw_coverage_enabled()) {
+         settings.afw_source_eye = afw_current_source_eye();
+@@ -5367,6 +5209,13 @@
+         return result;
+     }
+     auto settings = current_settings();
++    const auto id = static_cast<DlssViewId>(reinterpret_cast<std::uintptr_t>(handle));
++    if (!cheeky_processing_allowed_for_view(settings, id)) {
++        skip_d3d12_history(id);
++        skip_d3d12_history(peripheral_dlaa_view_id(id));
++        skip_dlss_nr_history(id);
++        return original(command_list, handle, parameters, callback);
++    }
+     if(quad_view_snapshot().active)settings=settings_for_view(settings,reinterpret_cast<std::uintptr_t>(handle));
+     if (!settings.quad_view_mode && afw_coverage_enabled()) {
+         settings.afw_source_eye = afw_current_source_eye();
+diff --git a/src/settings.cpp b/src/settings.cpp
+--- a/src/settings.cpp
++++ b/src/settings.cpp
+@@ -19,6 +19,7 @@
+ std::atomic<bool> processing_allowed{true};
+ 
+ std::atomic<bool> enabled{true};
++std::atomic<std::uint32_t> eye_processing_mode{0U};
+ std::atomic<bool> d3d12_lower_hook{true};
+ std::atomic<bool> d3d11_use_d3d12_transport{false};
+ std::atomic<bool> d3d12_quad_compose_wait{true};
+@@ -87,6 +88,7 @@
+ std::atomic<std::uint32_t> nr_transition_bits{0x3DA3D70AU};
+ std::atomic<std::uint32_t> nr_working_scale_bits{0x3F800000U};
+ std::atomic<std::uint32_t> nr_preset{};
++std::atomic<std::uint32_t> nr_template_active{};
+ std::atomic<std::uint32_t> nr_style{};
+ std::atomic<std::uint32_t> nr_intensity_bits{0x3F800000U};
+ std::atomic<std::uint32_t> nr_local_tone_bits{0x3F800000U};
+@@ -184,6 +186,7 @@
+     settings.nr_passes = nr_passes;
+     settings.nr_extra_passes = nr_extra_passes;
+     settings.enabled = enabled.load(std::memory_order_acquire);
++    settings.eye_processing_mode = eye_processing_mode.load(std::memory_order_acquire);
+     settings.d3d12_lower_hook = d3d12_lower_hook.load(std::memory_order_acquire);
+     settings.d3d11_use_d3d12_transport =
+         d3d11_use_d3d12_transport.load(std::memory_order_acquire);
+@@ -250,6 +253,7 @@
+     settings.nr_transition_width = load_float(nr_transition_bits);
+     settings.nr_working_scale = load_float(nr_working_scale_bits);
+     settings.nr_preset = nr_preset.load(std::memory_order_acquire);
++    settings.nr_template_active = nr_template_active.load(std::memory_order_acquire);
+     settings.nr_style = nr_style.load(std::memory_order_acquire);
+     settings.nr_intensity = load_float(nr_intensity_bits);
+     settings.nr_local_tone_strength = load_float(nr_local_tone_bits);
+@@ -280,11 +284,13 @@
+ void update_settings(const Settings& settings) noexcept {
+     std::unique_lock lock(settings_mutex);
+     fg_settings = settings.fg;
++    fg_settings.enabled = false; // NR Lite must not run Cheeky FG
++    fg_settings.force_reflex_off = false; // NR Lite does not override Reflex
+     nr_passes = std::clamp(settings.nr_passes, 1U, max_nr_passes);
+     for (std::size_t i = 0; i < nr_extra_passes.size(); ++i)
+         nr_extra_passes[i] = sanitized_extra_pass(settings.nr_extra_passes[i]);
+     if(!cheeky::fg::valid_dlssg_preset(fg_settings.dlssg_preset))fg_settings.dlssg_preset=3;
+-    reflex_override::requested.store(settings.fg.force_reflex_off,std::memory_order_release);
++    reflex_override::requested.store(false,std::memory_order_release);
+     fg_settings.multiplier=std::clamp(fg_settings.multiplier,2u,4u);
+     const auto bounded = [](float value, float lo, float hi, float fallback) {
+         return std::isfinite(value) ? std::clamp(value, lo, hi) : fallback;
+@@ -311,6 +317,7 @@
+     fg_settings.optical.center_validation=fg_settings.optical.peripheral_validation=1;
+     d3d12_lower_hook.store(settings.d3d12_lower_hook, std::memory_order_release);
+     enabled.store(settings.enabled, std::memory_order_release);
++    eye_processing_mode.store(settings.eye_processing_mode <= 3U ? settings.eye_processing_mode : 0U, std::memory_order_release);
+     d3d11_use_d3d12_transport.store(
+         settings.d3d11_use_d3d12_transport,
+         std::memory_order_release
+@@ -428,6 +435,7 @@
+         std::clamp(settings.nr_working_scale, 0.10F, 1.0F)
+     );
+     nr_preset.store((std::min)(settings.nr_preset, 7U), std::memory_order_release);
++    nr_template_active.store((std::min)(settings.nr_template_active, 2U), std::memory_order_release);
+     nr_style.store((std::min)(settings.nr_style, 2U), std::memory_order_release);
+     // NR 310.8 saturates the final model blend at one. Accept legacy saved
+     // values above one, but expose the effective value to both integrations.
+@@ -704,6 +712,57 @@
+     }
+ }
+ 
++bool cheeky_triview_fovea(const std::uint64_t view_id) noexcept {
++    if (!view_id) return false;
++    // Prefer verified OpenXR quad roles when those exist.
++    const auto quad = quad_view_snapshot();
++    if (quad.active) {
++        if (quad.status != 2) return false;
++        const auto* role = quad_view_assignment(quad, view_id, stereo_view_generation(view_id));
++        return role != nullptr && role->focus;
++    }
++    // TriView's two *real* stereo foveas are the unique equal-output-size
++    // pair among three DLSS source calls. The mono full-FOV source is unique.
++    // Use game evaluation geometry, never NGX handle creation/evaluation order.
++    std::lock_guard lock(stereo_views_mutex);
++    const auto now = GetTickCount64();
++    const StereoView* v[3]{};
++    unsigned n{};
++    for (const auto& source : stereo_views) {
++        if (!source.evaluation_calls || source.graphics_api != 12U ||
++            !source.evaluation_output_width || !source.evaluation_output_height ||
++            source.last_evaluation_ms > now ||
++            now - source.last_evaluation_ms > 2000U) continue;
++        if (n == 3U) return false; // A fourth live source makes role inference unsafe.
++        v[n++] = &source;
++    }
++    if (n != 3U) return false; // Do not process a partial / startup set.
++    const auto equal = [](const StereoView* a, const StereoView* b) noexcept {
++        return a->evaluation_output_width == b->evaluation_output_width &&
++               a->evaluation_output_height == b->evaluation_output_height;
++    };
++    const bool ab = equal(v[0],v[1]), ac = equal(v[0],v[2]), bc = equal(v[1],v[2]);
++    if (ab && !ac && !bc)
++        return view_id == v[0]->view_id || view_id == v[1]->view_id;
++    if (ac && !ab && !bc)
++        return view_id == v[0]->view_id || view_id == v[2]->view_id;
++    if (bc && !ab && !ac)
++        return view_id == v[1]->view_id || view_id == v[2]->view_id;
++    return false; // All-equal or no equal pair: do not process unknown periphery.
++}
++
++bool cheeky_processing_allowed_for_view(const Settings& settings,
++    const std::uint64_t view_id) noexcept {
++    if (settings.eye_processing_mode == 0U) return true;
++    if (settings.eye_processing_mode == 3U) return cheeky_triview_fovea(view_id);
++    if (view_id == 0U || settings.eye_processing_mode > 3U) return false;
++    // Identical to proven r13: use existing role coordinator, not handle order.
++    static_cast<void>(settings_for_view(settings, view_id));
++    const auto role = stereo_eye_assignment(view_id);
++    if (!role.assigned || role.shared_source) return false;
++    return role.eye_index == settings.eye_processing_mode - 1U;
++}
++
+ Settings settings_for_view(
+     const Settings& settings,
+     const std::uint64_t view_id
+diff --git a/src/settings.hpp b/src/settings.hpp
+--- a/src/settings.hpp
++++ b/src/settings.hpp
+@@ -79,6 +79,7 @@
+         bool force_reflex_off{true}; // Per-game override, independent of FG enable.
+     } fg;
+     bool enabled{true};
++    std::uint32_t eye_processing_mode{0U}; // All=0, Duo view0=1, Duo view1=2, Tri foveas=3
+     bool d3d12_lower_hook{true}; // Applied at interception startup; changes require a restart.
+     bool d3d11_use_d3d12_transport{false};
+     bool d3d12_quad_compose_wait{true}; // D3D12 quad views: xrEndFrame waits for the composition GPU work.
+@@ -154,6 +155,7 @@
+     float nr_transition_width{0.08F};
+     float nr_working_scale{1.0F};
+     std::uint32_t nr_preset{};
++    std::uint32_t nr_template_active{}; // 0 custom; 1/2 last loaded or saved slot
+     std::uint32_t nr_style{};
+     float nr_intensity{1.0F};
+     float nr_local_tone_strength{1.0F};
+@@ -296,6 +298,8 @@
+     std::uint32_t output_height,
+     const CropGeometry& crop
+ ) noexcept;
++[[nodiscard]] bool cheeky_processing_allowed_for_view(const Settings&, std::uint64_t) noexcept;
++[[nodiscard]] bool cheeky_triview_fovea(std::uint64_t) noexcept;
+ [[nodiscard]] Settings settings_for_view(
+     const Settings& settings,
+     std::uint64_t view_id
+diff --git a/tests/gaze_tests.cpp b/tests/gaze_tests.cpp
+--- a/tests/gaze_tests.cpp
++++ b/tests/gaze_tests.cpp
+@@ -2835,6 +2835,89 @@
+ int run_d3d11_binding_tests();
+ int run_debug_exposure_tests();
+ int main(int argc, char** argv) {
++    if (argc == 2 && std::strcmp(argv[1], "--opennr-v063") == 0) {
++        using namespace cheeky::foveated_dlss;
++        const auto old = configured_settings();
++        auto s = old;
++        s.eye_processing_mode = 0U;
++        expect(cheeky_processing_allowed_for_view(s, 99001), "Both is upstream");
++        s.eye_processing_mode = 1U;
++        update_settings(s);
++        expect(configured_settings().eye_processing_mode == 1U, "Setting persists");
++        register_stereo_view(99001);
++        expect(!cheeky_processing_allowed_for_view(s,99001), "Unknown view passthrough");
++        register_stereo_view(99002);
++        static_cast<void>(settings_for_view(s,99001));
++        static_cast<void>(settings_for_view(s,99002));
++        expect(cheeky_processing_allowed_for_view(s,99001), "View 0 selected");
++        expect(!cheeky_processing_allowed_for_view(s,99002), "View 1 deselected");
++        s.eye_processing_mode = 2U;
++        expect(!cheeky_processing_allowed_for_view(s,99001), "View 0 deselected");
++        expect(cheeky_processing_allowed_for_view(s,99002), "View 1 selected");
++        s.eye_processing_mode = 4U;
++        update_settings(s);
++        expect(configured_settings().eye_processing_mode == 0U, "Invalid mode to All");
++        s.eye_processing_mode = 3U;
++        update_settings(s);
++        expect(configured_settings().eye_processing_mode == 3U, "TriView selector persisted");
++        expect(!cheeky_processing_allowed_for_view(s,99001),
++               "Incomplete TriView mapping must not guess");
++        register_stereo_view(99004);
++        note_stereo_view_evaluation(99001,12U,800U,500U,1600U,1000U);
++        note_stereo_view_evaluation(99002,12U,800U,500U,1600U,1000U);
++        note_stereo_view_evaluation(99004,12U,1000U,600U,4000U,2000U);
++        expect(cheeky_processing_allowed_for_view(s,99001) &&
++               cheeky_processing_allowed_for_view(s,99002) &&
++               !cheeky_processing_allowed_for_view(s,99004),
++               "TriView both equal-size foveas, no full-FOV mono periphery");
++        note_stereo_view_evaluation(99004,12U,800U,500U,1600U,1000U);
++        expect(!cheeky_processing_allowed_for_view(s,99001) &&
++               !cheeky_processing_allowed_for_view(s,99004),
++               "Three same-size sources are ambiguous, fail closed");
++        unregister_stereo_view(99004);
++        s.eye_processing_mode = 0U;
++        expect(cheeky_processing_allowed_for_view(s,99001),
++               "All mode supports any source count");
++        // Independent source mapping regressions; UEVR serialization is
++        // tested separately by the native UEVR runtime integration harness.
++        // Assigned source identity must not silently depend on the initial
++        // NGX registration order once a calibrated stereo mapping is learned.
++        const auto generation0 = stereo_view_generation(99001);
++        const auto generation1 = stereo_view_generation(99002);
++        expect(publish_stereo_calibration(99002, 99001, generation1, generation0,
++            100U, GetTickCount64(), nullptr, 1U),
++            "Calibrated reversed-eye source mapping published");
++        s.eye_processing_mode = 1U;
++        expect(cheeky_processing_allowed_for_view(s, 99002) &&
++            !cheeky_processing_allowed_for_view(s, 99001),
++            "A legitimate calibration reversal follows the mapped role");
++        s.eye_processing_mode = 2U;
++        expect(cheeky_processing_allowed_for_view(s, 99001) &&
++            !cheeky_processing_allowed_for_view(s, 99002),
++            "Opposite calibrated role selects the other source");
++
++        // An OpenXR mono submission may map both physical eyes to one DLSS
++        // source. Never invent an extra render pass or process the wrong one.
++        unregister_stereo_view(99001);
++        unregister_stereo_view(99002);
++        register_stereo_view(99003);
++        const auto shared_generation = stereo_view_generation(99003);
++        expect(publish_stereo_calibration(99003, 99003, shared_generation, shared_generation,
++            101U, GetTickCount64(), nullptr, 1U, false, true),
++            "Shared-mono calibration published");
++        s.eye_processing_mode = 1U;
++        expect(!cheeky_processing_allowed_for_view(s, 99003),
++            "Shared-mono source bypasses view 0 selection");
++        s.eye_processing_mode = 2U;
++        expect(!cheeky_processing_allowed_for_view(s, 99003),
++            "Shared-mono source bypasses view 1 selection");
++        s.eye_processing_mode = 0U;
++        expect(cheeky_processing_allowed_for_view(s, 99003),
++            "Both remains upstream-compatible even for shared-mono");
++        unregister_stereo_view(99003);
++        update_settings(old);
++        return failures ? 1 : 0;
++    }
+     const auto test_view_activity = [] {
+         using namespace cheeky::foveated_dlss;
+         constexpr std::uint64_t unused = 0xF00001, live = 0xF00002;
+diff --git a/tests/nr_processing_tests.cpp b/tests/nr_processing_tests.cpp
+--- a/tests/nr_processing_tests.cpp
++++ b/tests/nr_processing_tests.cpp
+@@ -1,4 +1,5 @@
+ #include "dlss_nr_input.hpp"
++#include "../uevr/nr_lite_budget_policy.hpp"
+ #include "gaze_foveation.hpp"
+ #include "mock_ngx_parameters.hpp"
+ #include <iostream>
+@@ -62,6 +63,43 @@
+         const auto require = [](bool value, const char* why) {
+             if (!value) throw std::runtime_error(why);
+         };
++        // Full-frame NR in TriView requires significant EXTRA headroom:
++        // previous active NGX features cannot be force-released mid-recording.
++        {
++            Settings old{}, active{}, full{};
++            active.eye_processing_mode = 3U;
++            active.nr_enabled = true;
++            active.nr_foveated = true;
++            active.nr_processing_order = NrProcessingOrder::before_upscaling;
++            old = active;
++            full = active;
++            full.nr_foveated = false;
++            const auto required = nr_lite_required_headroom(old, full);
++            require(required >= 2048ULL * nr_lite_mib,
++                "Disabling NR foveation must reserve sufficient peak VRAM");
++            require(!nr_lite_has_headroom(required, true,
++                9504ULL * nr_lite_mib, 10150ULL * nr_lite_mib),
++                "Full-frame NR must refuse the observed 10 Nov low-budget state");
++            require(nr_lite_has_headroom(required, true,
++                6000ULL * nr_lite_mib, 10150ULL * nr_lite_mib),
++                "Full-frame NR should remain available when enough VRAM exists");
++            require(!nr_lite_has_headroom(required, false, 0U, 0U),
++                "Unknown DXGI headroom must fail closed for expanded models");
++            require(nr_lite_required_headroom(full, old) == 0U,
++                "Returning to smaller NR foveation should always remain possible");
++            old.nr_enabled = false;
++            require(nr_lite_required_headroom(old, active) > 0U,
++                "Enabling two-eye NR must be budget-gated");
++            full = active; full.nr_passes = 2U;
++            Settings all_views = active;
++            all_views.eye_processing_mode = 0U;
++            require(nr_lite_required_headroom(active, all_views) >= 2048ULL * nr_lite_mib,
++                "All-view mode must reserve room for periphery NR");
++            require(nr_lite_required_headroom(all_views, active) == 0U,
++                "All-views to stereo-foveas is a low-memory recovery path");
++            require(nr_lite_required_headroom(active, full) >= 1024ULL * nr_lite_mib,
++                "Two-pass model allocation must be budget-gated");
++        }
+         // Old INIs exposed intensity up to 2, although the model saturates at 1.
+         const auto saved_settings = current_settings();
+         for (const auto [requested, expected] : {std::pair{2.0F, 1.0F},
+diff --git a/tests/uevr_tests.cpp b/tests/uevr_tests.cpp
+--- a/tests/uevr_tests.cpp
++++ b/tests/uevr_tests.cpp
+@@ -184,10 +184,11 @@
+         require(read_settings_file(path,restored,error)&&restored.fg.release_point==1,"Explicit release point overrides legacy key");
+         fg.fg.width=5;fg.fg.height=-1;fg.fg.feather=3;
+         update_settings(fg);
+-        require(current_settings().fg.enabled && current_settings().fg.width==1 && current_settings().fg.height==0.2f &&
++        require(!current_settings().fg.enabled && current_settings().fg.width==1 && current_settings().fg.height==0.2f &&
+             current_settings().fg.feather==0.3f,"Runtime clamps FG geometry");
+         set_processing_allowed(false);
+-        require(!current_settings().fg.enabled && configured_settings().fg.enabled,"Detach pauses FG and preserves preference");
++        require(!current_settings().fg.enabled && !configured_settings().fg.enabled,
++            "NR Lite forces FG off, including across plugin detachment");
+         set_processing_allowed(true);update_settings(Settings{});
+     }
+     Settings s; require(s.d3d12_lower_hook, "Lower hook is the default");
+@@ -883,6 +884,30 @@
+         command("1\n46\nset\nWidth=0.65\nNrIntensity=1\nNrWorkingScale=0.37\nEyeCalibrationContinuous=false");
+         require(received.find("\"setting_groups\":{") != received.npos && received.find("\"nr_details\":{") != received.npos &&
+             received.find("\"frame\":{") != received.npos, "Expanded diagnostic snapshot bridge");
++        command("1\n210\nset\nNrPreset=1\nNrPasses=1\nNrWidth=0.4\nNrIntensity=0.7");
++        command("1\n211\nnr_template_save_1");
++        require(field(received, "NrTemplateActive")==1, "Template 1 save acknowledged");
++        command("1\n212\nset\nNrPreset=2\nNrPasses=2\nNrWidth=0.7\nNrIntensity=0.35");
++        command("1\n213\nnr_template_save_2");
++        require(field(received, "NrTemplateActive")==2, "Template 2 save acknowledged");
++        command("1\n214\nnr_template_load_1");
++        require(field(received, "NrPreset")==1 && field(received, "NrPasses")==1 &&
++            std::abs(field(received, "NrWidth")-0.4)<0.0001,
++            "Template 1 model, pass count and crop restored");
++        command("1\n215\nnr_template_load_2");
++        require(field(received, "NrPreset")==2 && field(received, "NrPasses")==2 &&
++            std::abs(field(received, "NrWidth")-0.7)<0.0001 &&
++            field(received, "EyeProcessingMode")==2,
++            "Template 2 restores NR only and preserves DuoView source selection");
++        command("1\n216\nnr_template_toggle");
++        require(field(received, "NrPreset")==1 && field(received,"NrTemplateActive")==1,
++            "One-click toggle switched from template 2 to template 1");
++        command("1\n217\nnr_template_toggle");
++        require(field(received, "NrPreset")==2 && field(received,"NrTemplateActive")==2,
++            "One-click toggle switched from template 1 to template 2");
++        require(std::filesystem::exists(root/"CheekyFoveatedDLSS-NR-Template-1.ini") &&
++            std::filesystem::exists(root/"CheekyFoveatedDLSS-NR-Template-2.ini"),
++            "Both template files persisted");
+         for (unsigned i = 0; i < 35; ++i) { Sleep(10); present(); }
+         require(field(snapshot(get), "present_ms") > 0, "Host presents feed the exported frame cadence");
+         if (!dx11) {
+@@ -931,6 +956,7 @@
+         for (int i=0;i<500 && field(snapshot(get),"saved_revision")<field(snapshot(get),"revision");++i) Sleep(10);
+         Settings saved; std::string error; require(read_settings_file(root/"CheekyFoveatedDLSS.ini",saved,error),"Persisted runtime config");
+         require(std::abs(saved.width-0.65f)<0.0001f && saved.enabled,"Persisted configured state");
++        require(saved.eye_processing_mode == 2U, "View selection was not persisted to disk");
+         require(!saved.eye_calibration_continuous, "Calibration policy must be saved per game");
+         require(saved.nr_processing_order == NrProcessingOrder::before_upscaling && saved.nr_working_scale == 0.37f,
+             "Asynchronous persistence lost NR rendering order or scale");
+@@ -948,6 +974,7 @@
+         require(received.find("\"attached\":true")!=received.npos && std::abs(field(received,"Width")-0.65)<0.0001,"Reload retains settings");
+         require(received.find("\"EyeCalibrationContinuous\":false") != received.npos,
+             "Reconnect must retain the saved calibration policy");
++        require(field(received,"EyeProcessingMode")==2, "UEVR plugin reload lost selected view");
+         require(field(received,"NrProcessingOrder")==1 && std::abs(field(received,"NrWorkingScale")-0.37)<0.0001,
+             "Reconnect lost rendering order or scale");
+         detach(1);
+diff --git a/uevr/runtime.cpp b/uevr/runtime.cpp
+--- a/uevr/runtime.cpp
++++ b/uevr/runtime.cpp
+@@ -3,6 +3,7 @@
+ #include "settings_io.hpp"
+ #include "frame_cadence.hpp"
+ #include "gpu_memory.hpp"
++#include "nr_lite_budget_policy.hpp"
+ #include "system_load.hpp"
+ #include "support_bundle.hpp"
+ #include "eye_calibration_capture.hpp"
+@@ -67,6 +68,40 @@
+     std::string report_summary;
+ };
+ State& state() { static auto* instance = new State; return *instance; }
++
++// Reconfiguration gate for both direct edits and saved-template loads.
++// A rejected transaction leaves current NR settings and temporal histories
++// unchanged. Never force-release an NGX model still owned by GPU recordings.
++bool nr_lite_check_budget(State& s, const Settings& previous,
++    const Settings& next, const char* reason) noexcept {
++    const auto required = nr_lite_required_headroom(previous, next);
++    if (!required) return true;
++    // Software WARP test devices have no dedicated NVIDIA VRAM.
++    if (s.graphics_ready && s.memory.dedicated_capacity == 0U) return true;
++    if (s.graphics_ready) s.memory.poll(GetTickCount64(), true);
++    const bool valid = s.graphics_ready && s.memory.local.valid;
++    const auto usage = s.memory.local.usage;
++    const auto budget = s.memory.local.budget;
++    const auto free_mib = budget > usage ? (budget - usage) >> 20U : 0U;
++    const auto required_mib = required >> 20U;
++    if (nr_lite_has_headroom(required, valid, usage, budget)) {
++        trace_event("[CheekyNR][VRAMGuard] approved action=%s freeMiB=%llu reserveMiB=%llu nrFoveated=%u passes=%u",
++            reason, static_cast<unsigned long long>(free_mib),
++            static_cast<unsigned long long>(required_mib),
++            next.nr_foveated ? 1U : 0U, next.nr_passes);
++        return true;
++    }
++    s.message = "NR change refused: insufficient free VRAM for safe model reallocation. "
++                "Keep NR foveation enabled or lower the TriView resolution first.";
++    trace_event("[CheekyNR][VRAMGuard] REJECTED action=%s valid=%u usedMiB=%llu budgetMiB=%llu freeMiB=%llu reserveMiB=%llu nrFoveated=%u passes=%u",
++        reason, valid ? 1U : 0U,
++        static_cast<unsigned long long>(usage >> 20U),
++        static_cast<unsigned long long>(budget >> 20U),
++        static_cast<unsigned long long>(free_mib),
++        static_cast<unsigned long long>(required_mib),
++        next.nr_foveated ? 1U : 0U, next.nr_passes);
++    return false;
++}
+ // Never destroyed: its sampler thread may outlive DLL teardown until it exits.
+ SystemLoadSampler& system_load() { static auto* instance = new SystemLoadSampler; return *instance; }
+ void sample_fg_memory(State& s,std::uint64_t now) {
+@@ -885,6 +920,49 @@
+         }
+         if (action == "save") { request_save(s); return true; }
+         if (action == "reset_nr") { reset_dlss_nr(); return true; }
++        if (action.starts_with("nr_template_save_") ||
++            action.starts_with("nr_template_load_") ||
++            action == "nr_template_toggle") {
++            const bool saving = action.starts_with("nr_template_save_");
++            const bool toggling = action == "nr_template_toggle";
++            const auto suffix = toggling ? "" : action.substr(17U);
++            if (!toggling && suffix != "1" && suffix != "2") {
++                s.message = "Invalid NR template slot"; return false;
++            }
++            const auto slot = toggling
++                ? (configured_settings().nr_template_active == 1U ? 2U : 1U)
++                : static_cast<std::uint32_t>(suffix[0] - '0');
++            const auto filepath = s.directory /
++                (slot == 1U ? L"CheekyFoveatedDLSS-NR-Template-1.ini"
++                            : L"CheekyFoveatedDLSS-NR-Template-2.ini");
++            auto settings = configured_settings();
++            std::string error;
++            if (saving) {
++                // Preserve all Nr* fields as a transaction; template loading
++                // deliberately ignores every other saved setting.
++                if (!write_settings_file(filepath, settings, error)) {
++                    s.message = "NR template save failed: " + error; return false;
++                }
++            } else {
++                Settings stored{};
++                if (!read_settings_file(filepath, stored, error)) {
++                    s.message = "NR template load failed: " + error; return false;
++                }
++#define CHEEKY_SETTING(name, field) if (std::string_view(name).starts_with("Nr") && std::string_view(name) != "NrTemplateActive") settings.field = stored.field;
++#include "settings_fields.inc"
++#undef CHEEKY_SETTING
++                if (!nr_lite_check_budget(s, configured_settings(), settings, "template")) return false;
++                update_settings(settings);
++                reset_dlss_nr(); // Do not reuse another model's temporal history.
++            }
++            settings.nr_template_active = slot;
++            update_settings(settings);
++            ++s.revision;
++            s.applied_request = id;
++            s.message = saving ? "NR Template saved" : "NR Template loaded";
++            request_save(s);
++            return true;
++        }
+         auto settings = configured_settings();
+         const bool was_manual_mapping = settings.manual_stereo_mapping;
+         if (action == "defaults") {
+@@ -910,6 +988,7 @@
+             }
+             if (!count) return false;
+         } else { s.message = "Unknown command"; return false; }
++        if (!nr_lite_check_budget(s, configured_settings(), settings, action.c_str())) return false;
+         update_settings(settings);
+         if (was_manual_mapping != settings.manual_stereo_mapping)
+             eye_calibration_enable(!settings.manual_stereo_mapping);
+diff --git a/uevr/scripts/cheeky_foveated_dlss.lua b/uevr/scripts/cheeky_foveated_dlss.lua
+--- a/uevr/scripts/cheeky_foveated_dlss.lua
++++ b/uevr/scripts/cheeky_foveated_dlss.lua
+@@ -85,7 +85,7 @@
+     status = value
+     -- A reconnect can reach an older runtime. Drop unsupported optional drafts
+     -- before automatic flush or Apply can resend them to that runtime.
+-    for _, key in ipairs({"FgAutoMultiplier", "FgMultiplier", "FgDlssgPreset", "FgReleasePoint", "FgPacingClock", "FgTargetRefreshHz", "FgLimitGpuAhead", "FgCarryMissedTicks", "FgPacingHeadroom", "FgExtraFrameSlots", "FgForceReflexOff", "FgLatencyDiagnostics", "FgDirectXrOutput", "FgWaitForCompletion", "FgResolutionPercent", "FgPeripheralPercent", "FgPeripheralMethod", "FgCenterMethod", "FgOpticalCenterPreset", "FgOpticalPeripheralPreset", "FgOpticalCenterPercent", "FgOpticalPeripheralPercent", "FgOpticalCenterGrid", "FgOpticalPeripheralGrid", "FgEnabled", "FgFoveated", "FgMatchSrRegion", "FgShowBorder", "FgWidth", "FgHeight", "FgXOffset", "FgYOffset", "FgFeather", "FixMotionBlur", "NrProcessingOrder", "AfwManualCoverage", "AfwAutomaticCoverage", "AfwWarpMargin", "EyeCalibrationContinuous", "EyeCalibrationMethod"}) do
++    for _, key in ipairs({"FgAutoMultiplier", "FgMultiplier", "FgDlssgPreset", "FgReleasePoint", "FgPacingClock", "FgTargetRefreshHz", "FgLimitGpuAhead", "FgCarryMissedTicks", "FgPacingHeadroom", "FgExtraFrameSlots", "FgForceReflexOff", "FgLatencyDiagnostics", "FgDirectXrOutput", "FgWaitForCompletion", "FgResolutionPercent", "FgPeripheralPercent", "FgPeripheralMethod", "FgCenterMethod", "FgOpticalCenterPreset", "FgOpticalPeripheralPreset", "FgOpticalCenterPercent", "FgOpticalPeripheralPercent", "FgOpticalCenterGrid", "FgOpticalPeripheralGrid", "FgEnabled", "FgFoveated", "FgMatchSrRegion", "FgShowBorder", "FgWidth", "FgHeight", "FgXOffset", "FgYOffset", "FgFeather", "FixMotionBlur", "NrProcessingOrder", "AfwManualCoverage", "AfwAutomaticCoverage", "AfwWarpMargin", "EyeCalibrationContinuous", "EyeCalibrationMethod", "EyeProcessingMode"}) do
+         if value.settings[key] == nil then
+             draft[key], dirty[key] = nil, nil
+             ready_edits[key], slider_edits[key] = nil, nil
+@@ -188,32 +188,6 @@
+     imgui.end_disabled()
+     imgui.tree_pop()
+ end
+-local function fg_optical(method)
+-    return method ~= nil and method >= 5 and method <= 12
+-end
+--- Type and method share one saved ID: 0 DLSS-G, 1-4 DLSS vectors,
+--- 5-8 optical flow, 9-12 optical flow + depth, 13 previous frame.
+-local function fg_method_combo(prefix, key, periphery)
+-    local method = draft[key]
+-    if method == nil then return end
+-    local function set(value) draft[key], dirty[key], ready_edits[key] = value, value, value end
+-    local types = {"DLSS-G", "DLSS Vectors", "Optiflow", "Optiflow + Depth"}
+-    if periphery then types[5] = "Previous frame" end
+-    local shader = method >= 1 and method <= 12
+-    local kind = method == 0 and 1 or method == 13 and 5 or math.floor((method - 1) / 4) + 2
+-    local interpolation = shader and (method - 1) % 4 + 1 or 3
+-    local changed, value = imgui.combo(prefix .. " type", kind, types)
+-    if changed and value ~= kind then
+-        if value == 1 then set(0) elseif value == 5 then set(13) else set((value - 2) * 4 + interpolation) end
+-    end
+-    method = draft[key]
+-    if method >= 1 and method <= 12 then
+-        local methods = {"Simple Warping", "Bidirectional Interpolation",
+-            "Confidence-Guided Interpolation", "Confidence-Guided Interpolation (Fast)"}
+-        changed, value = imgui.combo(prefix .. " method", (method - 1) % 4 + 1, methods)
+-        if changed then set(method - (method - 1) % 4 + value - 1) end
+-    end
+-end
+ local function donate_button()
+     -- Do not remove this donation button or change its original destination when
+     -- this project is forked or integrated into another project.
+@@ -275,34 +249,6 @@
+     imgui.spacing()
+     imgui.text_colored(label, 0xFF8FC9EC)
+ end
+-local function rows(id, entries)
+-    -- UEVR's documented table binding; keep a plain-text fallback for older hosts.
+-    if not imgui.begin_table then
+-        for _, row in ipairs(entries) do text(row[1] .. ": " .. tostring(row[2])) end
+-    elseif imgui.begin_table(id, 2, 0, {0, 0}, 0) then
+-        for _, row in ipairs(entries) do
+-            imgui.table_next_row(0, 0)
+-            imgui.table_next_column(); text(row[1])
+-            imgui.table_next_column(); text(row[2])
+-        end
+-        imgui.end_table()
+-    end
+-end
+-local function yes(value) return value and "Yes" or "No" end
+-local function size(w, h)
+-    if not w or not h or w == 0 or h == 0 then return "Not sampled yet" end
+-    return string.format("%d x %d", w, h)
+-end
+-local function timing(ms)
+-    return ms and ms > 0 and string.format("%.3f ms", ms) or "Not sampled / unavailable"
+-end
+-local function fps(ms)
+-    return ms and ms > 0 and string.format("%.1f FPS  |  %.2f ms", 1000 / ms, ms) or "Not sampled yet"
+-end
+-local function saving(full, reduced)
+-    if not full or not reduced or full <= 0 or reduced <= 0 then return "Sample both modes to compare" end
+-    return string.format("%.3f ms (%.1f%%)", full - reduced, 100 * (full - reduced) / full)
+-end
+ local function reset_group(label, group)
+     imgui.begin_disabled(pending_apply ~= nil or (group ~= "all" and not status.setting_groups))
+     if imgui.button(label) and not pending_apply then
+@@ -320,753 +266,101 @@
+     end
+     imgui.end_disabled()
+ end
+-local alignment = {[0]="Manual fallback", [1]="Streamline projection", [2]="OpenXR", [3]="OpenVR", [4]="LibOVR"}
+ 
+-local function fg_resource_memory(id, r)
+-    if not r then text("Update the plugin/runtime for the FG resource memory breakdown."); return end
+-    if not imgui.tree_node("FG resource memory breakdown##" .. id) then return end
+-    local c = r.categories or {}
+-    local function mib(bytes) return string.format("%.1f MiB", (bytes or 0) / 1048576) end
+-    local entries = {}
+-    local function item(label, key, available)
+-        local b = c[key] or {}
+-        local value = available and (mib(b.bytes) .. string.format(" / %.0f resources",b.resources or 0)) or "Unavailable / awaiting sample"
+-        if available and (b.unknown_resources or 0)>0 then value=value .. string.format("; %.0f unsized",b.unknown_resources) end
+-        entries[#entries+1] = {label,value}
+-    end
+-    local capture = r.layer_supported and (not r.presenter_present or (r.capture_tick or 0)>0)
+-    local worker = r.layer_supported and (not r.presenter_present or (r.worker_tick or 0)>0)
+-    local presenter = r.layer_supported and (not r.presenter_present or (r.presenter_tick or 0)>0)
+-    item("Native color / capture pool","capture",capture)
+-    item("Generated output pool","generated",worker)
+-    item("Upload transport pool","upload_pool",presenter)
+-    item("Captured depth guides (raw/prepared)","guide_depth",r.guides_supported)
+-    item("Captured motion guides (raw/prepared)","guide_motion",r.guides_supported)
+-    item("Prepared FG color","prepared_color",worker)
+-    item("Worker-owned prepared depth","prepared_depth",worker)
+-    item("Worker-owned prepared motion","prepared_motion",worker)
+-    item("NGX output textures + flags","ngx_outputs",worker)
+-    item("Periphery + depth history","periphery",worker)
+-    item("Composition scratch","composition",worker)
+-    item("Shared scene XR images (estimated)","swapchain_native",presenter)
+-    item("Separate generated XR images (estimated)","swapchain_generated",presenter)
+-    item("Auxiliary XR images (estimated)","swapchain_auxiliary",presenter)
+-    rows("fg_memory_categories_" .. id,entries)
+-    rows("fg_memory_totals_" .. id,{
+-        {"Known app FG resources",mib(r.app_resource_bytes)},
+-        {"XR image allocation estimates",mib(r.swapchain_estimated_bytes)},
+-        {"Known resources + XR estimates",mib(r.known_resource_bytes)},
+-        {"Reusable capture / output pool",mib((c.capture or {}).reusable_bytes) .. " / " .. mib((c.generated or {}).reusable_bytes)},
+-        {"NVIDIA internal / driver memory","Not measured"}
+-    })
+-    if not r.layer_supported then text("Partial breakdown: update OpenXR support for presenter resources.") end
+-    if (r.unknown_resources or 0)>0 then text("Some resource sizes are unavailable; totals omit those sizes.") end
+-    text("Unique resource allocation sizes, not resident VRAM. XR images are estimates; borrowed game textures are excluded.")
+-    text("Prepared guide captures are counted in captured rows; borrowed guides add no worker-owned allocation.")
+-    text("Reusable pools are a subset of the totals. They are retained allocations, not extra copies per reference.")
+-    text("Does not measure NVIDIA internal workspace, command/descriptor storage or driver overhead; do not subtract from DXGI usage to infer NVIDIA's share.")
+-    imgui.tree_pop()
+-end
+-
+-local function gpu_memory(id)
+-    section("GPU memory (game process)")
+-    local m = status.gpu_memory or {}
+-    local l, n, b = m["local"] or {}, m.nonlocal or {}, m.baseline or {}
+-    local function mib(bytes) return string.format("%.1f MiB", (bytes or 0) / 1048576) end
+-    local function delta(bytes) return string.format("%+.1f MiB", (bytes or 0) / 1048576) end
+-    if not m.supported then
+-        text("GPU memory query unavailable in this runtime or renderer.")
+-        return
+-    end
+-    rows("gpu_memory_" .. id, {
+-        {"GPU adapter", m.adapter or "Unknown"},
+-        {"Local usage / budget", l.valid and (mib(l.usage_bytes) .. " / " .. mib(l.budget_bytes)) or "Unavailable"},
+-        {"Local budget headroom", l.valid and mib(l.headroom_bytes) or "Unavailable"},
+-        {"Local sampled peak", l.valid and mib(l.peak_bytes) or "Unavailable"},
+-        {"Samples over local budget", l.valid and string.format("%.0f",l.over_budget_samples or 0) or "Unavailable"},
+-        {"Shared / nonlocal usage", n.valid and mib(n.usage_bytes) or "Unavailable"},
+-        {"Shared / nonlocal budget", n.valid and mib(n.budget_bytes) or "Unavailable"},
+-        {"Dedicated adapter capacity", (m.dedicated_capacity_bytes or 0)>0 and mib(m.dedicated_capacity_bytes) or "Unavailable / shared-memory GPU"}
+-    })
+-    if l.valid and (l.over_budget_bytes or 0)>0 then text("OVER LOCAL BUDGET by " .. mib(l.over_budget_bytes)) end
+-    if b.valid then
+-        rows("gpu_memory_baseline_" .. id, {
+-            {"Baseline FG setting", b.fg_enabled and "ON" or "OFF"},
+-            {"Local change from baseline", l.valid and delta(b.local_delta_bytes) or "Unavailable"},
+-            {"Shared change from baseline", n.valid and b.nonlocal_valid and delta(b.nonlocal_delta_bytes) or "Unavailable"}
+-        })
+-    else text("No VRAM baseline marked.") end
+-    imgui.begin_disabled(not l.valid)
+-    if imgui.button("Mark VRAM baseline##" .. id) then send("mark_vram_baseline") end
+-    imgui.end_disabled()
+-    text("Sampled once per second. Local memory is VRAM on discrete GPUs; budget is assigned by Windows.")
+-    text("Includes the game, Cheeky and in-process runtime allocations. Excludes other processes; capacity is not free VRAM.")
+-    text("Mark a baseline with FG OFF, then enable FG in the same scene. The change also includes game allocations.")
+-    fg_resource_memory(id,m.fg_resources)
+-end
+-
+-local function performance(d, f)
+-    gpu_memory("performance")
+-    section("Frame rate comparison")
+-    rows("fps", {{"SR enabled", fps(f.sr_enabled_ms)}, {"SR disabled", fps(f.sr_disabled_ms)},
+-        {"Frame time savings", saving(f.sr_disabled_ms, f.sr_enabled_ms)}})
+-    text("Toggle SR in the same scene. These measure UEVR present callbacks; headset FPS may differ.")
+-
+-    section("GPU time (250 ms average)")
+-    local quad = status.quad_views and status.quad_views.active
+-    local times = {{quad and "Original DLSS" or "Full DLSS", timing(d.native_ms)}}
+-    if quad then table.insert(times, {"Original peripheral DLSS", timing(d.native_peripheral_ms)}) end
+-    table.insert(times, {"Foveated DLSS", timing(d.foveated_ms)})
+-    table.insert(times, {"Peripheral DLSS", timing(d.peripheral_ms)})
+-    local settings = status.settings or {}
+-    if status.renderer == 1 and settings.NrEnabled then
+-        local before = settings.NrProcessingOrder == 1
+-        local metric = settings.NrFoveated and "nr_foveated_ms" or "nr_full_ms"
+-        if before then metric = settings.NrFoveated and "before_nr_foveated_ms" or "before_nr_full_ms" end
+-        times[#times + 1] = {before and "NR + preparation (Before)" or "NR (After)", timing(d[metric])}
+-    end
+-    rows("gpu_time", times)
+-    text("Samples are retained when a mode is disabled. DLSS timings exclude other game work.")
+-
+-    section("Resolution")
+-    local c = d.crop or {}
+-    rows("resolution", {
+-        {"Game input / output", size(d.input_width, d.input_height) .. " / " .. size(d.output_width, d.output_height)},
+-        {"Center DLSS input / output", size(c.input_width, c.input_height) .. " / " .. size(c.output_width, c.output_height)}
+-    })
+-    if status.renderer == 1 and settings.NrEnabled then
+-        local n = status.nr_details or {}
+-        rows("nr_resolution", {{"NR working size", size(n.working_width, n.working_height)}})
+-    end
+-end
+-
+-local function afw_mode(afw)
+-    if afw.rendering_mode_known then return afw.rendering_mode == 3 and "Selected" or "Not selected" end
+-    return afw.coverage_enabled == false and "Not selected" or "Mode unavailable"
+-end
+-
+-local function afw_controls()
+-    if draft.AfwManualCoverage == nil then return end
+-    local gaze = draft.CenterMode ~= 0
+-    local mode = draft.AfwAutomaticCoverage and 2 or draft.AfwManualCoverage and 1 or 0
+-    local choices = {[0]="Per-eye (calibrated)",[1]="Manual"}
+-    if draft.AfwAutomaticCoverage ~= nil then choices[2] = "Automatic" end
+-    local changed, value = imgui.combo(gaze and "AFW tracking-loss fallback" or "AFW stereo coverage", mode, choices)
+-    if changed then
+-        -- Commit both legacy flags together, preserving existing preferences
+-        -- until the user selects a mode. Automatic still wins in older INIs.
+-        mode = value
+-        local edits = {AfwManualCoverage = value == 1}
+-        if draft.AfwAutomaticCoverage ~= nil then edits.AfwAutomaticCoverage = value == 2 end
+-        for key, enabled in pairs(edits) do draft[key], dirty[key], ready_edits[key] = enabled, enabled, enabled end
+-    end
+-    if mode == 2 then
+-        -- Height is edited once in Foveation placement below.
+-    elseif mode == 1 then
+-        slider(gaze and "Fallback stereo X offset" or "Stereo X offset", "XOffset", -1, 1)
+-    end
+-    if mode == 0 then text("Uses the configured region and calibrated eye alignment.")
+-    elseif gaze then text("Gaze follows both eyes. The fallback above applies when tracking is unavailable.") end
+-    if (gaze or mode ~= 0) and draft.AfwWarpMargin ~= nil and imgui.tree_node("Advanced AFW") then
+-        slider("Extra margin per edge", "AfwWarpMargin", 0, 0.25)
+-        text("Adds a fixed fraction of the full image around each eye's region. Larger margins cost more GPU time.")
+-        imgui.tree_pop()
+-    end
+-end
+-
+-uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
+-    local changed, value = imgui.checkbox("Enable Cheeky for this game", enabled)
++uevr.lua.add_script_panel("Cheeky TriView NR Lite", function()
++    local changed, value = imgui.checkbox("Enable DLSS-NR plugin for this game", enabled)
+     if changed then set_enabled(value) end
+     if loader_error then text(loader_error) end
+-    if not enabled then
+-        text("Disabled. After first activation, hook code stays resident until application exit; processing is detached.")
++    if not enabled then return end
++    if loader_state ~= "enabled" then
++        text("NR runtime: " .. tostring(loader_state or "waiting"))
+         return
+     end
+-    if loader_state == "failed" then
+-        text("Cheeky could not start. Check the runtime message below and the log; missing files require the complete matching package.")
+-        if not status then return end
+-    elseif loader_state ~= "enabled" then
+-        text("Waiting for the Cheeky plugin. Install the matching plugin and Lua script.")
+-        return
+-    end
+-
+-    if not imgui.tree_node("Cheeky Foveated DLSS") then return end
+-    if error_text then text(error_text) end
+     if not status then
+-        text("Waiting for the Cheeky native plugin.")
+-        text("Extract the complete UEVR package into this game's configuration folder.")
+-        text("Check PluginLoader and the UEVR log for DLL/API errors.")
++        text("Waiting for NR settings from the plugin")
+         if imgui.button("Reconnect") then send("get") end
+-        imgui.tree_pop()
+         return
+     end
+-    if imgui.table_setup_column and imgui.ColumnFlags and imgui.begin_table("cheeky_header", 2, 0, {0, 0}, 0) then
+-        imgui.table_setup_column("Version", imgui.ColumnFlags.WidthStretch, 1.0, 0)
+-        local font = imgui.calc_text_size("Donate").y
+-        imgui.table_setup_column("Support", imgui.ColumnFlags.WidthFixed, font * 6.6, 0)
+-        imgui.table_next_row(0, 0)
+-        imgui.table_next_column(); text("Cheeky " .. tostring(status.version))
+-        imgui.table_next_column(); donate_button()
+-        imgui.end_table()
+-    else
+-        text("Cheeky " .. tostring(status.version))
+-        imgui.same_line(); donate_button()
+-    end
++    if not imgui.tree_node("DLSS 5 NR — game-native SR") then return end
++    donate_button()
++    text("Only NVIDIA NR is applied by this plugin. STALKER 2 retains its own DLSS SR.")
+     local message = tostring(status.message or "")
+-    if message ~= "" and message ~= "Settings applied" and not message:match("^Ready%.") then text(message) end
+-    local afw = status.afw_experiment or {}
+-    local afw_available = afw.enabled and afw.coverage_enabled ~= false
+-    local afw_active = afw_available and (draft.AfwAutomaticCoverage or draft.AfwManualCoverage)
+-    if not status.ready then text("Processing is paused.") end
+-    text("Alt+Shift+/ toggles SR.")
+-    local d = (status.apis or {})[status.renderer == 1 and 2 or 1] or {}
+-    local f = status.frame or {}
+-    local fg_state = status.fg or {}
+-    local fg_timeline = fg_state.pacing_timeline or {}
+-    local fg_cadence = fg_state.cadence or {}
+-    local native_fg_mode = afw.rendering_mode_known and afw.rendering_mode == 0
+-    local fg_status_text = "Disabled"
+-    if not native_fg_mode then
+-        fg_status_text = afw.rendering_mode_known and "Paused - Native Stereo required" or "Waiting for UEVR rendering mode"
+-    elseif draft.FgEnabled then
+-        fg_status_text = (fg_timeline.supported and fg_timeline.recent_generated) and
+-            string.format("Generating (%.1f FG FPS)",fg_cadence.generated_fps or 0) or "No recent generated frames"
++    if message ~= "" and message ~= "Settings applied" and not message:match("^Ready%.") then
++        text(message)
+     end
+-    rows("overview", {{"Renderer", status.renderer == 1 and "DX12" or "DX11 direct"},
+-        {"SR status", d.state or "Waiting"}, {"NR status", status.nr or "Waiting"},
+-        {"DLSS-FG status", fg_status_text},
+-        {"UEVR present cadence", fps(f.present_ms)}})
+-    if afw.enabled then rows("afw_overview", {{"AFW", afw_mode(afw)}}) end
+-    -- A reset is a native transaction. Wait for its authoritative snapshot before editing again.
++    text("Atlas batching requires verified two-eye inputs; this build collects routing diagnostics.")
++    text("NR status: " .. tostring(status.nr or "Waiting"))
++    if status.ready == false then text("Processing is paused") end
+     imgui.begin_disabled(pending_apply ~= nil and pending_apply.reset_group ~= nil)
+-
+-    if imgui.tree_node("Stereo and gaze") then
+-        combo("Foveation center", "CenterMode", {[0]="Fixed",[1]="Runtime gaze (OpenXR / OpenVR)",[2]="Simulated gaze"})
+-        if afw_available then
+-            afw_controls()
+-            afw_active = draft.AfwAutomaticCoverage or draft.AfwManualCoverage
+-        end
+-        section("Foveation placement")
+-        local aligned_height = afw_active and draft.AfwAutomaticCoverage or (not afw_active and draft.AutoStereoAlignment)
+-        slider("Height offset", aligned_height and "AlignedHeightOffset" or "HeightOffset", -1, 1)
+-        text("Moves fixed and eye-tracked placement. Negative = up; positive = down.")
+-        if afw_active then
+-            if draft.AfwAutomaticCoverage and afw.coverage_mode ~= 2 and afw.coverage_mode ~= 3 then
+-                text("Automatic coverage is waiting for matching UEVR projections; using centered fallback.")
+-            end
+-        else
+-            check("Automatic stereo alignment", "AutoStereoAlignment")
+-            if not draft.AutoStereoAlignment then slider("Manual stereo X offset", "XOffset", -1, 1) end
+-            if not draft.AutoStereoAlignment then check("Invert stereo eye order", "InvertStereoXOffset") end
+-        end
+-        if imgui.tree_node("Stereo Eye Mapping") then
+-            local c = status.eye_calibration or {}
+-            if status.settings.EyeCalibrationMethod ~= nil then
+-                local methods = {[0]="Auto",[1]="Standard corners",[2]="Timing tolerant corners",[3]="Full crop search",[4]="Manual"}
+-                local selected = draft.ManualStereoMapping and 4 or draft.EyeCalibrationMethod
+-                local changed, method = imgui.combo("Mapping method", selected, methods)
+-                if changed then
+-                    local edits = {ManualStereoMapping = method == 4}
+-                    if method ~= 4 then edits.EyeCalibrationMethod = method end
+-                    for key, value in pairs(edits) do draft[key], dirty[key], ready_edits[key] = value, value, value end
+-                end
+-                imgui.begin_disabled(not draft.ManualStereoMapping)
+-                check("First DLSS view is right eye", "ManualStereoRightFirst")
+-                imgui.end_disabled()
+-                if draft.ManualStereoMapping then
+-                    text("Manual: assumes full-eye images with matching XR coordinates.")
+-                    text("Off means left eye first. No crop, flip or projection changes.")
+-                    text("Check both eyes and image edges with the red alignment border.")
+-                end
+-            end
+-            if not draft.ManualStereoMapping then
+-                local methods = {[0]="Auto",[1]="Standard corners",[2]="Timing tolerant corners",[3]="Full crop search"}
+-                local learned = status.settings.EyeCalibrationLearnedMethod or 0
+-                text("Learned starting method: " .. (learned > 0 and methods[learned] or "Not learned yet"))
+-                text("Active method: " .. (c.active_method or "Waiting"))
+-                if status.settings.EyeCalibrationLearnedMethod == 2 and (status.settings.EyeCalibrationLearnedSessions or 0) < 2 then
+-                    text("Timing preference needs confirmation on another launch.")
+-                end
+-                if imgui.button("Reset learned calibration method") then send("calibration_forget") end
+-            end
+-            if not draft.ManualStereoMapping and status.settings.EyeCalibrationContinuous ~= nil then
+-                if draft.EyeCalibrationMethod == 3 or (draft.EyeCalibrationMethod == 0 and c.active_method == "Full crop search") then
+-                    check("Continuously validate eye calibration", "EyeCalibrationContinuous")
+-                    if draft.EyeCalibrationContinuous == false then
+-                        text("Recalibrates only when views, dimensions, submission bounds, or the VR session change. Same-view eye swaps and image crop changes are not detected.")
+-                    end
+-                end
+-                if c.enabled and imgui.button("Recalibrate now") then send("calibration_recalibrate") end
+-            end
+-            rows("eye_calibration", {{"Runtime", c.backend or "Waiting for VR"},
+-                {"Status", draft.ManualStereoMapping and "Manual (unverified full-eye layout)" or c.status or "Unavailable in this runtime"}})
+-            imgui.tree_pop()
+-        end
+-        section("Eye tracking")
+-        if draft.CenterMode == 2 then
+-            combo("Simulation pattern", "SimulationPattern", {[0]="Figure eight (8 s)",[1]="Slow sweep (20 s)",
+-                [2]="Jump every 2 s",[3]="Jump every 8 s",[4]="Tracking loss",[5]="Hold center"})
+-            text("Patterns restart when changed. Enable the red border to inspect motion.")
+-            if draft.SimulationPattern == 2 or draft.SimulationPattern == 3 then check("Show next jump target", "ShowNextJumpTarget") end
+-            if draft.SimulationPattern == 4 then text("Moves for 4 s, loses tracking for 1 s, then recovers.") end
+-        end
+-        if imgui.tree_node("OpenXR input compatibility") then
+-            check("Independent OpenXR gaze (restart application required)", "IndependentOpenXRGaze")
+-            text("For hosts without OpenXR input only. Attaches gaze after 90 frames.")
+-            text("Later host input initialization cannot attach until restart.")
+-            imgui.tree_pop()
+-        end
+-        if imgui.tree_node("Advanced eye tracking") then
+-            slider("Gaze smoothing (ms)", "GazeSmoothingMs", 0, 100)
+-            slider("Hold gaze on signal loss (ms)", "GazeHoldMs", 0, 1000)
+-            slider("Crop quantization (pixels)", "GazeQuantizationPixels", 1, 64, true)
+-            slider("Jump reset threshold", "GazeJumpResetRatio", 0.01, 1)
+-            imgui.tree_pop()
+-        end
+-        local g = status.gaze or {}
+-        if afw_active then
+-            if draft.CenterMode ~= 0 then rows("afw_gaze_summary", {{"Gaze driving foveation", yes(g.using_gaze)}}) end
+-        else
+-            rows("gaze_summary", {{"Alignment", alignment[g.alignment] or "Unknown"}, {"Gaze driving foveation", yes(g.using_gaze)},
+-                {"Mapped left / right", yes(g.left_mapped) .. " / " .. yes(g.right_mapped)}})
+-        end
+-        if draft.CenterMode == 1 and not g.using_gaze then
+-            imgui.text_colored(afw_active and "Eye tracking or UEVR projections unavailable; using fixed fallback." or "Eye tracking unavailable or awaiting mapping; using fixed fallback.", 0xFFFFBC70)
+-        end
+-        if draft.CenterMode ~= 0 or not afw_active then
+-            text("OpenXR alignment/gaze uses the matching Cheeky layer. Fixed alignment needs no eye tracker.")
+-        end
+-        reset_group("Reset Stereo / gaze defaults", "gaze")
+-        imgui.tree_pop()
++    check("Enable DLSS-NR", "NrEnabled")
++    if draft.EyeProcessingMode ~= nil then
++        combo("NR source views", "EyeProcessingMode",
++            {[0]="All DLSS views", [1]="Duo view 0", [2]="Duo view 1",
++             [3]="TriView: both stereo foveas"}, {3,0,1,2})
++        text("Mode 3 fails closed when the live TriView geometry is ambiguous.")
++        text("All DLSS views also runs NR on the periphery and costs more VRAM.")
+     end
+-
+-    local rr = d.reconstruction_feature == 13
+-    if imgui.tree_node(rr and "DLSS-RR" or "DLSS-SR") then
+-        if draft.D3D12LowerHook ~= nil then
+-            check("Use lower DLSS hook (DX12)", "D3D12LowerHook")
+-            text("Off selects the higher call. Restart the game after changing this.")
+-            text("Active DLSS hook: " .. (status.d3d12_lower_hook_active and "Lower" or "Higher"))
+-            if status.d3d12_hook_restart_required then text("DLSS hook change saved for next game restart.") end
+-        end
+-        check("Enable foveated DLSS-SR", "Enabled")
+-        if draft.Enabled then
+-            section("Center")
+-            if rr then combo("Center RR preset", "RrCenterPreset", {[0]="Game/default",[4]="D",[5]="E",[6]="F"})
+-            else combo("Center preset", "CenterPreset", {[0]="Game/default",[5]="E",[10]="J",[11]="K",[12]="L",[13]="M"}) end
+-            if not rr and draft.FixMotionBlur ~= nil then
+-                check("Fix motion-vector blur", "FixMotionBlur")
+-                text("(Use if preset causes blurriness)")
+-                text("DX12 / input-resolution motion vectors. Adds a GPU motion copy.")
+-            end
+-            slider("Center supersampling", "CenterSupersampling", 1, 2)
+-            slider("Fovea width", "Width", 0.2, 1)
+-            slider("Fovea height", "Height", 0.2, 1)
+-            if afw_active then text("AFW sizes are per eye. Stereo coverage and extra margin can enlarge the visible region.") end
+-            slider("Roundness", "Roundness", 0, 1)
+-            text("Cosmetic only; no performance impact.")
+-            slider("Transition width", "TransitionWidth", 0, 0.3)
+-            check("Show red alignment border", "AlignmentBorder")
+-            section("Periphery")
+-            check("Peripheral DLSS", "PeripheralDlaa")
+-            if draft.PeripheralDlaa then
+-                if rr then combo("Peripheral RR preset", "RrPeripheralPreset", {[0]="Game/default",[4]="D",[5]="E",[6]="F"})
+-                else combo("Peripheral preset", "PeripheralDlaaPreset", {[5]="E",[10]="J",[11]="K",[12]="L",[13]="M"}) end
+-                slider("Periphery scale", "PeripheralDlaaScale", 0.2, 1)
+-            end
+-        end
+-        reset_group("Reset DLSS-SR defaults", "sr")
+-        imgui.tree_pop()
++    if draft.NrProcessingOrder ~= nil then
++        combo("NR placement", "NrProcessingOrder",
++            {[0]="After SR", [1]="Before SR (recommended)"}, {0,1})
+     end
+-
+-    if imgui.tree_node("Frame Gen (Experimental)") then
+-        if draft.FgEnabled == nil then
+-            text("Install the matching DLSS-FG plugin, runtime and Lua script.")
+-        elseif not native_fg_mode then
+-            text("DLSS-FG controls are available only in UEVR Native Stereo.")
+-        else
+-            -- Same content and order as the standalone F8 Frame Gen tab.
+-            check("Enable Frame Generation", "FgEnabled")
+-            if draft.FgMultiplier ~= nil then
+-                if draft.FgAutoMultiplier ~= nil then check("Automatic FG multiplier", "FgAutoMultiplier") end
+-                if imgui.begin_disabled then imgui.begin_disabled(draft.FgAutoMultiplier == true) end
+-                combo("FG multiplier", "FgMultiplier", {[2]="2x", [3]="3x", [4]="4x"})
+-                if imgui.end_disabled then imgui.end_disabled() end
+-                if draft.FgAutoMultiplier then
+-                    local automatic = (status.fg or {}).automatic or {}
+-                    if not automatic.supported then text("Auto requires the matching OpenXR layer update.")
+-                    else text(string.format("Auto: %dx selected / %dx presenting (maximum %dx)%s", automatic.selected or 2, automatic.presented or 2, automatic.maximum or 4, automatic.valid and "" or " - measuring")) end
+-                    text("Adapts 2x-4x to rendering load. Increases after sustained overload; decreases after 1.5 seconds of headroom.")
+-                end
+-                if draft.FgMultiplier > 2 then text("DLSS requires multi-frame support from the GPU and runtime. Shader methods support all multipliers. Higher multipliers lower the game's target frame rate.") end
++    if draft.NrEnabled then
++        check("Enable NR subregion", "NrFoveated")
++        if draft.NrFoveated then
++            check("Match original SR crop", "NrUseSrFoveation")
++            if not draft.NrUseSrFoveation then
++                slider("NR width", "NrWidth", 0.2, 1)
++                slider("NR height", "NrHeight", 0.2, 1)
++                slider("NR roundness", "NrRoundness", 0, 1)
++                slider("NR transition", "NrTransitionWidth", 0, 0.3)
+             end
+-            local fg = status.fg or {}
+-            if not fg.layer_present then
+-                text("OpenXR layer not loaded. Install the matching OpenXR support and restart the game.")
+-            elseif not fg.controls_supported then
+-                text("Update the OpenXR layer and restart the game.")
+-            elseif not status.settings.FgEnabled then
+-                text("Status: Off")
+-            elseif not fg.compatible_session then
+-                text("Status: Waiting for a running D3D11 or D3D12 OpenXR stereo session")
+-            else
+-                text("Status: " .. tostring(fg.state or "Waiting"))
+-                if fg.state ~= "Generating frames" and fg.diagnostic and fg.diagnostic ~= "" then
+-                    text(tostring(fg.diagnostic))
+-                end
+-            end
+-            local dx11 = status.renderer == 0
+-            local native_shader11 = dx11 and (draft.FgCenterMethod or 0) > 0 and (not draft.FgFoveated or (draft.FgPeripheralMethod or 1) ~= 0)
+-            local percent = {[25]="25%", [50]="50%", [75]="75%", [100]="100% native"}
+-            section("Foveation")
+-            if draft.FgCenterMethod ~= nil then
+-                fg_method_combo("FG center", "FgCenterMethod", false)
+-            end
+-            if draft.FgDlssgPreset ~= nil and ((draft.FgCenterMethod or 0) == 0 or
+-                    (draft.FgFoveated and draft.FgPeripheralMethod == 0)) then
+-                combo("DLSS-G preset", "FgDlssgPreset", {[1]="Preset A", [2]="Preset B", [3]="Preset C"})
+-                if draft.FgDlssgPreset == 2 then text("Preset B needs separate scene and HUD inputs; without them it behaves like Preset A.") end
+-                if draft.FgDlssgPreset == 3 then text("Preset C uses the faster Lite model and requires DLSS-G 310.9.16 or newer.") end
+-            end
+-            local optical_presets = {[0]="Slow (quality)", [1]="Medium", [2]="Fast (performance)"}
+-            local optical_grids = {[4]="4x4 blocks", [2]="2x2 blocks", [1]="1x1 (per pixel)"}
+-            if fg_optical(draft.FgCenterMethod) then
+-                if draft.FgOpticalCenterPreset ~= nil then combo("Center optical flow preset", "FgOpticalCenterPreset", optical_presets) end
+-                if draft.FgOpticalCenterPercent ~= nil then combo("Center optical flow resolution", "FgOpticalCenterPercent", percent) end
+-                if draft.FgOpticalCenterGrid ~= nil then combo("Center optical flow vector grid", "FgOpticalCenterGrid", optical_grids) end
+-            end
+-            if draft.FgResolutionPercent ~= nil then combo("FG scale", "FgResolutionPercent", percent) end
+-            check("Foveated frame generation", "FgFoveated")
+-            if draft.FgFoveated then
+-                if draft.FgMatchSrRegion ~= nil then check("Match DLSS-SR foveation region", "FgMatchSrRegion") end
+-                if draft.FgMatchSrRegion then
+-                    text("Uses SR size, transition and per-eye placement, including gaze when available.")
+-                else
+-                    slider("FG region width", "FgWidth", 0.2, 1)
+-                    slider("FG region height", "FgHeight", 0.2, 1)
+-                    slider("FG horizontal offset", "FgXOffset", -0.5, 0.5)
+-                    slider("FG vertical offset", "FgYOffset", -1, 1)
+-                    slider("FG transition width", "FgFeather", 0, 0.3)
+-                end
+-                if draft.FgPeripheralPercent ~= nil then
+-                    combo("FG periphery scale", "FgPeripheralPercent", percent)
+-                    fg_method_combo("FG periphery", "FgPeripheralMethod", true)
+-                    if fg_optical(draft.FgPeripheralMethod) then
+-                        if draft.FgOpticalPeripheralPreset ~= nil then combo("Periphery optical flow preset", "FgOpticalPeripheralPreset", optical_presets) end
+-                        if draft.FgOpticalPeripheralPercent ~= nil then combo("Periphery optical flow resolution", "FgOpticalPeripheralPercent", percent) end
+-                        if draft.FgOpticalPeripheralGrid ~= nil then combo("Periphery optical flow vector grid", "FgOpticalPeripheralGrid", optical_grids) end
+-                    end
+-                end
+-                if draft.FgShowBorder ~= nil then check("Show blue FG region border", "FgShowBorder") end
+-            end
+-            if imgui.tree_node("Advanced settings") then
+-                if draft.FgForceReflexOff ~= nil then
+-                    check("Force NVIDIA Reflex off", "FgForceReflexOff")
+-                    if draft.FgForceReflexOff then
+-                        text("Disables NVIDIA Reflex sleep and its frame limiter. Applies even when frame generation is off.")
+-                        local reflex = status.reflex_override or {}
+-                        if reflex.last_status and reflex.last_status ~= 0 then
+-                            text("Reflex override driver status: " .. tostring(reflex.last_status))
+-                        elseif reflex.hooked then
+-                            text(string.format("Reflex sleep calls blocked: %.0f", reflex.sleep_calls_bypassed or 0))
+-                        else
+-                            text("Waiting for NVIDIA Reflex.")
+-                        end
+-                    end
+-                end
+-                if draft.FgTargetRefreshHz ~= nil then
+-                    combo("Headset target refresh", "FgTargetRefreshHz", {
+-                        [0]="Automatic", [60]="60 Hz", [72]="72 Hz", [75]="75 Hz", [80]="80 Hz", [90]="90 Hz",
+-                        [100]="100 Hz", [120]="120 Hz", [144]="144 Hz", [165]="165 Hz", [180]="180 Hz", [200]="200 Hz", [240]="240 Hz", [360]="360 Hz"})
+-                    text("Used for game prediction and FPS targets; rendering proceeds when release conditions and buffer capacity allow it. Automatic uses a headset refresh query or the fastest runtime period observed this session. Set your headset's Hz explicitly if Automatic starts too low.")
+-                end
+-                if draft.FgLimitGpuAhead ~= nil then
+-                    check("Keep the GPU from falling behind (release Never)", "FgLimitGpuAhead")
+-                    if draft.FgLimitGpuAhead then
+-                        text("With release Never: the game waits while its previous frame has not yet been captured on the GPU, preventing a GPU backlog.")
+-                    end
+-                end
+-                if draft.FgExtraFrameSlots ~= nil then
+-                    check("Extra frame slots (more VRAM)", "FgExtraFrameSlots")
+-                    if draft.FgExtraFrameSlots then
+-                        text("Keeps two additional stereo capture slots available while frame generation is in flight. Uses more VRAM.")
+-                    end
+-                end
+-                if native_shader11 then
+-                    text("Native D3D11 records every stage on the game's immediate context, so the separate DX12 GPU queues do not apply.")
+-                elseif draft.FgQueuePriority ~= nil then
+-                    local flow_queue = fg_optical(draft.FgCenterMethod) or
+-                        (draft.FgFoveated and fg_optical(draft.FgPeripheralMethod))
+-                    if flow_queue then
+-                        combo("FG GPU queue", "FgQueuePriority", {[2]="Shared game queue", [1]="Separate HIGH queue"})
+-                    else
+-                        imgui.begin_disabled(true)
+-                        imgui.combo("FG GPU queue", 2, {[2]="Shared game queue"})
+-                        imgui.end_disabled()
+-                        text("Separate HIGH is available only with NVIDIA Optical Flow selected for the center or active periphery. Other methods use the shared queue.")
+-                    end
+-                end
+-                if draft.FgReleasePoint ~= nil then
+-                    combo("Release game rendering", "FgReleasePoint", {
+-                        [0]="After FG submission", [1]="After GPU preparation", [2]="After FG completion", [3]="After all generated frames submitted", [4]="4 ms after FG submission", [5]="Never (buffer capacity only)", [6]="After first generated frame submission", [7]="After second generated frame submission", [8]="After color capture completes"}, {5,0,4,8,1,2,6,7,3})
+-                    if draft.FgReleasePoint == 8 then
+-                        text(native_shader11 and "Native D3D11 orders capture on its immediate context; this mode uses buffer capacity only." or "The next render starts after the GPU completes both-eye color capture and buffer capacity is available. Optical flow, frame generation and presentation may still be in flight.")
+-                    elseif draft.FgReleasePoint == 5 then
+-                        text("The next render starts when buffer capacity allows it. Generation and presentation may still be in flight.")
+-                    elseif draft.FgReleasePoint == 6 or draft.FgReleasePoint == 7 then
+-                        text("The next render starts after xrEndFrame returns for the selected generated frame. At 2x there is one generated frame.")
+-                    elseif draft.FgReleasePoint == 3 then
+-                        text("The next render starts after xrEndFrame returns for the last generated frame.")
+-                    elseif draft.FgReleasePoint ~= 3 then
+-                        text("Experimental overlap: capture order alone cannot prove frame identity. Use After all generated frames submitted for serialized matching.")
+-                    end
+-                end
+-                if draft.FgDirectXrOutput ~= nil then
+-                    if native_shader11 then
+-                        combo("FG output destination", "FgDirectXrOutput", {[0]="Private image + copy", [1]="Direct OpenXR image (experimental)"})
+-                        if draft.FgNative11SkipIdentityCrop ~= nil then
+-                            check("Reuse whole-image eye captures (experimental)", "FgNative11SkipIdentityCrop")
+-                            text("Per-eye swapchains and quad views: use the captured eye directly instead of copying it again.")
+-                        end
+-                    elseif not dx11 then
+-                        combo("FG output destination", "FgDirectXrOutput", {[0]="Compact intermediate", [1]="Direct OpenXR image (experimental)"})
+-                    end
+-                end
+-                if not native_shader11 and draft.FgLatencyDiagnostics ~= nil then
+-                    combo("FG latency diagnostics", "FgLatencyDiagnostics", {[0]="Off", [1]="Calibrated timeline (1 in 17 jobs)"})
+-                end
+-                imgui.tree_pop()
+-            end
+-            -- Settings stay editable while FG is off; measurements only exist while it runs.
+-            if draft.FgEnabled then
+-                local function ms(object, key)
+-                    local value = (object or {})[key]
+-                    return value and string.format("%.2f ms", value) or "Unavailable"
+-                end
+-                section("Performance")
+-                rows("fg_frames", {{"Total frames (native / generated / fallback)",
+-                    string.format("%.0f / %.0f / %.0f", fg.native_frames or 0, fg.generated_frames or 0, fg.fallback_frames or 0)}})
+-                local cadence = fg.cadence or {}
+-                if cadence.valid then
+-                    rows("fg_cadence", {{"FPS (game / native / generated)", string.format("%.1f / %.1f / %.1f", cadence.game_fps or 0, cadence.native_fps or 0, cadence.generated_fps or 0)},
+-                        {"Unique FPS output", string.format("%.1f FPS", cadence.unique_fps or 0)}})
+-                else text("Measuring presentation cadence...") end
+-
+-                section("Content age at OpenXR submission (average ms)")
+-                text("Capture-to-submit age, not rendering time or headset display latency.")
+-                text("Reference values for comparing modes; not a measurement of added FG delay.")
+-                local presentation = fg.presentation or {}
+-                local ages = {}
+-                if (presentation.native_samples or 0) > 0 then ages[#ages+1] = {"Real frame", ms(presentation, "native_age_ms")} end
+-                if (presentation.generated_samples or 0) > 0 then
+-                    ages[#ages+1] = {"Generated frame (at its interpolated time)", ms(presentation, "generated_age_ms")}
+-                    ages[#ages+1] = {"Newest input used for the generated frame", ms(presentation, "newest_input_age_ms")}
+-                end
+-                if #ages > 0 then rows("fg_frame_age", ages) else text("No content-age samples yet.") end
+-
+-                section("GPU timings, both eyes (average / last ms)")
+-                local p = fg.performance
+-                if not p or not p.supported then
+-                    text("Install the matching OpenXR layer update.")
+-                elseif p.gpu_valid then
+-                    local function gpu_ms(mean, last) return string.format("%.3f / %.3f", mean or 0, last or 0) end
+-                    local extra = fg.overhead or {}
+-                    local stages = extra.supported
+-                    local focused = (p.foveated_eyes or 0) > 0
+-                    local resized = not focused and (p.center_width or 0) > 0 and
+-                        (p.center_width ~= p.output_width or p.center_height ~= p.output_height)
+-                    if native_shader11 and (p.output_width or 0) > 0 then
+-                        rows("fg_resolutions", {{"Output per eye", size(p.output_width, p.output_height)}})
+-                    elseif (p.center_width or 0) > 0 then
+-                        local sizes = {{focused and "Center FG input" or "Full-frame FG input", size(p.center_width, p.center_height)}}
+-                        if focused then sizes[#sizes+1] = {"Periphery input", size(p.peripheral_width, p.peripheral_height)} end
+-                        sizes[#sizes+1] = {"Output per eye", size(p.output_width, p.output_height)}
+-                        rows("fg_resolutions", sizes)
+-                    end
+-                    -- Pipeline order with inline subtotals.
+-                    local entries, sum, sum_last = {}, 0, 0
+-                    local function row(label, mean, last, sampled)
+-                        entries[#entries+1] = {label, sampled == false and "Waiting for GPU samples" or gpu_ms(mean, last)}
+-                    end
+-                    local function sampled(...)
+-                        for _, key in ipairs({...}) do if (extra[key .. "_samples"] or 0) == 0 then return false end end
+-                        return true
+-                    end
+-                    local function stage(label, key, group)
+-                        local mean, last = extra[key .. "_ms"], extra[key .. "_last_ms"]
+-                        row(label, mean, last, sampled(key))
+-                        if sampled(key) then group[1], group[2] = group[1] + (mean or 0), group[2] + (last or 0) end
+-                    end
+-                    if stages then
+-                        local capture = {0, 0}
+-                        stage("Guide capture (per real frame)", "guide", capture)
+-                        stage(native_shader11 and "Color capture / eye crop (per copy)" or "Color capture + guide handoff (per real frame)", "capture", capture)
+-                        if not native_shader11 then row("  Capture subtotal", capture[1], capture[2], sampled("guide", "capture")) end
+-                        sum, sum_last = sum + capture[1], sum_last + capture[2]
+-                    end
+-                    if native_shader11 then
+-                        row("Shader generation (center + periphery)", p.total_ms, p.total_last_ms)
+-                    else
+-                        row("Color / guide preparation", p.preparation_ms, p.preparation_last_ms)
+-                        row(focused and "DLSS-FG / shader center" or "FG full frame", p.center_ms, p.center_last_ms)
+-                        if focused or resized then row(resized and "Output resize" or "Periphery + output assembly", p.periphery_ms, p.periphery_last_ms) end
+-                        row(stages and "  Generation subtotal (per generated frame)" or "FG GPU total (per generated frame)", p.total_ms, p.total_last_ms)
+-                    end
+-                    sum, sum_last = sum + (p.total_ms or 0), sum_last + (p.total_last_ms or 0)
+-                    if stages then
+-                        local present = {0, 0}
+-                        if not native_shader11 then stage("Generated output copy (per generated frame)", "publication", present) end
+-                        stage(native_shader11 and "OpenXR image copy (per copy)" or "OpenXR uploads (per presentation)", "upload", present)
+-                        if not native_shader11 then
+-                            row("  Presentation subtotal", present[1], present[2], sampled("publication", "upload"))
+-                            sum, sum_last = sum + present[1], sum_last + present[2]
+-                            row("Measured GPU stage sum", sum, sum_last, sampled("guide", "capture", "publication", "upload"))
+-                        end
+-                    end
+-                    rows("fg_gpu_timings", entries)
+-                    local batch = fg.batch_timing
+-                    if batch and batch.supported and batch.valid then
+-                        local batch_rows = {{"Whole batch incl. output copies (per real frame)", gpu_ms(batch.batch_ms, batch.batch_last_ms)}}
+-                        if batch.optical_separated and (batch.optical_regions or 0) > 0 then
+-                            batch_rows[#batch_rows+1] = {"Optical flow preparation + exposed waits (per real frame)", gpu_ms(batch.optical_ms, batch.optical_last_ms)}
+-                        end
+-                        for _, phase in ipairs(batch.phases or {}) do
+-                            local label = "Generated stereo frame " .. tostring(phase.index or "?")
+-                            if phase.index == 1 and (batch.optical_regions or 0) > 0 and not batch.optical_separated then label = label .. " (includes optical flow)" end
+-                            batch_rows[#batch_rows+1] = {label, gpu_ms(phase.ms, phase.last_ms)}
+-                        end
+-                        rows("fg_batch_timings", batch_rows)
+-                        text("Batch and generated-frame times cover both eyes, including composition and output copies. Capture, XR uploads and pacing are excluded.")
+-                        if batch.optical_separated and (batch.optical_regions or 0) > 0 then
+-                            text("Generated-frame times exclude optical flow preparation and exposed waits. Optical engine work overlapping interpolation is not counted twice.")
+-                        end
+-                    end
+-                    text(native_shader11 and "Shader time covers both eyes. Copy times are per copy. Runtime work is excluded." or
+-                        "Stage samples use different frame cadences and can overlap. Their sum is not total frame time; compositor work is excluded.")
+-                elseif not p.gpu_supported and (p.gpu_samples or 0) == 0 then
+-                    text("GPU timestamps unavailable or FG has not started.")
+-                else
+-                    text("Waiting for a complete GPU timing sample.")
+-                end
+-
+-                if imgui.tree_node("FG capture and presentation diagnostics") then
+-                    local function line(label, value)
+-                        text(label .. ": " .. (value ~= nil and value ~= "" and tostring(value) or "unavailable"))
+-                    end
+-                    line("Captured guides", fg.captured_guides and string.format("%.0f", fg.captured_guides))
+-                    line("Guide matching", fg.match_reason)
+-                    line("Direct output fallback", (fg.direct_output or {}).reason_text)
+-                    if imgui.tree_node("CPU waits and pacing") then
+-                        local t = fg.pacing_timeline
+-                        text("Rolling averages; separate stages can overlap.")
+-                        rows("fg_pacing", {{"Game waits for credit", ms(t, "game_wait_credit_ms")},
+-                            {"Game BeginFrame gate", ms(t, "game_begin_gate_ms")}, {"Presenter waits for content", ms(t, "presenter_content_ms")},
+-                            {"Deferred game credit", ms(t, "credit_deferred_ms")}, {"Clock lateness", ms(t, "clock_late_ms")},
+-                            {"Native xrEndFrame", ms(t, "native_xr_end_ms")}, {"Generated xrEndFrame", ms(t, "generated_xr_end_ms")},
+-                            {"FG submit to completion", ms(t, "fg_submit_to_complete_ms")}})
+-                        imgui.tree_pop()
+-                    end
+-                    if imgui.button("Copy FG diagnostic JSON") then send("copy_fg_diagnostics") end
+-                    text("The support bundle includes the complete diagnostic snapshot.")
+-                    imgui.tree_pop()
+-                end
+-            end
+-            reset_group("Reset FG defaults", "fg")
++            check("NR border debug", "NrAlignmentBorder")
+         end
+-        imgui.tree_pop()
+-    end
+-
+-    if imgui.tree_node("DLSS-NR (experimental)") then
+-        if status.renderer == 0 then
+-            check("DX11 -> DX12 transport", "D3D11D3D12Transport")
+-            text("DLSS-NR on DX11 requires DX12 transport.")
++        section("Neural rendering")
++        slider("NR working scale", "NrWorkingScale", 0.1, 1)
++        if draft.NrPreset ~= nil then
++            combo("NVIDIA NR model", "NrPreset",
++                {[0]="Runtime default", [1]="Original NR", [2]="Faster NR"}, {0,1,2})
+         end
+-        if status.renderer ~= 0 or draft.D3D11D3D12Transport then
+-            check("Enable DLSS-NR", "NrEnabled")
+-            text("Alt+Shift+> (period key): toggle DLSS-NR")
+-            if draft.NrEnabled then
+-                check("Foveated NR", "NrFoveated")
+-                if draft.NrFoveated then
+-                    text("Uses Stereo and gaze settings, even with SR disabled.")
+-                    check("Use SR size and shape", "NrUseSrFoveation")
+-                    if not draft.NrUseSrFoveation then
+-                        slider("NR width", "NrWidth", 0.2, 1)
+-                        slider("NR height", "NrHeight", 0.2, 1)
+-                        slider("NR roundness", "NrRoundness", 0, 1)
+-                        text("Cosmetic only; no performance impact.")
+-                        slider("NR transition", "NrTransitionWidth", 0, 0.3)
+-                    end
+-                    check("Show NR alignment border", "NrAlignmentBorder")
+-                end
+-                section("Neural rendering")
+-                if status.settings.NrProcessingOrder ~= nil then
+-                    combo("Rendering order", "NrProcessingOrder", {[0]="After upscaling",[1]="Before upscaling"})
+-                else
+-                    text("Rendering order: Unavailable in this runtime")
+-                end
+-                slider("NR working scale", "NrWorkingScale", 0.1, 1)
+-                combo("DLSS-NR style", "NrStyle", {[0]="Standard",[1]="Natural",[2]="Cinematic"})
+-                slider("NR intensity", "NrIntensity", 0, 1)
+-                text("Intensity: 0 = no model edit, 1 = full model edit.")
+-                if imgui.tree_node("Additional settings") then
+-                    slider("Local tone", "NrLocalToneStrength", 0, 2)
+-                    slider("Local structure", "NrLocalStructureStrength", 0, 2)
+-                    check("Automatic mask", "NrAutomaticMask")
+-                    if draft.NrAutomaticMask == true then
+-                        slider("Skin structure", "NrSkinStructureStrength", 0, 2)
+-                    end
+-                    if (status.nr_details or {}).hdr_input == true then
+-                        slider("Paper white", "NrPaperWhiteScale", 0.01, 8)
+-                    end
+-                    slider("Transfer strength", "NrHdrTransferStrength", 0, 2)
+-                    slider("Color strength", "NrColorStrength", 0, 2)
+-                    combo("Depth convention", "NrDepthConvention", {[0]="Game/default",[1]="Normal",[2]="Reversed"})
+-                    slider("Motion scale X", "NrMotionScaleXMultiplier", -4, 4)
+-                    slider("Motion scale Y", "NrMotionScaleYMultiplier", -4, 4)
+-                    imgui.tree_pop()
+-                end
+-                if status.settings.NrPasses ~= nil then
+-                    section("Model passes")
+-                    combo("Model passes", "NrPasses", {[1]="1",[2]="2",[3]="3"}, {1, 2, 3})
+-                    text("Each extra pass refines the previous one and costs about one more NR evaluation.")
+-                    for number = 2, draft.NrPasses or 1 do nr_extra_pass(number) end
+-                end
+-            end
+-            if imgui.button("Reset NR history / retry") then send("reset_nr") end
+-            text("nvngx_dlssnr.dll: beside the runtime DLL, or beside the running game executable.")
+-            text("After adding the DLL, use Reset NR history / retry. The log lists paths and loader errors.")
++        combo("Style", "NrStyle", {[0]="Standard", [1]="Natural", [2]="Cinematic"})
++        slider("Intensity", "NrIntensity", 0, 1)
++        slider("Local tone", "NrLocalToneStrength", 0, 2)
++        slider("Local structure", "NrLocalStructureStrength", 0, 2)
++        check("Automatic mask", "NrAutomaticMask")
++        if draft.NrAutomaticMask then slider("Skin structure", "NrSkinStructureStrength", 0, 2) end
++        slider("Paper white", "NrPaperWhiteScale", 0.01, 8)
++        slider("HDR transfer", "NrHdrTransferStrength", 0, 2)
++        slider("Color strength", "NrColorStrength", 0, 2)
++        combo("Depth convention", "NrDepthConvention",
++            {[0]="Game/default", [1]="Normal", [2]="Reversed"})
++        slider("Motion scale X", "NrMotionScaleXMultiplier", -4, 4)
++        slider("Motion scale Y", "NrMotionScaleYMultiplier", -4, 4)
++        if draft.NrPasses ~= nil then
++            section("Model passes — one or two")
++            combo("Model passes", "NrPasses", {[1]="1", [2]="2"}, {1,2})
++            if (draft.NrPasses or 1) >= 2 then nr_extra_pass(2) end
+         end
+-        reset_group("Reset DLSS-NR defaults", "nr")
+-        imgui.tree_pop()
+     end
+-    if next(dirty) or pending_apply then apply_buttons("bottom") end
+-
+-    if imgui.tree_node("Performance") then performance(d, f); imgui.tree_pop() end
+-
+-    if imgui.tree_node("Support") then
+-        text("Report an issue creates a ZIP, opens GitHub and selects the ZIP in Explorer.")
+-        text("Review before sharing; logs may contain personal paths. Attach the ZIP and submit yourself.")
+-        local support = status.support or {}
+-        imgui.begin_disabled(support.busy == true)
+-        if imgui.button("Report an issue...") then send("report_issue") end
+-        imgui.same_line()
+-        if imgui.button("Create support ZIP only") then send("report") end
+-        imgui.end_disabled()
+-        if support.busy then text("Preparing support ZIP...") end
+-        if support.zip and support.zip ~= "" then
+-            text(support.zip)
+-            if imgui.button("Show ZIP") then send("show_report") end
+-            imgui.same_line()
+-            if imgui.button("Open GitHub issue") then send("open_issue") end
+-        end
+-        imgui.same_line()
+-        if imgui.button("Refresh status") then send("get") end
+-        imgui.tree_pop()
++    section("Saved NR templates")
++    if draft.NrTemplateActive ~= nil then
++        text("Active template: " .. tostring(draft.NrTemplateActive))
+     end
+-    if imgui.tree_node("Reset settings") then
+-        reset_group("Restore all Cheeky defaults", "all")
+-        imgui.tree_pop()
+-    end
++    local blocked = next(dirty) ~= nil or pending_apply ~= nil
++    imgui.begin_disabled(blocked)
++    if imgui.button("Save Template 1") then send("nr_template_save_1") end
++    imgui.same_line()
++    if imgui.button("Load Template 1") then send("nr_template_load_1") end
++    if imgui.button("Save Template 2") then send("nr_template_save_2") end
++    imgui.same_line()
++    if imgui.button("Load Template 2") then send("nr_template_load_2") end
++    if imgui.button("Toggle Template 1 / 2") then send("nr_template_toggle") end
+     imgui.end_disabled()
++    if next(dirty) or pending_apply then apply_buttons("nr") end
++    if imgui.button("Reset NR history") then send("reset_nr") end
++    imgui.same_line()
++    if imgui.button("Refresh status") then send("get") end
++    text("VRAM and atlas-routing diagnostics appear in the plugin log every 2 s.")
++    imgui.end_disabled()
+     imgui.tree_pop()
+     flush_edits()
+ end)
+diff --git a/uevr/settings_fields.inc b/uevr/settings_fields.inc
+--- a/uevr/settings_fields.inc
++++ b/uevr/settings_fields.inc
+@@ -34,6 +34,7 @@
+ CHEEKY_SETTING("FgOpticalCenterGrid", fg.optical.center_grid)
+ CHEEKY_SETTING("FgOpticalPeripheralGrid", fg.optical.peripheral_grid)
+ CHEEKY_SETTING("Enabled", enabled)
++CHEEKY_SETTING("EyeProcessingMode", eye_processing_mode)
+ CHEEKY_SETTING("D3D12LowerHook", d3d12_lower_hook)
+ CHEEKY_SETTING("D3D11D3D12Transport", d3d11_use_d3d12_transport)
+ CHEEKY_SETTING("D3D12QuadComposeWait", d3d12_quad_compose_wait)
+@@ -95,6 +96,7 @@
+ CHEEKY_SETTING("NrProcessingOrder", nr_processing_order)
+ CHEEKY_SETTING("NrWorkingScale", nr_working_scale)
+ CHEEKY_SETTING("NrPreset", nr_preset)
++CHEEKY_SETTING("NrTemplateActive", nr_template_active)
+ CHEEKY_SETTING("NrStyle", nr_style)
+ CHEEKY_SETTING("NrIntensity", nr_intensity)
+ CHEEKY_SETTING("NrLocalToneStrength", nr_local_tone_strength)
+diff --git a/uevr/settings_io.cpp b/uevr/settings_io.cpp
+--- a/uevr/settings_io.cpp
++++ b/uevr/settings_io.cpp
+@@ -95,7 +95,7 @@
+     if(key.starts_with("Quad"))return "gaze";
+     if (key.starts_with("Fg")) return "fg";
+     if (key.starts_with("Nr")) return "nr";
+-    for (const auto gaze : {"XOffset", "HeightOffset", "InvertStereoXOffset", "CenterMode",
++    for (const auto gaze : {"EyeProcessingMode", "XOffset", "HeightOffset", "InvertStereoXOffset", "CenterMode",
+             "AutoStereoAlignment", "EyeCalibrationContinuous", "EyeCalibrationMethod", "EyeCalibrationLearnedMethod", "EyeCalibrationLearnedSignature", "EyeCalibrationLearnedSessions", "AlignedHeightOffset", "ShowNextJumpTarget", "SimulationPattern",
+             "ManualStereoMapping", "ManualStereoRightFirst", "ManualQuadViewAssignment", "ShowQuadViewNumbers", "IndependentOpenXRGaze",
+             "GazeSmoothingMs", "GazeHoldMs", "GazeQuantizationPixels", "GazeJumpResetRatio",
+@@ -149,6 +149,7 @@
+     auto candidate = s;
+     candidate.fg = Settings{}.fg;
+     candidate.d3d12_lower_hook = true; // Older files use the new lower-hook default.
++    candidate.eye_processing_mode = 0U;
+     candidate.manual_stereo_mapping = false;
+     candidate.manual_stereo_right_first = false;
+     candidate.quad_manual_assignment=false;candidate.quad_show_numbers=false;
+diff --git a/shared/version.h b/shared/version.h
+--- a/shared/version.h
++++ b/shared/version.h
+@@ -1,4 +1,4 @@
+ #pragma once
+ 
+ // Release version shared by the UI, CMake, and installer build script.
+-#define CHEEKY_VERSION "0.6.2"
++#define CHEEKY_VERSION "0.6.3"
+diff --git a/uevr/nr_lite_budget_policy.hpp b/uevr/nr_lite_budget_policy.hpp
+--- /dev/null
++++ b/uevr/nr_lite_budget_policy.hpp
+@@ -0,0 +1,81 @@
++#pragma once
++// TriView NR-Lite: conservative admission policy for changing NVIDIA Feature 18.
++// This is a headroom gate, NOT a promise that NVNGX allocations fit: the driver
++// does not expose exact model/history sizes until they are created.
++#include "../src/settings.hpp"
++#include <cstdint>
++
++namespace cheeky::foveated_dlss {
++
++constexpr std::uint64_t nr_lite_mib = 1024ULL * 1024ULL;
++
++[[nodiscard]] inline std::uint64_t nr_lite_required_headroom(
++    const Settings& current, const Settings& requested) noexcept {
++    // Other integrations preserve original behavior. This guard is targeted
++    // at the two-fovea TriView setup where we know VRAM is constrained.
++    if (requested.eye_processing_mode > 3U || !requested.nr_enabled)
++        return 0ULL;
++
++    // Enabling NR instantiates model histories and is always budget-gated.
++    if (!current.nr_enabled)
++        return (requested.nr_foveated
++            ? (requested.eye_processing_mode == 0U ? 2048ULL : 1024ULL)
++            : (requested.eye_processing_mode == 0U ? 3072ULL : 2304ULL)) * nr_lite_mib;
++
++    // Expanding NR beyond the prior crop recreates NVIDIA model histories;
++    // old ones cannot be freed until all recording and GPU fences retire.
++    if (current.nr_foveated && !requested.nr_foveated)
++        return (requested.eye_processing_mode == 0U ? 3072ULL : 2304ULL) * nr_lite_mib;
++
++    // After-SR operates on larger images; switching NR order can reallocate
++    // both eye features, even when the region selector was unchanged.
++    if (current.nr_processing_order != requested.nr_processing_order)
++        return (requested.nr_processing_order == NrProcessingOrder::after_upscaling
++            ? (requested.eye_processing_mode == 0U ? 3072ULL : 2560ULL)
++            : (requested.eye_processing_mode == 0U ? 2048ULL : 1536ULL)) * nr_lite_mib;
++
++    if (requested.nr_passes > current.nr_passes)
++        return (requested.eye_processing_mode == 0U ? 2304ULL : 1536ULL) * nr_lite_mib;
++
++    const bool growing = requested.nr_working_scale > current.nr_working_scale + 0.0001F ||
++        (requested.nr_foveated && current.nr_foveated &&
++            (requested.nr_width > current.nr_width + 0.0001F ||
++             requested.nr_height > current.nr_height + 0.0001F));
++    if (growing)
++        return (requested.nr_foveated
++            ? (requested.eye_processing_mode == 0U ? 2048ULL : 1024ULL)
++            : (requested.eye_processing_mode == 0U ? 3072ULL : 2304ULL)) * nr_lite_mib;
++
++    // The model's parameters are part of its feature key. An edit can create
++    // a new model even if the texture dimensions have not changed.
++    const bool rekey = requested.nr_preset != current.nr_preset ||
++        requested.nr_style != current.nr_style ||
++        requested.nr_intensity != current.nr_intensity ||
++        requested.nr_local_tone_strength != current.nr_local_tone_strength ||
++        requested.nr_local_structure_strength != current.nr_local_structure_strength ||
++        requested.nr_skin_structure_strength != current.nr_skin_structure_strength ||
++        requested.nr_automatic_mask != current.nr_automatic_mask ||
++        requested.nr_ui_correction != current.nr_ui_correction;
++    if (rekey) return (requested.eye_processing_mode == 0U ? 1536ULL : 768ULL) * nr_lite_mib;
++
++    // Switching to fewer processed views MUST remain a recovery operation
++    // even under a nearly exhausted VRAM budget. All -> foveas and foveas ->
++    // one eye do not add new features when model dimensions/tuning are stable.
++    if (current.eye_processing_mode != requested.eye_processing_mode) {
++        if (current.eye_processing_mode == 0U ||
++            (current.eye_processing_mode == 3U &&
++             (requested.eye_processing_mode == 1U || requested.eye_processing_mode == 2U)))
++            return 0ULL;
++        return (requested.eye_processing_mode == 0U ? 2048ULL : 1024ULL) * nr_lite_mib;
++    }
++    return 0ULL;
++}
++
++[[nodiscard]] inline bool nr_lite_has_headroom(
++    std::uint64_t required, bool valid, std::uint64_t usage,
++    std::uint64_t budget) noexcept {
++    if (!required) return true;
++    return valid && budget >= usage && budget - usage >= required;
++}
++
++} // namespace cheeky::foveated_dlss
