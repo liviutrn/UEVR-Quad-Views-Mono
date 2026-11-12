@@ -16,7 +16,7 @@ def main():
     sh=Path(sys.argv[2])
     require(vr/"DuoViewConfig.hpp","m2_unlinked_sharpen","m2_fovea_depth",
             "m2_left_sharpen","m2_right_sharpen")
-    require(vr/"VR.cpp","Separate left/right sharpening",
+    require(vr.parent/"VR.cpp","Separate left/right sharpening",
             "M2 fine fovea depth (if matched)","m2_right_sharpen==candidate.m2_right_sharpen")
     require(vr/"QuadViewNgxDepth.hpp",
             "latest_duoview_fovea_submitted","slot->duoview_fovea = fine_output",
