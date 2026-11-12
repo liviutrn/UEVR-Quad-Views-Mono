@@ -21,6 +21,13 @@ inline JitKind ClassifyJit(bool accepted, int path, bool distinct,
     if (!accepted || path != 3 || !distinct || !written || exact) return JitKind::kOther;
     return interpolate ? JitKind::kInterpolate : JitKind::kPredict;
 }
+// Inferred missing target grid slots, NOT proof of a dropped panel scanout.
+// Clamp giant hitches so one discontinuity cannot overflow the summary.
+inline std::uint32_t MissingGridSlots(std::int64_t delta_ns, std::int64_t grid_period_ns) {
+    if (delta_ns <= 0 || grid_period_ns <= 0) return 0;
+    const double periods = static_cast<double>(delta_ns) / static_cast<double>(grid_period_ns);
+    return static_cast<std::uint32_t>(std::clamp(std::floor(periods + 0.5) - 1.0, 0.0, 120.0));
+}
 inline std::uint32_t LeadFloor(double work_ms, double interval_ms, double refresh_ms,
                                std::uint32_t reserve, std::uint32_t cap) {
     if (!reserve || !cap || refresh_ms <= 0.0) return 0;
