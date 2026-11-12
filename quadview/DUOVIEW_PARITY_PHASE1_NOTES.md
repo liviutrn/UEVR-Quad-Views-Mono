@@ -32,3 +32,14 @@ Joey/UESDK/frontend pins unchanged: 5ac7edc/3cffbc8/60be4b0.
   1. Is ID6's scale/HUD/FOV/shared-eye behavior like working v208d?
   2. Does 7->6->7 switch in game without black frames or a crash?
   3. Is TriView ID7 unchanged in appearance/performance?
+
+## First CI attempt and correction
+- Build #155 (run 43235752282) failed before integration compilation:
+  v208d's verify_stage234 expects OverlayComponent edits from the mono HUD
+  patch; the old TriView workflow had run the verifier too early.
+  Moved its invocation after all v208d scripts, matching original DuoView CI.
+- The portable-sanitizer job still ran the old Build182 source manifest,
+  which necessarily rejected the upgraded v208d files. Replaced that sole
+  stale invocation with a pinned Git subtree verification. No source
+  integrity verifier or Build182 manifest was edited or disabled.
+- No runtime or performance claims until the complete new CI run passes.

@@ -83,8 +83,6 @@ jobs:
         run: |
           python workspace/duoview/joey_stage1/apply_stage234.py backend frontend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 source anchors did not match original Joey' }
-          python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
-          if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
       - name: Port complete v208d DuoView Mono source into ID6 before TriView overlays
         shell: pwsh
         run: |
@@ -112,6 +110,10 @@ jobs:
           }
           python workspace/duoview/joey_stage1/test_xyz_head_scaling.py backend
           if ($LASTEXITCODE -ne 0) { throw 'v208d XYZ scaling test failed' }
+          # v208d verifier expects HUD scripts to edit OverlayComponent.
+          # Run after all v208d scripts, matching its original workflow.
+          python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Complete v208d source-integrity contracts failed' }
           git -C backend diff --check
           if ($LASTEXITCODE -ne 0) { throw 'v208d generated source whitespace errors' }
       - name: Apply isolated stereo QuadView backend overlay
@@ -527,7 +529,8 @@ jobs:
           python3 quadview/RecoveryMutationTest.py sanitizer-evidence/RecoveryContinuityTests
           python3 -m unittest discover -s quadview -p test_quadview_log_regression.py -v
           python3 -m unittest discover -s quadview -p test_quadview_hook_trace_summary.py -v
-          python3 scripts/verify_baseline.py
+          # Original Build182 manifest is superseded by pinned complete v208d tree.
+          test "$(git rev-parse HEAD:duoview)" = "3d5593a82ac13532989420b2e356b17602b1098b"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
