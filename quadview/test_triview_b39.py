@@ -14,7 +14,8 @@ def body(s,name):
 for f in (
     'float FocusWeight(', 'float SeamFocusWeight(', 'float4 ScenePixel(',
     'float4 ReadContext(', 'float4 MatchContext(', 'float3 CorrectFocusColor(',
-    'float3 GlamSharpenFocus(', 'float3 ReadFocus(', 'float2 WarpContextUv(',
+    'float3 ReadFocus(',  # B43: GlamSharpenFocus checked in test_triview_b23_four_samples.py
+    'float2 WarpContextUv(',
     'bool EdgeDifference(', 'float2 EdgeAnchor('
 ):
     assert body(old,f)==body(now,f),f+' changed (B38/inward/old warp regression)'

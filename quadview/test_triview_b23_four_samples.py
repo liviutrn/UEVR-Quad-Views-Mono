@@ -34,8 +34,19 @@ def main():
         return s.split(start,1)[1].split('\n}',1)[0]
     for name in ('float2 SourceSize(', 'float2 AtlasUvKnownSize(', 'float2 AtlasUv(', 'float2 ContextUv(',
                  'float4 ReadSource(', 'float FocusWeight(', 'float3 GlamDecode(', 'float3 GlamEncode(',
-                 'float3 ReadFocus(', 'float3 GlamSharpenFocus(', 'float4 ReadContext('):
+                 'float3 ReadFocus(', 'float4 ReadContext('):
         assert function(actual,name)==function(optimized,name), 'Changed protected B29 source helper: '+name
+    # B43: the B29 sharpen body now lives in GlamSharpenChange with radius/guard as
+    # parameters (1.4/3.5 for the normal ring). Everything else must stay identical.
+    old = function(optimized, 'float3 GlamSharpenFocus(')
+    old = old.split('const float3 c = GlamDecode(center);\n',1)[1].split('    const float radius = 1.4;\n',1)[1]
+    old = old.replace('float2(-3.5, 0.0) : float2(0.0, 3.5)', 'float2(-guard, 0.0) : float2(0.0, guard)')
+    old = old.replace('float2( 3.5, 0.0) : float2(0.0,-3.5)', 'float2( guard, 0.0) : float2(0.0,-guard)')
+    old = old.replace('    return GlamEncode(c + change);', '    return change;')
+    new = function(actual, 'float3 GlamSharpenChange(').split(') {\n',1)[1]
+    assert new == old, 'B43 GlamSharpenChange differs from the protected B29 sharpen body'
+    focus = function(actual, 'float3 GlamSharpenFocus(')
+    assert 'sourceSize, 1.4, 3.5)' in focus and 'sourceSize, 2.8, 7.0)' in focus and 'float3 result = c + change;' in focus and "(uint)Sharpen.y & wideBit" in focus and 'sourceIndex == 2u ? 8u : 16u' in focus
     assert actual.count("InverseDepthAt(c)") == 1
     print("B23/B29 protected depth, sampling, sharpening and output contracts: PASS; B30 seam code tested separately")
 

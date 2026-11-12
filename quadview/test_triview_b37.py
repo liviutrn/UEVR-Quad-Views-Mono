@@ -9,7 +9,7 @@ def body(text,name):
  start=text.index(name);a=text.index('{',start);i=a+1;level=1
  while level: level+=(text[i]=='{')-(text[i]=='}');i+=1
  return text[start:i]
-for name in ['float2 AtlasUvKnownSize(','float3 ReadFocus(','float3 GlamSharpenFocus(','float3 CorrectFocusColor(']:
+for name in ['float2 AtlasUvKnownSize(','float3 ReadFocus(','float3 CorrectFocusColor(']: # B43: sharpen body checked in test_triview_b23_four_samples.py
  assert body(s,name)==body(baseline,name),name
 assert 'Seam.x < 0.5 || Seam.x > 2.5' in s
 assert 'const auto rect = color_source_rect(layout,view == 1 && layout.shared_context ? 0 : view);' in h

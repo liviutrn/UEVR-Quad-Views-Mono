@@ -183,12 +183,12 @@ float3 ReadFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, 
     return GlamDecode(ReadSource(sourceIndex, AtlasUvKnownSize(sourceSize, rect, local)).rgb);
 }
 
-float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float3 center,
-                        float strength, float maxChange, float2 sourceSize) {
-    // Fused v186.1 Glamarye Bigger-radius four-diagonal filter with its
-    // FXAA-style edge guard and maximum-change limiter. No separate pass.
-    const float3 c = GlamDecode(center);
-    const float radius = 1.4;
+// One ring of the fused v186.1 Glamarye Bigger-radius four-diagonal filter
+// with its FXAA-style edge guard and maximum-change limiter. Returns the
+// linear-light change for decoded centre c. B43: radius/guard are parameters
+// so a second, twice-as-wide ring can be added per eye.
+float3 GlamSharpenChange(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float3 c,
+                         float strength, float maxChange, float2 sourceSize, float radius, float guard) {
     const float3 ne = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2( radius,  radius), sourceSize);
     const float3 sw = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2(-radius, -radius), sourceSize);
     const float3 se = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2( radius, -radius), sourceSize);
@@ -203,8 +203,8 @@ float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tap
     float3 n2 = horizontal ? ne + nw : ne + se;
     float3 s2 = horizontal ? se + sw : nw + sw;
     n2 *= 0.5; s2 *= 0.5;
-    const float2 west = horizontal ? float2(-3.5, 0.0) : float2(0.0, 3.5);
-    const float2 east = horizontal ? float2( 3.5, 0.0) : float2(0.0,-3.5);
+    const float2 west = horizontal ? float2(-guard, 0.0) : float2(0.0, guard);
+    const float2 east = horizontal ? float2( guard, 0.0) : float2(0.0,-guard);
     const float3 ww = ReadFocus(sourceIndex, rect, focusUv, tapScale, west, sourceSize);
     const float3 ee = ReadFocus(sourceIndex, rect, focusUv, tapScale, east, sourceSize);
     const float3 d1 = abs((ww - n2) - (ee - s2));
@@ -221,7 +221,25 @@ float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tap
     possible = clamp(possible, 0.00001, maxChange);
     float3 change = diff / (1.0 / max(strength, 0.00001) + abs(diff) / possible);
     change *= (1.0 - edgeRatio);
-    return GlamEncode(c + change);
+    return change;
+}
+
+float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float3 center,
+                        float strength, float maxChange, float2 sourceSize) {
+    // Normal ring: radius 1.4, guard 3.5 (unchanged v186.1 Bigger filter).
+    const float3 c = GlamDecode(center);
+    float3 change = GlamSharpenChange(sourceIndex, rect, focusUv, tapScale, c, strength, maxChange,
+                                      sourceSize, 1.4, 3.5);
+    // B43 "Extra-wide" per eye (Sharpen.y bit 8 = left/source 2, bit 16 = right/source 3):
+    // add a second ring at twice the radius, enhancing the coarser detail that
+    // DLSS Performance leaves soft. Same limiter per ring; result clamped.
+    const uint wideBit = sourceIndex == 2u ? 8u : 16u;
+    float3 result = c + change; // flags off: exactly the previous output
+    [branch] if (((uint)Sharpen.y & wideBit) != 0u) {
+        result = saturate(result + GlamSharpenChange(sourceIndex, rect, focusUv, tapScale, c, strength, maxChange,
+                                                     sourceSize, 2.8, 7.0));
+    }
+    return GlamEncode(result);
 }
 
 float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 eyeUv) {

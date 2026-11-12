@@ -12,7 +12,8 @@ def body(text,name):
     return text[a:end]
 for fn in ('float FocusWeight(','float4 ReadContext(','float4 MatchContext(',
            'float SeamFocusWeight(','float3 CorrectFocusColor(',
-           'float3 GlamSharpenFocus(','float3 ReadFocus(','float2 WarpContextUv('):
+           'float3 ReadFocus(',  # B43: GlamSharpenFocus checked in test_triview_b23_four_samples.py
+          'float2 WarpContextUv('):
     assert body(old,fn)==body(now,fn),fn+' changed unexpectedly'
 assert body(old,'float4 ScenePixel(')==body(now,'float4 ScenePixel('), 'B38 inward feather changed'
 for marker in (
