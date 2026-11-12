@@ -299,21 +299,10 @@ struct B40MonoHistory {
          '                    SPDLOG_WARNING_EVERY_N_SEC(2,',
          '                if (!comp->prewarm(device, vr->get_hmd_width(), vr->get_hmd_height(), duo_srgb, duo_frequency)) {\n'
          '                    SPDLOG_WARNING_EVERY_N_SEC(2,'),
-        ("set prewarmed swapchain history on success",
-         '                    SPDLOG_WARNING_EVERY_N_SEC(2,\n'
-         '                        "[DuoView] DX12 prewarm failed; guarded compositing/fallback remains available");\n'
-         '                }\n'
-         '            }\n'
-         '        }\n\n'
-         '        if (vr->is_native_stereo_fix_texture_array_submit_enabled()) {',
-         '                    SPDLOG_WARNING_EVERY_N_SEC(2,\n'
-         '                        "[DuoView] DX12 prewarm failed; guarded compositing/fallback remains available");\n'
-         '                } else {\n'
-         '                    comp->set_b40_history(this->duoview_b40_history);\n'
-         '                }\n'
-         '            }\n'
-         '        }\n\n'
-         '        if (vr->is_native_stereo_fix_texture_array_submit_enabled()) {'),
+        ("bind shared history before swapchain prewarm",
+         '                if (!comp->prewarm(device, vr->get_hmd_width(), vr->get_hmd_height(), duo_srgb, duo_frequency)) {',
+         '                comp->set_b40_history(this->duoview_b40_history);\n'
+         '                if (!comp->prewarm(device, vr->get_hmd_width(), vr->get_hmd_height(), duo_srgb, duo_frequency)) {'),
         ("enforce queue identity in live callback (never alloc)",
          '                                    auto& compositor = *found->second;\n'
          '                                    recorded = compositor.record_native(device, commands.cmd_list.Get(),',
