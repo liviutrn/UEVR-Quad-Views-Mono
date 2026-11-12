@@ -330,20 +330,20 @@ float4 PSMain(VertexOut i) : SV_TARGET0 {"""),
     if (DebugViewMode == 0 && SeamOptions.x > .5 && BlendWeight(fullUv) < 1.0)
         peripheralColor.rgb = DuoPhase2MatchContext(fullUv, peripheralColor.rgb);"""),
         ("gather fovea correction",
-         """        const float4 fovealColor = SourceAtlas.SampleLevel(LinearClamp, foveaSample, 0.0);
-        result = DebugViewMode == 2 ? fovealColor : lerp(peripheralColor, fovealColor, weight);""",
-         """        float4 fovealColor = SourceAtlas.SampleLevel(LinearClamp, foveaSample, 0.0);
+         """        const float4 foveaColor = SourceAtlas.SampleLevel(LinearClamp, foveaSample, 0.0);
+        result = DebugViewMode == 2 ? foveaColor : lerp(peripheralColor, foveaColor, weight);""",
+         """        float4 foveaColor = SourceAtlas.SampleLevel(LinearClamp, foveaSample, 0.0);
         if (DebugViewMode == 0) {
             if (SharpenStrength > 0.0) {
-                const float3 beforeSharpen = fovealColor.rgb;
-                fovealColor.rgb = GlamSharpenNativeFovea(fullUv, fovealColor.rgb);
+                const float3 beforeSharpen = foveaColor.rgb;
+                foveaColor.rgb = GlamSharpenNativeFovea(fullUv, foveaColor.rgb);
                 [branch] if ((SharpenFlags & 16u) != 0u)
-                    fovealColor.rgb = GlamEncode(saturate(GlamDecode(fovealColor.rgb) +
+                    foveaColor.rgb = GlamEncode(saturate(GlamDecode(foveaColor.rgb) +
                                               GlamExtraWideChange(fullUv, beforeSharpen)));
             }
-            fovealColor.rgb = DuoPhase2FocusLift(fovealColor.rgb, foveaUV);
+            foveaColor.rgb = DuoPhase2FocusLift(foveaColor.rgb, foveaUV);
         }
-        result = DebugViewMode == 2 ? fovealColor : lerp(peripheralColor, fovealColor, weight);"""),
+        result = DebugViewMode == 2 ? foveaColor : lerp(peripheralColor, foveaColor, weight);"""),
     ])
     (src / "DuoViewPhase2Effects.hlsl").write_text(helper.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     # No TriView shader, mode-7 C++ member, or mode-7 settings file is edited.
