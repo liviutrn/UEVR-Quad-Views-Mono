@@ -1,46 +1,100 @@
-# VectorXR 0.20.1 / Dynamic Smoothness experiment
+# VectorXR 0.20.1 — Dynamic6 telemetry audit build
 
-Base: reviewed Mono patch commit 96aebe7 applied over upstream 8fffa72.
-Experimental timing policy only, no changes to stereo, Mono image collapsing,
-FOV/poses, shaders, OFA or UEVR. All switches **off by default**.
+This is an **experimental personal build** based on upstream VectorXR 0.20.1
+(commit `8fffa72`) plus reviewed Mono baseline `96aebe7`. The original
+Mono detector, stereo mode, shaders, poses/FOV, and VectorXR Fixed/Auto
+scheduling are not changed by this telemetry phase.
 
-In `%LOCALAPPDATA%\\VectorXR\\framegen-research.txt` add:
+## Default behavior — IMPORTANT
+
+The **low-overhead summary diagnostics are ENABLED by default** in this
+audit branch. You do not need to add any setting to activate them. Set
+`VECTORXR_FRAMEGEN_FLOW_DIAGNOSTICS=0` to disable and compare overhead;
+`=1` enables explicitly. A game/OpenXR session restart is needed.
+
+The actual timing experiments are **still opt-in**:
+- `VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX` defaults to `4` (reviewed behavior);
+  accepted values: `5`, `6`. This affects Dynamic lead/multiplier
+  bookkeeping; timestamp-based JIT synthesis itself was never capped at 4×.
+- `VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE` defaults to `0` and is NOT
+  recommended for initial measurements. Values `1` to `4` enforce
+  a high minimum lead only for Dynamic + Interpolate + JIT; at 20 real FPS
+  it could be more than 100ms and reduce source FPS or exhaust history.
+- Diagnostics are enabled for all JIT output in the session, not solely
+  when Dynamic Max 6 is selected.
+
+These can be set in `%LOCALAPPDATA%\VectorXR\framegen-research.txt`,
+or overridden with Windows environment variables.
+
+Suggested first comparative run at 120Hz, Dynamic + Interpolate + NVIDIA OFA:
 
 ```ini
 VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX=6
-VECTORXR_FRAMEGEN_FLOW_DIAGNOSTICS=1
-# Optional after reading the initial 30-second logs:
-VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE=1
+VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE=0
+# Diagnostics is already on (no line necessary)
 ```
 
-- DYNAMIC_MAX: 4 (stock), 5 or 6; extends only Dynamic multiplier and
-  lead/ring bookkeeping. The JIT interpolation fraction is already uncapped.
-- LEAD_RESERVE: 0 (stock), 1-4; creates an enforced minimum on top of a
-  latency/real-interval estimate in Dynamic + Interpolate + JIT; **not pinned**.
-  The adaptive controller cannot probe below that floor, but can still step
-  above it and the learned ring ceiling still caps it. With 50ms application
-  work and 50ms real interval at 120Hz, reserve=1 requests 13 slots (~108ms).
-  This is NOT a cheap, guaranteed one-slot increase over the current lead.
-  A large floor may reduce real FPS or exhaust the capture ring. Keep
-  LEAD_RESERVE disabled until the diagnostics justify trying it.
-- DIAGNOSTICS: log successful-runtime-submission, distinct, non-exact JIT
-  writes classified by their *chosen synthesis mode*: smoothInterp and
-  smoothPredict. smoothOther covers other successful JIT slot submissions,
-  including copies/repeats/fallback paths and no-layer slots. The invariant
-  is smoothInterp + smoothPredict + smoothOther = smoothSubmitted.
-  smoothEndGapMs is median/p95 of wall-clock gaps between successful JIT
-  xrEndFrame **returns**, not deadlines or headset panel scanout. The labels
-  do not guarantee optical correctness or that SteamVR actually displayed
-  each image. Existing outputFps, distinctFps, repeatedFrames, covers,
-  unready, staleMotion, runtimeHalved and ringExhausted remain essential.
+## What the normal 30-second log now reports
 
-20 real FPS on 120 Hz ideally means 20 real + 100 synthetic FPS, five
-interpolated frames between real A/G at 1/6, 2/6, 3/6, 4/6, 5/6.
-The existing debug 'pick' trace contains source IDs, presentation times
-and chosen interpolation fractions.
+`smoothSubmitted` counts JIT slots whose `RuntimeEnd` succeeded.
+`smoothInterp`, `smoothPredict`, `smoothOther` partition **accepted JIT
+submission attempts**, so their sum must equal `smoothSubmitted`.
+To avoid false quality claims, only distinct, non-exact output writes from
+the primary JIT path (path=3) qualify as interpolation/prediction. Alternate
+source/path 4 and exact/unchanged copies go to Other.
 
-Test at 120Hz in the same heavy scene: control with switches OFF,
-DIAGNOSTICS only, then MAX=6, then RESERVE=1 and =2 individually.
-Provide 2+ 30-second windows of each, then repeat at 90Hz.
-Also test Mono to Stereo switching and save/reload. CI does not prove
-headset display cadence, image fidelity or runtime safety.
+`smoothCover` counts *a subset* of predicted submissions using a cover
+choice while the next real frame is late. `smoothStale` counts predicted
+submissions using older motion fields.
+
+`smoothEndGapMsP50P95` and `smoothEndGapMsP99` measure CPU clock gaps
+between successful JIT runtime `xrEndFrame` **returns**.
+`smoothTargetGapMsP50P95` and `smoothTargetGapMsP99` measure gaps
+between the submitted target `XrTime` values, which are requested display
+slots, NOT a recording of actual scanout.
+`smoothSubmitLateMsP50P95` and `smoothSubmitLateMsP99` record positive
+delays from the internal scheduled submission instant to the CPU start of
+`RuntimeBegin`. `smoothSubmitLateHalf` counts delays > half a refresh.
+
+`smoothMissedGrid` estimates omitted nominal refresh slots based on the
+submitted target-time gap and current measured grid period, capped at 120
+per discontinuity. `smoothTargetRegress` counts non-monotonic submitted
+target times. These are **diagnostic inferences**; a runtime refresh-rate
+change or halving can look like a missing slot.
+
+`smoothPairs` counts *observed* new source-frame pairs used for accepted
+primary JIT interpolation. `smoothPairRewind` detects a non-increasing
+interpolation fraction within one pair. `smoothPairGap` detects >1.5
+refresh between interpolated samples using the same pair. These counts
+do not establish complete coverage of every real-frame pair; the full
+debug trace is needed for exact missing-fraction reconstruction.
+
+Existing fields (`appFps`, `outputFps`, `distinctFps`, `covers`,
+`repeatedFrames`, `runtimeHalved`, `ringExhausted`, `unready`,
+`ofaMs`, `gpuMs`, `leadSlots`) remain essential.
+
+**Neither these counters nor successful `xrEndFrame` prove that SteamVR
+actually scanned out a unique, optically correct image.** Cross-check
+headset perception and SteamVR frame timing.
+
+## Files to send after the first run
+
+1. Full VectorXR session log (including startup and at least two 30-second
+   summaries from a stable difficult scene).
+2. For a short second run, enable VectorXR's normal **Debug** log level and
+   send the adjacent `.framegen-trace.csv`, which includes per-frame JIT
+   source IDs, target display timestamps and chosen interpolation fractions.
+   Debug tracing is intentionally NOT default-on: its per-frame disk I/O
+   could affect the pacing we are trying to measure.
+3. Optionally SteamVR's frame timing or a consistent headset observation
+   (camera pans and moving weapon). Do not change Cheeky/UEVR settings
+   between A/B tests.
+
+## Safe test & rollback
+
+First test Dynamic Max 4 with built-in diagnostics, then Max 6 and no lead
+reserve, at 120Hz (and optionally 90Hz). Then test save reload and Mono ↔
+Stereo. Keep a backup of the installed VectorXR 0.20.1 DLL; restore it if
+there is a black eye, device hung, or extra judder. Replace DLL only, not
+the installed OpenXR JSON. This is **CI-buildable code, not a verified
+smooth 20→120 headset result**.
