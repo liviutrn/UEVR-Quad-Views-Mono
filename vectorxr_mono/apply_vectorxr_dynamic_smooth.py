@@ -41,7 +41,7 @@ replace(H, "    FrameGenDynamicPolicy dynamic_policy_;",
     std::uint32_t smooth_lead_reserve_{0}; // opt-in adaptive minimum, not pinned
     std::uint32_t smooth_min_lead_{0}; // floor enforced by the adaptive controller
     bool smooth_diagnostics_{false};
-    Clock::time_point smooth_last_success_end_{};
+    std::chrono::steady_clock::time_point smooth_last_success_end_{};
     std::vector<double> smooth_end_gaps_ms_; // successful JIT RuntimeEnd return gaps, not scanout""",
         "config fields")
 replace(H, "        std::uint64_t generated_distinct{0};",
