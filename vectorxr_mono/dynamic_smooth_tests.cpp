@@ -39,6 +39,17 @@ int main() {
           "repeat never counted as interpolation");
     check(ClassifyJit(true,3,true,false,false,true)==JitKind::kOther,
           "no GPU write never counted as interpolation");
+    using depthxr::dynamic_smooth::MissingGridSlots;
+    constexpr std::int64_t grid = 8333333;
+    check(MissingGridSlots(grid,grid)==0, "ordinary target interval");
+    check(MissingGridSlots(6*grid,grid)==5, "20fps target gap at 120Hz");
+    check(MissingGridSlots(3*grid,grid)==2, "missing two grid slots");
+    check(MissingGridSlots(149*grid/100,grid)==0, "jitter below half-slot");
+    check(MissingGridSlots(151*grid/100,grid)==1, "jitter beyond half-slot");
+    check(MissingGridSlots(200*grid,grid)==120, "large hitch bounded");
+    check(MissingGridSlots(0,grid)==0, "nonpositive target interval");
+    check(MissingGridSlots(grid,0)==0, "invalid grid period");
+    check(MissingGridSlots(-grid,grid)==0, "backwards target counted separately");
     if (!errors) std::cout << "Dynamic Smooth tests passed\n";
     return errors ? 1 : 0;
 }
