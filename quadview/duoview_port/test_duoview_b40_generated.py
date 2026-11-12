@@ -29,9 +29,11 @@ if "confidence * .5" in shader or "gainSum" in shader:
     raise RuntimeError("Old four-probe approximation is still in the production shader")
 common=require(duo/"DuoViewComposite.hlsl","uint4 B40Temporal","float4 SeamGeometry")
 require(duo/"DuoViewNativeCompositeRaster.hlsl",
-    "DuoPhase2MatchContext", "DuoB40InwardAnchor", "rawPeriphery")
+    "DuoPhase2MatchContext", "DuoB40InwardAnchor", "rawPeriphery",
+    "lerp(rawPeriphery,periphery,DuoB40InwardAnchor(fullUv))")
 require(duo/"DuoViewCompositeRaster.hlsl",
-    "DuoPhase2MatchContext", "DuoB40InwardAnchor", "rawPeripheralColor")
+    "DuoPhase2MatchContext", "DuoB40InwardAnchor", "rawPeripheralColor",
+    "lerp(rawPeripheralColor,peripheralColor,DuoB40InwardAnchor(fullUv))")
 gpu=require(backend/"src/mods/vr/DuoViewD3D12.hpp",
     "struct B40MonoHistory", "std::shared_ptr<B40MonoHistory> b40_history_",
     "Create B40 gather compute PSO", "Create B40 Native compute PSO",

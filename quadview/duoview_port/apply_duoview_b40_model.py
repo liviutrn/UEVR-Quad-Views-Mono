@@ -72,7 +72,7 @@ def main():
          '    const ModSlider::Ptr m_duo_seam_color{ModSlider::create(generate_name("DuoViewSeamColorStrength"), 0.f, 1.f, 1.f)};\n'
          '    const ModSlider::Ptr m_duo_b40_radius{ModSlider::create(generate_name("DuoViewB40AmbientRadiusPx"), 8.f, 128.f, 48.f)};\n'
          '    const ModSlider::Ptr m_duo_b40_inside{ModSlider::create(generate_name("DuoViewB40AmbientInsidePx"), 8.f, 96.f, 32.f)};\n'
-         '    const ModInt32::Ptr m_duo_b40_preset{ModSliderInt32::create(generate_name("DuoViewB40TemporalPreset"), 0, 3, 2)};'),
+         '    const ModCombo::Ptr m_duo_b40_preset{ModCombo::create(generate_name("DuoViewB40TemporalPreset"), s_quadview_b40_presets, 2)};'),
         ("saved settings",
          "            *m_duo_seam_reach, *m_duo_seam_inward, *m_duo_seam_color,",
          "            *m_duo_seam_reach, *m_duo_seam_inward, *m_duo_seam_color,\n"
@@ -147,7 +147,7 @@ def main():
         ("B38 restore inward raw-context feather",
          "        result = DebugViewMode == 2 ? fovea : lerp(periphery,fovea,weight);",
          "        const float4 blendPeriphery = SeamOptions.x > .5\n"
-         "            ? lerp(periphery,rawPeriphery,DuoB40InwardAnchor(fullUv)) : periphery;\n"
+         "            ? lerp(rawPeriphery,periphery,DuoB40InwardAnchor(fullUv)) : periphery;\n"
          "        result = DebugViewMode == 2 ? fovea : lerp(blendPeriphery,fovea,weight);"),
     ])
     gather=src/"DuoViewCompositeRaster.hlsl"
@@ -159,7 +159,7 @@ def main():
         ("B38 gather inward original raw context",
          "        result = DebugViewMode == 2 ? foveaColor : lerp(peripheralColor, foveaColor, weight);",
          "        const float4 blendPeripheral = SeamOptions.x > .5\n"
-         "            ? lerp(peripheralColor,rawPeripheralColor,DuoB40InwardAnchor(fullUv)) : peripheralColor;\n"
+         "            ? lerp(rawPeripheralColor,peripheralColor,DuoB40InwardAnchor(fullUv)) : peripheralColor;\n"
          "        result = DebugViewMode == 2 ? foveaColor : lerp(blendPeripheral, foveaColor, weight);"),
     ])
     helper=Path(__file__).with_name("DuoViewB40Mono.hlsl")
