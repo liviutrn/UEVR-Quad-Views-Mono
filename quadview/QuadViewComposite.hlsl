@@ -183,12 +183,53 @@ float3 ReadFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, 
     return GlamDecode(ReadSource(sourceIndex, AtlasUvKnownSize(sourceSize, rect, local)).rgb);
 }
 
-// One ring of the fused v186.1 Glamarye Bigger-radius four-diagonal filter
-// with its FXAA-style edge guard and maximum-change limiter. Returns the
-// linear-light change for decoded centre c. B43: radius/guard are parameters
-// so a second, twice-as-wide ring can be added per eye.
-float3 GlamSharpenChange(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float3 c,
-                         float strength, float maxChange, float2 sourceSize, float radius, float guard) {
+float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float3 center,
+                        float strength, float maxChange, float2 sourceSize) {
+    // Fused v186.1 Glamarye Bigger-radius four-diagonal filter with its
+    // FXAA-style edge guard and maximum-change limiter. No separate pass.
+    const float3 c = GlamDecode(center);
+    const float radius = 1.4;
+    const float3 ne = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2( radius,  radius), sourceSize);
+    const float3 sw = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2(-radius, -radius), sourceSize);
+    const float3 se = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2( radius, -radius), sourceSize);
+    const float3 nw = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2(-radius,  radius), sourceSize);
+    float3 smoothed = (ne + nw) + (se + sw);
+    smoothed = clamp((smoothed + c) / 5.0, c * 0.5, c * 2.0);
+    smoothed = min(smoothed, 1.0);
+
+    const float dy = dot(GlamLuma, abs((ne + nw) - (se + sw)));
+    const float dx = dot(GlamLuma, abs((ne + se) - (nw + sw)));
+    const bool horizontal = dy > dx;
+    float3 n2 = horizontal ? ne + nw : ne + se;
+    float3 s2 = horizontal ? se + sw : nw + sw;
+    n2 *= 0.5; s2 *= 0.5;
+    const float2 west = horizontal ? float2(-3.5, 0.0) : float2(0.0, 3.5);
+    const float2 east = horizontal ? float2( 3.5, 0.0) : float2(0.0,-3.5);
+    const float3 ww = ReadFocus(sourceIndex, rect, focusUv, tapScale, west, sourceSize);
+    const float3 ee = ReadFocus(sourceIndex, rect, focusUv, tapScale, east, sourceSize);
+    const float3 d1 = abs((ww - n2) - (ee - s2));
+    const float3 d2 = abs((ee - n2) - (ww - s2));
+    const float3 totalDiff = d1 + d2 + 0.00004;
+    const float3 maxDiff = max(d1, d2) + 0.00001 - Sharpen.w * sqrt(max(smoothed, 0.0));
+    const float edgeRatio = max(2.0 * dot(GlamLuma, maxDiff / totalDiff) - 1.0, 0.0);
+
+    const float3 diffRGB = 2.0 * c + (ne + nw + se + sw)
+        - 3.0 * (max(max(ne,nw),max(se,sw)) + min(min(ne,nw),min(se,sw)));
+    const float diff = dot(GlamLuma, diffRGB);
+    float3 possible = min(smoothed, c * 0.5);
+    possible = min(possible, 1.0 - max(smoothed, c));
+    possible = clamp(possible, 0.00001, maxChange);
+    float3 change = diff / (1.0 / max(strength, 0.00001) + abs(diff) / possible);
+    change *= (1.0 - edgeRatio);
+    return GlamEncode(c + change);
+}
+
+// B43 extra-wide ring: the same Glamarye filter as GlamSharpenFocus (copied so
+// that protected function stays byte-identical) with radius/guard parameters,
+// returning the linear-light change for the UNSHARPENED decoded centre c.
+// Used only in ScenePixel (display), never in the seam-analysis paths.
+float3 GlamSharpenRingChange(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float3 c,
+                             float strength, float maxChange, float2 sourceSize, float radius, float guard) {
     const float3 ne = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2( radius,  radius), sourceSize);
     const float3 sw = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2(-radius, -radius), sourceSize);
     const float3 se = ReadFocus(sourceIndex, rect, focusUv, tapScale, float2( radius, -radius), sourceSize);
@@ -222,24 +263,6 @@ float3 GlamSharpenChange(uint sourceIndex, uint4 rect, float2 focusUv, float2 ta
     float3 change = diff / (1.0 / max(strength, 0.00001) + abs(diff) / possible);
     change *= (1.0 - edgeRatio);
     return change;
-}
-
-float3 GlamSharpenFocus(uint sourceIndex, uint4 rect, float2 focusUv, float2 tapScale, float3 center,
-                        float strength, float maxChange, float2 sourceSize) {
-    // Normal ring: radius 1.4, guard 3.5 (unchanged v186.1 Bigger filter).
-    const float3 c = GlamDecode(center);
-    float3 change = GlamSharpenChange(sourceIndex, rect, focusUv, tapScale, c, strength, maxChange,
-                                      sourceSize, 1.4, 3.5);
-    // B43 "Extra-wide" per eye (Sharpen.y bit 8 = left/source 2, bit 16 = right/source 3):
-    // add a second ring at twice the radius, enhancing the coarser detail that
-    // DLSS Performance leaves soft. Same limiter per ring; result clamped.
-    const uint wideBit = sourceIndex == 2u ? 8u : 16u;
-    float3 result = c + change; // flags off: exactly the previous output
-    [branch] if (((uint)Sharpen.y & wideBit) != 0u) {
-        result = saturate(result + GlamSharpenChange(sourceIndex, rect, focusUv, tapScale, c, strength, maxChange,
-                                                     sourceSize, 2.8, 7.0));
-    }
-    return GlamEncode(result);
 }
 
 float4 ReadContext(uint eye, uint contextSource, uint4 contextRect, float2 eyeUv) {
@@ -289,6 +312,8 @@ float3 CorrectFocusColor(float3 color, float2 focusUv) {
 // Appearance changes affect only sampled peripheral colors. Estimate and apply
 // in the same source-sample domain; preserve B28's final output encoding. This
 // costs one multiply per channel, without per-output-pixel gamma conversions.
+// B43 note: the per-eye extra-wide ring is display-only (ScenePixel); it is a
+// zero-mean detail boost, so seam colour statistics stay on this reference.
 // B35: both analysis and display use this exact post-NR/SR, sharpened,
 // anti-vignette-corrected reference. No changes to B31 CorrectFocusColor.
 float4 DisplayFocus(uint eye, uint4 rect, float2 focusUv, float4 crop) {
@@ -523,7 +548,14 @@ float4 ScenePixel(VertexOut input) {
     const float eyeMaxChange = eye == 0u ? SharpenEye.z : SharpenEye.w;
     [branch] if (eyeStrength > 0.0) {
         const float2 tapScale = 1.0 / (float2(EyeAndAtlas.xy) * (crop.zw - crop.xy));
+        const float3 unsharpened = focus.rgb;
         focus.rgb = GlamSharpenFocus(2u + eye, focusRect, focusUv, tapScale, focus.rgb, eyeStrength, eyeMaxChange, focusSourceSize);
+        // B43 extra-wide (Sharpen.y bit 8 = left, 16 = right): add a 2x-radius ring on top.
+        [branch] if (((uint)Sharpen.y & (eye == 0u ? 8u : 16u)) != 0u) {
+            focus.rgb = GlamEncode(saturate(GlamDecode(focus.rgb) +
+                GlamSharpenRingChange(2u + eye, focusRect, focusUv, tapScale, GlamDecode(unsharpened),
+                                      eyeStrength, eyeMaxChange, focusSourceSize, 2.8, 7.0)));
+        }
     }
     if (debugMode == 0u) focus.rgb = CorrectFocusColor(focus.rgb, focusUv);
     float4 output = focus;

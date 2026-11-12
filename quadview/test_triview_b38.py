@@ -12,10 +12,11 @@ def body(text,name):
     return text[a:end]
 for fn in ('float FocusWeight(','float4 ReadContext(','float4 MatchContext(',
            'float SeamFocusWeight(','float3 CorrectFocusColor(',
-           'float3 ReadFocus(',  # B43: GlamSharpenFocus checked in test_triview_b23_four_samples.py
-          'float2 WarpContextUv('):
+           'float3 GlamSharpenFocus(','float3 ReadFocus(','float2 WarpContextUv('):
     assert body(old,fn)==body(now,fn),fn+' changed unexpectedly'
-assert body(old,'float4 ScenePixel(')==body(now,'float4 ScenePixel('), 'B38 inward feather changed'
+from b43_scene_strip import strip_b43  # B43: ignore only the extra-wide sharpen block
+assert body(old,'float4 ScenePixel(')==strip_b43(body(now,'float4 ScenePixel(')), 'B38 inward feather changed'
+
 for marker in (
     'const float4 rawContext = ReadContext(',
     'float4 context = MatchContext(eye, eyeUv, crop, rawContext);',

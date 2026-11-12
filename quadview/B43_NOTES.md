@@ -6,10 +6,16 @@ Status: compiled only after CI; NOT headset-tested yet.
 - Strength range 0-10 -> 0-20, max change per pixel 0.40 -> 0.80, both eyes.
 - New per-eye toggle "extra-wide sharpen" (QuadViewSharpenWideLeft/Right, default OFF):
   adds a second Glamarye ring at radius 2.8 (guard 7.0) on top of the normal 1.4 ring.
-  Shader: GlamSharpenChange (old B29 body, radius/guard as parameters), Sharpen.y bits 8/16.
-  Flags off = exactly the previous output. Cost: +6 taps per fovea pixel.
-- Protection tests: GlamSharpenFocus is no longer frozen; test_triview_b23_four_samples.py
-  checks GlamSharpenChange equals the old body with 1.4/3.5.
+  Shader (B43b): GlamSharpenFocus/DisplayFocus are byte-identical to B42.5; the new
+  GlamSharpenRingChange (copy of the body with radius/guard parameters) is applied only in
+  ScenePixel (display), Sharpen.y bits 8/16. Seam analysis (CSSeam) is unchanged.
+- First B43 attempt (ring inside GlamSharpenFocus) failed CI twice in
+  quadview-combined-seam-production-gpu ("Adaptive matching did not fit the two eyes
+  independently") although that test runs with sharpening OFF. Most likely cause (not proven):
+  the much larger seam compute shader (DisplayFocus is unrolled 15x+3x there). B43b keeps the
+  compute shader identical to B42.5, which also isolates the question.
+- Tests: test_triview_b23_four_samples.py checks the ring equals the protected body;
+  b38/b39 ScenePixel freezes ignore only the B43 block (b43_scene_strip.py).
 
 ## Startup (log 12 Nov 12:34, B42.5)
 First game frame 29.7 s -> Native Fix ready 34.8 -> ID7 request 36.8 (2 s hold) -> one-time

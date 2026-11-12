@@ -14,11 +14,14 @@ def body(s,name):
 for f in (
     'float FocusWeight(', 'float SeamFocusWeight(', 'float4 ScenePixel(',
     'float4 ReadContext(', 'float4 MatchContext(', 'float3 CorrectFocusColor(',
-    'float3 ReadFocus(',  # B43: GlamSharpenFocus checked in test_triview_b23_four_samples.py
-    'float2 WarpContextUv(',
+    'float3 GlamSharpenFocus(', 'float3 ReadFocus(', 'float2 WarpContextUv(',
     'bool EdgeDifference(', 'float2 EdgeAnchor('
 ):
-    assert body(old,f)==body(now,f),f+' changed (B38/inward/old warp regression)'
+    cur=body(now,f)
+    if f=='float4 ScenePixel(':
+        from b43_scene_strip import strip_b43  # B43: ignore only the extra-wide sharpen block
+        cur=strip_b43(cur)
+    assert body(old,f)==cur,f+' changed (B38/inward/old warp regression)'
 ambient=body(now,'bool AmbientEdgeDifference(')
 assert '[unroll] for (int depth=0;depth<3;++depth)' in ambient
 assert '[unroll] for (int i=-2;i<=2;++i)' in ambient
