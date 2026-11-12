@@ -43,3 +43,14 @@ Joey/UESDK/frontend pins unchanged: 5ac7edc/3cffbc8/60be4b0.
   stale invocation with a pinned Git subtree verification. No source
   integrity verifier or Build182 manifest was edited or disabled.
 - No runtime or performance claims until the complete new CI run passes.
+
+## Second CI attempt and compatibility patch
+- Run #156 (43236646822): sanitizer passed, complete v208d script-chain
+  integrity passed, and all initial B43 overlays through B12 VRAM passed.
+  At B12 the original TriView depth-swapchain script expected an unguarded
+  if (is_depth_allowed) while v208d adds skip_unused_depth_swapchain.
+- New isolated quadview/duoview_port/apply_triview_vram_v208d.py is copied
+  from original B12 with just TWO guarded predicate edits: it preserves the
+  v208d skip for ID6 and the B12 skip for ID7 independently. The original
+  quadview/apply_triview_vram.py is untouched and can still be diffed.
+  All other B43 patches remain unchanged.
