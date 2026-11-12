@@ -1,6 +1,6 @@
-name: TriView B43 sharpen and startup
+name: TriView B43 + DuoView Mono v208d Phase 1
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B43 sharpen and startup (${{ github.run_number }})
+run-name: TriView B43 + DuoView v208d (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -25,15 +25,14 @@ jobs:
           path: workspace
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify preserved DuoView baseline against pinned ID7 parent
+      - name: Pin complete DuoView v208d source; preserve TriView B43 ancestry
         shell: pwsh
         run: |
-          $baseline='f0a6be707d1c03f2b6c6bf01982f001aa403e073'
-          git -C workspace merge-base --is-ancestor $baseline HEAD
-          if ($LASTEXITCODE -ne 0) { throw 'Experimental ID7 is not descended from its pinned original source' }
-          git -C workspace diff --exit-code $baseline HEAD -- duoview scripts/verify_baseline.py BASELINE_SOURCE_SHA256SUMS
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned DuoView baseline or integrity verifier changed' }
-          Write-Host 'Preserved DuoView source is identical to pinned original ID7 parent'
+          $expected='3d5593a82ac13532989420b2e356b17602b1098b'
+          $actual=(git -C workspace rev-parse 'HEAD:duoview').Trim()
+          if ($actual -ne $expected) { throw "DuoView v208d tree mismatch: $actual (expected $expected)" }
+          git -C workspace merge-base --is-ancestor 1f75a2dd28a54a2f5747d88a80a1317e41a05d43 HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Mode7 B43 base is not an ancestor' }
       - uses: actions/checkout@v4
         with:
           repository: joeyhodge/UEVR
@@ -86,17 +85,35 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 source anchors did not match original Joey' }
           python workspace/duoview/joey_stage1/verify_stage234.py backend frontend evidence
           if ($LASTEXITCODE -ne 0) { throw 'Stage 2-4 violated original-source or SDK boundaries' }
-      - name: Apply DuoView v208d FOV fix, XYZ head scaling and hotkeys (Tri-view B5 port)
+      - name: Port complete v208d DuoView Mono source into ID6 before TriView overlays
         shell: pwsh
         run: |
-          # Byte-identical copies of the DuoView v208d scripts, applied at the same
-          # point as in duoview-joey-stage234.yml (right after Stage 2-4).
-          foreach ($s in @('apply_foreground_mpc_minimal','apply_xyz_head_scaling','apply_manual_fov_global_lookup_v165','apply_v205_manual_fov_runtime_hotkeys','apply_v207_auto_fov_after_load')) {
-            python workspace/quadview/duoview_port/$s.py backend
-            if ($LASTEXITCODE -ne 0) { throw "DuoView port script $s failed its anchors" }
+          # v208d order, using matched scripts from the pinned source tree.
+          $scripts = @(
+            'apply_foreground_mpc_minimal',
+            'apply_mono_hud_convergence',
+            'apply_mono_alignment_build48',
+            'apply_runtime_eye_alignment_persistence_build49',
+            'apply_xyz_head_scaling',
+            'apply_manual_fov_global_lookup_v165',
+            'apply_v205_manual_fov_runtime_hotkeys',
+            'apply_v207_auto_fov_after_load',
+            'apply_v208_shared_eye_vram',
+            'apply_v208b_sharpen_max_change',
+            'apply_v208d_vram_options'
+          )
+          foreach ($s in $scripts) {
+            python workspace/duoview/joey_stage1/$s.py backend
+            if ($LASTEXITCODE -ne 0) { throw "v208d DuoView script $s failed its anchors" }
+            if ($s -eq 'apply_runtime_eye_alignment_persistence_build49') {
+              python workspace/duoview/joey_stage1/test_runtime_eye_alignment_persistence_build49.py backend
+              if ($LASTEXITCODE -ne 0) { throw 'v208d alignment persistence test failed' }
+            }
           }
-          python workspace/quadview/duoview_port/test_xyz_head_scaling.py backend
-          if ($LASTEXITCODE -ne 0) { throw 'XYZ head scaling contract failed' }
+          python workspace/duoview/joey_stage1/test_xyz_head_scaling.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'v208d XYZ scaling test failed' }
+          git -C backend diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'v208d generated source whitespace errors' }
       - name: Apply isolated stereo QuadView backend overlay
         shell: pwsh
         run: |
@@ -368,6 +385,7 @@ jobs:
           Copy-Item workspace/quadview/B40_CONTINUOUS_AMBIENT_NOTES.md package/B40_CONTINUOUS_AMBIENT_NOTES.md
           Copy-Item workspace/quadview/B41_NOTES.md package/B41_NOTES.md
           Copy-Item workspace/quadview/B42_NOTES.md package/B42_NOTES.md
+          Copy-Item workspace/quadview/DUOVIEW_PARITY_PHASE1_NOTES.md package/DUOVIEW_PARITY_PHASE1_NOTES.md
           Copy-Item workspace/quadview/focus_lift_calibration.json package/focus_lift_calibration.json
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md

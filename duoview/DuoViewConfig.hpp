@@ -16,6 +16,10 @@ struct Settings {
     float peripheral_scale{.20f};
     float foveal_density{1.f};
     float feather_fraction{.08f};
+    float sharpen_strength{}; // Glamarye fovea-only; 0 preserves v182 output.
+    // Max per-pixel change allowed by the sharpen limiter (0.05..0.30; 0.10 = v208 output).
+    // Placed before sharp_periphery so apply_v208's anchor on the struct tail still matches.
+    float sharpen_max_change{.10f};
     bool debug_border{};
     bool eye_tracked{true};
     uint32_t fovea_view{};
@@ -38,6 +42,10 @@ struct Settings {
     float gaze_breakout_radius{.035f}; // when farther from locked crop, go 1:1
     float gaze_still_radius{.008f};    // per-sample motion treated as stationary
     uint32_t gaze_relock_samples{3};  // quiet samples before leaving fast tracking
+    // v207: Catmull-Rom (bicubic) upscaling of the low-resolution periphery.
+    // OFF keeps the original bilinear sampling bit-for-bit. Keep this LAST:
+    // designated initializers in VR::configure_duoview follow field order.
+    bool sharp_periphery{true};
 };
 // Resolve persisted UI controls field by field. Unlike the strict ConfigLatch,
 // one bad slider must not veto eye tracking, shading, position, or other sliders.
@@ -49,7 +57,8 @@ enum UiReject : uint32_t {
     reject_diagnostic=1u<<6, reject_guard=1u<<7, reject_quant=1u<<8,
     reject_hold=1u<<9, reject_reacquire=1u<<10, reject_offset_u=1u<<11,
     reject_offset_v=1u<<12, reject_micro=1u<<13,
-    reject_breakout=1u<<14, reject_still=1u<<15, reject_relock=1u<<16
+    reject_breakout=1u<<14, reject_still=1u<<15, reject_relock=1u<<16,
+    reject_sharpen=1u<<17, reject_sharpen_max=1u<<18
 };
 struct UiReconciled {
     Settings settings{};
@@ -103,6 +112,7 @@ inline UiReconciled reconcile_ui_settings(const Settings& requested,
     out.stabilize_crop=requested.stabilize_crop;
     out.independent_shading=requested.independent_shading;
     out.native_fix_same_pass=requested.native_fix_same_pass;
+    out.sharp_periphery=requested.sharp_periphery;
     const auto scalar=[&](float value,float lo,float hi,uint32_t mask,
                           float Settings::* field) {
         if (valid(value,lo,hi)) out.*field=value;
@@ -119,6 +129,8 @@ inline UiReconciled reconcile_ui_settings(const Settings& requested,
         else result.rejected|=mask;
     };
     scalar(requested.feather_fraction,0.f,.45f,reject_feather,&Settings::feather_fraction);
+    scalar(requested.sharpen_strength,0.f,5.f,reject_sharpen,&Settings::sharpen_strength);
+    scalar(requested.sharpen_max_change,.05f,.30f,reject_sharpen_max,&Settings::sharpen_max_change);
     scalar(requested.guard_fraction,0.f,.05f,reject_guard,&Settings::guard_fraction);
     scalar(requested.gaze_offset_u,-.25f,.25f,reject_offset_u,&Settings::gaze_offset_u);
     scalar(requested.gaze_offset_v,-.25f,.25f,reject_offset_v,&Settings::gaze_offset_v);
@@ -160,7 +172,11 @@ class ConfigLatch {
 public:
     bool set_settings(Settings proposed) {
         std::scoped_lock lock{mutex_};
-        if (!std::isfinite(proposed.feather_fraction) ||
+        if (!std::isfinite(proposed.sharpen_strength) || proposed.sharpen_strength<0.f ||
+            proposed.sharpen_strength>5.f ||
+            !std::isfinite(proposed.sharpen_max_change) ||
+            proposed.sharpen_max_change<.05f || proposed.sharpen_max_change>.30f ||
+            !std::isfinite(proposed.feather_fraction) ||
             proposed.feather_fraction < 0.f || proposed.feather_fraction > .45f ||
             proposed.fovea_view > 1 || proposed.diagnostic_view > 2 ||
             !std::isfinite(proposed.guard_fraction) || proposed.guard_fraction<0.f || proposed.guard_fraction>.05f ||

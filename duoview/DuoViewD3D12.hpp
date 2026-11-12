@@ -16,8 +16,10 @@ struct ShaderConstants {
     float reserved;
     uint32_t fovea_source_size[2], peripheral_source_size[2];
     uint32_t output_offset[2];
+    float sharpen_strength, sharpen_max_change, sharpen_fxaa_bias;
+    uint32_t sharpen_flags;
 };
-static_assert(sizeof(ShaderConstants) == 104);
+static_assert(sizeof(ShaderConstants) == 120);
 
 class Compositor {
 public:
@@ -135,7 +137,11 @@ public:
         // old compositor+copy fallback for incompatible swapchain formats.
         if (!stereo_destination_valid(xrd,width_,height_))
             return reject("Invalid Mono XR output dimensions, format, or render-target flags");
+        // Direct double-wide raster would run sharpening twice on the same
+        // monoscopic foveal content. Use the existing single-Mono compose+copy
+        // when fused sharpening is enabled; leave v182 behavior otherwise.
         const bool direct_xr=frame.config.settings.direct_xr_output &&
+            frame.config.settings.sharpen_strength <= 0.0f &&
             xrd.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
             xrd.Width==static_cast<uint64_t>(width_)*2 && xrd.Height==height_ &&
             xrd.DepthOrArraySize==1 && xrd.MipLevels==1 &&
@@ -200,7 +206,11 @@ public:
             frame.config.settings.debug_border ? 1u : 0u,
             frame.config.settings.diagnostic_view, 0.f,
             {static_cast<uint32_t>(fd.Width),fd.Height},
-            {static_cast<uint32_t>(vd.Width),vd.Height}
+            {static_cast<uint32_t>(vd.Width),vd.Height},
+            {0u,0u},
+            frame.config.settings.sharpen_strength, frame.config.settings.sharpen_max_change, 0.02f,
+            3u | (srgb_ ? 0u : 4u) | // larger radius, edge protection, SDR conversion
+                (frame.config.settings.sharp_periphery ? 8u : 0u) // v207 Catmull-Rom periphery
         };
         ensure_srvs(device,fovea,periphery,sampling_format);
         // GPU lifetime remains bound to the exact retired OpenXR command slot,
@@ -286,7 +296,8 @@ public:
         if (!stereo_destination_valid(destination->GetDesc(),frame.config.layout.atlas_width/2,
                                       frame.config.layout.atlas_height))
             return reject("Invalid gather XR destination before source copy");
-        if (!atlas_) return reject("Missing prewarmed Native gather atlas (ID6 activation setup)");
+        if (!create_gather_atlas(device))
+            return reject("Native gather atlas unavailable (compositor not prewarmed or allocation failed)");
         const auto p = primary->GetDesc(), s = secondary->GetDesc(), a = atlas_->GetDesc();
         const auto& l = frame.config.layout;
         const auto& primary_rect = frame.config.settings.fovea_view == 0 ? l.fovea : l.periphery;
@@ -431,13 +442,34 @@ private:
         transition(cmd, source, D3D12_RESOURCE_STATE_COPY_SOURCE, source_state);
         return true;
     }
+    // v207: the gather atlas serves only the rare fallback for Native sources
+    // that cannot be sampled directly. Allocate it on first use instead of at
+    // prewarm: 2*W*H*4 bytes per XR command slot (~105 MB at 4060x3228).
+    // It is never released before prepare() rebuilds the whole slot.
+    bool create_gather_atlas(ID3D12Device* device) {
+        if (atlas_) return true;
+        if (!device || device_.Get() != device || !width_ || !height_) return false;
+        D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT; heap.CreationNodeMask = heap.VisibleNodeMask = 1;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = static_cast<uint64_t>(width_) * 2; desc.Height = height_;
+        desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.SampleDesc.Count = 1;
+        desc.Format = srgb_ ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        if (!check(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&atlas_)), "Create Native gather atlas")) return false;
+        atlas_->SetName(L"DuoView::NativeGatherAtlasFallback");
+        return true;
+    }
     bool check(HRESULT hr, const char* operation) {
         if (SUCCEEDED(hr)) return true;
         error_ = std::string(operation) + " HRESULT " + std::to_string(static_cast<uint32_t>(hr));
         return false;
     }
     bool prepare(ID3D12Device* device, UINT width, UINT height, bool srgb) {
-        if (device_.Get() == device && output_ && atlas_ && pipeline_ && native_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
+        // The gather atlas is allocated lazily (create_gather_atlas); it is not
+        // part of the prewarmed state, so its absence must not force a rebuild.
+        if (device_.Get() == device && output_ && pipeline_ && native_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;
         output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();
         srv_first_reference_.Reset(); srv_second_reference_.Reset(); xr_rtv_reference_.Reset();
         srv_descriptors_valid_=false; srv_cached_format_=DXGI_FORMAT_UNKNOWN;
@@ -500,14 +532,6 @@ private:
         if (!check(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &texture,
             D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&output_)), "Create output")) return false;
         output_->SetName(L"DuoView::MonoComposite");
-        D3D12_RESOURCE_DESC atlas_desc=texture;
-        atlas_desc.Width=static_cast<uint64_t>(width)*2;
-        atlas_desc.Height=height;
-        atlas_desc.Format=srgb ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM;
-        atlas_desc.Flags=D3D12_RESOURCE_FLAG_NONE;
-        if (!check(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&atlas_desc,
-            D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&atlas_)),"Create Native gather atlas")) return false;
-        atlas_->SetName(L"DuoView::NativeGatherAtlasFallback");
         D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.NumDescriptors = 2; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (!check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_)), "Create RTV heap")) return false;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; hd.NumDescriptors = 2;

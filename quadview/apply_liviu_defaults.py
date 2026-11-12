@@ -30,6 +30,11 @@ DEFAULTS = [
     ('generate_name("XYZHeadScalingEnabled")', 'true'),
     ('generate_name("XYZHeadScaleX")', '3.0f'),
     ('generate_name("XYZHeadScaleZ")', '1.5f'),
+    # DuoView Mono (ID6) — Liviu's known mono setup.
+    ('"OpenXR_MonoEyeAlignmentEnabled"', 'true'),
+    ('"OpenXR_MonoEyeAlignmentPercent"', '-1.5f'),
+    ('generate_name("DuoViewSameImageBothEyes")', 'true'),
+    ('generate_name("DuoViewSharpPeriphery")', 'false'),
     # TriView (ID7)
     ('generate_name("QuadViewContextScale")', '.30f'),
     ('generate_name("QuadViewFeather")', '.10f'),
