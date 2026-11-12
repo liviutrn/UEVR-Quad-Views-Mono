@@ -39,13 +39,17 @@ replace(H, "    FrameGenDynamicPolicy dynamic_policy_;",
         """    FrameGenDynamicPolicy dynamic_policy_;
     std::uint32_t smooth_dynamic_max_{4}; // stock default
     std::uint32_t smooth_lead_reserve_{0}; // opt-in adaptive minimum, not pinned
+    std::uint32_t smooth_min_lead_{0}; // floor enforced by the adaptive controller
     bool smooth_diagnostics_{false};
-    std::vector<double> smooth_end_gaps_ms_; // return-to-return, not panel scanout""",
+    Clock::time_point smooth_last_success_end_{};
+    std::vector<double> smooth_end_gaps_ms_; // successful JIT RuntimeEnd return gaps, not scanout""",
         "config fields")
 replace(H, "        std::uint64_t generated_distinct{0};",
         """        std::uint64_t generated_distinct{0};
         std::uint64_t smooth_interpolated{0}; // unique, true JIT interpolations
-        std::uint64_t smooth_predicted{0}; // unique, JIT extrapolations""",
+        std::uint64_t smooth_predicted{0}; // unique, JIT extrapolations
+        std::uint64_t smooth_other{0}; // accepted JIT slots: copies/repeats/fallbacks/empty
+        std::uint64_t smooth_submitted{0}; // all accepted JIT RuntimeEnd calls""",
         "diagnostic totals")
 replace(P, "    const std::uint64_t research_reads = ResearchFileReads();",
         """    // Session-scoped; defaults preserve the reviewed build exactly.
@@ -58,6 +62,8 @@ replace(P, "    const std::uint64_t research_reads = ResearchFileReads();",
     if (reserve == "1" || reserve == "2" || reserve == "3" || reserve == "4")
         smooth_lead_reserve_ = static_cast<std::uint32_t>(reserve[0] - '0');
     smooth_diagnostics_ = ReadResearchSwitch("VECTORXR_FRAMEGEN_FLOW_DIAGNOSTICS") == "1";
+    smooth_min_lead_ = 0;
+    smooth_last_success_end_ = Clock::time_point{};
     smooth_end_gaps_ms_.clear();
     if (logger_ && (smooth_dynamic_max_ != 4 || smooth_lead_reserve_ || smooth_diagnostics_)) {
         logger_->Info("Frame Generation Dynamic Smooth: max=" + std::to_string(smooth_dynamic_max_) +
@@ -77,6 +83,25 @@ replace(P, "                        multiplier <= 4 && !late_write;",
 replace(P, "        !(lead_probe_->ring && multiplier <= 4 && RingJudgedLocked(lead_ring_[multiplier], now))) {",
         "        !(lead_probe_->ring && multiplier < lead_ring_.size() && RingJudgedLocked(lead_ring_[multiplier], now))) {",
         "lead probe ring")
+// Only the opt-in floor is new; the stock controller remains unchanged.
+replace(P, """    if (lead_policy_.pinned_lead) {
+        return; // tests: the lead stays where it was pinned
+    }
+    const auto now = Clock::now();""",
+        """    if (lead_policy_.pinned_lead) {
+        return; // tests: the lead stays where it was pinned
+    }
+    const std::uint32_t smooth_minimum =
+        smooth_lead_reserve_ && jit_ && jit_interpolate_ && DynamicLocked()
+            ? std::max(1u, std::min(smooth_min_lead_, LeadCapLocked(multiplier)))
+            : 1u;
+    const auto now = Clock::now();""", "controller floor")
+replace(P, "if (step_down && lead_slots_ > 1 &&",
+        "if (step_down && dynamic_smooth::CanProbeDown(lead_slots_, smooth_minimum) &&",
+        "prevent spare probe below reserve")
+replace(P, "    if (lead_probe_ || lead_slots_ <= 1) {",
+        "    if (lead_probe_ || !dynamic_smooth::CanProbeDown(lead_slots_, smooth_minimum)) {",
+        "prevent calm probe below reserve")
 replace(P, """    if (lead_slots_ > cap) {
         ClampLeadLocked(cap);
     }
@@ -85,12 +110,15 @@ replace(P, """    if (lead_slots_ > cap) {
         ClampLeadLocked(cap);
     }
     // Only Dynamic / JIT / Interpolate gets the opt-in extra reserve.
-    // The controller still steps UP after late frames; ring ceiling wins.
+    // Enforce the minimum in the controller as well, so its down-probe cannot
+    // repeatedly be undone on the very next wait (resetting its history).
+    smooth_min_lead_ = 0;
     if (dynamic && interpolate_jit && smooth_lead_reserve_ > 0) {
         const double interval = dynamic_interval_slots_ > 0.0
                                     ? dynamic_interval_slots_ * period_ms : app_latency_ms_;
         const auto floor = dynamic_smooth::LeadFloor(
             app_latency_ms_, interval, period_ms, smooth_lead_reserve_, cap);
+        smooth_min_lead_ = floor;
         if (lead_slots_ < floor) {
             lead_slots_ = floor;
             lead_probe_.reset();
@@ -100,31 +128,53 @@ replace(P, """    if (lead_slots_ > cap) {
     }
     // Predict the first slot the frame will really reach.""",
         "extra adaptive lead")
-replace(P, """void FrameGenPresenter::NoteSubmissionLocked(bool distinct, bool generated) {
-    const auto now = Clock::now();
-    submissions_.push_back(now);""",
-        """void FrameGenPresenter::NoteSubmissionLocked(bool distinct, bool generated) {
-    const auto now = Clock::now();
-    if (smooth_diagnostics_ && !submissions_.empty())
-        AddSample(smooth_end_gaps_ms_, Milliseconds(now - submissions_.back()), kMaxFrameSamples);
-    submissions_.push_back(now);""", "end-of-submission timing")
+// Successful JIT RuntimeEnd is recorded at the actual JIT submission site,
+// not in NoteSubmissionLocked (which also handles non-JIT and rejected calls).
+replace(P, """            if (XR_SUCCEEDED(result) && submit) {
+                result = RuntimeEnd(calls, session, &end_info, true);
+            }
+            submit_lock.unlock();
+            lock.lock();
+            if (!submit) {""",
+        """            if (XR_SUCCEEDED(result) && submit) {
+                result = RuntimeEnd(calls, session, &end_info, true);
+            }
+            // Sample only a successful JIT runtime submission, immediately
+            // after RuntimeEnd, not after re-acquiring the presenter lock.
+            const auto smooth_runtime_return =
+                smooth_diagnostics_ && submit && XR_SUCCEEDED(result) ? Clock::now() : Clock::time_point{};
+            submit_lock.unlock();
+            lock.lock();
+            if (!submit) {""", "capture successful return")
 replace(P, """                const bool moved = distinct && written && !write.exact;
                 generated_ += moved ? 1 : 0;
                 NoteSubmissionLocked(distinct, moved);""",
         """                const bool moved = distinct && written && !write.exact;
-                if (smooth_diagnostics_ && moved) {
-                    if (choice.mode == FrameGenSynthesisMode::kInterpolate)
-                        ++totals_.smooth_interpolated;
-                    else
-                        ++totals_.smooth_predicted;
+                if (smooth_diagnostics_ && XR_SUCCEEDED(result)) {
+                    ++totals_.smooth_submitted;
+                    switch (dynamic_smooth::ClassifyJit(true, path, distinct, written, write.exact,
+                                  choice.mode == FrameGenSynthesisMode::kInterpolate)) {
+                    case dynamic_smooth::JitKind::kInterpolate:
+                        ++totals_.smooth_interpolated; break;
+                    case dynamic_smooth::JitKind::kPredict:
+                        ++totals_.smooth_predicted; break;
+                    default:
+                        ++totals_.smooth_other; break;
+                    }
+                    if (smooth_last_success_end_ != Clock::time_point{})
+                        AddSample(smooth_end_gaps_ms_, Milliseconds(smooth_runtime_return -
+                                      smooth_last_success_end_), kMaxFrameSamples);
+                    smooth_last_success_end_ = smooth_runtime_return;
                 }
                 generated_ += moved ? 1 : 0;
-                NoteSubmissionLocked(distinct, moved);""", "classify submitted motion")
+                NoteSubmissionLocked(distinct, moved);""", "count successful submission")
 replace(P, '            ")" + ", copiesSkipped=" + std::to_string(delta(&Totals::copies_skipped)) +',
         """            ")" +
             (smooth_diagnostics_
                 ? ", smoothInterp=" + std::to_string(delta(&Totals::smooth_interpolated)) +
                   ", smoothPredict=" + std::to_string(delta(&Totals::smooth_predicted)) +
+                  ", smoothOther=" + std::to_string(delta(&Totals::smooth_other)) +
+                  ", smoothSubmitted=" + std::to_string(delta(&Totals::smooth_submitted)) +
                   ", smoothEndGapMs=" + Percentiles(smooth_end_gaps_ms_, 0.5, 0.95)
                 : std::string()) +
             ", copiesSkipped=" + std::to_string(delta(&Totals::copies_skipped)) +""",
