@@ -5,6 +5,7 @@ on:
     branches:
       - 'claude/vectorxr-mono-**'
       - 'experiment/vectorxr-dynamic6-smooth-20261112'
+      - 'review/vectorxr-dynamic6-audit-20261112'
   workflow_dispatch:
 permissions:
   contents: read
