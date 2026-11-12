@@ -1,9 +1,10 @@
-name: VectorXR Mono Frame Generation (personal build)
-run-name: VectorXR 0.20.1 + mono frame generation (${{ github.run_number }})
+name: VectorXR Mono + Dynamic Smoothness (personal build)
+run-name: VectorXR 0.20.1 Mono + Dynamic Smoothness (${{ github.run_number }})
 on:
   push:
     branches:
       - 'claude/vectorxr-mono-**'
+      - 'experiment/vectorxr-dynamic6-smooth-20261112'
   workflow_dispatch:
 permissions:
   contents: read
@@ -54,6 +55,14 @@ jobs:
           git -C vectorxr add -N layer/include/depthxr/mono_framegen.h layer/tests/mono_framegen_tests.cpp
           git -C vectorxr diff | Set-Content -Encoding utf8 evidence/vectorxr-mono.patch
           git -C vectorxr diff --stat
+      - name: Apply optional Dynamic Smoothness patch
+        shell: pwsh
+        run: |
+          python workspace/vectorxr_mono/apply_vectorxr_dynamic_smooth.py vectorxr
+          if ($LASTEXITCODE -ne 0) { throw 'Dynamic Smoothness patch anchors failed' }
+          git -C vectorxr add -N layer/include/depthxr/dynamic_smooth.h layer/tests/dynamic_smooth_tests.cpp
+          git -C vectorxr diff | Set-Content -Encoding utf8 evidence/vectorxr-mono-dynamic-smooth.patch
+          git -C vectorxr diff --stat
       - name: Build the layer (Release)
         shell: pwsh
         run: |
@@ -62,10 +71,10 @@ jobs:
           } finally {
             Get-Content evidence/build.log -ErrorAction SilentlyContinue | Select-Object -Last 120
           }
-      - name: Run the mono frame generation test
+      - name: Run Mono and Dynamic Smoothness tests
         shell: pwsh
         run: |
-          ctest --test-dir vectorxr/build -C Release -R vectorxr_mono_framegen_tests --output-on-failure --no-tests=error
+          ctest --test-dir vectorxr/build -C Release -R 'vectorxr_(mono_framegen|dynamic_smooth)_tests' --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { throw 'Mono frame generation test failed' }
       - name: Package the personal DLL
         shell: pwsh
@@ -79,12 +88,14 @@ jobs:
           Copy-Item vectorxr/LICENSE $out/LICENSE-MPL-2.0.txt
           Copy-Item vectorxr/THIRD-PARTY-NOTICES.txt $out/
           Copy-Item evidence/vectorxr-mono.patch $out/
+          Copy-Item evidence/vectorxr-mono-dynamic-smooth.patch $out/
           New-Item -ItemType Directory $out/source -Force | Out-Null
           Copy-Item workspace/vectorxr_mono/* $out/source/
           @'
           VECTORXR 0.20.1 + MONO FRAME GENERATION - PERSONAL TEST BUILD (not an official VectorXR release)
           Built from DienerTech/vectorxr 8fffa72 (tag v0.20.1, MPL-2.0) + the patch in vectorxr-mono.patch / source/.
-          Unsigned. Personal use only. HEADSET UNVERIFIED.
+          Unsigned. Personal use only. HEADSET UNVERIFIED. Dynamic 6x is OFF by default.
+          See source/README-dynamic-smooth.md for switches and a test plan.
 
           WHAT IT DOES
           Mono activates only when both OpenXR views reference the SAME swapchain, array slice and rectangle.
@@ -113,12 +124,12 @@ jobs:
           Base commit: 8fffa72e99be8ab1e39457c7353faeb1218ac83f (DienerTech/vectorxr).
           '@ | Set-Content $out/READ_FIRST.txt
           Get-ChildItem $out -Recurse -File | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize | Out-String | Set-Content evidence/package-sha256.txt
-          $zip = "VectorXR-0.20.1-Mono-FrameGen-${{ github.run_number }}.zip"
+          $zip = "VectorXR-0.20.1-Mono-DynamicSmooth-${{ github.run_number }}.zip"
           Compress-Archive -Path $out/* -DestinationPath $zip -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: VectorXR-0.20.1-Mono-FrameGen-${{ github.run_number }}
-          path: VectorXR-0.20.1-Mono-FrameGen-*.zip
+          name: VectorXR-0.20.1-Mono-DynamicSmooth-${{ github.run_number }}
+          path: VectorXR-0.20.1-Mono-DynamicSmooth-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Run VectorXR's full layer test suite (regression check)
