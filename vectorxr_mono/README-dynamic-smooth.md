@@ -15,15 +15,24 @@ VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE=1
 
 - DYNAMIC_MAX: 4 (stock), 5 or 6; extends only Dynamic multiplier and
   lead/ring bookkeeping. The JIT interpolation fraction is already uncapped.
-- LEAD_RESERVE: 0 (stock), 1-4 added refresh slots above a calculated
-  minimum in Dynamic + Interpolate + JIT; **not pinned**. Automatic lead
-  increases and history ceiling continue operating. A large reserve may
-  reduce real FPS or exhaust the capture ring.
-- DIAGNOSTICS: log distinct true interpolations (smoothInterp), successful
-  extrapolations (smoothPredict), and median/p95 intervals between
-  xrEndFrame **returns** (smoothEndGapMs), not actual headset scanout.
-  Existing outputFps, distinctFps, repeatedFrames, covers, unready,
-  staleMotion, runtimeHalved and ringExhausted remain essential.
+- LEAD_RESERVE: 0 (stock), 1-4; creates an enforced minimum on top of a
+  latency/real-interval estimate in Dynamic + Interpolate + JIT; **not pinned**.
+  The adaptive controller cannot probe below that floor, but can still step
+  above it and the learned ring ceiling still caps it. With 50ms application
+  work and 50ms real interval at 120Hz, reserve=1 requests 13 slots (~108ms).
+  This is NOT a cheap, guaranteed one-slot increase over the current lead.
+  A large floor may reduce real FPS or exhaust the capture ring. Keep
+  LEAD_RESERVE disabled until the diagnostics justify trying it.
+- DIAGNOSTICS: log successful-runtime-submission, distinct, non-exact JIT
+  writes classified by their *chosen synthesis mode*: smoothInterp and
+  smoothPredict. smoothOther covers other successful JIT slot submissions,
+  including copies/repeats/fallback paths and no-layer slots. The invariant
+  is smoothInterp + smoothPredict + smoothOther = smoothSubmitted.
+  smoothEndGapMs is median/p95 of wall-clock gaps between successful JIT
+  xrEndFrame **returns**, not deadlines or headset panel scanout. The labels
+  do not guarantee optical correctness or that SteamVR actually displayed
+  each image. Existing outputFps, distinctFps, repeatedFrames, covers,
+  unready, staleMotion, runtimeHalved and ringExhausted remain essential.
 
 20 real FPS on 120 Hz ideally means 20 real + 100 synthetic FPS, five
 interpolated frames between real A/G at 1/6, 2/6, 3/6, 4/6, 5/6.
