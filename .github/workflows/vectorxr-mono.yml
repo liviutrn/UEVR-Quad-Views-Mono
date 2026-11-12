@@ -83,7 +83,7 @@ jobs:
           Copy-Item workspace/vectorxr_mono/* $out/source/
           @'
           VECTORXR 0.20.1 + MONO FRAME GENERATION - PERSONAL TEST BUILD (not an official VectorXR release)
-          Built from DienerTech/vectorxr 87e575f (tag v0.20.1, MPL-2.0) + the patch in vectorxr-mono.patch / source/.
+          Built from DienerTech/vectorxr 8fffa72 (tag v0.20.1, MPL-2.0) + the patch in vectorxr-mono.patch / source/.
           Unsigned. Personal use only. HEADSET UNVERIFIED.
 
           WHAT IT DOES
@@ -93,7 +93,9 @@ jobs:
           Mono should reduce FG work and memory, but the size of that gain has not yet been measured.
           It starts after 45 shared-image frames and stops at the first nonmatching submission.
           Normal stereo remains the stock VectorXR path.
-          Stock expanded/compact FG HUD rows end with MONO or STEREO while the FG session is running.
+          The stock expanded FG HUD row ends with MONO or STEREO. The compact row starts with it,
+          so the indicator stays visible even when the stock status text is clipped.
+          Mono HUD status and saved view data reset on each new OpenXR session.
           Each eye keeps its own field of view, so UEVR's Mono Eye Alignment (-1.5) is kept on every frame.
           Log lines in VectorXR's log: "Mono Frame Generation started / stopped / ... frames generated from one view".
           To switch it off without uninstalling: set the Windows environment variable VECTORXR_MONO_FRAMEGEN=0.
