@@ -5,6 +5,7 @@ The v208d source tree remains pinned and unmodified; use the CI working tree.
 """
 from pathlib import Path
 import argparse
+import re
 import subprocess
 import tempfile
 import sys
@@ -27,6 +28,13 @@ def main():
         ("CSMonoB40","cs_5_0","native_b40_compute_bytecode","DuoViewNativeCompositeRaster.hlsl",True),
     )
     if args.m1:
+        # Stage 2–4 already compiled the exact pinned v208d shader before overlays.
+        original = args.output.read_text(encoding="utf-8")
+        legacy = re.search(r"inline constexpr unsigned char pixel_shader_bytecode\[\] = \{.*?\};",
+                           original, re.DOTALL)
+        if legacy is None:
+            raise RuntimeError("Pinned v208d packed raster bytecode missing")
+        results.append(legacy.group().replace("pixel_shader_bytecode", "legacy_packed_pixel_bytecode", 1) + "\n")
         # The two original WARP fixtures both remove the device in the
         # independent atlas shader. Reuse the Native entry and only specialize
         # source coordinates for the packed texture.

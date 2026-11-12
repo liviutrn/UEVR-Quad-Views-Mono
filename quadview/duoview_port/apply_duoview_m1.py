@@ -127,7 +127,7 @@ def patch_compositor(vr):
     bool last_stereo_depth() const { return last_stereo_output_ && m1_.rows!=0; }
     bool last_native_direct_xr() const"""),
         ("release M1 resources on slot rebuild", "        b40_warning_.clear();",
-         "        b40_warning_.clear();\n        m1_={};"),
+         "        b40_warning_.clear();\n        legacy_packed_pipeline_.Reset();\n        m1_={};"),
         ("M1 SRV count", "        range.NumDescriptors = 3;", "        range.NumDescriptors = 4;"),
         ("M1 root ranges", "        D3D12_ROOT_PARAMETER params[4]{};",
          """        D3D12_DESCRIPTOR_RANGE m1_raw_range{};
@@ -177,8 +177,20 @@ def patch_compositor(vr):
         soft_uav.Format=DXGI_FORMAT_R32_FLOAT;
         soft_uav.ViewDimension=D3D12_UAV_DIMENSION_TEXTURE2D;
         device->CreateUnorderedAccessView(m1_.soft_depth.Get(),nullptr,&soft_uav,desc_cpu);"""),
+        ("pinned packed raster for plain Mono",
+         "        cmd->SetPipelineState(pipeline_.Get());",
+         """        const bool packed_effects=b40_active || frame.settings.focus_lift_enabled ||
+            frame.settings.sharpen_strength>0.f;
+        cmd->SetPipelineState(packed_effects ? pipeline_.Get() : legacy_packed_pipeline_.Get());"""),
+        ("build pinned packed raster PSO",
+         '        graphics.PS = {native_pixel_shader_bytecode, sizeof(native_pixel_shader_bytecode)};',
+         """        graphics.PS = {legacy_packed_pixel_bytecode, sizeof(legacy_packed_pixel_bytecode)};
+        if (!check(device->CreateGraphicsPipelineState(&graphics, IID_PPV_ARGS(&legacy_packed_pipeline_)),
+            "Create pinned packed raster PSO")) return false;
+        graphics.PS = {native_pixel_shader_bytecode, sizeof(native_pixel_shader_bytecode)};"""),
         ("M1 slot state", "    std::string b40_warning_;",
          """    std::string b40_warning_;
+    ComPtr<ID3D12PipelineState> legacy_packed_pipeline_;
     M1Resources m1_{};
     D3D12_CPU_DESCRIPTOR_HANDLE m1_raw_srv_{};
     bool last_stereo_output_{};"""),

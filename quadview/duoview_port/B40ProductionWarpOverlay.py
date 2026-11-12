@@ -154,8 +154,12 @@ def main() -> None:
         "        if (reference.empty()) reference=left;\n        else for (size_t i=0;i<left.size();++i)\n",
         "        if (reference.empty()) reference=left;\n"
         "        else if (!b40_overlay_mode && !frame.config.settings.synthetic_stereo) for (size_t i=0;i<left.size();++i)\n", 1)
+    gather = '    run(*a,true,Route::gather,"v208 shared gather fallback route");\n'
+    if source.count(gather) != 1:
+        raise SystemExit("Expected one gather route in pinned fixture")
+    source = source.replace(gather, "", 1)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(source.replace(MARKER, BLOCK + MARKER), encoding="utf-8")
+    args.output.write_text(source.replace(MARKER, BLOCK + gather + MARKER), encoding="utf-8")
     print(f"Generated {args.output}")
 
 
