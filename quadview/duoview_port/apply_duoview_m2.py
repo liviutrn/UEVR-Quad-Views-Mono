@@ -219,16 +219,29 @@ float3 GlamSharpenNativeFovea(float2 uv, float3 c) {
     ])
     patch(shaders/"DuoViewNativeCompositeRaster.hlsl",[
         ("M2 per-eye raster strength",
-         """        if (SharpenStrength > 0.0 && DebugViewMode == 0)
-            fovea.rgb = GlamSharpenNativeFovea(fullUv, fovea.rgb);""",
+         """        if (SharpenStrength > 0.0 && DebugViewMode == 0) {
+            const float3 beforeSharpen = fovea.rgb;
+            fovea.rgb = GlamSharpenNativeFovea(fullUv, fovea.rgb);
+            [branch] if ((SharpenFlags & 16u) != 0u)
+                fovea.rgb = GlamEncode(saturate(GlamDecode(fovea.rgb) +
+                                            GlamExtraWideChange(fullUv, beforeSharpen)));
+        }""",
          """#ifdef DUOVIEW_M1_RASTER
         const float fineSharpen=i.pos.x>=OutputSize.x ? M2Sharpen.y : M2Sharpen.x;
-        if (fineSharpen > 0.0 && DebugViewMode == 0)
+#else
+        const float fineSharpen=SharpenStrength;
+#endif
+        if (fineSharpen > 0.0 && DebugViewMode == 0) {
+            const float3 beforeSharpen = fovea.rgb;
+#ifdef DUOVIEW_M1_RASTER
             fovea.rgb=GlamSharpenNativeFovea(fullUv,fovea.rgb,fineSharpen);
 #else
-        if (SharpenStrength > 0.0 && DebugViewMode == 0)
-            fovea.rgb = GlamSharpenNativeFovea(fullUv, fovea.rgb);
-#endif"""),
+            fovea.rgb=GlamSharpenNativeFovea(fullUv,fovea.rgb);
+#endif
+            [branch] if ((SharpenFlags & 16u) != 0u)
+                fovea.rgb = GlamEncode(saturate(GlamDecode(fovea.rgb) +
+                                            GlamExtraWideChange(fullUv, beforeSharpen)));
+        }"""),
     ])
 
 
