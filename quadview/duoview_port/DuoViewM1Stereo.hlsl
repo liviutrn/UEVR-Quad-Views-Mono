@@ -6,6 +6,10 @@ cbuffer DuoViewM1 : register(b1) {
     uint4 M1Rect; // offset and extent in the captured NGX input
     uint4 M1Grid; // active and allocated extent
     float4 M1Filter; // slope per grid texel, inverse-depth cap
+    float4 M2Crop; // full-screen eye-local fovea crop min.xy / max.zw
+    uint4 M2FoveaRect; // high-resolution NGX depth viewport offset.xy / size.zw
+    float4 M2FoveaFlags; // independent jitter UV.xy, blend-width.z, valid.w
+    float4 M2Sharpen; // left/right fovea sharpen; linked values are identical
 };
 
 #ifdef DUOVIEW_M1_CONDITION
@@ -61,6 +65,34 @@ void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
 
 #ifdef DUOVIEW_M1_RASTER
 Texture2D<float> M1SoftDepth : register(t3);
+Texture2D<float> M2RawFoveaDepth : register(t5);
+
+// Keep fine depth at its original NGX resolution. Blend it over the conditioned
+// full-FOV periphery in the eye-local crop; never blur its entire field down to
+// M1's 1024-cell grid. Invalid/missing/stale captures have valid.w == 0.
+float M2FusedInverseDepth(float2 fullUv, float coarse) {
+    [branch] if (M2FoveaFlags.w < .5) return coarse;
+    const float2 extent = M2Crop.zw-M2Crop.xy;
+    if (any(extent <= 0.0)) return coarse;
+    const float2 local = (fullUv-M2Crop.xy)/extent;
+    if (any(local < 0.0) || any(local >= 1.0)) return coarse;
+    const float2 dimension = float2(M2FoveaRect.zw);
+    const float2 jittered = clamp(local+M2FoveaFlags.xy,
+                                 0.5/dimension,1.0-0.5/dimension);
+    const int2 pixel = int2(jittered*dimension)+int2(M2FoveaRect.xy);
+    const float z = M2RawFoveaDepth.Load(int3(pixel,0));
+    float fine = (M1Depth.z*z-M1Depth.x)/M1Depth.y;
+    if (!isfinite(fine) || fine <= 0.0) return coarse;
+    if (M1Depth.w > 0.0 && fine > M1Depth.w) {
+        const float excess=fine-M1Depth.w;
+        fine=M1Depth.w+excess/(1.0+excess/M1Depth.w);
+    }
+    fine=min(fine,M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y);
+    const float edge=min(min(local.x,local.y),min(1.0-local.x,1.0-local.y));
+    const float t=saturate(edge/max(M2FoveaFlags.z,0.0001));
+    const float feather=t*t*(3.0-2.0*t);
+    return lerp(coarse,fine,feather);
+}
 
 float2 M1PullUv(float2 eyeUv, uint eye) {
     const uint row = 3u*eye;
@@ -73,7 +105,8 @@ float2 M1PullUv(float2 eyeUv, uint eye) {
             const float2 cell = clamp((uv + M1Eye.zw) * float2(M1Grid.xy),
                                      float2(.5,.5), float2(M1Grid.xy)-.5);
             const float d = M1SoftDepth.SampleLevel(LinearClamp, cell / float2(M1Grid.zw),0);
-            uv.x = base.x + M1Eye[eye] * d;
+            const float fused = M2FusedInverseDepth(uv,d);
+            uv.x = base.x + M1Eye[eye] * fused;
         }
     }
     return saturate(uv);
