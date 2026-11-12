@@ -1,6 +1,6 @@
-name: TriView B43 + DuoView Mono v208d Phase 1
+name: TriView B43 + DuoView Mono v208d Phase 2
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B43 + DuoView v208d (${{ github.run_number }})
+run-name: TriView B43 + DuoView v208d Phase2 (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**']
@@ -265,6 +265,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B43 sharpen overlay failed' }
           python workspace/quadview/apply_liviu_defaults.py backend
           if ($LASTEXITCODE -ne 0) { throw "Liviu's standard UEVR defaults could not be applied" }
+          # Phase 2: only mode 6. Patch the exact generated v208d source *after*
+          # all existing scripts and source verification; leave TriView untouched.
+          python workspace/quadview/duoview_port/apply_duoview_phase2.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView Phase2 compositor/settings anchor failure' }
+          python workspace/quadview/duoview_port/test_duoview_phase2.py backend workspace/duoview workspace/quadview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView Phase2 generated-source contract failure' }
+          python workspace/duoview/embed_shader.py backend/src/mods/vr/DuoViewShaderSource.hpp
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView Phase2 fxc DXBC precompile failure' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -388,6 +396,7 @@ jobs:
           Copy-Item workspace/quadview/B41_NOTES.md package/B41_NOTES.md
           Copy-Item workspace/quadview/B42_NOTES.md package/B42_NOTES.md
           Copy-Item workspace/quadview/DUOVIEW_PARITY_PHASE1_NOTES.md package/DUOVIEW_PARITY_PHASE1_NOTES.md
+          Copy-Item workspace/quadview/DUOVIEW_PARITY_PHASE2_NOTES.md package/DUOVIEW_PARITY_PHASE2_NOTES.md
           Copy-Item workspace/quadview/focus_lift_calibration.json package/focus_lift_calibration.json
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
