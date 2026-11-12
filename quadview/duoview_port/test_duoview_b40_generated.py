@@ -53,7 +53,7 @@ host=require(backend/"src/mods/vr/D3D12Component.cpp",
 )
 require(backend/"src/mods/vr/DuoViewConfig.hpp",
     "float seam_ambient_radius_px{48.f}",
-    "float seam_ambient_inside_px{32.f}",
+    "seam_ambient_inside_px{32.f}",
     "uint32_t seam_time_ms{350u}",
 )
 require(backend/"src/mods/VR.cpp",
