@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Personal VectorXR 0.20.1 (DienerTech/vectorxr 87e575f, MPL-2.0) patch:
+"""Personal VectorXR 0.20.1 (DienerTech/vectorxr 8fffa72, MPL-2.0) patch:
 Frame Generation runs ONCE when both projection views show the same image.
 
 Usage: apply_vectorxr_mono.py <vectorxr checkout>
@@ -245,8 +245,9 @@ const XrFrameEndInfo* OpenXrLayer::ExpandMonoFrame(XrSession session, const XrFr
 XrResult OpenXrLayer::TraceRuntimeEndFrame(XrSession session, const XrFrameEndInfo* info) {
 ''', "definitions")
 
-# 4) Put the selected mono/stereo mode into the stock Frame Generation HUD row
-# in both expanded and compact layouts; the standard badge and FPS remain stock.
+# 4) Put the selected mono/stereo mode into the stock Frame Generation HUD row.
+# In compact mode the value is a prefix, so it cannot disappear behind the
+# stock 520 px panel's right-hand text clipping.
 replace(C,
         "    snapshot.framegen=framegen.row;\n"
         "    snapshot.compact_framegen=framegen.compact;\n"
@@ -258,9 +259,22 @@ replace(C,
         "        !framegen_off_for_toolkit_.load(std::memory_order_acquire)) {\n"
         "        const std::string eye_mode = mono_framegen_active_.load(std::memory_order_acquire) ? \"MONO\" : \"STEREO\";\n"
         "        snapshot.framegen += \"  /  \" + eye_mode;\n"
-        "        snapshot.compact_framegen += \"  /  \" + eye_mode;\n"
+        "        snapshot.compact_framegen = eye_mode + \"  /  \" + snapshot.compact_framegen;\n"
         "    }\n",
         "stock FG OSD mode")
+
+# 5) Reset the detector when a new OpenXR session starts, not just after
+# its first real submitted projection. This avoids stale HUD status or stale
+# RealViews if runtime session handles are reused during a reset/reinit.
+replace(C,
+        "void OpenXrLayer::StartFrameGen(XrSession session, const void* binding_chain, const std::string& unavailable) {\n",
+        "void OpenXrLayer::StartFrameGen(XrSession session, const void* binding_chain, const std::string& unavailable) {\n"
+        "    {\n"
+        "        std::scoped_lock mono_lock(mono_framegen_mutex_);\n"
+        "        mono_framegen_ = MonoFrameGenState{};\n"
+        "        mono_framegen_active_.store(false, std::memory_order_release);\n"
+        "    }\n",
+        "new-session detector and HUD reset")
 
 CM = "layer/CMakeLists.txt"
 replace(CM, "        set_tests_properties(depthxr_layer_load_tests PROPERTIES TIMEOUT 30)\n",
