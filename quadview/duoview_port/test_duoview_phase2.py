@@ -28,6 +28,6 @@ need(src/"DuoViewNativeCompositeRaster.hlsl",
      "DuoPhase2MatchContext", "DuoPhase2FocusLift", "GlamExtraWideChange")
 need(src/"DuoViewCompositeRaster.hlsl",
      "DuoPhase2MatchContext", "DuoPhase2FocusLift", "GlamExtraWideChange")
-need(src/"DuoViewPhase2Effects.hlsl", "confidence < .5", "SeamOptions.x < .5")
+need(src/"DuoViewPhase2Effects.hlsl", "confidence * .5", "SeamOptions.x < .5")
 need(quad/"QuadViewComposite.hlsl", "GlamSharpenRingChange", "CorrectFocusColor")
 print("Phase2 contract checks passed (the original TriView shader is kept untouched).")

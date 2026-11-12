@@ -60,8 +60,10 @@ float3 DuoPhase2MatchContext(float2 uv, float3 inputColor) {
         confidence += quality;
     }
     // No plausible border samples -> neutral, NOT last frame's stale gain.
-    [branch] if (confidence < .5) return inputColor;
-    const float3 gain = lerp(float3(1.0,1.0,1.0), gainSum / confidence, SeamOptions.y);
+    [branch] if (confidence <= .001) return inputColor;
+    // Soft confidence avoids the hard 0.5 threshold popping on dynamic edges.
+    const float weight = SeamOptions.y * saturate(confidence * .5);
+    const float3 gain = lerp(float3(1.0,1.0,1.0), gainSum / confidence, weight);
     const float falloff = 1.0 - smoothstep(0.0, max(SeamGeometry.x, 1.0), outerDistance);
     return max(inputColor * lerp(float3(1.0,1.0,1.0), gain, falloff), 0.0);
 }
