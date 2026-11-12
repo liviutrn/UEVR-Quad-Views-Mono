@@ -19,7 +19,7 @@ need(root/"src/mods/VR.cpp",
      "m_duo_seam_match->draw", ".seam_match_enabled=m_duo_seam_match->value()",
      "current.seam_match_enabled==candidate.seam_match_enabled")
 need(root/"src/mods/vr/DuoViewD3D12.hpp",
-     "static_assert(sizeof(ShaderConstants) == 184)",
+     "static_assert(sizeof(ShaderConstants) == 192)",
      "!frame.config.settings.seam_match_enabled",
      "frame.config.settings.seam_color_strength",
      "frame.settings.seam_color_strength")

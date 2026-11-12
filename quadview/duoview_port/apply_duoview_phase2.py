@@ -180,18 +180,19 @@ def main():
                 frame.config.settings.seam_strength, frame.config.settings.seam_limit, 0.f},
             {frame.config.settings.seam_reach_px, frame.config.settings.seam_inward_px,
                 frame.config.settings.seam_color_strength, 0.f}"""
-    # FocusProfile separated from FocusLift to match original B31 center/radial
-    # behavior; 4 float4 structs add 64 bytes => 184B / 46 root DWORDs.
+    # HLSL packs float4 on 16-byte boundaries: 8B pad after flags.
+    # 120B original + 8B pad + 4*16B arrays => 192B / 48 root DWORDs.
     edits(dx, [
         ("shader constant fields",
          "    uint32_t sharpen_flags;\n};\nstatic_assert(sizeof(ShaderConstants) == 120);",
          """    uint32_t sharpen_flags;
+    uint32_t cbuffer_align[2]; // HLSL float4 registers start at 16-byte boundary
     float focus_lift[4];
     float focus_profile[4];
     float seam_options[4];
     float seam_geometry[4];
 };
-static_assert(sizeof(ShaderConstants) == 184);
+static_assert(sizeof(ShaderConstants) == 192);
 static_assert(sizeof(ShaderConstants)/4 <= 64); // D3D12 root DWORD budget"""),
         ("direct xr avoid double apply",
          "            frame.config.settings.sharpen_strength <= 0.0f &&",
@@ -202,6 +203,7 @@ static_assert(sizeof(ShaderConstants)/4 <= 64); // D3D12 root DWORD budget"""),
          "                (frame.config.settings.sharp_periphery ? 8u : 0u) // v207 Catmull-Rom periphery\n        };",
          """                (frame.config.settings.sharp_periphery ? 8u : 0u) | // v207 Catmull-Rom periphery
                 (frame.config.settings.sharpen_wide ? 16u : 0u),
+            {0u,0u},
             """+focus_constants+"""
         };"""),
         ("gather constants", "            frame.settings.debug_border ? 1u : 0u, frame.settings.diagnostic_view, 0.f};",
@@ -209,6 +211,7 @@ static_assert(sizeof(ShaderConstants)/4 <= 64); // D3D12 root DWORD budget"""),
             {0u,0u}, {0u,0u}, {0u,0u},
             frame.settings.sharpen_strength, frame.settings.sharpen_max_change, .02f,
             3u | (srgb ? 0u : 4u) | (frame.settings.sharpen_wide ? 16u : 0u),
+            {0u,0u}, // HLSL cbuffer float4 alignment
             {frame.settings.focus_lift_enabled ? 1.f : 0.f,
                 frame.settings.focus_brightness, frame.settings.focus_corner_gain, frame.settings.focus_onset},
             {frame.settings.focus_power, 0.f, 0.f, 0.f},
@@ -284,6 +287,8 @@ float3 DuoReadContext(float2 uv) {
     return PeripheralNativeSource.SampleLevel(LinearClamp, NativeSampleUV(uv, PeripheralRect.zw, NativePeripheryDimensions), 0.0).rgb;
 }
 #include "DuoViewPhase2Effects.hlsl" """.rstrip()),
+        ("native mutable periphery", "    const float4 periphery = (SharpenFlags & 8u) != 0u",
+         "    float4 periphery = (SharpenFlags & 8u) != 0u"),
         ("native context correction",
          "    float4 result = DebugViewMode == 2 ? float4(.04,.04,.04,1) : periphery;",
          """    if (DebugViewMode == 0 && weight < 1.0 && SeamOptions.x > .5)

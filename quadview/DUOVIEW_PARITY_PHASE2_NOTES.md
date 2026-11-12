@@ -21,6 +21,6 @@ The Mono seam is NOT a byte-for-byte port of TriView's B40 temporal depth-aware 
 ## Validation gates
 - Phase2 guarded source anchor application and code-contract checks; HLSL DXBC compiled by fxc.exe in CI for both native+fallback raster, no live compiler.
 - Original pinned DuoView C++/WARP test suite, existing TriView CPU/GPU WARP tests, native Joey backend and UEVR compatibility suite.
-- Config/constant layout changes must compile in native DX12 backend; root constant count 46 DWORDs (under 64 DWORD budget).
+- Config/constant layout changes must compile in native DX12 backend; root constant count 48 DWORDs (under 64 DWORD budget).
 - GPU time and stability are not validated by CI. Never claim successful headset behavior without user's tests.
 - ≤3 headset questions: (1) mode6 stability + sharpen/anti-vignette correct? (2) seam visual behaviour/flicker at near crop edge? (3) ID7 looks/performs unchanged?
