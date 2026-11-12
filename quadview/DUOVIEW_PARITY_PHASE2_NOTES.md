@@ -10,7 +10,7 @@ Date: 2026-11-12. CI validation and headset validation tracked separately.
 
 ## Phase 2 behavior
 1. Sharpen: DuoView Glamarye strength slider 0–20 (previously 0–5), max change 0.05–0.80 (previously up to .30); opt-in extra-wide 2x radius + 7px FXAA guard ring, in the ID6 fovea only. The original sharpen strength/default is preserved; extra-wide OFF by default.
-2. Anti-vignette: opt-in brightness-only radial focus lift from B31 logic: uniform brightness, corner gain, normalized onset, radial power; center remains neutral when brightness = 1.00 and radial threshold not exceeded. Default OFF.
+2. Anti-vignette: opt-in brightness-only radial focus lift from B31 logic: uniform brightness, corner gain, normalized onset, radial power; center remains neutral when brightness = 1.00 and radial threshold not exceeded. Default OFF, but enabling it immediately uses the measured B31 preset (14.8% corner lift, radial onset 0.4694, power 0.924, neutral center).
 3. Mono seam: opt-in local automatic colour/brightness matching in 4 spatial probe groups. Rejects black and strongly mismatching edge samples, clamps gain, fades the correction only across configurable OUTWARD region; configurable INWARD feather preserves genuine fovea pixels (no fake stretched fovea). No history resets, no temporal accumulation or allocations. Default OFF.
 4. Consistent ID6 compatible Native and fallback gathered raster outputs: identical knobs and helper shader, same root constant layout; no effects in TriView.
 5. Conservative Direct XR guard: disables the two-half direct raster when sharpen or focus/seam corrections enabled, so mode6 composes once then copies twice; avoids doing neural-independent appearance work twice.

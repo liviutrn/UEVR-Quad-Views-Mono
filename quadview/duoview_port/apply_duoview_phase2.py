@@ -37,7 +37,7 @@ def main():
         ("settings fields", "    bool debug_border{};",
          """    bool sharpen_wide{};
     bool focus_lift_enabled{};
-    float focus_brightness{1.f}, focus_corner_gain{}, focus_onset{.35f}, focus_power{2.f};
+    float focus_brightness{1.f}, focus_corner_gain{.148f}, focus_onset{.4694f}, focus_power{.924f};
     bool seam_match_enabled{};
     float seam_strength{.75f}, seam_limit{.25f}, seam_reach_px{80.f};
     float seam_inward_px{64.f}, seam_color_strength{};
@@ -91,9 +91,9 @@ def main():
     const ModToggle::Ptr m_duo_sharpen_wide{ModToggle::create(generate_name("DuoViewGlamaryeExtraWide"), false)};
     const ModToggle::Ptr m_duo_focus_lift{ModToggle::create(generate_name("DuoViewFocusLift"), false)};
     const ModSlider::Ptr m_duo_focus_brightness{ModSlider::create(generate_name("DuoViewFocusBrightness"), .5f, 1.5f, 1.f)};
-    const ModSlider::Ptr m_duo_focus_corner{ModSlider::create(generate_name("DuoViewFocusCornerGain"), 0.f, .7f, 0.f)};
-    const ModSlider::Ptr m_duo_focus_onset{ModSlider::create(generate_name("DuoViewFocusLiftOnset"), 0.f, .85f, .35f)};
-    const ModSlider::Ptr m_duo_focus_power{ModSlider::create(generate_name("DuoViewFocusLiftPower"), .5f, 5.f, 2.f)};
+    const ModSlider::Ptr m_duo_focus_corner{ModSlider::create(generate_name("DuoViewFocusCornerGain"), 0.f, .7f, .148f)};
+    const ModSlider::Ptr m_duo_focus_onset{ModSlider::create(generate_name("DuoViewFocusLiftOnset"), 0.f, .85f, .4694f)};
+    const ModSlider::Ptr m_duo_focus_power{ModSlider::create(generate_name("DuoViewFocusLiftPower"), .5f, 5.f, .924f)};
     const ModToggle::Ptr m_duo_seam_match{ModToggle::create(generate_name("DuoViewSeamMatch"), false)};
     const ModSlider::Ptr m_duo_seam_strength{ModSlider::create(generate_name("DuoViewSeamStrength"), 0.f, 1.f, .75f)};
     const ModSlider::Ptr m_duo_seam_limit{ModSlider::create(generate_name("DuoViewSeamMaxGain"), 0.f, .5f, .25f)};
@@ -111,8 +111,8 @@ def main():
         ("reset controls", "m_duo_sharpen_max->value()=.10f;",
          """m_duo_sharpen_max->value()=.10f;
                     m_duo_sharpen_wide->value()=false; m_duo_focus_lift->value()=false;
-                    m_duo_focus_brightness->value()=1.f; m_duo_focus_corner->value()=0.f;
-                    m_duo_focus_onset->value()=.35f; m_duo_focus_power->value()=2.f;
+                    m_duo_focus_brightness->value()=1.f; m_duo_focus_corner->value()=.148f;
+                    m_duo_focus_onset->value()=.4694f; m_duo_focus_power->value()=.924f;
                     m_duo_seam_match->value()=false; m_duo_seam_strength->value()=.75f;
                     m_duo_seam_limit->value()=.25f; m_duo_seam_reach->value()=80.f;
                     m_duo_seam_inward->value()=64.f; m_duo_seam_color->value()=0.f;"""),
