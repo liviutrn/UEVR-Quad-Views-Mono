@@ -1,9 +1,9 @@
-name: TriView B43 + DuoView Mono B40 Temporal Seam
+name: TriView B43 + DuoView Mono M1
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B43 + DuoView B40 Mono (${{ github.run_number }})
+run-name: TriView B43 + DuoView Mono M1 (${{ github.run_number }})
 on:
   push:
-    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**']
+    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**']
     paths: ['.github/workflows/triview-b1.yml', 'quadview/**']
   workflow_dispatch:
 permissions:
@@ -280,8 +280,15 @@ jobs:
           python workspace/quadview/duoview_port/test_duoview_b40_generated.py backend workspace/duoview workspace/quadview
           if ($LASTEXITCODE -ne 0) { throw 'Mono B40 generated implementation contracts failed' }
           # Five actual fxc shaders: VS, native/gather PS and native/gather CS.
-          python workspace/quadview/duoview_port/embed_duoview_b40.py workspace/duoview backend/src/mods/vr/DuoViewShaderSource.hpp
+          python workspace/quadview/duoview_port/apply_duoview_m1.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView M1 compositor and submission overlay failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m1_depth.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView M1 depth capture overlay failed' }
+          python workspace/quadview/duoview_port/embed_duoview_b40.py workspace/duoview backend/src/mods/vr/DuoViewShaderSource.hpp --m1
           if ($LASTEXITCODE -ne 0) { throw 'Mono B40 offline pixel/compute FXC compilation failed' }
+          # The independent DuoView tests compile the pinned v208d raster shaders with their original C++.
+          git -C workspace restore -- duoview
+          if ($LASTEXITCODE -ne 0) { throw 'Could not restore pinned DuoView test inputs' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -301,6 +308,18 @@ jobs:
           ctest --test-dir quad_tests -C Release --verbose --output-on-failure --no-tests=error -E '^quadview-edge-v2-production-gpu$' *> evidence/quad-results.log
           $code=$LASTEXITCODE; Get-Content evidence/quad-results.log
           if ($code -ne 0) { throw 'QuadView CPU/asynchronous/GPU tests failed' }
+      - name: Run the generated DuoView B40 and M1 GPU regression fixture
+        shell: pwsh
+        run: |
+          cmake -S workspace/quadview/duoview_port -B duo_b40_tests -G 'Visual Studio 17 2022' -A x64 "-DJOYEY_BACKEND_DIR=$((Resolve-Path backend).Path)" *> evidence/duo-b40-config.log
+          $code=$LASTEXITCODE; Get-Content evidence/duo-b40-config.log
+          if ($code -ne 0) { throw 'Generated DuoView GPU fixture configuration failed' }
+          cmake --build duo_b40_tests --config Release *> evidence/duo-b40-build.log
+          $code=$LASTEXITCODE; Get-Content evidence/duo-b40-build.log
+          if ($code -ne 0) { throw 'Generated DuoView GPU fixture build failed' }
+          ctest --test-dir duo_b40_tests -C Release --output-on-failure --no-tests=error *> evidence/duo-b40-results.log
+          $code=$LASTEXITCODE; Get-Content evidence/duo-b40-results.log
+          if ($code -ne 0) { throw 'Generated DuoView GPU fixture failed' }
       - name: Verify pinned production geometry and pair-state contracts
         shell: pwsh
         run: |
@@ -363,7 +382,7 @@ jobs:
           dotnet publish frontend/UEVR/UEVR.csproj --output package --configuration Release *> evidence/frontend-build.log
           $code=$LASTEXITCODE; Get-Content evidence/frontend-build.log | Select-Object -Last 60
           if ($code -ne 0) { throw 'Matching original frontend failed to compile' }
-      - name: Verify legacy TriView Edge V2 GPU regression (documented WARP flake)
+      - name: Verify legacy TriView Edge V2 GPU regression
         shell: pwsh
         run: |
           # quadview-edge-v2-production-gpu is a documented WARP timing flake ("temporal=40 instant=40",
@@ -474,16 +493,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-B40Mono-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-M1-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-B40Mono-${{ github.run_number }}
+          name: UEVR-DuoView-M1-${{ github.run_number }}
           path: |
-            UEVR-TriView-B43-*.zip
-            UEVR-TriView-B43-*.zip.sha256
+            UEVR-DuoView-M1-*.zip
+            UEVR-DuoView-M1-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
@@ -553,6 +572,12 @@ jobs:
           python3 -m unittest discover -s quadview -p test_quadview_hook_trace_summary.py -v
           # Original Build182 manifest is superseded by pinned complete v208d tree.
           test "$(git rev-parse HEAD:duoview)" = "3d5593a82ac13532989420b2e356b17602b1098b"
+      - name: Validate M1 camera geometry and pull warp with ASan and UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -I quadview quadview/duoview_port/DuoViewStereoGeometryTests.cpp -o sanitizer-evidence/DuoViewStereoGeometryTests
+          sanitizer-evidence/DuoViewStereoGeometryTests | tee sanitizer-evidence/DuoViewStereoGeometryTests.log
       - name: Validate Mono B40 grouped temporal math with ASan and UBSan
         shell: bash
         run: |

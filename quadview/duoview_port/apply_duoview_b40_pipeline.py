@@ -52,7 +52,8 @@ struct B40MonoHistory {
 };
 """
     dispatch="""
-    static uint32_t b40_timestamp_ms() {
+    uint32_t b40_timestamp_ms() const {
+        if (b40_test_timestamp_ms_) return b40_test_timestamp_ms_;
         return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
     }
@@ -101,7 +102,9 @@ struct B40MonoHistory {
          "    void set_b40_history(std::shared_ptr<B40MonoHistory> state) {\n"
          "        // Never allocate or destroy GPU history on the XR frame callback.\n"
          "        b40_history_=std::move(state);\n"
-         "    }"),
+         "    }\n"
+         "    void set_b40_test_timestamp_ms(uint32_t stamp) { b40_test_timestamp_ms_=stamp; }\n"
+         "    const std::string& b40_warning() const { return b40_warning_; }"),
         ("gather b40 active",
          "        ShaderConstants constants{\n            {l.atlas_width / 2, l.atlas_height},",
          "        const bool b40_active=frame.settings.seam_match_enabled && b40_ready();\n"
@@ -164,12 +167,13 @@ struct B40MonoHistory {
         ("no in-frame pipeline recreation",
          "if (device_.Get() == device && output_ && pipeline_ && native_pipeline_ && root_ && srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;",
          "if (device_.Get() == device && output_ && pipeline_ && native_pipeline_ &&\n"
-         "            b40_native_pipeline_ && b40_gather_pipeline_ && b40_stats_ && root_ &&\n"
+         "            root_ &&\n"
          "            srv_ && rtv_ && width == width_ && height == height_ && srgb == srgb_) return true;"),
         ("B40 resources owned by prewarm",
          "output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset(); root_.Reset(); srv_.Reset(); rtv_.Reset();",
          "output_.Reset(); atlas_.Reset(); pipeline_.Reset(); native_pipeline_.Reset();\n"
          "        b40_native_pipeline_.Reset(); b40_gather_pipeline_.Reset(); b40_stats_.Reset();\n"
+         "        b40_warning_.clear();\n"
          "        root_.Reset(); srv_.Reset(); rtv_.Reset();"),
         ("three SRV descriptors", "range.NumDescriptors = 2;",
          "range.NumDescriptors = 3; // t0 fovea, t1 periphery, t2 B40 32-knot stats"),
@@ -205,9 +209,9 @@ struct B40MonoHistory {
          '        D3D12_COMPUTE_PIPELINE_STATE_DESC compute{};\n'
          '        compute.pRootSignature=root_.Get();\n'
          '        compute.CS={gather_b40_compute_bytecode,sizeof(gather_b40_compute_bytecode)};\n'
-         '        if (!check(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&b40_gather_pipeline_)),"Create B40 gather compute PSO")) return false;\n'
+         '        if (!check(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&b40_gather_pipeline_)),"Create B40 gather compute PSO")) b40_warning_=std::move(error_);\n'
          '        compute.CS={native_b40_compute_bytecode,sizeof(native_b40_compute_bytecode)};\n'
-         '        if (!check(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&b40_native_pipeline_)),"Create B40 Native compute PSO")) return false;'),
+         '        if (!check(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&b40_native_pipeline_)),"Create B40 Native compute PSO")) b40_warning_=std::move(error_);'),
         ("prewarm stats alloc before heaps",
          '        D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.NumDescriptors = 2; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;',
          '        // Per-fenced-slot analysis output; queue-owned EMA lives separately.\n'
@@ -218,7 +222,7 @@ struct B40MonoHistory {
          '        stats.SampleDesc.Count=1; stats.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;\n'
          '        stats.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;\n'
          '        if (!check(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&stats,\n'
-         '            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,nullptr,IID_PPV_ARGS(&b40_stats_)),"Create B40 slot stats")) return false;\n'
+         '            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,nullptr,IID_PPV_ARGS(&b40_stats_)),"Create B40 slot stats")) b40_warning_=std::move(error_);\n'
          '        D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.NumDescriptors = 2; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;'),
         ("4 heap descriptors",
          "hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; hd.NumDescriptors = 2;",
@@ -247,7 +251,9 @@ struct B40MonoHistory {
          "    ComPtr<ID3D12RootSignature> root_;\n"
          "    ComPtr<ID3D12PipelineState> pipeline_, native_pipeline_, b40_native_pipeline_, b40_gather_pipeline_;\n"
          "    ComPtr<ID3D12Resource> b40_stats_;\n"
-         "    std::shared_ptr<B40MonoHistory> b40_history_{};"),
+         "    std::shared_ptr<B40MonoHistory> b40_history_{};\n"
+         "    uint32_t b40_test_timestamp_ms_{};\n"
+         "    std::string b40_warning_;"),
     ])
     # Add one shared queue-owned history pointer at the OpenXR runtime owner,
     # never inside an individual frame's temporary C++ stack state.
@@ -260,6 +266,17 @@ struct B40MonoHistory {
     ])
     cpp=root/"src/mods/vr/D3D12Component.cpp"
     patch(cpp,[
+        ("retire activation slot before changing GPU resources",
+         '                if (!tc) continue;\n'
+         '                auto& comp = m_openxr.duoview_compositors[&tc->commands];',
+         '                if (!tc || !tc->commands.references_retired()) continue;\n'
+         '                auto& comp = m_openxr.duoview_compositors[&tc->commands];'),
+        ("log fallback after swapchain prewarm",
+         '            log_duoview_compose_sharing(this->duoview_compositors);',
+         '            for (const auto& [commands, comp] : this->duoview_compositors) {\n'
+         '                if (comp && !comp->b40_warning().empty()) spdlog::warn("[DuoView][B40] Seam unavailable: {}",comp->b40_warning());\n'
+         '            }\n'
+         '            log_duoview_compose_sharing(this->duoview_compositors);'),
         ("activation queue history before slots",
          '            const bool srgb = false; // Existing Joey BGRA8 UNORM render source.\n'
          '            uint32_t prepared = 0;',
@@ -277,6 +294,7 @@ struct B40MonoHistory {
          '                    ++prepared;',
          '                if (comp->prewarm(device, vr->get_hmd_width(), vr->get_hmd_height(), srgb, frequency)) {\n'
          '                    comp->set_b40_history(m_openxr.duoview_b40_history);\n'
+         '                    if (!comp->b40_warning().empty()) spdlog::warn("[DuoView][B40] Seam unavailable: {}",comp->b40_warning());\n'
          '                    ++prepared;\n'
          '                }'),
         ("retire history only after all command slots",
@@ -306,6 +324,7 @@ struct B40MonoHistory {
         ("enforce queue identity in live callback (never alloc)",
          '                                    auto& compositor = *found->second;\n'
          '                                    recorded = compositor.record_native(device, commands.cmd_list.Get(),',
+         '                                    if (!commands.references_retired()) return;\n'
          '                                    auto& compositor = *found->second;\n'
          '                                    const auto current_queue=g_framework->get_d3d12_hook()->get_command_queue();\n'
          '                                    const bool queue_pinned=current_queue && m_openxr.duoview_b40_history &&\n'
@@ -313,6 +332,7 @@ struct B40MonoHistory {
          '                                        m_openxr.duoview_b40_history->queue.Get()==current_queue;\n'
          '                                    // Fail closed if the queue changes; never share history across queues.\n'
          '                                    compositor.set_b40_history(queue_pinned ? m_openxr.duoview_b40_history : nullptr);\n'
+         '                                    if (queue_pinned) commands.seam_submission_queue=current_queue;\n'
          '                                    recorded = compositor.record_native(device, commands.cmd_list.Get(),'),
     ])
     print("B40 queue-owned GPU history/PSOs/compute + Native/gather command slots patched; mode7 untouched")

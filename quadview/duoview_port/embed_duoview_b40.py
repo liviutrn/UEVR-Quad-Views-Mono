@@ -13,6 +13,7 @@ def main():
     a=argparse.ArgumentParser()
     a.add_argument("source", type=Path)
     a.add_argument("output", type=Path)
+    a.add_argument("--m1", action="store_true")
     args=a.parse_args()
     sys.path.insert(0,str(args.source))
     from embed_shader import fxc_executable, format_array
@@ -25,12 +26,27 @@ def main():
         ("CSMonoB40","cs_5_0","gather_b40_compute_bytecode","DuoViewCompositeRaster.hlsl",True),
         ("CSMonoB40","cs_5_0","native_b40_compute_bytecode","DuoViewNativeCompositeRaster.hlsl",True),
     )
+    if args.m1:
+        # The two original WARP fixtures both remove the device in the
+        # independent atlas shader. Reuse the Native entry and only specialize
+        # source coordinates for the packed texture.
+        shaders=(
+            shaders[0],
+            ("PSNativeMain","ps_5_0","pixel_shader_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_ATLAS_GATHER",)),
+            shaders[2],
+            ("CSMonoB40","cs_5_0","gather_b40_compute_bytecode","DuoViewNativeCompositeRaster.hlsl",
+             ("DUOVIEW_ATLAS_GATHER","DUOVIEW_B40_COMPUTE")),
+            shaders[4],
+            ("PSNativeMain","ps_5_0","m1_raster_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_M1_RASTER",)),
+            ("CSConditionM1","cs_5_0","m1_condition_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
+        )
     with tempfile.TemporaryDirectory(prefix="duoview-b40-") as temp:
-        for entry,profile,name,source,is_compute in shaders:
+        for entry,profile,name,source,define in shaders:
             output=Path(temp)/(name+".cso")
             cmd=[str(fxc),"/nologo","/O3","/T",profile,"/E",entry,
                  "/I",str(args.source),"/Fo",str(output)]
-            if is_compute: cmd+=["/D","DUOVIEW_B40_COMPUTE=1"]
+            for macro in (("DUOVIEW_B40_COMPUTE",) if define is True else define or ()):
+                cmd+=["/D",macro+"=1"]
             cmd+=[str(args.source/source)]
             run=subprocess.run(cmd,capture_output=True,text=True)
             if run.returncode:
