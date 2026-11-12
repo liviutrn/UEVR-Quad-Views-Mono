@@ -1,5 +1,5 @@
 name: VectorXR Mono Frame Generation (personal build)
-run-name: VectorXR 0.20.0 + mono frame generation (${{ github.run_number }})
+run-name: VectorXR 0.20.1 + mono frame generation (${{ github.run_number }})
 on:
   push:
     branches:
@@ -19,11 +19,11 @@ jobs:
         with:
           path: workspace
           persist-credentials: false
-      - name: Check out VectorXR 0.20.0 (DienerTech/vectorxr, MPL-2.0)
+      - name: Check out VectorXR 0.20.1 (DienerTech/vectorxr, MPL-2.0)
         uses: actions/checkout@v4
         with:
           repository: DienerTech/vectorxr
-          ref: 87e575fb21cde8ad9ef87763c67471b7d0b7ee0a
+          ref: 8fffa72e99be8ab1e39457c7353faeb1218ac83f
           path: vectorxr
           persist-credentials: false
       - name: Check out VectorXR's pinned vcpkg registry
@@ -47,9 +47,9 @@ jobs:
         shell: pwsh
         run: |
           $head = git -C vectorxr rev-parse HEAD
-          if ($head -ne '87e575fb21cde8ad9ef87763c67471b7d0b7ee0a') { throw "Unexpected VectorXR commit $head" }
+          if ($head -ne '8fffa72e99be8ab1e39457c7353faeb1218ac83f') { throw "Unexpected VectorXR commit $head" }
           python workspace/vectorxr_mono/apply_vectorxr_mono.py vectorxr
-          if ($LASTEXITCODE -ne 0) { throw 'Mono patch anchors did not match VectorXR 0.20.0' }
+          if ($LASTEXITCODE -ne 0) { throw 'Mono patch anchors did not match VectorXR 0.20.1' }
           New-Item -ItemType Directory evidence -Force | Out-Null
           git -C vectorxr add -N layer/include/depthxr/mono_framegen.h layer/tests/mono_framegen_tests.cpp
           git -C vectorxr diff | Set-Content -Encoding utf8 evidence/vectorxr-mono.patch
@@ -82,14 +82,18 @@ jobs:
           New-Item -ItemType Directory $out/source -Force | Out-Null
           Copy-Item workspace/vectorxr_mono/* $out/source/
           @'
-          VECTORXR 0.20.0 + MONO FRAME GENERATION - PERSONAL TEST BUILD (not an official VectorXR release)
-          Built from DienerTech/vectorxr 87e575f (tag v0.20.0, MPL-2.0) + the patch in vectorxr-mono.patch / source/.
+          VECTORXR 0.20.1 + MONO FRAME GENERATION - PERSONAL TEST BUILD (not an official VectorXR release)
+          Built from DienerTech/vectorxr 87e575f (tag v0.20.1, MPL-2.0) + the patch in vectorxr-mono.patch / source/.
           Unsigned. Personal use only. HEADSET UNVERIFIED.
 
           WHAT IT DOES
-          When both eyes of the game show the SAME image (DuoView v208 with "Same image for both eyes" ON),
-          frame generation runs once instead of once per eye: about half of VectorXR's video memory and GPU time.
-          It starts by itself after ~45 frames and stops at once if the eyes ever differ (normal stereo still works).
+          Mono activates only when both OpenXR views reference the SAME swapchain, array slice and rectangle.
+          Once enabled, Frame Generation processes one view and mirrors the output to both eyes.
+          This is NOT a pixel comparison: separate swapchain images containing identical pixels stay STEREO.
+          Mono should reduce FG work and memory, but the size of that gain has not yet been measured.
+          It starts after 45 shared-image frames and stops at the first nonmatching submission.
+          Normal stereo remains the stock VectorXR path.
+          Stock expanded/compact FG HUD rows end with MONO or STEREO while the FG session is running.
           Each eye keeps its own field of view, so UEVR's Mono Eye Alignment (-1.5) is kept on every frame.
           Log lines in VectorXR's log: "Mono Frame Generation started / stopped / ... frames generated from one view".
           To switch it off without uninstalling: set the Windows environment variable VECTORXR_MONO_FRAMEGEN=0.
@@ -103,15 +107,16 @@ jobs:
           4. Turn off VectorXR auto-update, or re-copy this DLL after an update.
           UNDO: delete the new DLL and rename the .bak back.
 
-          This requires your installed VectorXR app to be version 0.20.0.
+          This requires your installed VectorXR app to be version 0.20.1.
+          Base commit: 8fffa72e99be8ab1e39457c7353faeb1218ac83f (DienerTech/vectorxr).
           '@ | Set-Content $out/READ_FIRST.txt
           Get-ChildItem $out -Recurse -File | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize | Out-String | Set-Content evidence/package-sha256.txt
-          $zip = "VectorXR-0.20.0-Mono-FrameGen-${{ github.run_number }}.zip"
+          $zip = "VectorXR-0.20.1-Mono-FrameGen-${{ github.run_number }}.zip"
           Compress-Archive -Path $out/* -DestinationPath $zip -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: VectorXR-0.20.0-Mono-FrameGen-${{ github.run_number }}
-          path: VectorXR-0.20.0-Mono-FrameGen-*.zip
+          name: VectorXR-0.20.1-Mono-FrameGen-${{ github.run_number }}
+          path: VectorXR-0.20.1-Mono-FrameGen-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Run VectorXR's full layer test suite (regression check)
