@@ -277,6 +277,8 @@ float3 GlamExtraWideChange(float2 uv, float3 original) {
     glam.write_text(glam.read_text(encoding="utf-8") + wide, encoding="utf-8", newline="\n")
     native = src / "DuoViewNativeCompositeRaster.hlsl"
     edits(native, [
+        ("native guard define", '#include "DuoViewCompositeRaster.hlsl"',
+         '#define DUOVIEW_NATIVE_RASTER 1\n#include "DuoViewCompositeRaster.hlsl"'),
         ("native helper insertion", "#include \"DuoViewGlamaryeFovea.hlsl\"",
          """#include "DuoViewGlamaryeFovea.hlsl"
 float3 DuoReadFocus(float2 uv) {
@@ -309,7 +311,8 @@ float3 DuoReadContext(float2 uv) {
     raster = src / "DuoViewCompositeRaster.hlsl"
     edits(raster, [
         ("gather helper insertion", "float4 PSMain(VertexOut i) : SV_TARGET0 {",
-         """// This fallback needs the SAME fused appearance controls as native mode.
+         """#ifndef DUOVIEW_NATIVE_RASTER
+// This fallback needs the SAME fused appearance controls as native mode.
 // NativeSampleUV here adapts the existing atlas-bounded sampling for Glamarye.
 float2 NativeSampleUV(float2 uv, uint2 active, uint2 size) {
     return AtlasSampleUV(FoveaRect, uv);
@@ -344,6 +347,7 @@ float4 PSMain(VertexOut i) : SV_TARGET0 {"""),
             foveaColor.rgb = DuoPhase2FocusLift(foveaColor.rgb, foveaUV);
         }
         result = DebugViewMode == 2 ? foveaColor : lerp(peripheralColor, foveaColor, weight);"""),
+        ("gather guard close", "    return result;\n}", "    return result;\n}\n#endif // DUOVIEW_NATIVE_RASTER"),
     ])
     (src / "DuoViewPhase2Effects.hlsl").write_text(helper.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     # No TriView shader, mode-7 C++ member, or mode-7 settings file is edited.
