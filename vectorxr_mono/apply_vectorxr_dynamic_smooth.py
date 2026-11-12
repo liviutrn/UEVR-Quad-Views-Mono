@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in Dynamic Smoothness patch for VectorXR 0.20.1 (8fffa72).
+"""Dynamic Smoothness with default-on diagnostic summaries for VectorXR 0.20.1 (8fffa72).
 Apply AFTER vectorxr_mono/apply_vectorxr_mono.py from reviewed 96aebe7.
 No mono detector, shader, stereo pose/FOV, Fixed or Auto semantic changes.
 """
@@ -40,19 +40,33 @@ replace(H, "    FrameGenDynamicPolicy dynamic_policy_;",
     std::uint32_t smooth_dynamic_max_{4}; // stock default
     std::uint32_t smooth_lead_reserve_{0}; // opt-in adaptive minimum, not pinned
     std::uint32_t smooth_min_lead_{0}; // floor enforced by the adaptive controller
-    bool smooth_diagnostics_{false};
+    bool smooth_diagnostics_{true}; // audit build: enabled unless explicitly disabled
     std::chrono::steady_clock::time_point smooth_last_success_end_{};
-    std::vector<double> smooth_end_gaps_ms_; // successful JIT RuntimeEnd return gaps, not scanout""",
+    XrTime smooth_last_success_target_{0};
+    std::uint64_t smooth_last_interp_pair_{0};
+    float smooth_last_interp_fraction_{0.0f};
+    XrTime smooth_last_interp_target_{0};
+    std::vector<double> smooth_end_gaps_ms_; // successful JIT end-return gaps
+    std::vector<double> smooth_target_gaps_ms_; // requested XrTime gaps
+    std::vector<double> smooth_submit_late_ms_; // positive scheduler lateness""",
         "config fields")
 replace(H, "        std::uint64_t generated_distinct{0};",
         """        std::uint64_t generated_distinct{0};
         std::uint64_t smooth_interpolated{0}; // unique, true JIT interpolations
         std::uint64_t smooth_predicted{0}; // unique, JIT extrapolations
         std::uint64_t smooth_other{0}; // accepted JIT slots: copies/repeats/fallbacks/empty
-        std::uint64_t smooth_submitted{0}; // all accepted JIT RuntimeEnd calls""",
+        std::uint64_t smooth_submitted{0}; // all accepted JIT RuntimeEnd calls
+        std::uint64_t smooth_covers{0}; // predicted with cover enabled
+        std::uint64_t smooth_stale{0}; // used older frame motion
+        std::uint64_t smooth_grid_missing{0}; // inferred missing target grid slots
+        std::uint64_t smooth_target_regressed{0}; // nonmonotonic target times
+        std::uint64_t smooth_late_half{0}; // CPU submit start > half refresh after schedule
+        std::uint64_t smooth_interp_pairs{0}; // observed interpolated real-frame pairs
+        std::uint64_t smooth_interp_rewinds{0}; // nonincreasing fractions in pair
+        std::uint64_t smooth_interp_gaps{0}; // >1.5 refresh gaps within pair""",
         "diagnostic totals")
 replace(P, "    const std::uint64_t research_reads = ResearchFileReads();",
-        """    // Session-scoped; defaults preserve the reviewed build exactly.
+        """    // Session-scoped timing switches remain stock-off; audit telemetry defaults on.
     smooth_dynamic_max_ = 4;
     const auto max_setting = ReadResearchSwitch("VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX").value_or("");
     if (max_setting == "5") smooth_dynamic_max_ = 5;
@@ -61,10 +75,17 @@ replace(P, "    const std::uint64_t research_reads = ResearchFileReads();",
     const auto reserve = ReadResearchSwitch("VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE").value_or("");
     if (reserve == "1" || reserve == "2" || reserve == "3" || reserve == "4")
         smooth_lead_reserve_ = static_cast<std::uint32_t>(reserve[0] - '0');
-    smooth_diagnostics_ = ReadResearchSwitch("VECTORXR_FRAMEGEN_FLOW_DIAGNOSTICS") == "1";
+    // No change to frame timing with diagnostics enabled. Explicit =0 opts out.
+    smooth_diagnostics_ = ReadResearchSwitch("VECTORXR_FRAMEGEN_FLOW_DIAGNOSTICS") != "0";
     smooth_min_lead_ = 0;
     smooth_last_success_end_ = Clock::time_point{};
+    smooth_last_success_target_ = 0;
+    smooth_last_interp_pair_ = 0;
+    smooth_last_interp_fraction_ = 0.0f;
+    smooth_last_interp_target_ = 0;
     smooth_end_gaps_ms_.clear();
+    smooth_target_gaps_ms_.clear();
+    smooth_submit_late_ms_.clear();
     if (logger_ && (smooth_dynamic_max_ != 4 || smooth_lead_reserve_ || smooth_diagnostics_)) {
         logger_->Info("Frame Generation Dynamic Smooth: max=" + std::to_string(smooth_dynamic_max_) +
                       ", reserve=" + std::to_string(smooth_lead_reserve_) +
@@ -128,8 +149,29 @@ replace(P, """    if (lead_slots_ > cap) {
     }
     // Predict the first slot the frame will really reach.""",
         "extra adaptive lead")
+# Summary percentile helper: only runs at the 30-second summary.
+replace(P, "// \"lead:frames\" for each lead told in a summary window, \"-\" when none.",
+        """std::string SmoothP99(std::vector<double> values) {
+    if (values.empty()) return "-";
+    const std::size_t index = std::min(values.size() - 1,
+        static_cast<std::size_t>(0.99 * static_cast<double>(values.size())));
+    std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(index), values.end());
+    return Number(values[index], 1);
+}
+
+// "lead:frames" for each lead told in a summary window, "-" when none.""",
+        "p99 summary helper")
+
 # Successful JIT RuntimeEnd is recorded at the actual JIT submission site,
 # not in NoteSubmissionLocked (which also handles non-JIT and rejected calls).
+replace(P, """            // Nothing current to show: the frame is begun, not ended, so the
+            // runtime shows its last frame again (the next begin discards it).
+            XrResult result = RuntimeBegin(calls, session, &begin_info);""",
+        """            // Nothing current to show: the frame is begun, not ended, so the
+            // runtime shows its last frame again (the next begin discards it).
+            const auto smooth_submit_begin = smooth_diagnostics_ ? Clock::now() : Clock::time_point{};
+            XrResult result = RuntimeBegin(calls, session, &begin_info);""",
+        "JIT submit start timer")
 replace(P, """            if (XR_SUCCEEDED(result) && submit) {
                 result = RuntimeEnd(calls, session, &end_info, true);
             }
@@ -152,12 +194,31 @@ replace(P, """                const bool moved = distinct && written && !write.e
         """                const bool moved = distinct && written && !write.exact;
                 if (smooth_diagnostics_ && XR_SUCCEEDED(result)) {
                     ++totals_.smooth_submitted;
-                    switch (dynamic_smooth::ClassifyJit(true, path, distinct, written, write.exact,
-                                  choice.mode == FrameGenSynthesisMode::kInterpolate)) {
+                    const auto kind = dynamic_smooth::ClassifyJit(
+                        true, path, distinct, written, write.exact,
+                        choice.mode == FrameGenSynthesisMode::kInterpolate);
+                    switch (kind) {
                     case dynamic_smooth::JitKind::kInterpolate:
-                        ++totals_.smooth_interpolated; break;
+                        ++totals_.smooth_interpolated;
+                        if (source && source->id != smooth_last_interp_pair_) {
+                            smooth_last_interp_pair_ = source->id;
+                            smooth_last_interp_fraction_ = choice.fraction;
+                            smooth_last_interp_target_ = time;
+                            ++totals_.smooth_interp_pairs;
+                        } else if (source) {
+                            if (choice.fraction <= smooth_last_interp_fraction_ + 0.0001f)
+                                ++totals_.smooth_interp_rewinds;
+                            if (period > 0 && time - smooth_last_interp_target_ > period + period / 2)
+                                ++totals_.smooth_interp_gaps;
+                            smooth_last_interp_fraction_ = choice.fraction;
+                            smooth_last_interp_target_ = time;
+                        }
+                        break;
                     case dynamic_smooth::JitKind::kPredict:
-                        ++totals_.smooth_predicted; break;
+                        ++totals_.smooth_predicted;
+                        totals_.smooth_covers += choice.cover ? 1 : 0;
+                        totals_.smooth_stale += write.stale ? 1 : 0;
+                        break;
                     default:
                         ++totals_.smooth_other; break;
                     }
@@ -165,6 +226,21 @@ replace(P, """                const bool moved = distinct && written && !write.e
                         AddSample(smooth_end_gaps_ms_, Milliseconds(smooth_runtime_return -
                                       smooth_last_success_end_), kMaxFrameSamples);
                     smooth_last_success_end_ = smooth_runtime_return;
+                    if (period > 0 && smooth_last_success_target_ != 0) {
+                        const XrDuration target_gap = time - smooth_last_success_target_;
+                        if (target_gap > 0) {
+                            AddSample(smooth_target_gaps_ms_, static_cast<double>(target_gap) / 1e6,
+                                      kMaxFrameSamples);
+                            totals_.smooth_grid_missing += dynamic_smooth::MissingGridSlots(target_gap, period);
+                        } else {
+                            ++totals_.smooth_target_regressed;
+                        }
+                    }
+                    smooth_last_success_target_ = time;
+                    const double late_ms = std::max(0.0, Milliseconds(smooth_submit_begin - submit_at));
+                    AddSample(smooth_submit_late_ms_, late_ms, kMaxFrameSamples);
+                    if (period > 0 && late_ms > static_cast<double>(period) / 2e6)
+                        ++totals_.smooth_late_half;
                 }
                 generated_ += moved ? 1 : 0;
                 NoteSubmissionLocked(distinct, moved);""", "count successful submission")
@@ -175,12 +251,25 @@ replace(P, '            ")" + ", copiesSkipped=" + std::to_string(delta(&Totals:
                   ", smoothPredict=" + std::to_string(delta(&Totals::smooth_predicted)) +
                   ", smoothOther=" + std::to_string(delta(&Totals::smooth_other)) +
                   ", smoothSubmitted=" + std::to_string(delta(&Totals::smooth_submitted)) +
-                  ", smoothEndGapMs=" + Percentiles(smooth_end_gaps_ms_, 0.5, 0.95)
+                  ", smoothCover=" + std::to_string(delta(&Totals::smooth_covers)) +
+                  ", smoothStale=" + std::to_string(delta(&Totals::smooth_stale)) +
+                  ", smoothMissedGrid=" + std::to_string(delta(&Totals::smooth_grid_missing)) +
+                  ", smoothTargetRegress=" + std::to_string(delta(&Totals::smooth_target_regressed)) +
+                  ", smoothSubmitLateHalf=" + std::to_string(delta(&Totals::smooth_late_half)) +
+                  ", smoothPairs=" + std::to_string(delta(&Totals::smooth_interp_pairs)) +
+                  ", smoothPairRewind=" + std::to_string(delta(&Totals::smooth_interp_rewinds)) +
+                  ", smoothPairGap=" + std::to_string(delta(&Totals::smooth_interp_gaps)) +
+                  ", smoothEndGapMsP50P95=" + Percentiles(smooth_end_gaps_ms_, 0.5, 0.95) +
+                  ", smoothEndGapMsP99=" + SmoothP99(smooth_end_gaps_ms_) +
+                  ", smoothTargetGapMsP50P95=" + Percentiles(smooth_target_gaps_ms_, 0.5, 0.95) +
+                  ", smoothTargetGapMsP99=" + SmoothP99(smooth_target_gaps_ms_) +
+                  ", smoothSubmitLateMsP50P95=" + Percentiles(smooth_submit_late_ms_, 0.5, 0.95) +
+                  ", smoothSubmitLateMsP99=" + SmoothP99(smooth_submit_late_ms_)
                 : std::string()) +
             ", copiesSkipped=" + std::to_string(delta(&Totals::copies_skipped)) +""",
         "30 second summary")
 replace(P, "    ring_short_write_ms_.clear();\n",
-        "    ring_short_write_ms_.clear();\n    smooth_end_gaps_ms_.clear();\n",
+        "    ring_short_write_ms_.clear();\n    smooth_end_gaps_ms_.clear();\n    smooth_target_gaps_ms_.clear();\n    smooth_submit_late_ms_.clear();\n",
         "clear samples at start and summary", expected=2)
 replace(CM, "        set_tests_properties(vectorxr_mono_framegen_tests PROPERTIES TIMEOUT 10)\n",
         """        set_tests_properties(vectorxr_mono_framegen_tests PROPERTIES TIMEOUT 10)
