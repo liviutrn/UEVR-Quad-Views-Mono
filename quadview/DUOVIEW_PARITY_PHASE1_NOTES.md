@@ -54,3 +54,13 @@ Joey/UESDK/frontend pins unchanged: 5ac7edc/3cffbc8/60be4b0.
   v208d skip for ID6 and the B12 skip for ID7 independently. The original
   quadview/apply_triview_vram.py is untouched and can still be diffed.
   All other B43 patches remain unchanged.
+
+## Third CI attempt and compatibility patch
+- Run #157 (43237146585): sanitizer passed; generated integration reached
+  B24 runtime-restart overlay after passing B23/B22 contracts. Failed only at
+  the B24 check-new-OpenXR-loaded anchor, because v208d's Build49 Mono Eye
+  Alignment persistence legitimately adds restoration between
+  initialize_openxr() and if (e).
+- New isolated B24 wrapper is copied from B43 with only the anchor moved to
+  AFTER the Build49 restore block. It keeps the same B24 loaded-state test,
+  and does not change the old B24 file or Build49 logic.
