@@ -17,7 +17,7 @@ available only if it already exists in the DuoView version you port, and default
 
 ## 2. Where things are (source-read by Claude, 12 Nov)
 - Start branch: `claude/triview-b43-20261112` @ 1f75a2d (TriView B43, CI run 154 green, headset
-  test pending). Create `experiment/duoview-parity-<date>` from it. Do not push to claude/ branches.
+  test pending; later commits only add notes). Branch from its head. Do not push to claude/ branches.
 - Build: workflow `.github/workflows/triview-b1.yml` (trigger: push to claude/triview-** or
   experiment/triview-** touching quadview/** or the workflow). **Name your branch
   `experiment/triview-duoview-parity-<date>` so the push trigger matches**, or add your branch
