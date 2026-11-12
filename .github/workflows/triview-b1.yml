@@ -3,7 +3,7 @@ name: TriView B43 + DuoView Mono B40 Temporal Seam
 run-name: TriView B43 + DuoView B40 Mono (${{ github.run_number }})
 on:
   push:
-    branches: ['claude/triview-**', 'experiment/triview-**']
+    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**']
     paths: ['.github/workflows/triview-b1.yml', 'quadview/**']
   workflow_dispatch:
 permissions:
