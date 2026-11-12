@@ -69,7 +69,7 @@ float2 M1PullUv(float2 eyeUv, uint eye) {
     const float2 base = float2(dot(M1Homography[row].xyz,p),dot(M1Homography[row+1].xyz,p)) / w;
     float2 uv = base;
     [branch] if (M1Grid.x > 0 && abs(M1Eye[eye]) > 1.e-6) {
-        [unroll] for (uint pass = 0; pass < 6; ++pass) {
+        [unroll] for (uint iteration = 0; iteration < 6; ++iteration) {
             const float2 cell = clamp((uv + M1Eye.zw) * float2(M1Grid.xy),
                                      float2(.5,.5), float2(M1Grid.xy)-.5);
             const float d = M1SoftDepth.SampleLevel(LinearClamp, cell / float2(M1Grid.zw),0);
