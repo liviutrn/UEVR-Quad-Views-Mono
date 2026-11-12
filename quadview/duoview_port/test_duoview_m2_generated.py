@@ -18,7 +18,7 @@ def main():
             "m2_left_sharpen","m2_right_sharpen")
     require(vr/"VR.cpp","Separate left/right sharpening",
             "M2 fine fovea depth (if matched)","m2_right_sharpen==candidate.m2_right_sharpen")
-    require(vr/"QuadViewNgxDepthB18.hpp",
+    require(vr/"QuadViewNgxDepth.hpp",
             "latest_duoview_fovea_submitted","slot->duoview_fovea = fine_output",
             "request && slot->duoview_fovea != want_fovea",
             "if (!duo) prune_locked(want_w,want_h,false)",
