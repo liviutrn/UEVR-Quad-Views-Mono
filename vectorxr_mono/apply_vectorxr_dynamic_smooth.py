@@ -83,7 +83,7 @@ replace(P, "                        multiplier <= 4 && !late_write;",
 replace(P, "        !(lead_probe_->ring && multiplier <= 4 && RingJudgedLocked(lead_ring_[multiplier], now))) {",
         "        !(lead_probe_->ring && multiplier < lead_ring_.size() && RingJudgedLocked(lead_ring_[multiplier], now))) {",
         "lead probe ring")
-// Only the opt-in floor is new; the stock controller remains unchanged.
+# Only the opt-in floor is new; the stock controller remains unchanged.
 replace(P, """    if (lead_policy_.pinned_lead) {
         return; // tests: the lead stays where it was pinned
     }
@@ -128,8 +128,8 @@ replace(P, """    if (lead_slots_ > cap) {
     }
     // Predict the first slot the frame will really reach.""",
         "extra adaptive lead")
-// Successful JIT RuntimeEnd is recorded at the actual JIT submission site,
-// not in NoteSubmissionLocked (which also handles non-JIT and rejected calls).
+# Successful JIT RuntimeEnd is recorded at the actual JIT submission site,
+# not in NoteSubmissionLocked (which also handles non-JIT and rejected calls).
 replace(P, """            if (XR_SUCCEEDED(result) && submit) {
                 result = RuntimeEnd(calls, session, &end_info, true);
             }
