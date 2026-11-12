@@ -19,6 +19,26 @@ int main() {
     check(LeadFloor(50,50,refresh,2,12)==12, "lead cap");
     for (int i=1; i<=5; ++i)
         check(std::abs((i*refresh)/50.0-i/6.0)<1e-10, "20fps 120Hz fractions");
+    check(depthxr::dynamic_smooth::CanProbeDown(14,13), "probe allowed above floor");
+    check(!depthxr::dynamic_smooth::CanProbeDown(13,13), "no probe at floor");
+    check(!depthxr::dynamic_smooth::CanProbeDown(12,13), "no probe below floor");
+    check(depthxr::dynamic_smooth::CanProbeDown(2,0), "stock minimum remains one");
+    using depthxr::dynamic_smooth::ClassifyJit;
+    using depthxr::dynamic_smooth::JitKind;
+    check(ClassifyJit(true,3,true,true,false,true)==JitKind::kInterpolate,
+          "accepted, distinct actual JIT interpolation");
+    check(ClassifyJit(true,3,true,true,false,false)==JitKind::kPredict,
+          "accepted, distinct JIT extrapolation");
+    check(ClassifyJit(false,3,true,true,false,true)==JitKind::kOther,
+          "failed RuntimeEnd never counted as interpolation");
+    check(ClassifyJit(true,4,true,true,false,true)==JitKind::kOther,
+          "fallback path is not proven interpolation");
+    check(ClassifyJit(true,3,true,true,true,true)==JitKind::kOther,
+          "exact copy never counted as interpolation");
+    check(ClassifyJit(true,3,false,true,false,true)==JitKind::kOther,
+          "repeat never counted as interpolation");
+    check(ClassifyJit(true,3,true,false,false,true)==JitKind::kOther,
+          "no GPU write never counted as interpolation");
     if (!errors) std::cout << "Dynamic Smooth tests passed\n";
     return errors ? 1 : 0;
 }
