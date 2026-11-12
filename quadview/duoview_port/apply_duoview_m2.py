@@ -71,7 +71,7 @@ def m2_settings(mods):
 def m2_capture(mods):
     # Existing PeripheryDepth remains exactly the TriView producer in mode 7.
     # M2 expands only DuoView's request-owned capture selection.
-    patch(mods/"vr/QuadViewNgxDepthB18.hpp",[
+    patch(mods/"vr/QuadViewNgxDepth.hpp",[
         ("M2 role-tag snapshot", "    std::shared_ptr<const DuoViewDepthRequest> duoview_request;",
          """    std::shared_ptr<const DuoViewDepthRequest> duoview_request;
     bool duoview_fovea{};"""),
