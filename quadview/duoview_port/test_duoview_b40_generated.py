@@ -22,7 +22,7 @@ shader=require(duo/"DuoViewPhase2Effects.hlsl",
     "DuoMonoEdgeHistory[h+1u]=CropUv; // diagnostic only; no validity/reset check",
     "DuoMonoSeamOutput[lane*2u+1u]=float4(stable,1.0)",
     "DuoMonoSeamMatch[i*2u+1u]",
-    "DuoB40InwardAnchor",
+    "DuoB40InwardAnchor", "DuoB40EdgeAnchor", "GlamSharpenNativeFovea",
     "DuoPhase2FocusLift",
 )
 if "confidence * .5" in shader or "gainSum" in shader:

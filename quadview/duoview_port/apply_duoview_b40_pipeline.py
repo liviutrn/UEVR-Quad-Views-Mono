@@ -86,8 +86,8 @@ struct B40MonoHistory {
     }
 """
     patch(dxh,[
-        ("chrono header", '#include <memory>\n#include <string>',
-         '#include <memory>\n#include <string>\n#include <chrono>'),
+        ("chrono header", '#include <memory>',
+         '#include <memory>\n#include <chrono>'),
         ("B40 constant layout",
          "    float seam_geometry[4];\n};\nstatic_assert(sizeof(ShaderConstants) == 192);",
          "    float seam_geometry[4];\n    uint32_t b40_temporal[4];\n};\n"

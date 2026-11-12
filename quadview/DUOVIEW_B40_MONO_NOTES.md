@@ -6,6 +6,7 @@ Source baseline: experiment/triview-duoview-parity-phase2-20261112 at ecbb12c329
 ## Architecture preserved
 - Replace Phase2 prototype four-probe per-output-pixel matcher. This is a real B40 spatial sampling + persistent GPU history + temporal smoothing port.
 - 32 border knots on a single Mono fovea, 4 deterministic subanchors/knot = 128 spatial centers.
+- B40 exact displayed pixel-center edge projection and sharpened/anti-vignette corrected sample reference; extra-wide B43 ring display-only.
 - B39 interior 3x5 paired RGB differences per center = exactly 1,920 paired focus/context samples per mono frame, identical to TriView per eye. Mono does not duplicate work for right eye.
 - Group-of-four componentwise trimmed mean; 3-point componentwise median; 2-point mean; fewer than two usable anchors holds prior correction.
 - Single true queue-owned D3D12 history UAV, shared by all fence-retired OpenXR copy slots. Per-slot 64-float4 output stats; UAV-before/after dispatch barrier and UAV->SRV transition before display. Queue identity must remain stable. No CPU readback, no shader compilation in XR frame.

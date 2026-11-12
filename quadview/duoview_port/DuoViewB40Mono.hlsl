@@ -29,6 +29,31 @@ float DuoB40InwardAnchor(float2 uv) {
     return 1.0-t*t*(3.0-2.0*t);
 }
 
+// Pixel-center nearest-edge projection, byte-for-byte B40 side-selection logic
+// adapted from QuadViewComposite.hlsl EdgeAnchor with one Mono crop.
+float2 DuoB40EdgeAnchor(float2 uv,out uint side,out float along) {
+    const float2 size=float2(OutputSize);
+    const float2 lo=(ceil(CropUv.xy*size-.5)+.5)/size;
+    const float2 hi=(ceil(CropUv.zw*size-.5)-.5)/size;
+    float2 p=clamp(uv,lo,hi);
+    const float4 d=abs(float4(uv.y-lo.y,uv.x-hi.x,uv.y-hi.y,uv.x-lo.x))*size.yxyx;
+    side=0u; float best=d.x;
+    if(d.y<best){side=1u;best=d.y;}
+    if(d.z<best){side=2u;best=d.z;}
+    if(d.w<best)side=3u;
+    if(uv.y<lo.y)side=0u;
+    else if(uv.y>hi.y)side=2u;
+    else if(uv.x>hi.x)side=1u;
+    else if(uv.x<lo.x)side=3u;
+    if(side==0u)p.y=lo.y;
+    else if(side==1u)p.x=hi.x;
+    else if(side==2u)p.y=hi.y;
+    else p.x=lo.x;
+    const float2 a=saturate((p-lo)/max(hi-lo,1.0/size));
+    along=side==0u ? a.x : side==1u ? a.y : side==2u ? 1.0-a.x : 1.0-a.y;
+    return p;
+}
+
 StructuredBuffer<float4> DuoMonoSeamMatch : register(t2);
 
 float DuoB40EdgeFade(float distance,float reach) {
@@ -45,20 +70,8 @@ float3 DuoPhase2MatchContext(float2 uv,float3 context) {
     const float distance=length(outside);
     [branch] if (distance>=SeamGeometry.x || SeamOptions.y<=0.0) return context;
 
-    float2 edge=clamp(uv,CropUv.xy,CropUv.zw);
-    const float4 d=float4(abs(edge.y-CropUv.y),abs(edge.x-CropUv.z),
-                          abs(edge.y-CropUv.w),abs(edge.x-CropUv.x));
-    uint side=0u; float nearest=d.x;
-    if(d.y<nearest){side=1u;nearest=d.y;}
-    if(d.z<nearest){side=2u;nearest=d.z;}
-    if(d.w<nearest){side=3u;}
-    if(uv.y<CropUv.y) side=0u;
-    else if(uv.y>CropUv.w) side=2u;
-    else if(uv.x>CropUv.z) side=1u;
-    else if(uv.x<CropUv.x) side=3u;
-    const float2 alongUv=saturate((edge-CropUv.xy)/max(CropUv.zw-CropUv.xy,1.0/size));
-    const float along=side==0u ? alongUv.x : side==1u ? alongUv.y :
-                      side==2u ? 1.0-alongUv.x : 1.0-alongUv.y;
+    uint side=0u; float along=0.0;
+    DuoB40EdgeAnchor(uv,side,along);
     const float k=float(side*8u)+along*8.0;
     const uint i=((uint)floor(k))%32u, j=(i+1u)%32u;
     const float3 a=DuoMonoSeamMatch[i*2u+1u].rgb;
@@ -92,7 +105,12 @@ bool DuoB40AmbientEdgeDifference(float2 anchor,uint side,out float3 delta) {
             const float along=.5*float(i)*SeamGeometry.w;
             const float2 p=clamp(anchor+(inward*dist+tangent*along)/size,lo,hi);
             const float2 local=(p-CropUv.xy)/(CropUv.zw-CropUv.xy);
-            const float3 f=DuoPhase2FocusLift(DuoReadFocus(p),local);
+            // B40 DisplayFocus is sharpened and anti-vignette corrected.
+            // Extra-wide B43 ring remains display-only, matching TriView B43.
+            float3 f=DuoReadFocus(p);
+            [branch] if(SharpenStrength>0.0)
+                f=GlamSharpenNativeFovea(p,f);
+            f=DuoPhase2FocusLift(f,local);
             const float3 c=DuoReadContext(p);
             [branch] if(all(isfinite(f)) && all(isfinite(c))) {
                 sum+=f-c; accepted+=1.0;
@@ -122,7 +140,8 @@ void CSMonoB40(uint lane:SV_GroupIndex) {
                  side==1u ? float2(CropUv.z,lerp(CropUv.y,CropUv.w,t)) :
                  side==2u ? float2(lerp(CropUv.z,CropUv.x,t),CropUv.w) :
                             float2(CropUv.x,lerp(CropUv.w,CropUv.y,t));
-        p=clamp(p,lo,hi);
+        uint projectedSide=0u; float projectedAlong=0.0;
+        p=DuoB40EdgeAnchor(p,projectedSide,projectedAlong);
         float3 delta=0.0;
         [branch] if(DuoB40AmbientEdgeDifference(p,side,delta)) {
             if(count==0u) q0=delta;
