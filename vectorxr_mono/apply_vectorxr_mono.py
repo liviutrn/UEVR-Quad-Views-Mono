@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Personal VectorXR 0.20.0 (DienerTech/vectorxr 87e575f, MPL-2.0) patch:
+"""Personal VectorXR 0.20.1 (DienerTech/vectorxr 87e575f, MPL-2.0) patch:
 Frame Generation runs ONCE when both projection views show the same image.
 
 Usage: apply_vectorxr_mono.py <vectorxr checkout>
@@ -79,6 +79,8 @@ replace(H, "    XrResult SubmitRuntimeFrame(XrSession, const XrFrameEndInfo*);\n
     };
     std::mutex mono_framegen_mutex_;
     MonoFrameGenState mono_framegen_;
+    // Read by the stock Frame Generation OSD without taking the mono-state mutex.
+    std::atomic<bool> mono_framegen_active_{false};
 ''', "SubmitRuntimeFrame declaration")
 
 C = "layer/src/openxr_layer.cpp"
@@ -92,6 +94,11 @@ replace(C, "    if (framegen_owns_pacing_.load(std::memory_order_acquire) && inf
         "    if (framegen_owns_pacing_.load(std::memory_order_acquire) && info &&\n"
         "        !(quad && quad->route == FrameGenQuadRoute::kClaimed)) {\n"
         "        info = CollapseMonoFrame(session, info, mono_info, mono_layers, mono_projection, mono_view);\n"
+        "    } else if (quad && quad->route == FrameGenQuadRoute::kClaimed) {\n"
+        "        std::scoped_lock lock(mono_framegen_mutex_);\n"
+        "        mono_framegen_.active = false;\n"
+        "        mono_framegen_.streak = 0;\n"
+        "        mono_framegen_active_.store(false, std::memory_order_release);\n"
         "    }\n"
         "    if (framegen_owns_pacing_.load(std::memory_order_acquire) && info) {\n"
         "        if (FrameGenTrace& trace = framegen_.Trace(); trace.Enabled()) {\n", "collapse")
@@ -123,7 +130,7 @@ replace(C, "XrResult OpenXrLayer::TraceRuntimeEndFrame(XrSession session, const 
         if (state.enabled < 0) {
             const char* value = std::getenv("VECTORXR_MONO_FRAMEGEN");
             state.enabled = value && (std::string(value) == "0" || std::string(value) == "off") ? 0 : 1;
-            logger_.Info(std::string("Mono Frame Generation (personal DuoView patch on VectorXR 0.20.0): ") +
+            logger_.Info(std::string("Mono Frame Generation (personal DuoView patch on VectorXR 0.20.1): ") +
                          (state.enabled ? "enabled; it starts when both views show the same image."
                                         : "disabled by VECTORXR_MONO_FRAMEGEN."));
         }
@@ -132,8 +139,12 @@ replace(C, "XrResult OpenXrLayer::TraceRuntimeEndFrame(XrSession session, const 
             state = MonoFrameGenState{};
             state.enabled = enabled;
             state.session = session;
+            mono_framegen_active_.store(false, std::memory_order_release);
         }
-        if (!state.enabled) return info;
+        if (!state.enabled) {
+            mono_framegen_active_.store(false, std::memory_order_release);
+            return info;
+        }
         // No game image this frame (loading, dashboard, shouldRender false): nothing to
         // collapse and nothing to judge, so keep the mono state as it is (avoids a costly
         // stereo->mono rebuild cycle after a single empty frame).
@@ -146,11 +157,13 @@ replace(C, "XrResult OpenXrLayer::TraceRuntimeEndFrame(XrSession session, const 
             }
             state.active = false;
             state.streak = 0;
+            mono_framegen_active_.store(false, std::memory_order_release);
             return info;
         }
         if (!state.active) {
             if (++state.streak < mono_framegen::kActivateFrames) return info;
             state.active = true;
+            mono_framegen_active_.store(true, std::memory_order_release);
             const XrRect2Di& rect = source->views[0].subImage.imageRect;
             logger_.Info("Mono Frame Generation started: both views show " + std::to_string(rect.extent.width) + "x" +
                          std::to_string(rect.extent.height) + " at " + std::to_string(rect.offset.x) + "," +
@@ -231,6 +244,23 @@ const XrFrameEndInfo* OpenXrLayer::ExpandMonoFrame(XrSession session, const XrFr
 
 XrResult OpenXrLayer::TraceRuntimeEndFrame(XrSession session, const XrFrameEndInfo* info) {
 ''', "definitions")
+
+# 4) Put the selected mono/stereo mode into the stock Frame Generation HUD row
+# in both expanded and compact layouts; the standard badge and FPS remain stock.
+replace(C,
+        "    snapshot.framegen=framegen.row;\n"
+        "    snapshot.compact_framegen=framegen.compact;\n"
+        "    snapshot.framegen_detail=framegen.detail;\n",
+        "    snapshot.framegen=framegen.row;\n"
+        "    snapshot.compact_framegen=framegen.compact;\n"
+        "    snapshot.framegen_detail=framegen.detail;\n"
+        "    if (framegen_owns_pacing_.load(std::memory_order_acquire) &&\n"
+        "        !framegen_off_for_toolkit_.load(std::memory_order_acquire)) {\n"
+        "        const std::string eye_mode = mono_framegen_active_.load(std::memory_order_acquire) ? \"MONO\" : \"STEREO\";\n"
+        "        snapshot.framegen += \"  /  \" + eye_mode;\n"
+        "        snapshot.compact_framegen += \"  /  \" + eye_mode;\n"
+        "    }\n",
+        "stock FG OSD mode")
 
 CM = "layer/CMakeLists.txt"
 replace(CM, "        set_tests_properties(depthxr_layer_load_tests PROPERTIES TIMEOUT 30)\n",
