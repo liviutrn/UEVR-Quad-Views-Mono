@@ -60,7 +60,7 @@ def main():
          'm_duo_m2_fovea_depth->draw("M2 fine fovea depth (experimental: off by default)");',
          '''m_duo_m2_fovea_depth->draw("M2 fine fovea depth (experimental: off by default)");
                     m_duo_m24_vertical->draw("M2.4 Vertical depth taper (0 = M2.3)");
-                    m_duo_m24_distance->draw("M2.4 Distance-faded sharpening");
+                    m_duo_m24_distance->draw("M2.4 Distance-faded sharpening (synthetic stereo only)");
                     if(m_duo_m24_distance->value()) {
                         m_duo_m24_near->draw("Full sharpness nearer than (metres)");
                         m_duo_m24_far->draw("Fade complete at (metres)");
@@ -263,12 +263,42 @@ Texture2D<float> M1SoftDepth'''),
         }
 #else'''),
     ])
+    # Claude M2.4 adversarial review: non-M1 native has an independent
+    # wideSharpen gate, but still used the legacy two-argument wrapper
+    # (which reads SharpenStrength). Never let wide silently follow regular.
+    patch(sh/"DuoViewNativeCompositeRaster.hlsl",[
+        ("M24 true Mono wide intensity, not legacy linked wrapper",
+         'GlamExtraWideChange(fullUv, beforeSharpen)));',
+         'GlamExtraWideChange(fullUv, beforeSharpen, wideSharpen)));'),
+    ])
+    # The packed fallback is separate source and *also* silently skipped all
+    # wide-only passes. Its FocusProfile.y arrives in the same b0 used by
+    # native Mono, with no additional cbuffer or descriptor.
+    patch(sh/"DuoViewCompositeRaster.hlsl",[
+        ("M24 packed Mono wide with independent strength and gating",
+         '''            if (SharpenStrength > 0.0) {
+                const float3 beforeSharpen = foveaColor.rgb;
+                foveaColor.rgb = GlamSharpenNativeFovea(fullUv, foveaColor.rgb);
+                [branch] if ((SharpenFlags & 16u) != 0u)
+                    foveaColor.rgb = GlamEncode(saturate(GlamDecode(foveaColor.rgb) +
+                                              GlamExtraWideChange(fullUv, beforeSharpen)));
+            }''',
+         '''            if (SharpenStrength > 0.0 ||
+                ((SharpenFlags & 16u) != 0u && FocusProfile.y > 0.0)) {
+                const float3 beforeSharpen = foveaColor.rgb;
+                if (SharpenStrength > 0.0)
+                    foveaColor.rgb = GlamSharpenNativeFovea(fullUv, foveaColor.rgb);
+                [branch] if ((SharpenFlags & 16u) != 0u && FocusProfile.y > 0.0)
+                    foveaColor.rgb = GlamEncode(saturate(GlamDecode(foveaColor.rgb) +
+                                              GlamExtraWideChange(fullUv, beforeSharpen, FocusProfile.y)));
+            }'''),
+    ])
     # Packed Mono's dispatch selection must not skip wide with normal==0.
     patch(mods/"vr/DuoViewD3D12.hpp",[
         ("M24 Mono packed wide-on routing",
          'frame.settings.sharpen_strength>0.f;',
          'frame.settings.sharpen_strength>0.f || (frame.settings.sharpen_wide && frame.settings.m23_wide_strength>0.f);'),
     ])
-    print("M2.4 visual: 2D depth envelope + central B40 corners + scaled distance fading + true Mono-wide")
+    print("M2.4 visual: 2D depth envelope, B40 corners, stereo distance fade, true independent native/gather Mono-wide")
 if __name__=="__main__":
     main()
