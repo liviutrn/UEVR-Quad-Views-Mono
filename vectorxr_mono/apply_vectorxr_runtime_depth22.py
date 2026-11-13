@@ -157,7 +157,7 @@ change(T,
        "            points.push_back({i, t, residual, IsAppImage(runtime.submitted_swapchains[i])});",
        "diagnosis path observation")
 change(T,
-       r'                  << " nearestRealPhasePeriods=" << phase << "\n";',
+       r'                  << " nearestRealPhasePeriods=" << phase << "\\n";',
        r'''                  << " nearestRealPhasePeriods=" << phase;
         if (warmup_status && warmup_gpu) {
             std::cerr << " path=" << (point.app_copy ? "real-copy" : "generated-or-fallback")
