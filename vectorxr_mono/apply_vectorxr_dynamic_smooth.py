@@ -509,16 +509,18 @@ void TestJitDynamicInterpolationSlow() {
             StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
                      FrameGenMultiplier::kDynamic, app, runtime, owned);
             _putenv_s("VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX", "");
-            if (pinned) {
-                FrameGenLeadPolicy policy;
-                policy.pinned_lead = 10; // controlled, safely below 16-slot cap
-                policy.ring_ceiling = false;
-                presenter.SetLeadPolicy(policy);
-            }
             app->eye_speed = 0.5;
             app->end_offset_periods = 1;
             // Permit Dynamic engagement and lead controller to settle.
             RunPipelined(*app, 2500ms, 18ms, 61ms);
+            // Pin only AFTER warm-up: pinning before Dynamic engages can
+            // clamp lead to the startup 2x cap and confound the comparison.
+            if (pinned) {
+                FrameGenLeadPolicy policy;
+                policy.pinned_lead = std::max(1u, presenter.Status().lead_slots);
+                policy.ring_ceiling = false;
+                presenter.SetLeadPolicy(policy);
+            }
             const std::size_t first = runtime.Submissions();
             const std::uint32_t lead_start = presenter.Status().lead_slots;
             const auto started = std::chrono::steady_clock::now();
@@ -538,7 +540,7 @@ void TestJitDynamicInterpolationSlow() {
             // Reuse upstream's metric; the diagnosis must agree with it.
             const double timeline = TimelineShare(runtime, first, 8, app->eye_speed);
             std::cerr << "  slow Dynamic " << (six ? "max6" : "max4")
-                      << (pinned ? " pinned10" : " adaptive")
+                      << (pinned ? " pinned-at-settled-lead" : " adaptive")
                       << ": app " << frames / std::max(elapsed, 0.001)
                       << " fps, output " << rate << " fps, timeline " << timeline
                       << " (" << diagnosis.bad << "/" << diagnosis.total << " off)"
