@@ -186,7 +186,7 @@ jobs:
           $exe = Get-ChildItem vectorxr/build -Recurse -File -Filter depthxr_framegen_presenter_tests.exe |
             Select-Object -First 1
           if (-not $exe) { throw 'Presenter fake-runtime test executable not found' }
-          foreach ($test in @('TestJitDynamicInterpolationSlow', 'TestJitDynamicSlackReserve', 'TestJitWorldTickIndependentOfDisplayTime', 'TestJitBuild18WarmupFixture', 'TestRuntimeDepth22Off', 'TestRuntimeDepth22Standby', 'TestLiveSwitch22b')) {
+          foreach ($test in @('TestJitDynamicInterpolationSlow', 'TestJitDynamicSlackReserve', 'TestJitWorldTickIndependentOfDisplayTime', 'TestJitBuild18WarmupFixture', 'TestRuntimeDepth22Off', 'TestRuntimeDepth22Standby', 'TestLiveSwitch22b', 'TestLiveSwitch22bJit')) {
             $env:FG_TEST_ONLY = $test
             if ($test -eq 'TestJitDynamicInterpolationSlow') { $env:FG_TEST_GAPS = '1' }
             $log = "evidence/$test.log"
