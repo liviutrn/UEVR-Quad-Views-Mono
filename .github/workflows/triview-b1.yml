@@ -290,6 +290,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M2 generated source regression checks failed' }
           python workspace/quadview/duoview_port/apply_duoview_m21.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'M2.1 strict pair and globally conditioned depth overlay failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m21_jitter.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M2.1 depth jitter opt-in overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m21_generated.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'M2.1 final generated contracts failed' }
           python workspace/quadview/duoview_port/test_duoview_m21_numeric.py
