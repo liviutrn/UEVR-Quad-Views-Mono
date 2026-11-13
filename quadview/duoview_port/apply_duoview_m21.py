@@ -56,9 +56,6 @@ def captured_pair(mods):
     # Keep original 12-slot safety and TriView selection. For DuoView, prefer
     # reusing an idle texture with matching dimensions/format before resizing.
     patch(path,[
-        ("M21 avoid pruning live dual-role DuoView pool",
-         '        prune_locked(want_w_.load(),want_h_.load(),!on);',
-         '        if (mode!=DepthCaptureMode::DuoView || !on)\n            prune_locked(want_w_.load(),want_h_.load(),!on);'),
         ("M21 prioritize matching texture",
          '            if (!slot || candidate->sequence<slot->sequence) slot=candidate;',
          '''            const auto cd=candidate->texture ? candidate->texture->GetDesc() : D3D12_RESOURCE_DESC{};
