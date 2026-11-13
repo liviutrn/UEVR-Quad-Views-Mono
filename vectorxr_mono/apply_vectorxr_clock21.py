@@ -103,6 +103,12 @@ change(P,
                 choice.fraction = FrameGenFraction(FrameGenSynthesisMode::kInterpolate,
                     frame.world_content_time, next.world_content_time, time);""","interpolated content-only fraction")
 change(P,
+"""    choice.fraction = 0.0f;
+    if (frame.previous_time && time > frame.time &&""",
+"""    choice.fraction = 0.0f;
+    choice.pose_fraction = 0.0f;
+    if (frame.previous_time && time > frame.time &&""", "pose fraction zero for extrapolation")
+change(P,
 """        choice.fraction =
             FrameGenFraction(FrameGenSynthesisMode::kExtrapolate, frame.previous_time, frame.time, time, frame.reach);
     }
