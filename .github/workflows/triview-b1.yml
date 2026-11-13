@@ -3,7 +3,7 @@ name: TriView B43 + DuoView Mono M2.1
 run-name: TriView B43 + DuoView Mono M2.1 (${{ github.run_number }})
 on:
   push:
-    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**']
+    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**']
     paths: ['.github/workflows/triview-b1.yml', 'quadview/**']
   workflow_dispatch:
 permissions:
