@@ -851,6 +851,10 @@ prefix='inline constexpr char nr_codec_shader[] = R"('
 if text.count(prefix)!=1: raise RuntimeError("Unexpected codec source string declaration")
 start=text.index(prefix)+len(prefix);end=text.index(')";',start)
 raw=text[start:end]
+# Batch 2 needs the original HLSL with comments preserved. This reference
+# stays in the patch workspace, never the generated upstream src/ tree.
+(Path(__file__).resolve().parents[1] / "precompact_nr_codec_shader.hlsl").write_text(
+    raw, encoding="utf-8", newline="\n")
 compact_lines=[]
 for line in raw.splitlines():
     line=line.split("//",1)[0].strip()
