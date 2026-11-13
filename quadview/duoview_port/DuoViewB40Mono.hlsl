@@ -1,9 +1,9 @@
-// B43 TriView B40 Ambient seam analysis parity ported to DuoView Mono ID6.
+// B40 Continuous Ambient seam analysis ported to DuoView Mono ID6.
 // Based directly on QuadViewComposite.hlsl UpdateEdgeB40, AmbientEdgeDifference,
 // EdgeAnchor and MatchEdgeV2. One Mono path => one 32-knot GPU history.
 //
-// Same 128 deterministic centers PER EYE (four per knot), 15 paired RGB samples
-// per center, component-wise trimmed groups, and independent 32-knot eye EMAs.
+// The same 128 deterministic spatial centers (four per knot), 15 paired RGB
+// samples per center, component-wise trimmed groups, and temporal EMA as B40.
 // The two Source SRVs and the output share the existing DuoView command slot.
 // Native and gathered sources use identical algorithms and pixel coordinates.
 static const float3 DuoPhase2Luma = float3(.2126,.7152,.0722);
@@ -20,13 +20,14 @@ float3 DuoPhase2FocusLift(float3 color, float2 local) {
     return max(color*gain,0.0);
 }
 
-// B38 restores the B27 raw-context interior feather; the fovea itself
-// remains unblurred. The appearance correction fades in from the inner edge.
+// The periphery's correction must remain in force for the entire region
+// where periphery contributes to the final blend. Previously it faded to zero
+// in a FIXED 12px inward strip even when the actual blend feather was wider:
+// this exposed a hard band of uncorrected periphery inside the crop.
+// The final lerp(context,focus,weight) *already* tapers the correction by
+// 1-weight smoothly over the full rendered feather. Do not fade it twice.
 float DuoB40InwardAnchor(float2 uv) {
-    const float2 inside=min(uv-CropUv.xy,CropUv.zw-uv)*float2(OutputSize);
-    const float distance=max(min(inside.x,inside.y),0.0);
-    const float t=saturate(distance/max(SeamGeometry.y,1.0));
-    return 1.0-t*t*(3.0-2.0*t);
+    return 1.0;
 }
 
 // Pixel-center nearest-edge projection, byte-for-byte B40 side-selection logic
@@ -63,7 +64,7 @@ float DuoB40EdgeFade(float distance,float reach) {
 
 // B40's nearest-side+32-knot interpolation, in display UV, not cropped pixels.
 // No per-pixel border-copy, no immediate/raw sample path and no pixel stretching.
-float3 DuoPhase2MatchContext(float2 uv,float3 context,uint eye) {
+float3 DuoPhase2MatchContext(float2 uv,float3 context) {
     [branch] if (SeamOptions.x<.5) return context;
     const float2 size=float2(OutputSize);
     const float2 outside=max(max(max(CropUv.xy-uv,uv-CropUv.zw),0.0)*size-1.0,0.0);
@@ -74,9 +75,8 @@ float3 DuoPhase2MatchContext(float2 uv,float3 context,uint eye) {
     DuoB40EdgeAnchor(uv,side,along);
     const float k=float(side*8u)+along*8.0;
     const uint i=((uint)floor(k))%32u, j=(i+1u)%32u;
-    const uint base=(eye&1u)*64u;
-    const float3 a=DuoMonoSeamMatch[base+i*2u+1u].rgb;
-    const float3 b=DuoMonoSeamMatch[base+j*2u+1u].rgb;
+    const float3 a=DuoMonoSeamMatch[i*2u+1u].rgb;
+    const float3 b=DuoMonoSeamMatch[j*2u+1u].rgb;
     const float3 stable=lerp(a,b,frac(k));
     // B40 RGB residual, optional luma-only A/B; 1 = exact B40 RGB.
     const float luma=dot(stable,DuoPhase2Luma);
@@ -91,7 +91,7 @@ RWStructuredBuffer<float4> DuoMonoEdgeHistory : register(u1);
 // B39 inward 3x5 group. Exactly fifteen paired samples per spatial center.
 // Unlike TriView, no depth warp is needed: Mono periphery and focus share the
 // same full-FOV UV; sample both actual sources and reject nonfinite readings.
-bool DuoB40AmbientEdgeDifference(float2 anchor,uint side,float eyeSharpen,out float3 delta) {
+bool DuoB40AmbientEdgeDifference(float2 anchor,uint side,out float3 delta) {
     const float2 size=float2(OutputSize);
     const float2 lo=(ceil(CropUv.xy*size-.5)+.5)/size;
     const float2 hi=(ceil(CropUv.zw*size-.5)-.5)/size;
@@ -109,8 +109,8 @@ bool DuoB40AmbientEdgeDifference(float2 anchor,uint side,float eyeSharpen,out fl
             // B40 DisplayFocus is sharpened and anti-vignette corrected.
             // Extra-wide B43 ring remains display-only, matching TriView B43.
             float3 f=DuoReadFocus(p);
-            [branch] if(eyeSharpen>0.0)
-                f=GlamSharpenNativeFovea(p,f,eyeSharpen);
+            [branch] if(SharpenStrength>0.0)
+                f=GlamSharpenNativeFovea(p,f);
             f=DuoPhase2FocusLift(f,local);
             const float3 c=DuoReadContext(p);
             [branch] if(all(isfinite(f)) && all(isfinite(c))) {
@@ -122,16 +122,14 @@ bool DuoB40AmbientEdgeDifference(float2 anchor,uint side,float eyeSharpen,out fl
     return accepted>=8.0;
 }
 
-// B43 parity: 32 boundary knots per eye (64 lanes), 4 subanchors per knot, trimmed RGB
+// Direct B40 port: 32 boundary knots, 4 subanchors per knot, trimmed RGB
 // mean/median to reject local outliers, shared queue-owned EMA history. Gaze,
 // scene, settings, elapsed>250ms and invalid-sample NEVER reset history.
 // Allocating a fresh buffer on actual XR session/device restart is allowed.
-[numthreads(64,1,1)]
+[numthreads(32,1,1)]
 void CSMonoB40(uint lane:SV_GroupIndex) {
-    const uint eye=lane/32u;
-    const uint knot=lane%32u;
-    const uint side=knot/8u;
-    const float segment=float(knot%8u);
+    const uint side=lane/8u;
+    const float segment=float(lane%8u);
     float3 q0=0.0,q1=0.0,q2=0.0,q3=0.0;
     uint count=0u;
     const float2 size=float2(OutputSize);
@@ -146,8 +144,7 @@ void CSMonoB40(uint lane:SV_GroupIndex) {
         uint projectedSide=0u; float projectedAlong=0.0;
         p=DuoB40EdgeAnchor(p,projectedSide,projectedAlong);
         float3 delta=0.0;
-        [branch] if(DuoB40AmbientEdgeDifference(p,side,
-                eye==0u ? B40EyeSharpen.x : B40EyeSharpen.y,delta)) {
+        [branch] if(DuoB40AmbientEdgeDifference(p,side,delta)) {
             if(count==0u) q0=delta;
             else if(count==1u) q1=delta;
             else if(count==2u) q2=delta;
