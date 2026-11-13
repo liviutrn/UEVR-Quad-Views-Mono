@@ -221,6 +221,15 @@ replace(P, """                const bool moved = distinct && written && !write.e
         """                const bool moved = distinct && written && !write.exact;
                 if (smooth_diagnostics_ && XR_SUCCEEDED(result)) {
                     ++totals_.smooth_submitted;
+                    // A compositor restart, loading pause or non-rendered slot
+                    // must not be interpreted as missed pacing or a huge jump.
+                    const XrDuration target_gap = smooth_last_success_target_ ? time - smooth_last_success_target_ : 0;
+                    const bool continuous = target_gap > 0 && target_gap <= PauseLimitLocked() && path != 1;
+                    if (!continuous) smooth_last_interp_pair_ = 0;
+                    if (smooth_last_success_target_ && target_gap > PauseLimitLocked())
+                        ++totals_.smooth_pauses;
+                    if (smooth_last_success_target_ && target_gap <= 0)
+                        ++totals_.smooth_target_regressed;
                     const auto kind = dynamic_smooth::ClassifyJit(
                         true, path, distinct, written, write.exact,
                         choice.mode == FrameGenSynthesisMode::kInterpolate);
@@ -235,7 +244,7 @@ replace(P, """                const bool moved = distinct && written && !write.e
                         } else if (source) {
                             if (choice.fraction <= smooth_last_interp_fraction_ + 0.0001f)
                                 ++totals_.smooth_interp_rewinds;
-                            if (period > 0 && time - smooth_last_interp_target_ > period + period / 2)
+                            if (continuous && period > 0 && time - smooth_last_interp_target_ > period + period / 2)
                                 ++totals_.smooth_interp_gaps;
                             smooth_last_interp_fraction_ = choice.fraction;
                             smooth_last_interp_target_ = time;
@@ -243,27 +252,43 @@ replace(P, """                const bool moved = distinct && written && !write.e
                         break;
                     case dynamic_smooth::JitKind::kPredict:
                         ++totals_.smooth_predicted;
-                        totals_.smooth_covers += choice.cover ? 1 : 0;
+                        totals_.smooth_covers += (choice.cover || write.motion_late) ? 1 : 0;
                         totals_.smooth_stale += write.stale ? 1 : 0;
                         break;
                     default:
                         ++totals_.smooth_other; break;
                     }
-                    if (smooth_last_success_end_ != Clock::time_point{})
+                    if (continuous && smooth_last_success_end_ != Clock::time_point{})
                         AddSample(smooth_end_gaps_ms_, Milliseconds(smooth_runtime_return -
                                       smooth_last_success_end_), kMaxFrameSamples);
                     smooth_last_success_end_ = smooth_runtime_return;
-                    if (period > 0 && smooth_last_success_target_ != 0) {
-                        const XrDuration target_gap = time - smooth_last_success_target_;
-                        if (target_gap > 0) {
-                            AddSample(smooth_target_gaps_ms_, static_cast<double>(target_gap) / 1e6,
-                                      kMaxFrameSamples);
-                            totals_.smooth_grid_missing += dynamic_smooth::MissingGridSlots(target_gap, period);
-                        } else {
-                            ++totals_.smooth_target_regressed;
-                        }
+                    if (continuous && period > 0) {
+                        AddSample(smooth_target_gaps_ms_, static_cast<double>(target_gap) / 1e6, kMaxFrameSamples);
+                        totals_.smooth_grid_missing += dynamic_smooth::MissingGridSlots(target_gap, period);
                     }
                     smooth_last_success_target_ = time;
+                    // Inferred content time is a timeline proxy, not a visual
+                    // motion/ghosting or actual SteamVR scanout measurement.
+                    XrTime shown = smooth_last_content_; // hold paths 6,8
+                    if ((path == 3 || path == 4) && source) {
+                        shown = dynamic_smooth::ContentTime(
+                            source->previous_time, source->time, choice.fraction,
+                            choice.mode == FrameGenSynthesisMode::kInterpolate, write.exact);
+                    } else if (path == 2 || path == 5 || path == 7) {
+                        shown = jit_content_time_;
+                    }
+                    if (continuous && period > 0 && smooth_last_content_ != 0 && shown != 0) {
+                        const XrDuration step = shown - smooth_last_content_;
+                        AddSample(smooth_motion_err_ms_, std::abs(static_cast<double>(step) -
+                                  static_cast<double>(target_gap)) / 1e6, kMaxFrameSamples);
+                        switch (dynamic_smooth::ClassifyMotionStep(step, target_gap, period)) {
+                        case dynamic_smooth::MotionStep::kRewind: ++totals_.smooth_rewinds; break;
+                        case dynamic_smooth::MotionStep::kFreeze: ++totals_.smooth_freezes; break;
+                        case dynamic_smooth::MotionStep::kJump: ++totals_.smooth_jumps; break;
+                        default: break;
+                        }
+                    }
+                    smooth_last_content_ = (path == 1) ? 0 : shown;
                     const double late_ms = std::max(0.0, Milliseconds(smooth_submit_begin - submit_at));
                     AddSample(smooth_submit_late_ms_, late_ms, kMaxFrameSamples);
                     if (period > 0 && late_ms > static_cast<double>(period) / 2e6)
@@ -286,6 +311,14 @@ replace(P, '            ")" + ", copiesSkipped=" + std::to_string(delta(&Totals:
                   ", smoothPairs=" + std::to_string(delta(&Totals::smooth_interp_pairs)) +
                   ", smoothPairRewind=" + std::to_string(delta(&Totals::smooth_interp_rewinds)) +
                   ", smoothPairGap=" + std::to_string(delta(&Totals::smooth_interp_gaps)) +
+                  ", smoothReserveUps=" + std::to_string(delta(&Totals::smooth_reserve_ups)) +
+                  ", smoothRingBackoffs=" + std::to_string(delta(&Totals::smooth_ring_backoffs)) +
+                  ", smoothPauses=" + std::to_string(delta(&Totals::smooth_pauses)) +
+                  ", smoothFreeze=" + std::to_string(delta(&Totals::smooth_freezes)) +
+                  ", smoothJump=" + std::to_string(delta(&Totals::smooth_jumps)) +
+                  ", smoothRewind=" + std::to_string(delta(&Totals::smooth_rewinds)) +
+                  ", smoothMotionErrMsP50P95=" + Percentiles(smooth_motion_err_ms_, 0.5, 0.95) +
+                  ", smoothMotionErrMsP99=" + SmoothP99(smooth_motion_err_ms_) +
                   ", smoothEndGapMsP50P95=" + Percentiles(smooth_end_gaps_ms_, 0.5, 0.95) +
                   ", smoothEndGapMsP99=" + SmoothP99(smooth_end_gaps_ms_) +
                   ", smoothTargetGapMsP50P95=" + Percentiles(smooth_target_gaps_ms_, 0.5, 0.95) +
@@ -296,7 +329,7 @@ replace(P, '            ")" + ", copiesSkipped=" + std::to_string(delta(&Totals:
             ", copiesSkipped=" + std::to_string(delta(&Totals::copies_skipped)) +""",
         "30 second summary")
 replace(P, "    ring_short_write_ms_.clear();\n",
-        "    ring_short_write_ms_.clear();\n    smooth_end_gaps_ms_.clear();\n    smooth_target_gaps_ms_.clear();\n    smooth_submit_late_ms_.clear();\n",
+        "    ring_short_write_ms_.clear();\n    smooth_end_gaps_ms_.clear();\n    smooth_target_gaps_ms_.clear();\n    smooth_submit_late_ms_.clear();\n    smooth_motion_err_ms_.clear();\n",
         "clear samples at start and summary", expected=2)
 replace(CM, "        set_tests_properties(vectorxr_mono_framegen_tests PROPERTIES TIMEOUT 10)\n",
         """        set_tests_properties(vectorxr_mono_framegen_tests PROPERTIES TIMEOUT 10)
