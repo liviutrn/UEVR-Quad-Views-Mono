@@ -9,6 +9,7 @@ on:
       - 'experiment/vectorxr-dynamic6-evidence-reserve-20261113'
       - 'experiment/vectorxr-dynamic6-reserve19-20261113'
       - 'experiment/vectorxr-instrumentation21-20261113'
+      - 'experiment/vectorxr-22-runtime-depth-*'
   workflow_dispatch:
 permissions:
   contents: read
@@ -80,6 +81,36 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Research21 real-frame trace anchors failed' }
           git -C vectorxr diff | Set-Content -Encoding utf8 evidence/vectorxr-mono-dynamic-smooth-research21.patch
           git -C vectorxr diff --stat
+      - name: Apply VectorXR #22 and preserve the GENERATED C++ diff against #36
+        shell: pwsh
+        run: |
+          $before = Join-Path $env:RUNNER_TEMP 'vectorxr22-before'
+          $after  = Join-Path $env:RUNNER_TEMP 'vectorxr22-after'
+          $files = @(
+            'layer/include/depthxr/framegen_presenter.h',
+            'layer/src/framegen/framegen_presenter.cpp',
+            'layer/tests/framegen_presenter_tests.cpp'
+          )
+          foreach ($rel in $files) {
+            $dest = Join-Path $before $rel
+            New-Item -ItemType Directory (Split-Path $dest -Parent) -Force | Out-Null
+            Copy-Item (Join-Path 'vectorxr' $rel) $dest
+          }
+          python workspace/vectorxr_mono/apply_vectorxr_runtime_depth22.py vectorxr
+          if ($LASTEXITCODE -ne 0) { throw 'VectorXR #22 final patch anchors failed' }
+          foreach ($rel in $files) {
+            $dest = Join-Path $after $rel
+            New-Item -ItemType Directory (Split-Path $dest -Parent) -Force | Out-Null
+            Copy-Item (Join-Path 'vectorxr' $rel) $dest
+          }
+          git -c core.quotePath=false diff --no-index -- $before $after |
+            Set-Content -Encoding utf8 evidence/vectorxr22-generated-cpp.patch
+          $diffExit = $LASTEXITCODE
+          if ($diffExit -ne 1) { throw "Expected #22 generated C++ diff, got exit code $diffExit" }
+          $patch = Get-Item evidence/vectorxr22-generated-cpp.patch
+          if ($patch.Length -lt 100) { throw '#22 evidence patch is empty' }
+          Write-Host "VectorXR #22 generated diff size $($patch.Length) bytes"
+          git -C vectorxr diff --stat
       - name: Build the layer (Release)
         shell: pwsh
         run: |
@@ -99,7 +130,7 @@ jobs:
           $exe = Get-ChildItem vectorxr/build -Recurse -File -Filter depthxr_framegen_presenter_tests.exe |
             Select-Object -First 1
           if (-not $exe) { throw 'Presenter fake-runtime test executable not found' }
-          foreach ($test in @('TestJitDynamicInterpolationSlow', 'TestJitDynamicSlackReserve', 'TestJitWorldTickIndependentOfDisplayTime', 'TestJitBuild18WarmupFixture')) {
+          foreach ($test in @('TestJitDynamicInterpolationSlow', 'TestJitDynamicSlackReserve', 'TestJitWorldTickIndependentOfDisplayTime', 'TestJitBuild18WarmupFixture', 'TestRuntimeDepth22Off')) {
             $env:FG_TEST_ONLY = $test
             if ($test -eq 'TestJitDynamicInterpolationSlow') { $env:FG_TEST_GAPS = '1' }
             $log = "evidence/$test.log"
@@ -127,14 +158,16 @@ jobs:
           Copy-Item evidence/vectorxr-mono.patch $out/
           Copy-Item evidence/vectorxr-mono-dynamic-smooth.patch $out/
           Copy-Item evidence/vectorxr-mono-dynamic-smooth-research21.patch $out/
+          Copy-Item evidence/vectorxr22-generated-cpp.patch $out/
           Copy-Item workspace/vectorxr_mono/test-presets21 $out/settings-presets -Recurse -Force
+          Copy-Item workspace/vectorxr_mono/test-presets22 $out/settings-presets22 -Recurse -Force
           New-Item -ItemType Directory $out/source -Force | Out-Null
           Copy-Item workspace/vectorxr_mono/* $out/source/
           @'
           VECTORXR 0.20.1 + MONO FRAME GENERATION - PERSONAL TEST BUILD (not an official VectorXR release)
           Built from DienerTech/vectorxr 8fffa72 (tag v0.20.1, MPL-2.0) + the patch in vectorxr-mono.patch / source/.
           Unsigned. Personal use only. HEADSET UNVERIFIED. Dynamic 6x is OFF by default.
-          Research #21: 3 ready-to-copy settings files in settings-presets. All behavior switches default OFF.
+          Research #21: A/B/C/D in settings-presets. #22 RD0 in settings-presets22; runtime depth defaults ON.
           UEVR tracing requires a matching separately compiled UEVR research DLL.
           See source/README-dynamic-smooth.md for switches and a test plan.
 
@@ -165,12 +198,12 @@ jobs:
           Base commit: 8fffa72e99be8ab1e39457c7353faeb1218ac83f (DienerTech/vectorxr).
           '@ | Set-Content $out/READ_FIRST.txt
           Get-ChildItem $out -Recurse -File | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize | Out-String | Set-Content evidence/package-sha256.txt
-          $zip = "VectorXR-0.20.1-Mono-DynamicSmooth-${{ github.run_number }}.zip"
+          $zip = "VectorXR-0.20.1-RuntimeDepth22-${{ github.run_number }}.zip"
           Compress-Archive -Path $out/* -DestinationPath $zip -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: VectorXR-0.20.1-Mono-DynamicSmooth-${{ github.run_number }}
-          path: VectorXR-0.20.1-Mono-DynamicSmooth-*.zip
+          name: VectorXR-0.20.1-RuntimeDepth22-${{ github.run_number }}
+          path: VectorXR-0.20.1-RuntimeDepth22-*.zip
           if-no-files-found: error
           retention-days: 90
       - name: Run VectorXR's full layer test suite (regression check)
