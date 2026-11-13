@@ -299,7 +299,9 @@ jobs:
           python workspace/quadview/duoview_port/test_duoview_m22_generated.py workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'M2.2 4K diagnostic and subpixel shader contracts failed' }
           python workspace/quadview/duoview_port/test_duoview_m23_generated.py backend workspace/duoview workspace/quadview
-          if ($LASTEXITCODE -ne 0) { throw 'M2.3 exact B43-158 seam source + cross-list depth + independent wide regression failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'M2.3 B43-158 baseline, full-feather seam, depth and wide regression failed' }
+          python workspace/quadview/duoview_port/test_duoview_m23_blend.py
+          if ($LASTEXITCODE -ne 0) { throw 'M2.3 seam matching failed full-feather brightness continuity oracle' }
           python workspace/quadview/duoview_port/test_duoview_m21_numeric.py
           if ($LASTEXITCODE -ne 0) { throw 'M2.2 4000-pixel inverse-warp regression failed' }
           python workspace/quadview/duoview_port/embed_duoview_b40.py workspace/duoview backend/src/mods/vr/DuoViewShaderSource.hpp --m1
