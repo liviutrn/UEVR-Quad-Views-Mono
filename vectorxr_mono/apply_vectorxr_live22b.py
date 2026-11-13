@@ -119,7 +119,7 @@ change(R, '''            out<<"kind,frame,secondary,tick,qpc_ns,display_xr,pose_
 # Self-contained deterministic mock file test: mtime, 1-Hz throttle, a
 # non-live key, and defaults. CI also exercises the entire JIT runtime suite.
 change(T, '#include "depthxr/framegen_runtime_depth22.h"',
-       '#include "depthxr/framegen_runtime_depth22.h"\n#include "depthxr/framegen_live22b.hpp"',
+       '#include "depthxr/framegen_runtime_depth22.h"\n#include "depthxr/framegen_live22b.hpp"\n#include "depthxr/ResearchTrace21.hpp"',
        "include test helper")
 change(T, '''void TestRuntimeDepth22Standby() {''',
        '''void TestLiveSwitch22b() {
