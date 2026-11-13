@@ -11,6 +11,16 @@ def main():
     s=args.source.read_text(encoding="utf-8")
     marker="""    // Restore every touched field; the final legacy comparison is intended"""
     assert s.count(marker)==1, "M25 WARP insertion drifted"
+    # The B40 contract checks red fovea + blue periphery. M2.5a debug modes
+    # 2 and 3 intentionally replace those colors with a heatmap. Preserve
+    # the legacy assertion for all other modes, including fine-OFF parity.
+    # The remaining image hash, eye-coverage and D3D12 assertions stay active.
+    legacy_color_check='if (px(16,16)[2]<220 || px(1,1)[0]<220)'
+    if s.count(legacy_color_check)!=1:
+        raise SystemExit("M25 legacy WARP color-check anchor drifted")
+    s=s.replace(legacy_color_check,
+                'if (frame.config.settings.m21_depth_debug < 2u && '
+                '(px(16,16)[2]<220 || px(1,1)[0]<220))',1)
     block=r'''    // Real FXC + D3D12 WARP M2.5a smoke: with fine depth disabled, the
     // content-mode switch is NOT allowed to alter a single output pixel.
     primary=saved_primary;
