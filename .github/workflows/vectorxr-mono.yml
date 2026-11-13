@@ -7,6 +7,7 @@ on:
       - 'experiment/vectorxr-dynamic6-smooth-20261112'
       - 'review/vectorxr-dynamic6-audit-20261112'
       - 'experiment/vectorxr-dynamic6-evidence-reserve-20261113'
+      - 'experiment/vectorxr-dynamic6-reserve19-20261113'
   workflow_dispatch:
 permissions:
   contents: read
@@ -86,6 +87,7 @@ jobs:
           if (-not $exe) { throw 'Presenter fake-runtime test executable not found' }
           foreach ($test in @('TestJitDynamicInterpolationSlow', 'TestJitDynamicSlackReserve')) {
             $env:FG_TEST_ONLY = $test
+            if ($test -eq 'TestJitDynamicInterpolationSlow') { $env:FG_TEST_GAPS = '1' }
             $log = "evidence/$test.log"
             try {
               & $exe.FullName --group pacing *> $log
@@ -94,6 +96,7 @@ jobs:
               if ($code -ne 0) { throw "Fake-runtime $test failed with exit code $code" }
             } finally {
               Remove-Item Env:FG_TEST_ONLY -ErrorAction SilentlyContinue
+              Remove-Item Env:FG_TEST_GAPS -ErrorAction SilentlyContinue
             }
           }
       - name: Package the personal DLL
