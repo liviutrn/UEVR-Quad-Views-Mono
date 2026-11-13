@@ -11,7 +11,7 @@ def require(path,*tokens):
         if token not in s: raise RuntimeError(f"B40 missing {token!r} in {path}")
     return s
 shader=require(duo/"DuoViewPhase2Effects.hlsl",
-    "[numthreads(32,1,1)]","void CSMonoB40",
+    "[numthreads(64,1,1)]","void CSMonoB40",
     "for(uint sub=0u;sub<4u;++sub)",
     "for(int depth=0;depth<3;++depth)","for(int i=-2;i<=2;++i)",
     "count>=2u","count==4u","count==3u","count==2u",
@@ -21,13 +21,13 @@ shader=require(duo/"DuoViewPhase2Effects.hlsl",
     "stable+=clamp((target-stable)*alpha",
     "DuoMonoEdgeHistory[h+1u]=CropUv; // diagnostic only; no validity/reset check",
     "DuoMonoSeamOutput[lane*2u+1u]=float4(stable,1.0)",
-    "DuoMonoSeamMatch[i*2u+1u]",
+    "DuoMonoSeamMatch[base+i*2u+1u]",
     "DuoB40InwardAnchor", "DuoB40EdgeAnchor", "GlamSharpenNativeFovea",
     "DuoPhase2FocusLift",
 )
 if "confidence * .5" in shader or "gainSum" in shader:
     raise RuntimeError("Old four-probe approximation is still in the production shader")
-common=require(duo/"DuoViewComposite.hlsl","uint4 B40Temporal","float4 SeamGeometry")
+common=require(duo/"DuoViewComposite.hlsl","uint4 B40Temporal","float4 B40EyeSharpen","float4 SeamGeometry")
 require(duo/"DuoViewNativeCompositeRaster.hlsl",
     "DuoPhase2MatchContext", "DuoB40InwardAnchor", "rawPeriphery",
     "lerp(rawPeriphery,periphery,DuoB40InwardAnchor(fullUv))")
@@ -41,7 +41,7 @@ gpu=require(backend/"src/mods/vr/DuoViewD3D12.hpp",
     "D3D12_RESOURCE_STATE_UNORDERED_ACCESS",
     "D3D12_RESOURCE_BARRIER_TYPE_UAV",
     "cmd->Dispatch(1,1,1)",
-    "sizeof(ShaderConstants) == 208",
+    "sizeof(ShaderConstants) == 224",
     "sizeof(ShaderConstants)/4 + 4 <= 64",
     "SetComputeRootUnorderedAccessView(3",
     "b40_timestamp_ms()",
@@ -71,4 +71,4 @@ if "4 spatial edge groups" in (backend/"src/mods/VR.cpp").read_text(encoding="ut
     raise RuntimeError("Old UI still mislabels Mono B40 as Phase2 prototype")
 if len([x for x in shader.splitlines() if "DuoReadFocus(p)" in x])!=1:
     raise RuntimeError("B40 sample function altered unexpectedly")
-print("Mono B40 source contracts PASS: 128x15, 32 temporal knots, queue history, native/gather and no resets")
+print("Mono B40 source contracts PASS: 256x15, 64 temporal knots, queue history, native/gather and no resets")
