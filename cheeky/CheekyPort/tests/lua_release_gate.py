@@ -85,8 +85,10 @@ def main() -> None:
         needed = {
             "plugins/CheekyFoveatedDLSS.dll",
             "plugins/CheekyFoveatedDLSS/CheekyFoveatedDLSSRuntime.dll",
-            "OpenXR/CheekyOpenXRSetup.exe",
+            # UEVR-only package: OpenXR layer installer intentionally absent.
         }
+        if "OpenXR/CheekyOpenXRSetup.exe" in members:
+            raise RuntimeError("Unexpected OpenXR layer in UEVR-only package")
         missing = needed - set(members)
         if missing:
             raise RuntimeError(f"Missing payload entries: {sorted(missing)}")
