@@ -102,14 +102,18 @@ replace("""            if (XR_FAILED(result)) {
                 PauseLocked("runtime rejected a frame from the presenter thread (""",
 "successful per-refresh output, actual GPU fraction and path")
 
-# Flush at OpenXR session teardown, without stopping the writer. Keeping the
-# writer allows runtime reinitialization in a single process to retain data.
-replace("""void FrameGenPresenter::Stop() {
-    trace_.Stop();""",
-"""void FrameGenPresenter::Stop() {
-    trace_.Stop();
-    research_trace21::Sink().FlushNow();""",
-"session-end CSV flush")
+# Flush only AFTER the compositor thread has been stopped. Calling it at
+# Stop() entry could miss final compositor writes still in flight.
+# Do not permanently stop the writer; runtime reinit in the same process
+# must keep producing trace records.
+replace("""    lock.unlock();
+    {
+        // Finish outstanding GPU work before the runtime frees the output""",
+"""    lock.unlock();
+    research_trace21::Sink().FlushNow();
+    {
+        // Finish outstanding GPU work before the runtime frees the output""",
+"post-compositor session-end CSV flush")
 
 out=root/"layer/include/depthxr/ResearchTrace21.hpp"
 out.parent.mkdir(parents=True,exist_ok=True)
