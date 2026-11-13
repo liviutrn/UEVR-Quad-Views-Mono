@@ -50,7 +50,7 @@ def test_math():
     assert a==b==1 and not v
     assert tile(wall,wall,offset=1)[1]==1
     # Full frame veto really disables all fine weights.
-    assert all(0. if guard([(0.,0.,True)]*2) else t[1] == 0. for t in [(0.,0.,True)]*2)
+    assert all((0. if guard([(0.,0.,True)]*2) else t[1]) == 0. for t in [(0.,0.,True)]*2)
 
 def test_pool_reference():
     # Twelve slots are reserved as two role-specific groups of six. No resize
