@@ -69,7 +69,8 @@ replace("""            if (XR_FAILED(result)) {
                 // aux bits: 0..7 path; 8 exact; 9 written; 10 distinct;
                 // 11 xrEndFrame submitted; 12 rendered; 13 fraction-valid;
                 // 14 generated; 15 cover; 16 unmeasured; 17 stale;
-                // 18 motion-late; 19 source-known; 20 prev ID evicted.
+                // 18 motion-late; 19 source-known; 20 prev ID evicted;
+                // 21 extrapolation (else interpolation, when fraction-valid).
                 const auto bit = [](bool value, unsigned shift) -> std::int64_t {
                     return value ? (std::int64_t{1} << shift) : 0;
                 };
@@ -87,7 +88,8 @@ replace("""            if (XR_FAILED(result)) {
                     bit(write.stale, 17) |
                     bit(write.motion_late, 18) |
                     bit(shown_id != 0, 19) |
-                    bit(previous_time != 0 && previous_id == 0, 20);
+                    bit(previous_time != 0 && previous_id == 0, 20) |
+                    bit(synthesized_now && choice.mode == FrameGenSynthesisMode::kExtrapolate, 21);
                 // kind 7 schema: frame=actual shown source id,
                 // secondary=previous id (0 if evicted), display_xr=refresh time,
                 // pose_xr=GPU fraction*1e6 (or -1), aux=classification bits,
