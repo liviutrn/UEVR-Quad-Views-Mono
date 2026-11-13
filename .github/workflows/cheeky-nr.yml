@@ -1,0 +1,233 @@
+name: Cheeky 0.6.3 NR Batch 2 - shared-repo build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: cheeky
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned Cheeky 0.6.3
+        uses: actions/checkout@v4
+        with:
+          repository: ClarkCheekyKent/CheekyFoveatedDLSS
+          ref: 39bfc96214498e5e21cf861f0eb21f875697b428
+          path: cheeky/upstream-cheeky
+      - name: Apply TriView dual-fovea NR routing and VRAM cleanup
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_view.py
+          if ($LASTEXITCODE -ne 0) { throw "Patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_view.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Strict patch failed" }
+          # Upstream v0.6.3 tag still carries an old 0.6.2 version.h.
+          # Correct release identity in the isolated test package before compiling.
+          $header = "upstream-cheeky/shared/version.h"
+          $text = Get-Content $header -Raw
+          if (-not $text.Contains('#define CHEEKY_VERSION "0.6.2"')) {
+            throw "Unexpected upstream source-version header: review before packaging"
+          }
+          $text = $text.Replace('#define CHEEKY_VERSION "0.6.2"', '#define CHEEKY_VERSION "0.6.3"')
+          [IO.File]::WriteAllText((Resolve-Path $header), $text, [Text.UTF8Encoding]::new($false))
+      - name: Apply NR-only GPU lifetime and atlas probe
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_lite.py
+          if ($LASTEXITCODE -ne 0) { throw "NR-Lite patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_lite.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "NR-Lite strict patch failed" }
+          python CheekyPort/tests/test_v063_nr_lite.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "NR-Lite static checks failed" }
+      - name: Apply full-fovea defaults and actual-state diagnostics
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_visibility.py
+          if ($LASTEXITCODE -ne 0) { throw "NR diagnostics patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_visibility.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "NR diagnostics strict patch failed" }
+      - name: Apply independent NR view masks and pass-2 crop
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_independent.py
+          if ($LASTEXITCODE -ne 0) { throw "Independent-pass patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_independent.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Independent-pass strict patch failed" }
+      - name: Install GPU stage timing and regression assertions
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_gpu_trace.py
+          if ($LASTEXITCODE -ne 0) { throw "GPU profiler patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_gpu_trace.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "GPU profiler strict patch failed" }
+          python CheekyPort/tests/test_v063_perpass.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "NR pass routing regression assertions failed" }
+      - name: Apply TriView safety, exposure tracing and Faithful HDR reconstruction
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_safety.py CheekyPort/scripts/apply_v063_nr_faithful.py
+          if ($LASTEXITCODE -ne 0) { throw "NR safety/HDR patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_nr_safety.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "TriView safety strict patch failed" }
+          python CheekyPort/scripts/apply_v063_nr_faithful.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Faithful HDR strict patch failed" }
+          python CheekyPort/tests/test_v063_faithful.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Safety/HDR source & math regression failed" }
+      - name: Apply DuoView Mono plus TriView foveas-only source routing
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_duo_tri_foveas.py CheekyPort/tests/test_v063_duo_tri.py
+          if ($LASTEXITCODE -ne 0) { throw "DuoView source patch syntax invalid" }
+          python CheekyPort/scripts/apply_v063_duo_tri_foveas.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "DuoView/TriView strict patch failed" }
+          python CheekyPort/tests/test_v063_duo_tri.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "DuoView/TriView regression contract failed" }
+      - name: Apply reviewed explicit four-layout NR targeting and source tests
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_nr_targets_v2.py CheekyPort/tests/test_v063_nr_targets_v2.py
+          if ($LASTEXITCODE -ne 0) { throw "NR four-mode patch/test syntax failed" }
+          python CheekyPort/scripts/apply_v063_nr_targets_v2.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Strict four-mode NR source patch failed" }
+          python CheekyPort/tests/test_v063_nr_targets_v2.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Four-mode source contract failed" }
+      - name: Apply Fable review fixes and source-level gates
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_fable_review.py CheekyPort/tests/test_v063_fable_review.py
+          if ($LASTEXITCODE -ne 0) { throw "Fable review patch/test syntax failed" }
+          python CheekyPort/scripts/apply_v063_fable_review.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Fable review safety hardening patch failed" }
+          python CheekyPort/tests/test_v063_fable_review.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Fable review source policy contract failed" }
+      - name: Apply VRAM-safe Fable C1-C6 core repairs and C++ regression fixtures
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_fable_c1_c6.py CheekyPort/scripts/apply_v063_fable_status.py CheekyPort/scripts/apply_v063_fable_c1_c6_tests.py CheekyPort/tests/test_v063_fable_c1_c6.py
+          if ($LASTEXITCODE -ne 0) { throw "C1-C6 repair script syntax failed" }
+          python CheekyPort/scripts/apply_v063_fable_c1_c6.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "C1-C6 core source patch failed" }
+          python CheekyPort/scripts/apply_v063_fable_status.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "C5 live NR layout diagnostics patch failed" }
+          python CheekyPort/scripts/apply_v063_fable_c1_c6_tests.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "C1-C6 compiled test fixtures patch failed" }
+          python CheekyPort/tests/test_v063_fable_c1_c6.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "C1-C6 source contract failed" }
+      - name: Apply configurable 1536-MiB NR VRAM headroom cap and real regression fixtures
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_adjustable_guard.py CheekyPort/scripts/apply_v063_adjustable_guard_tests.py CheekyPort/tests/test_v063_adjustable_guard.py
+          if ($LASTEXITCODE -ne 0) { throw "Adjustable NR VRAM guard scripts failed to compile" }
+          python CheekyPort/scripts/apply_v063_adjustable_guard.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Adjustable NR VRAM headroom patch failed" }
+          python CheekyPort/scripts/apply_v063_adjustable_guard_tests.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "VRAM guard C++ test fixture patch failed" }
+          python CheekyPort/tests/test_v063_adjustable_guard.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Adjustable NR guard source contract failed" }
+      - name: Apply experimental preheadset opt-in NR probes and lossless capture
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_preheadset.py CheekyPort/tests/test_v063_preheadset.py
+          if ($LASTEXITCODE -ne 0) { throw "Preheadset scripts failed to compile" }
+          python CheekyPort/scripts/apply_v063_preheadset.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Preheadset generated code patch failed" }
+          python CheekyPort/tests/test_v063_preheadset.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Preheadset source and shadow reference contract failed" }
+      - name: Apply Claude capture-V2 review fixes and compiled tests
+        shell: pwsh
+        run: |
+          python -m py_compile CheekyPort/scripts/apply_v063_preheadset_capture_v2.py CheekyPort/scripts/apply_v063_capture_v2_tests.py CheekyPort/tests/test_v063_preheadset_capture_v2.py
+          if ($LASTEXITCODE -ne 0) { throw "Capture V2 scripts syntax failed" }
+          python CheekyPort/scripts/apply_v063_preheadset_capture_v2.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Capture V2 generated patch failed" }
+          python CheekyPort/scripts/apply_v063_capture_v2_tests.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Capture V2 compiled UEVR tests patch failed" }
+          python CheekyPort/tests/test_v063_preheadset_capture_v2.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Capture V2 source/lifetime gate failed" }
+      - name: Recompile every embedded HLSL shader from modified sources
+        working-directory: cheeky/upstream-cheeky
+        shell: pwsh
+        run: |
+          $sdk = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Windows Kits/10/bin'
+          $fxc = @(Get-ChildItem -Path $sdk -Filter fxc.exe -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]fxc[.]exe$' } |
+            Sort-Object -Property FullName -Descending | Select-Object -First 1)
+          if ($fxc.Count -ne 1) { throw "Windows SDK x64 fxc.exe missing" }
+          python scripts/build-d3d-shaders.py --fxc $fxc[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "Embedded shader regeneration failed" }
+          python scripts/build-d3d-shaders.py --fxc $fxc[0].FullName --check
+          if ($LASTEXITCODE -ne 0) { throw "Generated shader bytes differ from source" }
+      - name: Independently compile generated Lua (Lua 5.1 and 5.4)
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --only-binary=:all: lupa==2.8
+          if ($LASTEXITCODE -ne 0) { throw "Lua compiler dependency unavailable" }
+          python CheekyPort/tests/lua_release_gate.py source upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Generated Lua syntax gate failed" }
+      - name: Exercise generated Lua UI with mocked UEVR event bridge
+        shell: pwsh
+        run: |
+          python CheekyPort/tests/lua_ui_smoke.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Real generated Lua UI smoke test failed" }
+      - name: Compile full upstream solution (no unrelated FG hardware tests)
+        working-directory: cheeky/upstream-cheeky
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild/**/Bin/MSBuild.exe' | Select-Object -First 1
+          if (-not $msbuild) { throw "MSBuild not found" }
+          & $msbuild CheekyFoveatedDLSS.sln /m /nr:false /nologo /verbosity:minimal /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+          if ($LASTEXITCODE -ne 0) { throw "Compilation failed" }
+      - name: Run focused NR and source-view regressions
+        working-directory: cheeky/upstream-cheeky
+        shell: pwsh
+        run: |
+          foreach ($suite in @('--opennr-v063', '--nr-processing', '--d3d12-history', '--stereo-support', '--alignment-history')) {
+            Write-Host "Checking: $suite"
+            ./bin/Release/CheekyTests.exe $suite
+            if ($LASTEXITCODE -ne 0) { throw "Failed regression suite: $suite" }
+          }
+          Write-Host "Testing UEVR host bridge, mode switching and saved setting across reload"
+          ./bin/Release/CheekyUEVRTests.exe
+          if ($LASTEXITCODE -ne 0) { throw "Real UEVR runtime integration failed" }
+      - name: Package UEVR
+        working-directory: cheeky/upstream-cheeky
+        shell: pwsh
+        run: |
+          # The upstream PowerShell packager verifies its ZIP hashes internally.
+          # Its last cmdlet may retain an unrelated native LASTEXITCODE, so verify
+          # the actual output rather than trusting that inherited exit code.
+          ./scripts/package-uevr.ps1 -Configuration Release -Label v063-duotri-preheadset-instrumented -IncludeOpenXRSetup:$false
+          $zip = @(Get-ChildItem bin/Release/*-UEVR-v063-duotri-preheadset-instrumented.zip)
+          if ($zip.Count -ne 1) { throw "Missing or ambiguous UEVR archive" }
+          if ($zip[0].Name -ne "CheekyFoveatedDLSS-0.6.3-UEVR-v063-duotri-preheadset-instrumented.zip") {
+            throw "Incorrect version-stamped UEVR archive: $($zip[0].Name)"
+          }
+          $test = [IO.Compression.ZipFile]::OpenRead($zip[0].FullName)
+          try {
+            foreach ($expected in @("plugins/CheekyFoveatedDLSS.dll",
+                                  "plugins/CheekyFoveatedDLSS/CheekyFoveatedDLSSRuntime.dll",
+                                  "scripts/cheeky_foveated_dlss.lua")) {
+              if (-not @($test.Entries | Where-Object FullName -EQ $expected).Count) {
+                throw "Missing required UEVR payload: $expected"
+              }
+            }
+          } finally { $test.Dispose() }
+          $zip[0] | Get-FileHash -Algorithm SHA256
+      - name: Verify exact packaged Lua bytes and compile every packaged script
+        shell: pwsh
+        run: |
+          python CheekyPort/tests/lua_release_gate.py package upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Packaged Lua release gate failed" }
+      - name: Upload experimental headset-test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cheeky-0.6.3-UEVR-NR-Batch2
+          path: |
+            cheeky/upstream-cheeky/bin/Release/*-UEVR-v063-duotri-preheadset-instrumented.zip
+          if-no-files-found: error
+          retention-days: 20
