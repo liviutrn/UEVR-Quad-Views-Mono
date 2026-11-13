@@ -36,3 +36,7 @@ Keep a copy of the last known-good #201 / M1 and your best TriView binary. In ID
 - Verify mode ID7 shared producer and capture pool semantics have not changed, and mode ID6 stereo-OFF remains the original Mono route.
 
 **Evidence standard:** successful GitHub CI means Windows compilation and automated tests passed, not that VR rendering, frame pacing or headset stability have been validated.
+
+## CI and artifact provenance
+
+Workflow: `.github/workflows/triview-b1.yml`, build name `TriView B43 + DuoView Mono M2.2`. The distributable artifact is named `UEVR-DuoView-M22-<run number>`. This release-note commit is the final staged change triggering the M2.2 Windows/Ubuntu build, and makes no additional shader modifications.
