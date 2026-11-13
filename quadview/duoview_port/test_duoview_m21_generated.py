@@ -61,7 +61,7 @@ def main():
     assert "M2FusedInverseDepth" not in raster, "unsafe post-limit fusion remains"
     have(shaders/"DuoViewNativeCompositeRaster.hlsl",
          "M2Sharpen.z > .5 ? outputUv : M1PullUv",
-         "GlamExtraWideChange(fullUv, beforeSharpen, fineSharpen)",
+         "GlamExtraWideChange(fullUv, beforeSharpen, wideSharpen)",
          "M1ReadConditioned(pos+float2(delta.x,0))")
     have(shaders/"DuoViewGlamaryeFovea.hlsl",
          "float3 GlamExtraWideChange(float2 uv, float3 original, float strength)",
