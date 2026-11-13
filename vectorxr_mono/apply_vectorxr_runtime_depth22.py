@@ -12,7 +12,13 @@ root = Path(sys.argv[1]).resolve()
 H = root / "layer/include/depthxr/framegen_presenter.h"
 P = root / "layer/src/framegen/framegen_presenter.cpp"
 T = root / "layer/tests/framegen_presenter_tests.cpp"
-files = {p: p.read_text(encoding="utf-8") for p in (H, P, T)}
+L = root / "layer/src/openxr_layer.cpp"
+LH = root / "layer/include/depthxr/openxr_layer.h"
+F = root / "layer/src/framegen_plan.cpp"
+M = root / "layer/include/depthxr/framegen_runtime_depth22.h"
+if M.exists():
+    raise SystemExit("VectorXR #22 helper file already exists; expected clean #36 source")
+files = {p: p.read_text(encoding="utf-8") for p in (H, P, T, L, LH, F)}
 
 def change(path, old, new, label):
     current = files[path]
@@ -76,57 +82,122 @@ change(P,
        "BuildFrame(content, use_generated ? &views : nullptr, space, flags, views_exact && runtime_depth_, pointers);",
        "legacy exact copy")
 
-# A final output-only guard also covers inline, priming, standby and fallback
-# xrEndFrame paths, which bypass BuildFrame and would otherwise leak app depth.
-# Unknown non-depth chains remain untouched unless a depth node appears later
-# in a chain; in that exceptional opt-in case, omit the rest of the view chain
-# rather than submit a dangling depth pointer. The source frame stays intact.
-change(P,
-       """    XrResult result = XR_SUCCESS;
-    if (trace_.Enabled() && info) {
-        // What the runtime is given: its first projection layer's views.""",
-       """    XrResult result = XR_SUCCESS;
-    // #22: only sanitize the runtime-facing submission. NEVER mutate app
-    // projection views or their source depth chain used by the FG backend.
-    XrFrameEndInfo depthless_end22{};
-    std::vector<const XrCompositionLayerBaseHeader*> depthless_headers22;
-    std::deque<XrCompositionLayerProjection> depthless_projections22;
-    std::deque<std::vector<XrCompositionLayerProjectionView>> depthless_views22;
-    if (!runtime_depth_ && info && info->layers && info->layerCount) {
-        depthless_end22 = *info;
-        depthless_headers22.assign(info->layers, info->layers + info->layerCount);
+# One shared output sanitizer is used by the presenter AND by the layer's
+# raw pass-through xrEndFrame when FG has paused or stood down.
+# New header is intentionally outside the CMake source list (header-only).
+new_header = r'''#pragma once
+#include <openxr/openxr.h>
+#include <cstdint>
+#include <deque>
+#include <vector>
+
+namespace depthxr {
+// Output-only snapshot. Never rewrite the application's headers or depth
+// used by FG. Keep the original projection chain except for depth nodes;
+// an opaque chain containing depth loses its tail rather than corrupting it.
+struct RuntimeDepthlessFrame22 {
+    XrFrameEndInfo end{};
+    std::vector<const XrCompositionLayerBaseHeader*> headers;
+    std::deque<XrCompositionLayerProjection> projections;
+    std::deque<std::vector<XrCompositionLayerProjectionView>> views;
+
+    const XrFrameEndInfo* Apply(const XrFrameEndInfo* info, bool runtime_depth) {
+        if (runtime_depth || !info || !info->layers || !info->layerCount) return info;
+        end = *info;
+        headers.assign(info->layers, info->layers + info->layerCount);
         for (std::uint32_t i = 0; i < info->layerCount; ++i) {
             const auto* header = info->layers[i];
             if (!header || header->type != XR_TYPE_COMPOSITION_LAYER_PROJECTION) continue;
             const auto* projection = reinterpret_cast<const XrCompositionLayerProjection*>(header);
             if (!projection->views || !projection->viewCount) continue;
-            depthless_projections22.push_back(*projection);
-            depthless_views22.emplace_back(projection->views, projection->views + projection->viewCount);
-            for (auto& view : depthless_views22.back()) {
+            projections.push_back(*projection);
+            views.emplace_back(projection->views, projection->views + projection->viewCount);
+            for (auto& view : views.back()) {
                 const auto* first = static_cast<const XrBaseInStructure*>(view.next);
                 const auto* after = first;
                 while (after && after->type == XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR)
                     after = after->next;
-                bool depth_later = false;
+                bool buried_depth = false;
                 for (auto* node = after; node; node = node->next) {
                     if (node->type == XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR) {
-                        depth_later = true;
+                        buried_depth = true;
                         break;
                     }
                 }
-                if (depth_later) view.next = nullptr; // cannot clone opaque chain links
-                else if (after != first) view.next = after;
+                view.next = buried_depth ? nullptr : after;
             }
-            depthless_projections22.back().views = depthless_views22.back().data();
-            depthless_headers22[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(
-                &depthless_projections22.back());
+            projections.back().views = views.back().data();
+            headers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
         }
-        depthless_end22.layers = depthless_headers22.data();
-        info = &depthless_end22;
+        end.layers = headers.data();
+        return &end;
     }
+};
+} // namespace depthxr
+'''
+change(P,
+       '#include "depthxr/framegen_presenter.h"',
+       '#include "depthxr/framegen_presenter.h"\n#include "depthxr/framegen_runtime_depth22.h"',
+       "include output-only sanitizer in presenter")
+change(L,
+       '#include "depthxr/framegen_plan.h"',
+       '#include "depthxr/framegen_plan.h"\n#include "depthxr/framegen_runtime_depth22.h"',
+       "include output-only sanitizer in layer")
+change(T,
+       '#include "depthxr/framegen_presenter.h"',
+       '#include "depthxr/framegen_presenter.h"\n#include "depthxr/framegen_runtime_depth22.h"',
+       "include output-only sanitizer in fake runtime tests")
+
+# RuntimeEnd is the presenter-owned universal exit for generated, priming and
+# inline/standby submissions. The layer uses the SAME helper in its bypass.
+change(P,
+       '''    XrResult result = XR_SUCCESS;
     if (trace_.Enabled() && info) {
-        // What the runtime is given: its first projection layer's views.""",
-       "final submission guard")
+        // What the runtime is given: its first projection layer's views.''',
+       '''    XrResult result = XR_SUCCESS;
+    RuntimeDepthlessFrame22 depthless22;
+    info = depthless22.Apply(info, runtime_depth_);
+    if (trace_.Enabled() && info) {
+        // What the runtime is given: its first projection layer's views.''',
+       "presenter final runtime guard")
+# The raw OpenXrLayer::TraceRuntimeEndFrame else-path bypasses RuntimeEnd;
+# it must not leak app depth when FG gives up pacing or is disabled.
+change(LH,
+       '    std::atomic<bool> framegen_owns_pacing_{false};',
+       '''    std::atomic<bool> framegen_owns_pacing_{false};
+    std::atomic<bool> runtime_depth22_enabled_{true}; // per session, raw bypass''',
+       "layer session depth setting")
+change(F,
+       '        wanted != "VECTORXR_FRAMEGEN_WORLD") {',
+       '        wanted != "VECTORXR_FRAMEGEN_WORLD" && wanted != "VECTORXR_FRAMEGEN_RUNTIME_DEPTH") {',
+       "research-file allowlist supports runtime depth")
+change(L,
+       '''    StartFrameGen(*session,
+                  framegen_queue_.FrameGenChain(''',
+       '''    // Read once per session (never per frame); the presenter reads the
+    // same switch in Start. Default ON preserves #36 OpenXR submissions.
+    runtime_depth22_enabled_.store(
+        ReadResearchSwitch("VECTORXR_FRAMEGEN_RUNTIME_DEPTH") != "0",
+        std::memory_order_release);
+    StartFrameGen(*session,
+                  framegen_queue_.FrameGenChain(''',
+       "raw bypass session setting")
+change(L,
+       '''    }
+    return SubmitRuntimeFrame(session, info);
+}
+
+XrResult OpenXrLayer::SubmitRuntimeFrame''',
+       '''    }
+    // With no Frame Generation pacing, the app's xrEndFrame reaches the runtime
+    // directly. Apply the same output-only C2-independent depth sanitizer.
+    RuntimeDepthlessFrame22 depthless22;
+    return SubmitRuntimeFrame(session,
+        depthless22.Apply(info, runtime_depth22_enabled_.load(std::memory_order_acquire)));
+}
+
+XrResult OpenXrLayer::SubmitRuntimeFrame''',
+       "layer bypass depth guard")
 
 # Trace kind 7: paths 6/8 carry the fraction of the *previously shown* frame.
 # They are still marked fraction-invalid by aux bit 13: do not reclassify as
@@ -279,4 +350,5 @@ change(T,
 
 for path, value in files.items():
     path.write_text(value, encoding="utf-8", newline="")
+M.write_text(new_header, encoding="utf-8", newline="")
 print("VectorXR #22: runtime depth output switch, kind7 fixes, #18 per-miss context, fake-runtime regression")
