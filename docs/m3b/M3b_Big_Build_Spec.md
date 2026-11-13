@@ -226,3 +226,43 @@ Then raise edge sharpness and check for flicker.
 7. **Prove "OFF = same image".** For the base hash, run the WARP fixture's existing M3a checks unchanged; your OFF runs must produce identical hashes.
 8. **If the code doesn't match the spec** (a name, line or field), follow the code, note the difference in your report, and continue. Don't stop to ask.
 9. **P2 rotation source.** If you can't find the centre view's rotation for the depth's frame within reasonable effort, ship P2 with the reprojection fixed to identity (still with the clamp) and say so. I'll add the rotation afterwards.
+## 13. Review adjustments (Astra architecture review, 2026-11-14; adopted by the lead)
+
+These override §2–§7 where they differ. Bounded claims: say only what tests demonstrate.
+
+1. **Content gate wording (no code change).** The M2.5a gate is a *plausibility* check, not proof of frame identity: identical static scenes pass it. Log and release-note text must say "plausibility".
+2. **P1 jitter. Derive first; Auto is a diagnostic.**
+   - Log, per source evaluation, the NGX jitter (input render pixels), input size, crop/viewport and output size: `[DuoView][M3b] jitter src=coarse|fine jx jy in_w in_h crop`.
+   - The WARP proof test in §2 stays. It defines the mapping from NGX pixels to our sampling UV.
+   - Auto has three results: `plus`, `minus`, `inconclusive`. It needs ≥ 3 consecutive agreeing windows with a ≥ 3% margin and |jitter| > 0.05 px.
+   - Auto changes the live sign **at most once per session**, then locks. While inconclusive, it keeps legacy (+1).
+   - Use windows of 60 frames, not 120 (calibration delay matters at 20 real FPS).
+   - Score only on tiles whose depth edge is strong: e_d above the tile median. Texture-only colour edges are not geometry.
+3. **P2 temporal: experimental, with local rejection.**
+   - Name it "Temporal depth (experimental, rotation-only)" in the menu.
+   - Add **local history rejection**, so history is not clamped blindly:
+     - weight = strength · (1 − edge), where edge = smoothstep(.02, .08, max − min of the current 3×3);
+     - reject history entirely where |history − current| > 0.05 · max(current, 1e−3).
+     - Static flat areas keep full stabilization; depth edges (weapon outline) take mostly the current frame.
+   - History holds only stabilized **observed** depth. Nothing from fill, repair or conditioning is ever written to history (the seed is pre-envelope, so this already holds; keep it so).
+   - Stabilize the shared centre-view seed before the per-eye fields, as specified, so the eyes cannot disagree.
+   - Numeric model: add an edge case. A foreground step moving 1 texel/frame must show no trail beyond 1 texel at strength 0.9.
+4. **P4 colour edges.** Sample the colour **before** Cheeky enhancement if that resource is reachable at this point; otherwise use DLSS output and note it in your report. Liviu will A/B with NR on and off.
+5. **P6 frame-generation depth. Extra requirements if you do it:**
+   - Query `xrEnumerateSwapchainFormats`. Use D32_FLOAT if listed, else the first supported depth format from the spec list, else disable P6 with a log line.
+   - Depth encoding: metres via `nearZ`/`farZ` plus an explicit `minDepth`/`maxDepth`. Log the values once.
+   - Holes and repaired pixels get the chosen background's depth (as specified). No sentinel values.
+   - Stereo-strength semantics: log the submitted virtual-eye separation and the located separation each second while P6 is on. Headset test: s = 0, 0.5, 1 with P6 off and on; s = 0 must stay mono.
+   - Release notes: P6 helps head-motion reprojection and occlusion. It is **not** a fix for independent weapon motion (that needs motion vectors later).
+6. **Diagnostics (P7 additions, cheap):**
+   - add depth-debug mode 3, the per-pixel horizontal displacement |source − base| in output pixels (heat map);
+   - add a fovea-margin counter: % of fovea-region output pixels whose source UV lies outside the high-resolution crop, in the M3b log line.
+   - These tell us whether grid sampling or conditioning dominates foveal error, and whether the fovea crop needs a margin.
+
+**Not in M3b (recorded for later, in order):**
+- Cheeky C2 consumer (Builder B, raised in priority);
+- frame/provenance token shared by C1/C2;
+- full-pose (translation) history reprojection;
+- a shared binocular background layer near edges, observed history only, never invented pixels;
+- engine motion vectors transformed to eye space;
+- any neural fill.
