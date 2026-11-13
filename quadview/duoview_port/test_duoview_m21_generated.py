@@ -28,8 +28,9 @@ def main():
     pool=have(vr/"QuadViewNgxDepth.hpp",
          "latest_duoview_pair_submitted",
          "coarse->sequence!=fine->sequence+1",
-         "coarse->producer_list!=fine->producer_list",
-         "coarse->list_epoch!=fine->list_epoch",
+         "const bool same_list=coarse->producer_list==fine->producer_list",
+         "const bool same_queue=coarse->duoview_producer_queue",
+         "capture_gap>std::chrono::milliseconds(25)",
          "m21_fine_cooldown_until_ms_",
          "const bool fits=candidate->texture",
          "m21_stats() const", "m21_alloc_", "m21_full_", "m21_pair_gap_us_", "last_used_age_us_.store",
@@ -47,7 +48,7 @@ def main():
          "bool depth_debug", "data.m2_sharpen[2]", "data.m2_sharpen[3]",
          "std::clamp)(right_sharpen,0.f,20.f)",
          "if(fine_ok)", "data.filter[0]=softness/")
-    assert "sizeof(M1Constants) == 240" in hdr
+    assert "sizeof(M1Constants) == 256" in hdr
     shader=have(shaders/"DuoViewM1Stereo.hlsl",
          "M2RawFoveaDepth : register(t5)",
          "DecodeM2Depth(fineCenter+int2(fx,fy))",
@@ -60,7 +61,7 @@ def main():
     assert "M2FusedInverseDepth" not in raster, "unsafe post-limit fusion remains"
     have(shaders/"DuoViewNativeCompositeRaster.hlsl",
          "M2Sharpen.z > .5 ? outputUv : M1PullUv",
-         "GlamExtraWideChange(fullUv, beforeSharpen, fineSharpen)",
+         "GlamExtraWideChange(fullUv, beforeSharpen, wideSharpen)",
          "M1ReadConditioned(pos+float2(delta.x,0))")
     have(shaders/"DuoViewGlamaryeFovea.hlsl",
          "float3 GlamExtraWideChange(float2 uv, float3 original, float strength)",
