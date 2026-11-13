@@ -16,8 +16,8 @@ def main():
     sh=Path(sys.argv[2])
     patch(mods/"vr/DuoViewConfig.hpp",[
         ("M24 settings", "    bool m23_wide_unlinked{false};",
-         """    bool m24_distance_fade{false};
-    float m24_vertical_taper{2.f};
+         """    float m24_vertical_taper{2.f};
+    bool m24_distance_fade{false};
     float m24_fade_near_m{2.f}, m24_fade_far_m{15.f};
     float m24_fade_normal_far{.4f},m24_fade_wide_far{.2f};
     bool m23_wide_unlinked{false};"""),
