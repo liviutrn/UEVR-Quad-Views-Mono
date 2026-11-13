@@ -16,7 +16,6 @@ jobs:
         run: |
           tar -czf m3b-review-sources.tar.gz \
             quadview/duoview_port \
-            duoview/DuoViewM1Stereo.hlsl \
             duoview/DuoViewNativeCompositeRaster.hlsl \
             duoview/DuoViewComposite.hlsl \
             duoview/DuoViewCompositeRaster.hlsl \
