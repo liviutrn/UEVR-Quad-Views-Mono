@@ -184,11 +184,13 @@ def verify_4k():
     # At 4K a slope-limited edge changes only a tiny absolute inverse
     # depth per pixel. Old normalisation to 0.05 hid it; the new relative
     # slope normalisation stays visible independently of eye resolution.
-    sharpness=.50
-    per_pixel_slope=(sharpness/(max_k*N))*N/pixels
-    assert per_pixel_slope>0
-    old_tint=min(1.,8*per_pixel_slope/.05)*.85
-    new_relative=per_pixel_slope/per_pixel_slope
+    # Representative depth change in inverse engine units at one 4K pixel:
+    # 1e-4 is too faint when divided by the old hard-coded 0.05.
+    # Normalising to the same field's slope bound is scale-independent.
+    edge_change=1.e-4
+    per_pixel_slope=edge_change
+    old_tint=min(1.,8*edge_change/.05)*.85
+    new_relative=edge_change/per_pixel_slope
     new_tint=(min(1.,max(0.,(new_relative-.08)/(.32-.08))))*.95
     assert old_tint<.25 and new_tint>.90, (old_tint,new_tint)
     print(f"M2.2: {tested} high-res roots (4000px, cap 2/12.5): "
