@@ -12,7 +12,8 @@ root=Path(sys.argv[1]).resolve()
 here=Path(__file__).resolve().parents[1]
 paths=("src/settings.hpp","src/settings.cpp","src/hooks.cpp",
        "src/dlss_nr.cpp","uevr/settings_fields.inc","uevr/runtime.cpp",
-       "uevr/scripts/cheeky_foveated_dlss.lua","src/nr_probe_capture.hpp")
+       "uevr/scripts/cheeky_foveated_dlss.lua","src/nr_probe_capture.hpp",
+       "src/nr_codec_shader.hpp","scripts/build-d3d-shaders.py")
 files={name:(root/name).read_text(encoding="utf-8") for name in paths}
 def change(path,old,new,label):
     if path not in files: raise RuntimeError("Unstaged path "+path)
@@ -412,6 +413,101 @@ change("src/dlss_nr.cpp",
         }
     }''',
        "reuse a retired physical source, after fence and within 10 seconds")
+
+# Capture source selection currently re-enters the classifier from within
+# nr_mutex; compute only on explicit capture, before that lock is acquired.
+change("src/dlss_nr.cpp",
+       '''    std::lock_guard execution_lock(calibration12_execution_mutex());
+    std::lock_guard lock(nr_mutex);
+    collect_retired_views();''',
+       '''    std::lock_guard execution_lock(calibration12_execution_mutex());
+    const auto capture_source_mask_batch2 =
+        nr_probe_busy.load(std::memory_order_acquire)
+            ? cheeky_nr_selected_passes(settings, frame.view_id & ~(1ULL << 63U))
+            : 0U;
+    std::lock_guard lock(nr_mutex);
+    collect_retired_views();''',
+       "capture pass-selection moved before nr_mutex")
+change("src/nr_probe_capture.hpp",
+       '''    const auto source_mask=cheeky_nr_selected_passes(current_settings(),
+        frame.view_id & ~(1ULL<<63U));''',
+       '''    const auto source_mask=source_mask_batch2; // selected before nr_mutex''',
+       "capture no classifier under NR lock")
+change("src/nr_probe_capture.hpp",
+       '''const NrRegion& codec,const Settings& settings,unsigned passes) noexcept {''',
+       '''const NrRegion& codec,const Settings& settings,unsigned passes,
+    unsigned source_mask_batch2) noexcept {''',
+       "pass preclassified source mask to capture")
+change("src/dlss_nr.cpp",
+       '''nr_probe_capture_one(frame,*gpu,codec_region,settings,pass_count);''',
+       '''nr_probe_capture_one(frame,*gpu,codec_region,settings,pass_count,capture_source_mask_batch2);''',
+       "capture invocation uses preclassified mask")
+
+# JSON must not output bare NaN, -inf, +inf: those are INVALID JSON numbers.
+change("src/nr_probe_capture.hpp", "#pragma once", "#pragma once\n#include <cmath>",
+       "capture JSON finite math")
+capture=files["src/nr_probe_capture.hpp"]
+for field in ("intensity","tone","structure","skin","roundness","transition",
+              "shape_w","shape_h","exposure_pre","exposure_scale",
+              "exposure_ratio","exposure_multiplier"):
+    needle="<< capture->"+field
+    count=capture.count(needle)
+    if count != 1:
+        raise RuntimeError(f"capture JSON {field}: {count} stream values, expected 1")
+    capture=capture.replace(needle,"<< (std::isfinite(capture->"+field+
+        ") ? capture->"+field+" : 0.0f)",1)
+files["src/nr_probe_capture.hpp"]=capture
+
+# Preserve the commented HLSL source by splitting it into adjacent C++ raw
+# string literals, each under MSVC's 16KiB limit. Never edit HLSL semantics.
+# Shader extraction is extended only for the NR codec symbol.
+original=(here/"precompact_nr_codec_shader.hlsl").read_text(encoding="utf-8")
+chunks=[]; buf=""
+for line in original.splitlines(keepends=True):
+    if len(line.encode("utf-8")) > 8000:
+        raise RuntimeError("NR HLSL line exceeds raw literal chunk budget")
+    if buf and len((buf+line).encode("utf-8"))>8000:
+        chunks.append(buf);buf=""
+    buf+=line
+if buf: chunks.append(buf)
+if not chunks or any(len(c.encode("utf-8"))>8000 for c in chunks):
+    raise RuntimeError("No valid NR raw shader chunks")
+shader=files["src/nr_codec_shader.hpp"]
+prefix='inline constexpr char nr_codec_shader[] = R"('
+if shader.count(prefix)!=1:
+    raise RuntimeError("Expected one compacted NR codec literal")
+start=shader.index(prefix)
+end=shader.index(')";',start)+3
+replacement='inline constexpr char nr_codec_shader[] =\n'
+for i,chunk in enumerate(chunks):
+    delim='NRB'+str(i)
+    if ')'+delim+'"' in chunk:
+        raise RuntimeError("Raw HLSL delimiter collision")
+    replacement+='    R"'+delim+'('+chunk+')'+delim+'"\n'
+replacement=replacement.rstrip()+";"
+files["src/nr_codec_shader.hpp"]=shader[:start]+replacement+shader[end:]
+
+change("scripts/build-d3d-shaders.py",
+       '''    text = path.read_text(encoding="utf-8")
+    match = re.search(r"\\b" + re.escape(symbol) + r'\\[\\]\\s*=\\s*R"\\((.*?)\\)";', text, re.S)''',
+       '''    text = path.read_text(encoding="utf-8")
+    if symbol == "nr_codec_shader":
+        token="nr_codec_shader[] ="
+        if text.count(token)!=1: raise ValueError("Missing unique split NR codec")
+        cursor=text.index(token)+len(token)
+        pieces=[]
+        while True:
+            while cursor<len(text) and text[cursor].isspace(): cursor+=1
+            match=re.match(r'R"([A-Za-z0-9_]*)\\((.*?)\\)\\1"',text[cursor:],re.S)
+            if not match: break
+            pieces.append(match.group(2))
+            cursor+=match.end()
+        if not pieces or text[cursor]!=";":
+            raise ValueError("Invalid split NR codec C++ literals")
+        return "".join(pieces)
+    match = re.search(r"\\b" + re.escape(symbol) + r'\\[\\]\\s*=\\s*R"\\((.*?)\\)";', text, re.S)''',
+       "extract all split NR shader literals without losing bytes")
+print(f"BATCH2 NR shader: {len(original)} original bytes in {len(chunks)} raw literals, comments intact")
 
 # Remaining sections for VRAM admission, bounded feature reuse and capture
 # cleanups are appended by this batch before the generated tree is written.
