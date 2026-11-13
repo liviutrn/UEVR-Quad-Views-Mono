@@ -18,7 +18,7 @@ checks = {
     "skip zero-strength dispatch": "(settings.seam_strength > 0.f || settings.seam_debug)" in backend,
     "no-analysis timer is neutral": "seam_gpu_ms_=timed_seam_active_ ?" in backend,
     "ID7 present in package text": "UEVR ID7 / TriView B42" in workflow,
-    "B31 package artifact": any(x in workflow for x in ("UEVR-DuoView-M1-","UEVR-DuoView-M2-","UEVR-DuoView-M21-","UEVR-DuoView-M22-")),
+    "B31 package artifact": any(x in workflow for x in ("UEVR-DuoView-M1-","UEVR-DuoView-M2-","UEVR-DuoView-M21-","UEVR-DuoView-M22-","UEVR-DuoView-M23-")),
 }
 assert all(checks.values()), {k: v for k, v in checks.items() if not v}
 tests = 0
