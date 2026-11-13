@@ -479,19 +479,19 @@ SlowTimelineDiagnosis DiagnoseSlowTimeline(
         if (!detailed) continue;
         // nearest real frame's predicted time, so an issue recurring at the
         // same relative refresh of every real frame is visible in CI.
-        auto near = std::lower_bound(game_times.begin(), game_times.end(), point.time);
+        auto nearest_it = std::lower_bound(game_times.begin(), game_times.end(), point.time);
         double phase = 0.0;
         if (!game_times.empty()) {
-            if (near == game_times.end()) --near;
-            if (near != game_times.begin() &&
-                std::abs(static_cast<double>(*(near - 1) - point.time)) <
-                std::abs(static_cast<double>(*near - point.time))) --near;
-            phase = static_cast<double>(point.time - *near) / static_cast<double>(kPeriod);
+            if (nearest_it == game_times.end()) --nearest_it;
+            if (nearest_it != game_times.begin() &&
+                std::abs(static_cast<double>(*(nearest_it - 1) - point.time)) <
+                std::abs(static_cast<double>(*nearest_it - point.time))) --nearest_it;
+            phase = static_cast<double>(point.time - *nearest_it) / static_cast<double>(kPeriod);
         }
         std::cerr << "  off-timeline: submission=" << point.index - first
                   << " displayTime=" << point.time
                   << " residualPeriods=" << point.residual - median
-                  << " nearestRealPhasePeriods=" << phase << "\n";
+                  << " nearestRealPhasePeriods=" << phase << "\\n";
     }
     return {static_cast<double>(sorted.size() - bad) / static_cast<double>(sorted.size()), bad, sorted.size()};
 }
