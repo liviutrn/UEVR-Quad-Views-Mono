@@ -63,17 +63,17 @@ def main():
         ("M25 role of capture",
          "        const bool coarse_output=matches_periphery(out_w,out_h,want_w,want_h);",
          "        const bool coarse_output=matches_periphery(out_w,out_h,want_w,want_h);\n        const uint8_t m25_role=duo ? (fine_output ? 2u : 1u) : 0u;"),
-        ("M25 selection role isolation",
-         '''        for (auto& candidate : pool_) {
-            const uint64_t completed''',
-         '''        uint32_t m25_owned=0;
-        if (duo) for(const auto& s:pool_) if(s->m25_pool_role==m25_role) ++m25_owned;
-        for (auto& candidate : pool_) {
-            // Role is immutable until a fully retired copy is rebound;
-            // the TriView branch uses its original unmodified selection.
-            if(duo && candidate->m25_pool_role!=m25_role &&
-                !(candidate->m25_pool_role==0u && m25_owned<6u)) continue;
-            const uint64_t completed'''),
+        ("M25 role count before candidate selection",
+         '        std::shared_ptr<DepthSnapshot> slot;\n',
+         '        uint32_t m25_owned=0;\n'
+         '        if(duo) for(const auto& owned:pool_) if(owned->m25_pool_role==m25_role) ++m25_owned;\n'
+         '        std::shared_ptr<DepthSnapshot> slot;\n'),
+        ("M25 reuse only same role before scoring",
+         '            const auto cd=candidate->texture ? candidate->texture->GetDesc() : D3D12_RESOURCE_DESC{};',
+         '            // Retired copies can rebind to a new request only in the same role.\n'
+         '            if(duo && candidate->m25_pool_role!=m25_role &&\n'
+         '                !(candidate->m25_pool_role==0u && m25_owned<6u)) continue;\n'
+         '            const auto cd=candidate->texture ? candidate->texture->GetDesc() : D3D12_RESOURCE_DESC{};'),
         ("M25 per-role cap and busy accounting",
          'if (pool_.size() >= MaxSlots) { if (duo) ++m21_full_; reject(PoolFull); return {}; }',
          '''if ((duo && m25_owned>=6u) || pool_.size()>=MaxSlots) {
