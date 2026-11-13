@@ -29,7 +29,7 @@ def variance(values):
 def repair(depth,root,low_confidence=True):
     if not low_confidence:return root,0
     center=depth[root]
-    left=depth[max(0,root-1)];right=depth[min(len(depth)-1,root+1)]
+    left=depth[max(0,root-8)];right=depth[min(len(depth)-1,root+8)]
     direction=1 if right<left else -1
     for step in range(1,9):
         points=[root+direction*(step+j) for j in range(3)]
