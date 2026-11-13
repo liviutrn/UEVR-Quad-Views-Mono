@@ -55,8 +55,11 @@ void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
                 const float2 jit=clamp(local+M2FoveaFlags.xy,.5/dimension,1.0-.5/dimension);
                 const int2 fineCenter=int2(jit*dimension);
                 float fineNear=0.0;
-                [unroll] for(int fy=-1;fy<=1;++fy)
-                    [unroll] for(int fx=-1;fx<=1;++fx)
+                // Fine texels can be much smaller than one conditioned-grid texel.
+                // A 5x5 near-max footprint preserves thin foreground coverage
+                // without introducing another full-resolution depth grid.
+                [unroll] for(int fy=-2;fy<=2;++fy)
+                    [unroll] for(int fx=-2;fx<=2;++fx)
                         fineNear=max(fineNear,DecodeM2Depth(fineCenter+int2(fx,fy)));
                 const float edge=min(min(local.x,local.y),min(1.0-local.x,1.0-local.y));
                 const float t=saturate(edge/max(M2FoveaFlags.z,.0001));
@@ -117,16 +120,28 @@ float2 M1PullUv(float2 eyeUv, uint eye) {
         const float cap=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
         const float delta=k*cap;
         float lo=min(base.x,base.x+delta),hi=max(base.x,base.x+delta);
-        // Strictly decreasing residual from the conditioned depth envelope.
-        // Eight samples of bracketed bisection bound error by |delta|/512.
-        // The earlier secant was rejected after failing our 1-pixel oracle.
+        // The monotone field guarantees a unique root in [lo,hi].
+        // Eight bisections retain safety. Cache the sampled residuals at
+        // both bracket edges for a continuous, read-free secant finish.
+        // If one side was never sampled, use the last two probes instead.
+        float rLo=0.0, rHi=0.0, lastMid=0.0, lastResidual=0.0;
+        float previousMid=0.0, previousResidual=0.0;
+        bool haveLo=false, haveHi=false;
         [unroll] for(uint iteration=0u;iteration<8u;++iteration) {
             const float mid=0.5*(lo+hi);
             const float residual=base.x+k*M1ReadConditioned(float2(mid,base.y))-mid;
-            if(residual>0.0) lo=mid;
-            else hi=mid;
+            previousMid=lastMid; previousResidual=lastResidual;
+            lastMid=mid; lastResidual=residual;
+            if(residual>0.0) { lo=mid; rLo=residual; haveLo=true; }
+            else             { hi=mid; rHi=residual; haveHi=true; }
         }
-        uv.x=0.5*(lo+hi);
+        float root=0.5*(lo+hi);
+        if(haveLo && haveHi && rLo-rHi>1.e-9)
+            root=lo+(hi-lo)*rLo/(rLo-rHi);
+        else if(abs(lastResidual-previousResidual)>1.e-9)
+            root=lastMid-lastResidual*(lastMid-previousMid)/
+                 (lastResidual-previousResidual);
+        uv.x=clamp(root,lo,hi);
     }
     return saturate(uv);
 }
