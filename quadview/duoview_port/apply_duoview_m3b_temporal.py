@@ -24,7 +24,7 @@ Texture2D<float> M3bStabilizedRead : register(t10);
 RWTexture2D<float> M3bSeedWrite : register(u5);
 RWTexture2D<float> M3bStabilizedWrite : register(u6);"""),
       ("P2 kernels",
-       "groupshared uint M3bScoreReduction[384];",
+       "[numthreads(128,1,1)]\nvoid CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {",
        """[numthreads(8,8,1)]
 void CSSeedM3b(uint3 tid:SV_DispatchThreadID) {
     if(any(tid.xy>=M1Grid.xy)) return;
@@ -97,7 +97,8 @@ void CSStabilizeM3b(uint3 tid:SV_DispatchThreadID) {
     M3bStabilizedWrite[tid.xy]=outDepth;
 }
 
-groupshared uint M3bScoreReduction[384];"""),
+[numthreads(128,1,1)]
+void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {"""),
       ("P2 use stabilized seed only when ON",
        "        M1Row[x] = knee > 0.0 ? nearDepth : min(nearDepth, M1Filter.y);",
        "        M1Row[x] = knee > 0.0 ? nearDepth : min(nearDepth, M1Filter.y);\n"
