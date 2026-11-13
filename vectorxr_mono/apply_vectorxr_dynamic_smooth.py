@@ -351,7 +351,8 @@ replace(P, """                const bool moved = distinct && written && !write.e
                         break;
                     case dynamic_smooth::JitKind::kPredict:
                         ++totals_.smooth_predicted;
-                        totals_.smooth_covers += (choice.cover || write.motion_late) ? 1 : 0;
+                        totals_.smooth_covers += choice.cover ? 1 : 0;
+                        totals_.smooth_motion_late += write.motion_late ? 1 : 0;
                         totals_.smooth_stale += write.stale ? 1 : 0;
                         break;
                     default:
@@ -403,6 +404,11 @@ replace(P, '            ")" + ", copiesSkipped=" + std::to_string(delta(&Totals:
                   ", smoothOther=" + std::to_string(delta(&Totals::smooth_other)) +
                   ", smoothSubmitted=" + std::to_string(delta(&Totals::smooth_submitted)) +
                   ", smoothCover=" + std::to_string(delta(&Totals::smooth_covers)) +
+                  ", smoothMotionLate=" + std::to_string(delta(&Totals::smooth_motion_late)) +
+                  ", smoothScored=" + std::to_string(delta(&Totals::smooth_scored)) +
+                  ", smoothSlackUnknown=" + std::to_string(delta(&Totals::smooth_slack_unknown)) +
+                  ", smoothReserveOff=" + std::to_string(delta(&Totals::smooth_reserve_off)) +
+                  ", smoothSlackRefreshesP05P50=" + Percentiles(smooth_slack_periods_, 0.05, 0.5) +
                   ", smoothStale=" + std::to_string(delta(&Totals::smooth_stale)) +
                   ", smoothMissedGrid=" + std::to_string(delta(&Totals::smooth_grid_missing)) +
                   ", smoothTargetRegress=" + std::to_string(delta(&Totals::smooth_target_regressed)) +
@@ -412,6 +418,8 @@ replace(P, '            ")" + ", copiesSkipped=" + std::to_string(delta(&Totals:
                   ", smoothPairGap=" + std::to_string(delta(&Totals::smooth_interp_gaps)) +
                   ", smoothReserveUps=" + std::to_string(delta(&Totals::smooth_reserve_ups)) +
                   ", smoothRingBackoffs=" + std::to_string(delta(&Totals::smooth_ring_backoffs)) +
+                  ", smoothReserveGivebacks=" + std::to_string(delta(&Totals::smooth_reserve_givebacks)) +
+                  ", smoothReserveFlaps=" + std::to_string(delta(&Totals::smooth_reserve_flaps)) +
                   ", smoothPauses=" + std::to_string(delta(&Totals::smooth_pauses)) +
                   ", smoothFreeze=" + std::to_string(delta(&Totals::smooth_freezes)) +
                   ", smoothJump=" + std::to_string(delta(&Totals::smooth_jumps)) +
@@ -428,7 +436,7 @@ replace(P, '            ")" + ", copiesSkipped=" + std::to_string(delta(&Totals:
             ", copiesSkipped=" + std::to_string(delta(&Totals::copies_skipped)) +""",
         "30 second summary")
 replace(P, "    ring_short_write_ms_.clear();\n",
-        "    ring_short_write_ms_.clear();\n    smooth_end_gaps_ms_.clear();\n    smooth_target_gaps_ms_.clear();\n    smooth_submit_late_ms_.clear();\n    smooth_motion_err_ms_.clear();\n",
+        "    ring_short_write_ms_.clear();\n    smooth_end_gaps_ms_.clear();\n    smooth_target_gaps_ms_.clear();\n    smooth_submit_late_ms_.clear();\n    smooth_motion_err_ms_.clear();\n    smooth_slack_periods_.clear();\n",
         "clear samples at start and summary", expected=2)
 
 # Exercise actual Dynamic/JIT integration using upstream's fake OpenXR runtime.
