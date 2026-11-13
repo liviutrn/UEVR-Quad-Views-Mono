@@ -1,6 +1,6 @@
-name: TriView B43 + DuoView Mono M2.3
+name: TriView B43 + DuoView Mono M2.3 + World trace #21
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B43 + DuoView Mono M2.3 (${{ github.run_number }})
+run-name: TriView B43 + DuoView Mono M2.3 + World trace #21 (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**']
@@ -309,6 +309,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not restore pinned DuoView test inputs' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
+          python workspace/quadview/apply_uevr_world_trace21.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'UEVR research #21 frame trace anchors failed' }
           python workspace/quadview/SourceCheckpointTests.py
           if ($LASTEXITCODE -ne 0) { throw 'QuadView source checkpoint regression tests failed' }
           python workspace/quadview/source_checkpoint.py capture backend frontend evidence/quadview-source.json
