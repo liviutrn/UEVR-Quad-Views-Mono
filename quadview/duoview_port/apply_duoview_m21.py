@@ -23,7 +23,7 @@ def controls(mods):
     ])
     patch(mods/"VR.hpp",[
         ("M21 fine toggle default",'ModToggle::create(generate_name("DuoM2FoveaDepth"),true)',
-         'ModToggle::create(generate_name("DuoM2FoveaDepth"),false)'),
+         'ModToggle::create(generate_name("DuoM21FoveaDepth"),false)'),
         ("M21 debug toggle",'    const ModToggle::Ptr m_duo_m2_unlinked{',
          '    const ModToggle::Ptr m_duo_m21_depth_debug{ModToggle::create(generate_name("DuoM21DepthDebug"),false)};\n'
          '    const ModToggle::Ptr m_duo_m2_unlinked{'),
@@ -77,7 +77,7 @@ def captured_pair(mods):
          '    uint64_t next_sequence_{};',
          '''    uint64_t next_sequence_{};
     std::atomic<uint64_t> m21_alloc_{},m21_realloc_{},m21_full_{},m21_pairs_{},m21_pair_misses_{};
-    std::atomic<uint32_t> m21_pair_reason_{};
+    std::atomic<uint32_t> m21_pair_reason_{},m21_pair_gap_us_{};
     std::atomic<int64_t> m21_fine_cooldown_until_ms_{};'''),
         ("M21 exact-list pair selection",
          '        return select_recent(width,height,request,consumer_queue,true);\n    }\n\nprivate:',
@@ -131,25 +131,32 @@ def captured_pair(mods):
             }
         }
         if (!best_c) {
-            m21_pair_reason_.store(reason); ++m21_pair_misses_;
+            m21_pair_reason_.store(reason); m21_pair_gap_us_.store(0); ++m21_pair_misses_;
             m21_fine_cooldown_until_ms_.store(now_ms+500,std::memory_order_relaxed);
             return {};
         }
         // Hold coarse-only after any missing fine pair: avoids rapid toggles.
         if (now_ms<m21_fine_cooldown_until_ms_.load(std::memory_order_relaxed)) {
-            m21_pair_reason_.store(5); return {};
+            m21_pair_reason_.store(5); m21_pair_gap_us_.store(0); return {};
         }
-        m21_pair_reason_.store(0); ++m21_pairs_;
+        m21_pair_reason_.store(0); ++m21_pairs_; ++used_;
+        last_used_age_us_.store(uint32_t(std::chrono::duration_cast<std::chrono::microseconds>(
+            now-best_c->recorded).count()),std::memory_order_relaxed);
+        const auto gap=best_f->recorded>=best_c->recorded ?
+            best_f->recorded-best_c->recorded : best_c->recorded-best_f->recorded;
+        m21_pair_gap_us_.store(uint32_t(std::chrono::duration_cast<std::chrono::microseconds>(
+            gap).count()),std::memory_order_relaxed);
         return {best_c,best_f};
     }
 
     struct M21Stats {
         uint64_t allocations,reallocations,pool_full,pairs,pair_misses,pool_bytes;
-        uint32_t pair_reason;
+        uint32_t pair_reason,pair_gap_us;
     };
     M21Stats m21_stats() const {
         M21Stats s{m21_alloc_.load(),m21_realloc_.load(),
-            m21_full_.load(),m21_pairs_.load(),m21_pair_misses_.load(),0,m21_pair_reason_.load()};
+            m21_full_.load(),m21_pairs_.load(),m21_pair_misses_.load(),0,
+            m21_pair_reason_.load(),m21_pair_gap_us_.load()};
         std::scoped_lock lock(mutex_);
         for (const auto& slot:pool_) if (slot->texture && slot->duoview_request) {
             const auto d=slot->texture->GetDesc();
@@ -220,10 +227,10 @@ def deliver(mods):
                                                 compositor.last_stereo_fovea_depth(),packet_frame->config.settings.stereo_strength);''',
          '''const auto m21=uevr::quadview::ngx::PeripheryDepth::self().m21_stats();
                                             const auto depth_age=uevr::quadview::ngx::PeripheryDepth::self().stats().used_age_us;
-                                            SPDLOG_INFO_EVERY_N_SEC(2,"[DuoView][M2.1] stereo={} coarse={} fine={} strength={:.2f} age_us={} pair={}/{} reject={} alloc={} realloc={} full={} poolMiB={:.1f}",
+                                            SPDLOG_INFO_EVERY_N_SEC(2,"[DuoView][M2.1] stereo={} coarse={} fine={} strength={:.2f} age_us={} pair={}/{} reject={} gap_us={} alloc={} realloc={} full={} poolMiB={:.1f}",
                                                 stereo_output,compositor.last_stereo_depth(),
                                                 compositor.last_stereo_fovea_depth(),packet_frame->config.settings.stereo_strength,
-                                                depth_age,m21.pairs,m21.pair_misses,m21.pair_reason,
+                                                depth_age,m21.pairs,m21.pair_misses,m21.pair_reason,m21.pair_gap_us,
                                                 m21.allocations,m21.reallocations,m21.pool_full,
                                                 double(m21.pool_bytes)/1048576.0);'''),
     ])

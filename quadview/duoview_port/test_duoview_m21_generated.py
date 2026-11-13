@@ -19,7 +19,7 @@ def main():
     cfg=have(vr/"DuoViewConfig.hpp",
         "bool m2_fovea_depth{false};", "bool m21_depth_debug{false};", "bool m21_jitter_correct{false};",
         "requested.m2_right_sharpen,0.f,20.f")
-    have(vr.parent/"VR.hpp", 'DuoM21DepthDebug')
+    have(vr.parent/"VR.hpp", 'DuoM21DepthDebug', 'DuoM21FoveaDepth')
     have(root/"VR.cpp", 'm_duo_m21_depth_debug->draw',
          'Depth edge sharpness (higher = harder edge)',
          'm21_depth_debug==candidate.m21_depth_debug',
@@ -31,12 +31,12 @@ def main():
          "coarse->list_epoch!=fine->list_epoch",
          "m21_fine_cooldown_until_ms_",
          "const bool fits=candidate->texture",
-         "m21_stats() const", "m21_alloc_", "m21_full_")
+         "m21_stats() const", "m21_alloc_", "m21_full_", "m21_pair_gap_us_", "last_used_age_us_.store")
     have(vr/"D3D12Component.cpp",
          "depths.latest_duoview_pair_submitted",
          "pair.first ? pair.first",
          "pair.first==snapshot && pair.second",
-         "[DuoView][M2.1]")
+         "[DuoView][M2.1]", "m21.pair_gap_us")
     assert "std::chrono::milliseconds(25)" not in (
         vr/"D3D12Component.cpp").read_text(encoding="utf-8"), "unsafe old M2 time-only pairing remains"
     have(vr/"DuoViewD3D12.hpp","settings.m21_depth_debug", "settings.m21_jitter_correct",

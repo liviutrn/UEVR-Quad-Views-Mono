@@ -77,6 +77,8 @@ def main():
     if (m21_image_hash==fine_hash)
         throw std::runtime_error("M2.1 fine depth did not change the conditioned GPU depth edges");
     m21_fine_depth={fine_tex.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{},std::make_shared<const int>(1)};
+    const float original_u0=frame.config.layout.u0;
+    const float original_u1=frame.config.layout.u1;
     frame.config.layout.u0+=.08f;
     frame.config.layout.u1+=.08f;
     run(*a,false,Route::direct,"M2.1 moved crop depth diagnostic");
@@ -120,7 +122,13 @@ def main():
         throw std::runtime_error("M2.1 left/right sharpening controls were not independent on GPU");
     std::cout << "PASS: WARP M2.1 truly independent left/right sharpen and extra-wide ring (difference="
               << m21_eye_difference << ")\n";
+    // Restore every touched field; the final legacy comparison is intended
+    // to prove M1/M2.1 toggles do not disturb the original Mono route.
     primary=saved_primary;
+    frame.config.layout.u0=original_u0;
+    frame.config.layout.u1=original_u1;
+    frame.config.settings.sharpen_wide=false;
+    frame.config.settings.m2_fovea_depth=false;
     frame.config.settings.m2_unlinked_sharpen=false;
     frame.config.settings.m21_depth_debug=false;
     frame.config.settings.synthetic_stereo=false;
