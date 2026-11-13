@@ -63,7 +63,7 @@ def main():
     )
     require(sh/"DuoViewCompositeRaster.hlsl",
         "lerp(rawPeripheralColor,peripheralColor,DuoB40InwardAnchor(fullUv))",
-        "lerp(blendPeripheral,foveaColor,weight)")
+        "lerp(blendPeripheral, foveaColor, weight)")
     require(sh/"DuoViewComposite.hlsl",
         "return t * t * (3.0 - 2.0 * t);", "float FeatherFraction;")
     gpu=require(backend/"vr/DuoViewD3D12.hpp",
