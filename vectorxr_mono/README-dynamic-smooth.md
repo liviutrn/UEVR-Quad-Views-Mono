@@ -1,135 +1,156 @@
-# VectorXR v0.20.1 — evidence-based Dynamic reserve + motion telemetry
+# VectorXR 0.20.1 — build #19: reserve diagnostics and lead safety
 
-Personal experimental derivative of upstream `DienerTech/vectorxr` commit
-`8fffa72e99be8ab1e39457c7353faeb1218ac83f`, with the **reviewed
-unchanged Mono implementation from commit `96aebe7`**. This build is NOT an
-official VectorXR release and has not been evaluated in a PSVR2 headset.
+Experimental source branch: `experiment/vectorxr-dynamic6-reserve19-20261113`.
+Based on **fully CI-passed build #18** at `bf01c70c67fe6408dec6855cc3974f209ea0911b`.
+Pinned original VectorXR upstream: `DienerTech/vectorxr`
+`8fffa72e99be8ab1e39457c7353faeb1218ac83f`.
+The reviewed **Mono baseline** `96aebe7d5fbe35af6cecb0fc0f609b4ff9ce70ed`
+remains untouched, as do shaders, stereo, FOV/poses and unrelated TriView code.
 
-The previous audit build #16 (commit `75303dbda0dafe7462337f80931bbdb0bdf8c64d`)
-is preserved as an A/B reference. These changes live only on
-`experiment/vectorxr-dynamic6-evidence-reserve-20261113`.
+This is a research build, **not an official VectorXR release**. A passing CI
+suite proves compilation and simulated-runtime regressions, not perceived
+PSVR2 smoothness or true compositor scanout timing.
 
-## What 6× actually does
+## What is (and is not) meant by "6x"
 
-Dynamic/JIT interpolation in stock VectorXR already requests **one output
-per runtime refresh** and positions each intermediate image by its target
-display time. At 20 real FPS on a 120 Hz runtime, this can already mean
-five intermediate images between real frames. The setting
-`VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX=6` **does not create more slots**:
-it extends Dynamic's lead/multiplier bookkeeping and lead-cap ring indices
-to 5 and 6. Its performance value must be established from
-`leadSlots=16 (cap)` or ring evidence; do not assume that Max 6 improves
-smoothness.
+Dynamic + JIT + Interpolate already synthesizes slots on every nominal
+refresh (when GPU/runtime can manage); a source frame every 50 ms at
+120 Hz can already give five intervening generated frames. The switch
+`VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX=6` increases Dynamic's possible lead
+cap and per-multiplier history bookkeeping. **It does not add frames**.
+It is worth trying only if the log shows a relevant `leadSlots=16 (cap)`.
 
-## Settings and defaults
+## Settings — restart OpenXR/game after edits
 
-Set in `%LOCALAPPDATA%\VectorXR\framegen-research.txt` or as environment
-variables, then restart the game/OpenXR session:
+The settings are read from Windows environment variables or
+`%LOCALAPPDATA%\VectorXR\framegen-research.txt` (one `NAME=VALUE` per line).
 
-- `VECTORXR_FRAMEGEN_FLOW_DIAGNOSTICS`: **ON by default** in this
-  experimental audit build. Set `0` to disable. Per-refresh counters
-  use bounded vectors; expensive sorting happens only at summary time.
-- `VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX`: **4 by default**, can opt into
-  `5` or `6`. With 4, lead and Dynamic cap behavior remain stock.
-- `VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE`: **0 by default**, choose 1–4
-  to target that many refresh periods of measured spare arrival time.
-  The reserve is active only in Dynamic + Just-in-Time + Interpolate,
-  and is suspended on history-ring exhaustion/shortage.
+```ini
+VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX=6
+VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE=2
+```
 
-With reserve 0, the stock late/spare score and down-probe paths are retained.
-Unlike #16's formula floor, the new reserve does **not** preallocate a fixed
-number of additional buffered refreshes. It instead increments the lead by
-one only if at least 3 recent on-time frames had less measured slack than
-requested. It can step down only when at least 7 recent frames have
-more than reserve + 1.1 refreshes of measured slack; blind probes are
-suppressed except after a prolonged period of unmeasurable slack.
-Ring exhaustion or ring shortage disables reserve for 120 seconds;
-it does NOT immediately force the existing lead lower.
+Defaults, in this research build:
+- `VECTORXR_FRAMEGEN_FLOW_DIAGNOSTICS`: **1, enabled without any setting**.
+  Set `=0` only for overhead comparison. Full debug per-frame CSV remains
+  **off by default** because extra I/O can change pacing.
+- `VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX`: **4** (stock ceiling). Values 5/6
+  opt into larger bookkeeping capacity.
+- `VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE`: **0** (stock lead controller).
+  Values 1–4 are accepted, but **test 1–2 only** until actual headset logs
+  establish adequate frame history. Reserve applies only to Dynamic +
+  Just-in-Time + Interpolate; other modes are unchanged.
 
-This tradeoff is experimental. Increasing lead can add latency, lower
-application FPS, or exhaust a 3-real-frame history ring. The logs—not
-the multiplier name—must determine whether it helps.
+## Evidence-based reserve controller, build #19
 
-## Default-on log fields (30-second reporting windows)
+The reserve targets measured *early GPU completion slack* rather than
+blindly adding N refreshes to a formula-derived latency:
+- ON-TIME with fewer than N refreshes spare: **thin**. Three thin samples
+  among the recent ten can raise the lead by just one refresh.
+- ON-TIME with more than N + 1.1 refreshes spare: **spare**. Measured
+  samples (excluding unknowns) can authorize stepping down. The helper
+  requires at least five measured samples, at least 70% of measured frames
+  spare, and at most one thin. Seven spare + three thin **cannot** trigger
+  both up and down in the same window.
+- Missing GPU completion evidence scores **unknown**, not spare or thin.
+  When reserve is on, blind probes are suppressed except after a long run
+  of unmeasurable slack.
+- A measured down followed by a reserve up in under 15 seconds triggers
+  a 20-second prohibition on further measured downs; subsequent flaps
+  double it to 40 and then 60 seconds.
+- Current-lead, timely, non-cover ring shortages suspend extra reserve
+  for 120 seconds. Shortages due to a late presenter, older lead/multiplier,
+  cover frame or stale-motion fallback are *excluded*.
+- The controller remembers the failed lead for ten minutes, so it won't
+  immediately try the same high lead. It refunds one reserve-added lead
+  step if available and safe; it does **not** force a larger state reset.
+  An active backoff does not extend itself continuously on more shortages.
+- Reserve's own additional lead steps are tracked as credits; normal
+  down/probe/clamp steps consume credits. The session and compositor-start
+  resets clear this accounting and the history of previous reserve scores.
 
-- Existing `appFps`, `outputFps`, `distinctFps`, `lateReal`,
-  `covers`, `unready`, `ringExhausted`, `ringShort`,
-  `runtimeHalved`, `leadSlots`, `gpuMs`, `ofaMs`.
-- `smoothSubmitted` counts accepted JIT `xrEndFrame` submissions;
-  `smoothInterp` + `smoothPredict` + `smoothOther` must equal
-  `smoothSubmitted`. Classification is conservative: only the
-  distinct, non-exact, primary JIT write (path 3) gets Interp/Predict.
-  Other includes repeats, fallback paths and blank/unchanged images.
-- `smoothCover` counts predicted frames covered because the next frame
-  is late, **including late motion measurement fallback**; it may be a
-  subset of the existing broader `covers` statistic.
-- `smoothReserveUps`, `smoothRingBackoffs`: measured-slack reserve
-  increases and reserve suspensions on insufficient history.
-- `smoothEndGapMsP50P95/P99`: gaps between successful JIT
-  `xrEndFrame` **CPU returns**, not actual display scanout.
-  `smoothTargetGapMsP50P95/P99`: gaps between requested OpenXR display
-  timestamps. `smoothSubmitLateMsP50P95/P99`: lateness of CPU
-  `RuntimeBegin` entry relative to the layer's scheduled due instant.
-  `smoothSubmitLateHalf`: lateness > half a nominal refresh.
-- `smoothMissedGrid`, `smoothTargetRegress`: inferred missing target
-  grid slots and target reversals. Requested timestamps are not a record
-  of what the display actually scanned out. A runtime rate change or
-  halving may appear as missing targets.
-- `smoothPairs`, `smoothPairRewind`, `smoothPairGap`: source-pair
-  continuity of accepted interpolation fractions, ignoring long pauses.
-- `smoothFreeze`, `smoothJump`, `smoothRewind`, and
-  `smoothMotionErrMsP50P95/P99`: **inferred content-time cadence**
-  from source timestamps/fractions and repeated images. These describe
-  nominal motion time, not image pixels, OFA correctness, perceived
-  smoothness or exact headset refresh behavior. A misgenerated optical-flow
-  image can still score as perfectly timed; all zeros are NOT proof of
-  perfect VR motion.
-- `smoothPauses`: accepted-target discontinuities longer than the
-  presenter's pause limit. Presenter restarts reset the continuity
-  history so menus/restarts do not inflate cadence error metrics.
+With reserve=0 and max=4 the lead scoring, lowering, probing, cap and ring
+policy follow stock code; diagnostics add measurements but not pacing
+decisions. This equivalence is a targeted test/review objective.
 
-Frame samples use bounded memory. Optional debug logging starts upstream's
-`.framegen-trace.csv` containing frame-by-frame `pick`, `sub`, target
-times and fractions. Debug is intentionally **not** enabled by default,
-because per-frame CSV disk writes can perturb the pacing being measured.
+## Diagnostics: every 30-second summary
 
-## Headset A/B test
+New build #19 regime/lead counters:
+- `smoothScored`: scored frames at the current lead, excluding skipped
+  grace/probe history.
+- `smoothSlackUnknown`: scored on-time frames without valid early GPU
+  slack; compare with `smoothScored` to judge whether reserve can work.
+- `smoothReserveOff`: scored frames with reserve configured but inactive
+  (e.g. ring backoff); compare with `smoothScored`.
+- `smoothSlackRefreshesP05P50`: 5th percentile/median *measurable*
+  early slack, expressed in refresh periods, works even when reserve=0.
+  Not an estimate for missing/unknown frames.
+- `smoothReserveUps`, `smoothReserveFlaps`,
+  `smoothRingBackoffs`, `smoothReserveGivebacks`: observed reserve
+  interventions. A backoff is counted on entry, not each subsequent
+  suspended frame: use `smoothReserveOff` for duty cycle.
+- `smoothCover`: accepted, distinct JIT predictions that took the
+  cover path; `smoothMotionLate`: separate accepted predictions using
+  fallback from late motion measurement.
+- `smoothSubmitted`, `smoothInterp`, `smoothPredict`, `smoothOther`:
+  accepted JIT runtime submissions by classification (the last three
+  partition the first). Classification is not proof of correct images.
+- Existing from #18: inferred proxy-content `smoothFreeze`, `smoothJump`,
+  `smoothRewind`, `smoothMotionErrMsP50P95/P99`; target gaps, return
+  gaps and CPU lateness P50/P95/P99; missing grid, target reversals,
+  per-source-pair gaps and long pauses. Counters exclude discontinuities
+  across compositor restarts and pauses.
+- Always inspect stock `appFps`, `outputFps`, `distinctFps`,
+  `leadSlots`, `lateReal`, `covers`, `ringExhausted`,
+  `ringShort`, `unready`, `runtimeHalved`, `gpuMs`, `ofaMs`.
 
-Use Dynamic + Interpolate + NVIDIA OFA, with identical UEVR/Cheeky settings
-in the same demanding STALKER 2 area. Preserve existing VectorXR DLL for
-rollback. Only swap the DLL; do not replace the OpenXR layer JSON.
+**These counters are NOT a measurement of what SteamVR actually scanned
+out.** Even `smoothFreeze=0` can coexist with visual ghosting or GPU
+reprojection. Verify perceived quality inside the headset, and optionally
+SteamVR frame timings and upstream's debug `.framegen-trace.csv`.
 
-1. **Baseline build #16** at PSVR2 120 Hz, reserve 0, no extra settings,
-   about 3 minutes. Save full VectorXR log.
-2. **Same #16 at 90 Hz**, same workload/settings. Save log and subjective
-   ranking of smoothness, lag and weapon trails.
-3. **New evidence-reserve build** at 120 Hz with:
-   ```ini
-   VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX=6
-   VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE=2
-   ```
-   Diagnostics are already on. Save full log after at least two 30-second
-   windows; note whether lag is acceptable and whether motion improved.
-4. Optional short debug-trace run and SteamVR frame timing.
+## Critical simulated-runtime investigation: the 82.4% timeline anomaly
 
-When interpreting: `leadSlots=16 (cap)` justifies examining Max 6;
-nonzero late real/covers suggests lead; nonzero ringExhausted/ringShort
-suggests a memory/history limit; `runtimeHalved` or 16.7ms target gaps
-at 120 Hz suggest a runtime cadence limit. The new lead reserve must not
-be called a win without actual headset evidence.
+Build #18's 90Hz fake runtime, at about 16.1 real FPS and ~90 outputs/s,
+reported `TimelineShare=0.824324` in both Max 4 and Max 6 runs. That
+could mean one off-time image for every real source frame; it could also
+be adaptive lead movement. **It is an unresolved anomaly, not evidence of
+a working improvement.**
 
-## CI and regressions
+Build #19's `TestJitDynamicInterpolationSlow` now:
+- Warms up 2500 ms, records the *start and end lead* and *real frame count*.
+- Prints **off-timeline count / total**, not just a passing fraction.
+- When `FG_TEST_GAPS=1`, lists each bad refresh's time, error in 90Hz
+  refresh periods and phase relative to the nearest real game frame.
+- Compares adaptive lead to a lead **pinned at its warm-up settled value**
+  (not an arbitrary value that might be capped during startup).
+- Requires **at least 95%** content-time accuracy in pinned mode. Adaptive
+  pass is diagnostic and no longer hides the problem with a 0.80 threshold.
+- Still checks >90% distinct output, non-stalling, ordered timestamps.
+  It tests both Dynamic Max 4 and Max 6 in a 90Hz fake runtime.
 
-The branch patches the same pinned upstream code using
-`apply_vectorxr_mono.py` first and
-`apply_vectorxr_dynamic_smooth.py` second, with strict anchor counts.
-The review-protected `mono_framegen.h`, its patcher, the shaders,
-poses/FOV and unrelated TriView code have not been edited.
-Unit tests check reserve thresholds (including stock-off equivalence),
-content cadence classification, 5/6 bookkeeping and target-grid math.
-Upstream's existing fake-runtime presenter harness receives additional
-slow-Dynamic and jittered-reserve smoke tests.
+If the pinned test falls below 95%, CI must fail: stop, examine the
+bad-phase evidence, and investigate the underlying presenter pacing before
+claiming build #19 as usable. No scheduler or shader changes are included.
 
-CI verifies Release DLL compilation, both focused tests, the new fake-runtime
-smoke tests, complete upstream CTest suite and a downloadable DLL artifact.
-**A green CI build does not establish 20→120 headset smoothness.**
+## Owner A/B test once build passes
+
+Do not skip real headset evidence. Use the same demanding STALKER 2 scene,
+same UEVR/Cheeky and OFA settings, 3 minutes per test:
+1. **Build #16**, 120 Hz, reserve 0, Max 4.
+2. **Build #16**, 90 Hz, identical settings.
+3. **Build #18**, 120 Hz, Max 6 and reserve 2.
+4. **Build #19**, only after full CI success, 120 Hz, Max 6 and reserve 2.
+
+Send complete VectorXR logs, plus whether each felt smoother and whether
+latency and weapon trails were tolerable. One small change cannot be called
+an improvement without these observations.
+
+## Builds and rollback
+
+CI patches exact pinned upstream with the protected Mono patch first,
+then this Dynamic patcher, using strict single-match anchors. It builds
+the Windows Release DLL, runs both small focused tests, two fake-runtime
+tests, and the full upstream CTest suite, then uploads package and test
+evidence. Keep the installed 0.20.1 DLL as a backup and copy **DLL only**;
+do not replace the OpenXR layer JSON. Restore the backup on regression.
