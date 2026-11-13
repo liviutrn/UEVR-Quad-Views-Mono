@@ -4,6 +4,7 @@
 // No Engine/UEVR/OpenXR dependency. Do not use for input or scheduling.
 #include <atomic>
 #include <array>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
