@@ -6,6 +6,7 @@ on:
       - 'claude/vectorxr-mono-**'
       - 'experiment/vectorxr-dynamic6-smooth-20261112'
       - 'review/vectorxr-dynamic6-audit-20261112'
+      - 'experiment/vectorxr-dynamic6-evidence-reserve-20261113'
   workflow_dispatch:
 permissions:
   contents: read
@@ -77,6 +78,24 @@ jobs:
         run: |
           ctest --test-dir vectorxr/build -C Release -R 'vectorxr_(mono_framegen|dynamic_smooth)_tests' --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { throw 'Mono frame generation test failed' }
+      - name: Run targeted fake-runtime Dynamic and reserve smoke tests
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem vectorxr/build -Recurse -File -Filter depthxr_framegen_presenter_tests.exe |
+            Select-Object -First 1
+          if (-not $exe) { throw 'Presenter fake-runtime test executable not found' }
+          foreach ($test in @('TestJitDynamicInterpolationSlow', 'TestJitDynamicSlackReserve')) {
+            $env:FG_TEST_ONLY = $test
+            $log = "evidence/$test.log"
+            try {
+              & $exe.FullName --group pacing *> $log
+              $code = $LASTEXITCODE
+              Get-Content $log | Select-Object -Last 50
+              if ($code -ne 0) { throw "Fake-runtime $test failed with exit code $code" }
+            } finally {
+              Remove-Item Env:FG_TEST_ONLY -ErrorAction SilentlyContinue
+            }
+          }
       - name: Package the personal DLL
         shell: pwsh
         run: |
