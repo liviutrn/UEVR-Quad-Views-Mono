@@ -192,12 +192,33 @@ replace(P, "    if (now - lead_calm_since_ < CalmProbeWaitLocked()) {",
     if (now - lead_calm_since_ < CalmProbeWaitLocked()) {""", "avoid blind reserve probes")
 replace(P, "            totals_.ring_exhausted += write.ring_exhausted ? 1 : 0;",
         """            totals_.ring_exhausted += write.ring_exhausted ? 1 : 0;
-            // Prevent extra reserve escalation while the history ring is
-            // insufficient; stock adaptive lead control stays in charge.
-            if (smooth_lead_reserve_ && (write.ring_exhausted || write.ring_short)) {
+            // Back off ONLY when a timely own-path ring-short was caused by
+            // this lead. Covers, stale motion, a late presenter or a different
+            // multiplier are NOT evidence that this lead exceeded history.
+            const bool timely_ring_short = period > 0 &&
+                write.ring_short_at - returned <= std::chrono::nanoseconds(period * 3 / 4);
+            const bool lead_caused_ring_short = dynamic_smooth::ReserveRingShort(
+                write.ring_short, choice.cover || write.motion_late, compositor_drain_,
+                write.ring_short_composed == quad_mode_,
+                write.ring_short_lead == lead_slots_,
+                write.ring_short_multiplier == std::max(2u, EffectiveMultiplierLocked()),
+                timely_ring_short);
+            if (smooth_lead_reserve_ && lead_caused_ring_short) {
                 const auto now = Clock::now();
-                if (now >= smooth_ring_backoff_until_) ++totals_.smooth_ring_backoffs;
-                smooth_ring_backoff_until_ = now + std::chrono::seconds(120);
+                // Do not continually rearm while reserve is already off.
+                if (now >= smooth_ring_backoff_until_) {
+                    ++totals_.smooth_ring_backoffs;
+                    smooth_ring_backoff_until_ = now + std::chrono::seconds(120);
+                    smooth_ring_bad_lead_ = lead_slots_;
+                    smooth_ring_bad_until_ = now + std::chrono::minutes(10);
+                    if (smooth_reserve_credit_ && lead_slots_ > 1 && !lead_probe_) {
+                        ClampLeadLocked(lead_slots_ - 1);
+                        ++totals_.smooth_reserve_givebacks;
+                        lead_calm_since_ = now;
+                    }
+                    ClearLeadHistoryLocked();
+                    smooth_reserve_was_ = false;
+                }
             }""", "ring backoff")
 replace(P, """    jit_frames_.clear();
     jit_shown_.reset();""",
