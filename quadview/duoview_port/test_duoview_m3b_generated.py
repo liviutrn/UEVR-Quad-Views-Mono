@@ -35,10 +35,9 @@ def main():
     for key,field in keys.items():
         need(header,f'generate_name("{key}")',key+" persisted key")
         need(cfg,field+"{",field+" default")
-        need(cfg,"out."+field+"=",field+" validation")
+        need(cfg,"out."+field+"=",field+" validation",2 if field=="m3b_ratio_high" else 1)
         need(ui,"."+field+"=",field+" frozen frame")
         need(ui,"current."+field+"==candidate."+field,field+" equality")
-        need(ui,"m_duo_m3b_", "M3b UI controls present", ui.count("m_duo_m3b_")) if False else None
     for s in ("bool m3b_gate_tuning{false};","bool m3b_edge_repair{false};",
               "bool m3b_color_edges{false};","bool m3b_temporal{false};"):
         need(cfg,s,"OFF default "+s)
@@ -64,7 +63,7 @@ def main():
     need(hlsl,"M3bRepairFlags.x>.5","repair OFF gate")
     need(hlsl,"M3bColorFlags.x>.5","colour OFF gate",2)
     need(hlsl,"M3bTemporal.x>.5","temporal OFF gate")
-    need(hlsl,"M3bOptions.x>.5","tuning OFF gate",4)
+    need(hlsl,"M3bOptions.x>.5","tuning OFF gate",5)
     need(dx,"m1_raw_range.NumDescriptors=7","t4..t10 range")
     need(dx,"m1_output_range.NumDescriptors=5","u2..u6 range")
     need(dx,"hd.NumDescriptors = 17;","17 shader-visible descriptors")
