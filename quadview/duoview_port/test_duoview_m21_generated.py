@@ -19,7 +19,8 @@ def main():
     cfg=have(vr/"DuoViewConfig.hpp",
         "bool m2_fovea_depth{false};", "bool m21_depth_debug{false};",
         "requested.m2_right_sharpen,0.f,20.f")
-    have(root/"VR.cpp", 'DuoM21DepthDebug',
+    have(vr.parent/"VR.hpp", 'DuoM21DepthDebug')
+    have(root/"VR.cpp", 'm_duo_m21_depth_debug->draw',
          'Depth edge sharpness (higher = harder edge)',
          'm21_depth_debug==candidate.m21_depth_debug')
     pool=have(vr/"QuadViewNgxDepth.hpp",
