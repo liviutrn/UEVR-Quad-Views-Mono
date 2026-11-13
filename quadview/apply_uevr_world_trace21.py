@@ -77,6 +77,17 @@ replace(X,
                                     static_cast<std::int64_t>(frame_end_info.layerCount));
     //spdlog::info("[VR] display time diff: {}", pipelined_frame_state.predictedDisplayTime - this->frame_state.predictedDisplayTime);""",
 "actual XR submit frame")
+# Save the last tick/render/pose/submit records on normal OpenXR shutdown.
+# Do not permanently stop the rolling writer: UEVR may reinitialize its
+# runtime inside one game process. Only this research CSV is affected.
+replace(X,
+"""void OpenXR::destroy() {
+    this->frame_controller_profiles.invalidate();""",
+"""void OpenXR::destroy() {
+    research_trace21::Sink().FlushNow();
+    this->frame_controller_profiles.invalidate();""",
+"flush UEVR trace on session destruction")
+
 for path,s in sources.items():
     path.write_text(s,encoding="utf-8",newline="")
 D.parent.mkdir(parents=True,exist_ok=True)
