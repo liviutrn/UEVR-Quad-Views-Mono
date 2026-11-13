@@ -56,11 +56,6 @@ def captured_pair(mods):
     # Keep original 12-slot safety and TriView selection. For DuoView, prefer
     # reusing an idle texture with matching dimensions/format before resizing.
     patch(path,[
-        ("M21 reuse old DuoView generations",
-         '        for (auto& candidate : pool_) {\n            if (candidate->duoview_request != request) continue;\n            const uint64_t completed',
-         '        for (auto& candidate : pool_) {\n'
-         '            if (!duo && candidate->duoview_request) continue;\n'
-         '            const uint64_t completed'),
         ("M21 prioritize matching texture",
          '            if (!slot || candidate->sequence<slot->sequence) slot=candidate;',
          '''            const auto cd=candidate->texture ? candidate->texture->GetDesc() : D3D12_RESOURCE_DESC{};
