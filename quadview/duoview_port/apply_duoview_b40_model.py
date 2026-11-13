@@ -128,8 +128,7 @@ def main():
     patch(common,[
         ("B40 temporal cbuffer", "    float4 SeamGeometry;      // outward px, inward feather px, colour mix, reserved",
          "    float4 SeamGeometry;      // outward px, inward anchor px, RGB mix, spatial radius px\n"
-         "    uint4 B40Temporal;       // monotonic ms, EMA time constant, history enabled, reserved\n"
-         "    float4 B40EyeSharpen;   // exact displayed non-wide L/R sharpen reference"),
+         "    uint4 B40Temporal;       // monotonic ms, EMA time constant, history enabled, reserved"),
         ("B38 restore original v208d feather",
          "    [branch] if (SeamOptions.x > .5 && SeamGeometry.y > 0.0) {\n"
          "        const float2 edgePx = min(fullUv - CropUv.xy, CropUv.zw - fullUv) * float2(OutputSize);\n"
