@@ -34,13 +34,21 @@ shutil.copyfile(here / "dynamic_smooth_tests.cpp", root / "layer/tests/dynamic_s
 replace(P, '#include "depthxr/framegen_presenter.h"\n',
         '#include "depthxr/framegen_presenter.h"\n#include "depthxr/dynamic_smooth.h"\n',
         "include helper")
+replace(H, '#include "depthxr/engine_motion.h"\n',
+        '#include "depthxr/engine_motion.h"\n#include "depthxr/dynamic_smooth.h"\n',
+        "include pure helper in presenter header")
 replace(H, "    std::array<LeadRing, 5> lead_ring_{};",
         "    std::array<LeadRing, 7> lead_ring_{}; // index 2-6 for Dynamic 6x", "ring capacity")
 replace(H, "    FrameGenDynamicPolicy dynamic_policy_;",
         """    FrameGenDynamicPolicy dynamic_policy_;
     std::uint32_t smooth_dynamic_max_{4}; // stock default
     std::uint32_t smooth_lead_reserve_{0}; // opt-in adaptive minimum, not pinned
-    std::chrono::steady_clock::time_point smooth_ring_backoff_until_{}; // reserve disabled after history failure
+    std::chrono::steady_clock::time_point smooth_ring_backoff_until_{}; // attributed ring failure
+    std::chrono::steady_clock::time_point smooth_ring_bad_until_{};
+    std::uint32_t smooth_ring_bad_lead_{0};
+    std::uint32_t smooth_reserve_credit_{0}; // reserve-generated lead steps not yet returned
+    bool smooth_reserve_was_{false};
+    dynamic_smooth::DownHold smooth_down_{};
     bool smooth_diagnostics_{true}; // audit build: enabled unless explicitly disabled
     std::chrono::steady_clock::time_point smooth_last_success_end_{};
     XrTime smooth_last_success_target_{0};
@@ -51,7 +59,8 @@ replace(H, "    FrameGenDynamicPolicy dynamic_policy_;",
     std::vector<double> smooth_end_gaps_ms_; // successful JIT end-return gaps
     std::vector<double> smooth_target_gaps_ms_; // requested XrTime gaps
     std::vector<double> smooth_submit_late_ms_; // positive scheduler lateness
-    std::vector<double> smooth_motion_err_ms_; // proxy content-time cadence errors""",
+    std::vector<double> smooth_motion_err_ms_; // proxy content-time cadence errors
+    std::vector<double> smooth_slack_periods_; // samples in refresh periods""",
         "config fields")
 replace(H, "        std::uint64_t generated_distinct{0};",
         """        std::uint64_t generated_distinct{0};
@@ -68,7 +77,13 @@ replace(H, "        std::uint64_t generated_distinct{0};",
         std::uint64_t smooth_interp_rewinds{0}; // nonincreasing fractions in pair
         std::uint64_t smooth_interp_gaps{0}; // >1.5 refresh gaps within pair
         std::uint64_t smooth_reserve_ups{0}; // low measured slack increased lead
-        std::uint64_t smooth_ring_backoffs{0}; // history failure disabled reserve
+        std::uint64_t smooth_ring_backoffs{0}; // attributable ring shortage suspended reserve
+        std::uint64_t smooth_reserve_givebacks{0}; // reserve-added lead steps returned
+        std::uint64_t smooth_reserve_flaps{0}; // reserve up soon after measured down
+        std::uint64_t smooth_scored{0}; // eligible lead scores
+        std::uint64_t smooth_slack_unknown{0}; // scored on-time, slack unmeasurable
+        std::uint64_t smooth_reserve_off{0}; // scored with reserve configured but inactive
+        std::uint64_t smooth_motion_late{0}; // separate motion measurement fallback
         std::uint64_t smooth_pauses{0}; // accepted target gap exceeded pause limit
         std::uint64_t smooth_freezes{0}; // inferred same-content refreshes
         std::uint64_t smooth_jumps{0}; // inferred content-time jumps
@@ -87,6 +102,11 @@ replace(P, "    const std::uint64_t research_reads = ResearchFileReads();",
     // No change to frame timing with diagnostics enabled. Explicit =0 opts out.
     smooth_diagnostics_ = ReadResearchSwitch("VECTORXR_FRAMEGEN_FLOW_DIAGNOSTICS") != "0";
     smooth_ring_backoff_until_ = Clock::time_point{};
+    smooth_ring_bad_until_ = Clock::time_point{};
+    smooth_ring_bad_lead_ = 0;
+    smooth_reserve_credit_ = 0;
+    smooth_reserve_was_ = false;
+    smooth_down_ = {};
     smooth_last_success_end_ = Clock::time_point{};
     smooth_last_success_target_ = 0;
     smooth_last_interp_pair_ = 0;
@@ -97,6 +117,7 @@ replace(P, "    const std::uint64_t research_reads = ResearchFileReads();",
     smooth_target_gaps_ms_.clear();
     smooth_submit_late_ms_.clear();
     smooth_motion_err_ms_.clear();
+    smooth_slack_periods_.clear();
     if (logger_ && (smooth_dynamic_max_ != 4 || smooth_lead_reserve_ || smooth_diagnostics_)) {
         logger_->Info("Frame Generation Dynamic Smooth: max=" + std::to_string(smooth_dynamic_max_) +
                       ", reserve=" + std::to_string(smooth_lead_reserve_) +
@@ -125,14 +146,25 @@ replace(P, """    if (lead_calm_since_ == Clock::time_point{}) {
     // Only Dynamic / JIT / Interpolate with measured slack: no formula floor.
     const std::uint32_t smooth_reserve =
         smooth_lead_reserve_ && jit_ && jit_interpolate_ && DynamicLocked() && now >= smooth_ring_backoff_until_
-            ? smooth_lead_reserve_ : 0u;""", "reserve activation")
+            ? smooth_lead_reserve_ : 0u;
+    if ((smooth_reserve != 0) != smooth_reserve_was_) {
+        ClearLeadHistoryLocked();
+        smooth_reserve_was_ = smooth_reserve != 0;
+    }""", "reserve activation")
 replace(P, """        const bool spare = !late && slack_ms && *slack_ms > period_ms * 1.1;
         lead_history_.push_back(late ? 1 : spare ? 2 : 0);""",
         """        const bool spare = !late && slack_ms && *slack_ms > period_ms * 1.1;
         // Keep stock scoring exactly when reserve is disabled.
         lead_history_.push_back(smooth_reserve
             ? dynamic_smooth::ScoreLead(late, slack_ms.has_value(), slack_ms.value_or(0.0), period_ms, smooth_reserve)
-            : (late ? 1 : spare ? 2 : 0));""", "reserve lead scoring")
+            : (late ? 1 : spare ? 2 : 0));
+        if (smooth_diagnostics_) {
+            ++totals_.smooth_scored;
+            totals_.smooth_slack_unknown += (!late && !slack_ms) ? 1 : 0;
+            totals_.smooth_reserve_off += (smooth_lead_reserve_ && !smooth_reserve) ? 1 : 0;
+            if (!late && slack_ms && period_ms > 0)
+                AddSample(smooth_slack_periods_, *slack_ms / period_ms, kMaxFrameSamples);
+        }""", "reserve lead scoring")
 replace(P, "        if (judged && !repeated && step_up) {",
         """        // Raise by only one refresh when 3 of 10 measurements had less
         // spare slack than the requested reserve; no late frame required.
@@ -175,6 +207,11 @@ replace(P, """    jit_frames_.clear();
     smooth_last_interp_target_ = 0;
     smooth_last_content_ = 0;
     smooth_ring_backoff_until_ = Clock::time_point{};
+    smooth_ring_bad_until_ = Clock::time_point{};
+    smooth_ring_bad_lead_ = 0;
+    smooth_reserve_credit_ = 0;
+    smooth_reserve_was_ = false;
+    smooth_down_ = {};
     jit_shown_.reset();""", "restart telemetry reset")
 
 # Summary percentile helper: only runs at the 30-second summary.
