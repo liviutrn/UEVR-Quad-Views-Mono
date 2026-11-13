@@ -115,23 +115,17 @@ float2 M1PullUv(float2 eyeUv, uint eye) {
         // Nonnegative depth capped at cap brackets the unique warp root.
         const float cap=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
         const float delta=k*cap;
-        const float lo=min(base.x,base.x+delta),hi=max(base.x,base.x+delta);
-        float x0=base.x;
-        float r0=k*M1ReadConditioned(float2(x0,base.y));
-        float x1=clamp(x0+r0,lo,hi);
-        // Eight conditioned-depth reads; safeguarded secant is more accurate
-        // than six plain fixed-point steps when edge sharpness approaches .9.
-        [unroll] for(uint iteration=1u;iteration<8u;++iteration) {
-            const float r1=base.x+k*M1ReadConditioned(float2(x1,base.y))-x1;
-            const float denom=r1-r0;
-            float step=(abs(denom)>1.e-8 && abs(x1-x0)>1.e-8)
-                ? -r1*(x1-x0)/denom : r1;
-            if(!isfinite(step) || abs(step)>60.0*abs(r1) ||
-                x1+step<lo || x1+step>hi) step=r1;
-            const float next=clamp(x1+step,lo,hi);
-            x0=x1;r0=r1;x1=next;
+        float lo=min(base.x,base.x+delta),hi=max(base.x,base.x+delta);
+        // Strictly decreasing residual from the conditioned depth envelope.
+        // Eight samples of bracketed bisection bound error by |delta|/512.
+        // The earlier secant was rejected after failing our 1-pixel oracle.
+        [unroll] for(uint iteration=0u;iteration<8u;++iteration) {
+            const float mid=0.5*(lo+hi);
+            const float residual=base.x+k*M1ReadConditioned(float2(mid,base.y))-mid;
+            if(residual>0.0) lo=mid;
+            else hi=mid;
         }
-        uv.x=x1;
+        uv.x=0.5*(lo+hi);
     }
     return saturate(uv);
 }

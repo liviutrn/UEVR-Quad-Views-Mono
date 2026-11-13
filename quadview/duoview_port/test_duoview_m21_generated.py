@@ -52,7 +52,7 @@ def main():
          "nearDepth=lerp(nearDepth,fineNear,feather)",
          "M1ConditionedDepth[uint2(x,group.x)] = M1Row[x]",
          "M1ReadConditioned", "const float2 unjittered=", "M2Sharpen.w>.5 ? M1Eye.zw",
-         "for(uint iteration=1u;iteration<8u")
+         "for(uint iteration=0u;iteration<8u")
     raster=shader.split("#ifdef DUOVIEW_M1_RASTER",1)[-1]
     assert "M2RawFoveaDepth.Load" not in raster, "raw fine depth leaked into pixel warp"
     assert "M2FusedInverseDepth" not in raster, "unsafe post-limit fusion remains"

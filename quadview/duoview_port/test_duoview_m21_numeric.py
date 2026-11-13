@@ -2,7 +2,7 @@
 """Pure Python numerical oracle for the M2.1 conditioned-field / inverse warp.
 
 No GPU or SDK needed. The shader's one-grid max envelope and eight-read
-safeguarded secant are compared with a 36-step monotone bisection reference.
+bracketed bisection are compared with a 36-step monotone bisection reference.
 Tests moving crops, steps both within/across crop boundary, two eye signs.
 """
 from __future__ import annotations
@@ -67,20 +67,17 @@ def sample(d, u):
     return d[i] + (d[j]-d[i]) * (x-i)
 
 
-def secant(d, base, k):
+def bracketed_eight(d, base, k):
     lo = min(base, base + k*CAP)
     hi = max(base, base + k*CAP)
-    x0 = base
-    r0 = k*sample(d, x0)
-    x1 = clamp(x0+r0, lo, hi)
-    for _ in range(1, 8):
-        r1 = base + k*sample(d, x1) - x1
-        den = r1-r0
-        step = -r1*(x1-x0)/den if abs(den)>1e-8 and abs(x1-x0)>1e-8 else r1
-        if abs(step)>60*abs(r1) or x1+step < lo or x1+step > hi:
-            step = r1
-        x0, r0, x1 = x1, r1, clamp(x1+step, lo, hi)
-    return x1
+    for _ in range(8):
+        mid = .5*(lo+hi)
+        residual = base + k*sample(d, mid) - mid
+        if residual > 0:
+            lo = mid
+        else:
+            hi = mid
+    return .5*(lo+hi)
 
 
 def bisection(d, base, k):
@@ -116,13 +113,13 @@ def verify():
                         "folded stereo map",crop,fine_step,sharpness,k)
                     for pixel in range(80,EYE_PIXELS-80,3):
                         base=(pixel+.5)/EYE_PIXELS
-                        actual=secant(d,base,k)
+                        actual=bracketed_eight(d,base,k)
                         expected=bisection(d,base,k)
                         error=abs(actual-expected)*EYE_PIXELS
                         max_error=max(max_error,error)
                         # A numerical tolerance is not a headset guarantee.
                         assert error<1.0, (
-                            "secant inverse error >=1px",crop,fine_step,
+                            "eight-sample inverse error >=1px",crop,fine_step,
                             sharpness,k,pixel,error)
                         cases+=1
     print(f"M2.1: {cases} inverse roots, two gaze crops, raw depth seams and "
