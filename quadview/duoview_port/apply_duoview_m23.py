@@ -67,11 +67,11 @@ def main():
     const ModToggle::Ptr m_duo_m23_unlinked_wide{ModToggle::create(generate_name("DuoM23UnlinkedWide"),false)};
     const ModSlider::Ptr m_duo_m23_wide_left{ModSlider::create(generate_name("DuoM23WideLeft"),0.f,20.f,1.f)};
     const ModSlider::Ptr m_duo_m23_wide_right{ModSlider::create(generate_name("DuoM23WideRight"),0.f,20.f,1.f)};'''),
-    ])
-    patch(mods/"VR.cpp",[
         ("M23 persist controls",
          '*m_duo_m21_depth_debug, *m_duo_m21_jitter, *m_duo_m2_unlinked,',
          '*m_duo_m21_depth_debug, *m_duo_m21_jitter, *m_duo_m23_wide, *m_duo_m23_unlinked_wide, *m_duo_m23_wide_left, *m_duo_m23_wide_right, *m_duo_m2_unlinked,'),
+    ])
+    patch(mods/"VR.cpp",[
         ("M23 reset controls",
          'm_duo_m21_jitter->value()=false;',
          '''m_duo_m21_jitter->value()=false;
@@ -150,9 +150,6 @@ def main():
     ])
     native=shaders/"DuoViewNativeCompositeRaster.hlsl"
     patch(native,[
-        ("M23 context correction native per eye",
-         'DuoPhase2MatchContext(fullUv, periphery.rgb);',
-         'DuoPhase2MatchContext(fullUv, periphery.rgb,\n            i.pos.x>=OutputSize.x ? 1u : 0u);'),
         ("M23 wide strength independent of regular",
          '''#ifdef DUOVIEW_M1_RASTER
         const float fineSharpen=i.pos.x>=OutputSize.x ? M2Sharpen.y : M2Sharpen.x;
@@ -183,12 +180,7 @@ def main():
          'GlamExtraWideChange(fullUv, beforeSharpen, fineSharpen)));',
          'GlamExtraWideChange(fullUv, beforeSharpen, wideSharpen)));'),
     ])
-    patch(shaders/"DuoViewCompositeRaster.hlsl",[
-        ("M23 context correction gather per eye",
-         'DuoPhase2MatchContext(fullUv, peripheralColor.rgb);',
-         'DuoPhase2MatchContext(fullUv, peripheralColor.rgb,\n            i.pos.x>=OutputSize.x ? 1u : 0u);'),
-    ])
-    print("M2.3: fenced cross-list fine depth; B43 per-eye Mono B40 and independent 1.5x wide sharpening")
+    print("M2.3: fenced cross-list fine depth; continuous B40 seam over blend feather; independent 1.5x wide sharpening")
 
 
 if __name__=="__main__":
