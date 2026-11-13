@@ -44,8 +44,17 @@ add_custom_command(
   DEPENDS "${GENERATED_M25_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/M3ProductionWarpOverlay.py"
   VERBATIM)
 
+# M3b extends the same fixture without weakening the M3a baseline checks.
+set(GENERATED_M3B_WARP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/V208SharedEyeWarpM3b.cpp")
+add_custom_command(
+  OUTPUT "${GENERATED_M3B_WARP_SOURCE}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/M3bProductionWarpOverlay.py"
+          --source "${GENERATED_M3_WARP_SOURCE}" --output "${GENERATED_M3B_WARP_SOURCE}"
+  DEPENDS "${GENERATED_M3_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/M3bProductionWarpOverlay.py"
+  VERBATIM)
+
 if(WIN32)
-  add_executable(DuoViewB40ProductionWarp "${GENERATED_M3_WARP_SOURCE}")
+  add_executable(DuoViewB40ProductionWarp "${GENERATED_M3B_WARP_SOURCE}")
   target_compile_features(DuoViewB40ProductionWarp PRIVATE cxx_std_20)
   target_include_directories(DuoViewB40ProductionWarp PRIVATE "${JOYEY_BACKEND_DIR}/src/mods/vr")
   target_link_libraries(DuoViewB40ProductionWarp PRIVATE d3d12 dxgi d3dcompiler)
