@@ -444,43 +444,127 @@ replace(P, "    ring_short_write_ms_.clear();\n",
 replace(PT, "// Repeats the one-interval clamp of extrapolation predicts between real frames shown at `times`:",
         """// Research regression: the presenter must still submit correctly when the
 // application takes roughly 5.5 simulated 90-Hz refreshes per real frame.
+// Diagnoses 82.4% from #18: record every out-of-timeline submission,
+ // including phase relative to the nearest real game frame.
+struct SlowTimelineDiagnosis {
+    double share{0.0};
+    std::size_t bad{0};
+    std::size_t total{0};
+};
+SlowTimelineDiagnosis DiagnoseSlowTimeline(
+    Runtime& runtime, std::size_t first, std::size_t skip, double speed,
+    const std::vector<XrTime>& game_times, bool detailed) {
+    struct Point { std::size_t index; XrTime time; double residual; };
+    std::vector<Point> points;
+    std::vector<double> sorted;
+    {
+        std::scoped_lock lock(g_xr_mutex);
+        for (std::size_t i = first + skip; i < runtime.submitted_times.size(); ++i) {
+            if (runtime.submitted_swapchains[i].empty()) continue;
+            const XrTime t = runtime.submitted_times[i];
+            const double expected = speed * static_cast<double>(t - 1'000'000'000) * 1e-9;
+            const double residual = (runtime.submitted_left_x[i] - expected) /
+                                    (speed * static_cast<double>(kPeriod) * 1e-9);
+            points.push_back({i, t, residual});
+            sorted.push_back(residual);
+        }
+    }
+    if (sorted.empty()) return {};
+    std::sort(sorted.begin(), sorted.end());
+    const double median = sorted[sorted.size() / 2];
+    std::size_t bad = 0;
+    for (const auto& point : points) {
+        if (std::abs(point.residual - median) <= 0.6) continue;
+        ++bad;
+        if (!detailed) continue;
+        // nearest real frame's predicted time, so an issue recurring at the
+        // same relative refresh of every real frame is visible in CI.
+        auto near = std::lower_bound(game_times.begin(), game_times.end(), point.time);
+        double phase = 0.0;
+        if (!game_times.empty()) {
+            if (near == game_times.end()) --near;
+            if (near != game_times.begin() &&
+                std::abs(static_cast<double>(*(near - 1) - point.time)) <
+                std::abs(static_cast<double>(*near - point.time))) --near;
+            phase = static_cast<double>(point.time - *near) / static_cast<double>(kPeriod);
+        }
+        std::cerr << "  off-timeline: submission=" << point.index - first
+                  << " displayTime=" << point.time
+                  << " residualPeriods=" << point.residual - median
+                  << " nearestRealPhasePeriods=" << phase << "\n";
+    }
+    return {static_cast<double>(sorted.size() - bad) / static_cast<double>(sorted.size()), bad, sorted.size()};
+}
+
 void TestJitDynamicInterpolationSlow() {
-    for (const bool six : {false, true}) {
-        _putenv_s("VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX", six ? "6" : "");
-        FrameGenPresenter presenter;
-        GpuLog gpu;
-        Runtime runtime;
-        runtime.paced = true;
-        std::unique_ptr<App> owned;
-        App* app = nullptr;
-        StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
-                 FrameGenMultiplier::kDynamic, app, runtime, owned);
-        _putenv_s("VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX", "");
-        app->eye_speed = 0.5;
-        app->end_offset_periods = 1;
-        RunPipelined(*app, 1000ms, 18ms, 61ms);
-        const std::size_t first = runtime.Submissions();
-        const auto started = std::chrono::steady_clock::now();
-        std::chrono::steady_clock::duration gap{};
-        const int frames = RunPipelined(*app, 1600ms, 18ms, 61ms, {}, &gap);
-        const double elapsed = Seconds(std::chrono::steady_clock::now() - started);
-        const FrameGenStatus status = presenter.Status();
-        const auto log = runtime.Snapshot();
-        const double rate = static_cast<double>(log.size() - first) / std::max(elapsed, 0.001);
-        const double timeline = TimelineShare(runtime, first, 8, app->eye_speed);
-        std::cerr << "  slow Dynamic " << (six ? "max6" : "max4") << ": app "
-                  << frames / std::max(elapsed, 0.001) << " fps, output " << rate
-                  << " fps, timeline " << timeline << ", lead " << status.lead_slots
-                  << ", distinct " << status.distinct_fps << std::endl;
-        Check(status.threaded && status.dynamic && !status.standby,
-              "slow Dynamic: engaged JIT presenter");
-        Check(log.size() > first + 40 && rate > 65.0, "slow Dynamic: output continues each refresh");
-        Check(timeline > 0.80, "slow Dynamic: most images follow content timeline");
-        Check(gap < 250ms, "slow Dynamic: no prolonged app stall");
-        CheckOrderedTimes(log, "slow Dynamic");
-        presenter.Stop();
-        Check(!runtime.ordering_violation && !g_release_violation,
-              "slow Dynamic: runtime and swapchain ordering");
+    for (const bool pinned : {false, true}) {
+        for (const bool six : {false, true}) {
+            _putenv_s("VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX", six ? "6" : "");
+            FrameGenPresenter presenter;
+            GpuLog gpu;
+            Runtime runtime;
+            runtime.paced = true;
+            std::unique_ptr<App> owned;
+            App* app = nullptr;
+            StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
+                     FrameGenMultiplier::kDynamic, app, runtime, owned);
+            _putenv_s("VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX", "");
+            if (pinned) {
+                FrameGenLeadPolicy policy;
+                policy.pinned_lead = 10; // controlled, safely below 16-slot cap
+                policy.ring_ceiling = false;
+                presenter.SetLeadPolicy(policy);
+            }
+            app->eye_speed = 0.5;
+            app->end_offset_periods = 1;
+            // Permit Dynamic engagement and lead controller to settle.
+            RunPipelined(*app, 2500ms, 18ms, 61ms);
+            const std::size_t first = runtime.Submissions();
+            const std::uint32_t lead_start = presenter.Status().lead_slots;
+            const auto started = std::chrono::steady_clock::now();
+            std::chrono::steady_clock::duration gap{};
+            std::vector<XrTime> real_times;
+            const int frames = RunPipelined(*app, 1600ms, 18ms, 61ms,
+                [&](int, const XrFrameState& state) {
+                    real_times.push_back(state.predictedDisplayTime);
+                }, &gap);
+            std::sort(real_times.begin(), real_times.end());
+            const double elapsed = Seconds(std::chrono::steady_clock::now() - started);
+            const FrameGenStatus status = presenter.Status();
+            const auto log = runtime.Snapshot();
+            const double rate = static_cast<double>(log.size() - first) / std::max(elapsed, 0.001);
+            const bool detailed = std::getenv("FG_TEST_GAPS") != nullptr;
+            const auto diagnosis = DiagnoseSlowTimeline(runtime, first, 8, app->eye_speed, real_times, detailed);
+            // Reuse upstream's metric; the diagnosis must agree with it.
+            const double timeline = TimelineShare(runtime, first, 8, app->eye_speed);
+            std::cerr << "  slow Dynamic " << (six ? "max6" : "max4")
+                      << (pinned ? " pinned10" : " adaptive")
+                      << ": app " << frames / std::max(elapsed, 0.001)
+                      << " fps, output " << rate << " fps, timeline " << timeline
+                      << " (" << diagnosis.bad << "/" << diagnosis.total << " off)"
+                      << ", realFrames " << frames
+                      << ", lead " << lead_start << "->" << status.lead_slots
+                      << ", distinct " << status.distinct_fps << std::endl;
+            Check(std::abs(diagnosis.share - timeline) < 0.001,
+                  "slow Dynamic: independent residual diagnosis agrees with upstream");
+            Check(status.threaded && status.dynamic && !status.standby,
+                  "slow Dynamic: engaged JIT presenter");
+            Check(log.size() > first + 40 && rate > 65.0,
+                  "slow Dynamic: output continues each refresh");
+            // Do not conceal a real anomaly with #18's permissive 0.80 check.
+            // Adaptive timing is diagnostic only; a pinned lead must be clean.
+            if (pinned)
+                Check(timeline >= 0.95,
+                      "slow Dynamic: pinned lead must show >=95% on-time content (" +
+                      std::to_string(timeline) + ", bad " + std::to_string(diagnosis.bad) + ")");
+            Check(status.distinct_fps > 0.9 * status.output_fps,
+                  "slow Dynamic: >90% distinct output");
+            Check(gap < 250ms, "slow Dynamic: no prolonged app stall");
+            CheckOrderedTimes(log, "slow Dynamic");
+            presenter.Stop();
+            Check(!runtime.ordering_violation && !g_release_violation,
+                  "slow Dynamic: runtime and swapchain ordering");
+        }
     }
 }
 
