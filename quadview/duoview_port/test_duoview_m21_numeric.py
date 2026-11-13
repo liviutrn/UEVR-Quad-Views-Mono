@@ -48,11 +48,11 @@ def fused_seed(crop, fine_step):
     return result
 
 
-def condition(seed, sharpness):
-    slope = sharpness / (K * N)
+def condition(seed, sharpness, cap=CAP, max_k=K):
+    slope = sharpness / (max_k * N)
     current = seed[:]
     step = 1
-    while step < N and (step - 1) * slope < CAP:
+    while step < N and (step - 1) * slope < cap:
         nxt = current[:]
         for j in range(N):
             if j >= step:
@@ -71,22 +71,33 @@ def sample(d, u):
     return d[i] + (d[j]-d[i]) * (x-i)
 
 
-def bracketed_eight(d, base, k):
-    lo = min(base, base + k*CAP)
-    hi = max(base, base + k*CAP)
+def bracketed_eight(d, base, k, cap=CAP):
+    """Mirror the eight-read shader with cached bracket-residual finish."""
+    lo = min(base, base + k*cap)
+    hi = max(base, base + k*cap)
+    rlo = rhi = last_mid = last_residual = 0.
+    previous_mid = previous_residual = 0.
+    have_lo = have_hi = False
     for _ in range(8):
         mid = .5*(lo+hi)
         residual = base + k*sample(d, mid) - mid
+        previous_mid, previous_residual = last_mid, last_residual
+        last_mid, last_residual = mid, residual
         if residual > 0:
-            lo = mid
+            lo, rlo, have_lo = mid, residual, True
         else:
-            hi = mid
-    return .5*(lo+hi)
+            hi, rhi, have_hi = mid, residual, True
+    root = .5*(lo+hi)
+    if have_lo and have_hi and rlo-rhi > 1.e-9:
+        root = lo+(hi-lo)*rlo/(rlo-rhi)
+    elif abs(last_residual-previous_residual)>1.e-9:
+        root = last_mid-last_residual*(last_mid-previous_mid)/(last_residual-previous_residual)
+    return clamp(root, lo, hi)
 
 
-def bisection(d, base, k):
-    lo = min(base,base+k*CAP)
-    hi = max(base,base+k*CAP)
+def bisection(d, base, k, cap=CAP):
+    lo = min(base,base+k*cap)
+    hi = max(base,base+k*cap)
     for _ in range(36):
         mid = .5*(lo+hi)
         f = base+k*sample(d,mid)-mid
@@ -126,9 +137,65 @@ def verify():
                             "eight-sample inverse error >=1px",crop,fine_step,
                             sharpness,k,pixel,error)
                         cases+=1
-    print(f"M2.1: {cases} inverse roots, two gaze crops, raw depth seams and "
-          f"five sharpnesses: monotone and <1 px; peak={max_error:.4f} px")
+    print(f"M2.2: {cases} inverse roots, two gaze crops, conditioned fine-depth "
+          f"seams and five sharpnesses: monotone and <1 px; peak={max_error:.4f} px")
+
+
+def verify_4k():
+    """Stress the 4000px/eye quantisation gap, including knee OFF (cap=12.5)."""
+    tested=0
+    worst_error=0.0
+    worst_neighbor_jump=0.0
+    max_k=.0126
+    pixels=4000
+    for cap in (2.0,12.5):
+        for crop in ((.20,.65),(.36,.82)):
+            seed=[cap*(.92 if crop[0] <= (j+.5)/N < crop[1]-.21
+                       else .03+.05*j/N) for j in range(N)]
+            for sharpness in (.50,.80,.90):
+                d=condition(seed,sharpness,cap,max_k)
+                # Also check the strong-slope invariant for both disparities.
+                slope=sharpness/(max_k*N)
+                assert all(abs(d[j+1]-d[j])<=slope+1.e-9
+                           for j in range(N-1))
+                for k in (-max_k,max_k):
+                    prev_actual=prev_exact=None
+                    for pixel in range(80,3920):
+                        base=(pixel+.5)/pixels
+                        actual=bracketed_eight(d,base,k,cap)
+                        exact=bisection(d,base,k,cap)
+                        error=abs(actual-exact)*pixels
+                        worst_error=max(worst_error,error)
+                        # The discrete midpoint solver makes 2.4px jumps
+                        # at this range. Residual interpolation must suppress
+                        # that staircase without extra texture reads.
+                        if prev_actual is not None:
+                            step_error=abs((actual-prev_actual)-
+                                           (exact-prev_exact))*pixels
+                            worst_neighbor_jump=max(worst_neighbor_jump,step_error)
+                            assert step_error < 1.12, (
+                                "subpixel output staircase",cap,crop,sharpness,
+                                k,pixel,step_error)
+                        assert error < 1.12, (
+                            "subpixel inverse error",cap,crop,sharpness,k,pixel,error)
+                        prev_actual,prev_exact=actual,exact
+                        tested+=1
+
+    # At 4K a slope-limited edge changes only a tiny absolute inverse
+    # depth per pixel. Old normalisation to 0.05 hid it; the new relative
+    # slope normalisation stays visible independently of eye resolution.
+    sharpness=.50
+    per_pixel_slope=(sharpness/(max_k*N))*N/pixels
+    assert per_pixel_slope>0
+    old_tint=min(1.,8*per_pixel_slope/.05)*.85
+    new_relative=per_pixel_slope/per_pixel_slope
+    new_tint=(min(1.,max(0.,(new_relative-.08)/(.32-.08))))*.95
+    assert old_tint<.25 and new_tint>.90, (old_tint,new_tint)
+    print(f"M2.2: {tested} high-res roots (4000px, cap 2/12.5): "
+          f"max error={worst_error:.3f}px, maximum extra neighbor step="
+          f"{worst_neighbor_jump:.3f}px; 4K overlay contrast PASS")
 
 
 if __name__=="__main__":
     verify()
+    verify_4k()
