@@ -77,6 +77,9 @@ def main():
          '''m_duo_m21_jitter->value()=false;
                     m_duo_m23_wide->value()=1.f; m_duo_m23_unlinked_wide->value()=false;
                     m_duo_m23_wide_left->value()=1.f; m_duo_m23_wide_right->value()=1.f;'''),
+        ("M23 inward correction now follows actual feather",
+         'm_duo_seam_inward->draw("B38 inward raw-context anchor (12 px default)");',
+         'ImGui::TextWrapped("M2.3 seam correction follows the entire active blend feather. The legacy inward-anchor value is retained for older settings but no longer truncates matching.");'),
         ("M23 draw independent wide",
          'm_duo_sharpen_wide->draw("Extra-wide sharpen ring (OFF by default; additional 2x radius)");',
          '''m_duo_sharpen_wide->draw("Extra-wide sharpen ring (OFF by default; 1.5x regular radius)");
