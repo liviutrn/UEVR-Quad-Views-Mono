@@ -169,9 +169,13 @@ replace(P, "        if (judged && !repeated && step_up) {",
         """        // Raise by only one refresh when 3 of 10 measurements had less
         // spare slack than the requested reserve; no late frame required.
         if (smooth_reserve && !lead_probe_ && !step_up && !at_ceiling && lead_slots_ < cap &&
-            count(dynamic_smooth::kLeadThin) >= 3) {
+            dynamic_smooth::ReserveWantsUp(count(dynamic_smooth::kLeadThin)) &&
+            (now >= smooth_ring_bad_until_ || lead_slots_ + 1 < smooth_ring_bad_lead_)) {
             ++lead_slots_;
+            ++smooth_reserve_credit_;
             ++totals_.smooth_reserve_ups;
+            if (smooth_down_.NoteUp(now, lead_policy_.explore_max))
+                ++totals_.smooth_reserve_flaps;
             ClearLeadHistoryLocked();
             lead_calm_since_ = now;
             return;
@@ -213,6 +217,42 @@ replace(P, """    jit_frames_.clear();
     smooth_reserve_was_ = false;
     smooth_down_ = {};
     jit_shown_.reset();""", "restart telemetry reset")
+
+
+# The measured reserve decides down from measured frames (unknown frames are
+# excluded), while preserving the stock rule byte-for-byte when reserve=0.
+replace(P, "        bool step_down = lead_history_.size() >= 8 && count(2) >= 7;",
+        """        bool step_down = lead_history_.size() >= 8 && count(2) >= 7;
+        if (smooth_reserve) {
+            step_down = dynamic_smooth::ReserveWantsDown(
+                lead_history_.size(), count(dynamic_smooth::kLeadOnTime),
+                count(dynamic_smooth::kLeadSpare), count(dynamic_smooth::kLeadThin));
+        }""", "reserve measured step-down")
+replace(P, """        if (step_down && lead_slots_ > 1 &&
+            (!hysteresis || !exploring || now - lead_calm_since_ >= explore_wait)) {""",
+        """        if (step_down && lead_slots_ > 1 &&
+            (!smooth_reserve || !smooth_down_.BlockDown(now)) &&
+            (!hysteresis || !exploring || now - lead_calm_since_ >= explore_wait)) {
+            if (smooth_reserve) smooth_down_.NoteDown(now);""",
+        "hold against reserve flapping")
+replace(P, """            --lead_slots_;
+            ++totals_.lead_downs;""",
+        """            --lead_slots_;
+            if (smooth_reserve_credit_) --smooth_reserve_credit_;
+            ++totals_.lead_downs;""", "refund reserve credit on down")
+replace(P, """    lead_probe_ = LeadProbe{now, lead_slots_};
+    --lead_slots_;
+    ++totals_.lead_probes;""",
+        """    lead_probe_ = LeadProbe{now, lead_slots_};
+    --lead_slots_;
+    if (smooth_reserve_credit_) --smooth_reserve_credit_;
+    ++totals_.lead_probes;""", "refund reserve credit on calm probe")
+replace(P, """void FrameGenPresenter::ClampLeadLocked(std::uint32_t cap) {
+    lead_slots_ = cap;""",
+        """void FrameGenPresenter::ClampLeadLocked(std::uint32_t cap) {
+    if (smooth_reserve_credit_ && lead_slots_ > cap)
+        smooth_reserve_credit_ -= std::min(smooth_reserve_credit_, lead_slots_ - cap);
+    lead_slots_ = cap;""", "refund reserve credit when lead clamped")
 
 # Summary percentile helper: only runs at the 30-second summary.
 replace(P, "// \"lead:frames\" for each lead told in a summary window, \"-\" when none.",
