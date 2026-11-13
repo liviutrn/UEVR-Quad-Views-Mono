@@ -57,6 +57,27 @@ float2 DuoB40EdgeAnchor(float2 uv,out uint side,out float along) {
     return p;
 }
 
+// M2.4: radial/central projection for *inside* the feather. The B40
+// edge field is periodic, and adjacent corner knots meet at the same corner.
+// Nearest-side projection caused an abrupt change of interpolation parameter
+// across the corner bisector, hence diagonal corner creases.
+void DuoB40CentralSide(float2 uv,float2 lo,float2 hi,out uint side,out float along) {
+    const float2 c=.5*(lo+hi), hw=max(.5*(hi-lo),float2(1.e-6,1.e-6));
+    float2 d=uv-c;
+    if(all(abs(d)<1.e-7)) d=float2(0.0,-1.e-6);
+    const float2 r=abs(d)/hw;
+    const float t=max(max(r.x,r.y),1.e-7);
+    const float2 p=c+d/t;
+    const float2 a=saturate((p-lo)/max(hi-lo,float2(1.e-6,1.e-6)));
+    if(r.x>=r.y) {
+        side=d.x>0.0 ? 1u : 3u;
+        along=side==1u ? a.y : 1.0-a.y;
+    } else {
+        side=d.y<0.0 ? 0u : 2u;
+        along=side==0u ? a.x : 1.0-a.x;
+    }
+}
+
 StructuredBuffer<float4> DuoMonoSeamMatch : register(t2);
 
 float DuoB40EdgeFade(float distance,float reach) {
@@ -74,7 +95,15 @@ float3 DuoPhase2MatchContext(float2 uv,float3 context) {
     [branch] if (distance>=SeamGeometry.x || SeamOptions.y<=0.0) return context;
 
     uint side=0u; float along=0.0;
-    DuoB40EdgeAnchor(uv,side,along);
+    // Inside the crop: interpolate toward the same corner without the
+    // nearest-edge bisector jump. Outside: preserve approved B40 behavior.
+    if(all(uv>=CropUv.xy) && all(uv<=CropUv.zw)) {
+        const float2 lo=(ceil(CropUv.xy*size-.5)+.5)/size;
+        const float2 hi=(ceil(CropUv.zw*size-.5)-.5)/size;
+        DuoB40CentralSide(uv,lo,hi,side,along);
+    } else {
+        DuoB40EdgeAnchor(uv,side,along);
+    }
     const float k=float(side*8u)+along*8.0;
     const uint i=((uint)floor(k))%32u, j=(i+1u)%32u;
     const float3 a=DuoMonoSeamMatch[i*2u+1u].rgb;
