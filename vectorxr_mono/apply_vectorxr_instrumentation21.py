@@ -24,7 +24,6 @@ change(H, "    bool scored{false};\n        // Quad views:",
 """    bool scored{false};
         // Diagnostics only; never involved in a frame selection decision.
         bool research_capture_recorded{false};
-        bool research_analysis_recorded{false};
         bool research_due_recorded{false};
         // Quad views:""", "JitFrame flags")
 
@@ -43,7 +42,7 @@ change(H,"        std::uint64_t smooth_rewinds{0}; // inferred content-time rewi
         std::uint64_t research_fallback{0}; // path 4,5,7,8 when distinct
         std::uint64_t research_no_projection{0};
         std::uint64_t research_other_unknown{0};
-        // First-positive fence observation bounds, not GPU timestamps.
+        // Capture first-positive observation; analysis margin is at successful synthesized use.
         std::uint64_t research_gpu_seen{0};
         std::uint64_t research_analysis_seen{0};
         std::uint64_t research_due_count{0};
@@ -89,15 +88,6 @@ change(P,
                                       static_cast<double>(kept.needed - slot_time_) / static_cast<double>(period),
                                       kMaxFrameSamples);
                         }
-                        if (!kept.research_analysis_recorded && kept.analyzed &&
-                            Clock::now() >= kept.motion_not_before &&
-                            (!gpu_ || gpu_->Measured(kept.analyzed))) {
-                            kept.research_analysis_recorded = true;
-                            ++totals_.research_analysis_seen;
-                            AddSample(research_analysis_margin_periods_,
-                                      static_cast<double>(kept.needed - slot_time_) / static_cast<double>(period),
-                                      kMaxFrameSamples);
-                        }
                     }
                 } else if (research21_ && rendered && !kept.research_due_recorded &&
                            kept.needed <= slot_time_ + period / 2) {
@@ -105,9 +95,6 @@ change(P,
                     ++totals_.research_due_count;
                     if (gpu_ && kept.capture_mark && !gpu_->CaptureReached(kept.capture_mark))
                         ++totals_.research_gpu_not_ready_due;
-                    if (gpu_ && kept.analyzed &&
-                        (Clock::now() < kept.motion_not_before || !gpu_->Measured(kept.analyzed)))
-                        ++totals_.research_analysis_not_ready_due;
                 }
             }""", "fence sampling; flag off")
 
@@ -117,6 +104,21 @@ change(P,
 """                    ++totals_.smooth_submitted;
                     // A compositor restart,""",
 """                     ++totals_.smooth_submitted;
+                     // Measured() requires the GPU lock. Never sample it
+                     // in the compositor's presenter-lock loop. Infer only
+                     // from the already completed synthesis outcome here.
+                     if (research21_ && source && source->analyzed &&
+                         period > 0 && source->needed > 0) {
+                         if (written && !write.exact && !write.unmeasured) {
+                             ++totals_.research_analysis_seen;
+                             AddSample(research_analysis_margin_periods_,
+                                 static_cast<double>(source->needed - time) /
+                                 static_cast<double>(period), kMaxFrameSamples);
+                         } else if (source->needed <= time + period / 2 &&
+                                    (write.unmeasured || write.motion_late)) {
+                             ++totals_.research_analysis_not_ready_due;
+                         }
+                     }
                      if (path == 1) {
                          ++totals_.research_no_projection;
                      } else if (!distinct) {
