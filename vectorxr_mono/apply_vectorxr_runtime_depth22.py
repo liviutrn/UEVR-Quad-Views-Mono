@@ -40,6 +40,15 @@ change(P,
                       ", runtimeDepth=" + (runtime_depth_ ? "1" : "0") + ".");''',
        "startup log")
 
+# BuildFrame was a static helper in #36. Runtime depth is session-scoped
+# instance state, so make this helper an instance method. Both existing call
+# sites are in the member CompositorLoop; there are no static callers.
+# This corrects CI #41 MSVC C2597/C3867/C2568 without changing the policy.
+change(H,
+       "    static XrFrameEndInfo BuildFrame(",
+       "    XrFrameEndInfo BuildFrame(",
+       "BuildFrame session state access")
+
 # The original FrameCopy, with captured per-eye depth, is still stored and
 # consumed by optical flow/FG. BuildFrame operates on an ephemeral *copy* of
 # that stored data. Clearing has_depth here covers exact copies, JIT as-is
