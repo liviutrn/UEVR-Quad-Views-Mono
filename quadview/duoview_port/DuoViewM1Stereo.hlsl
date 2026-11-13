@@ -61,7 +61,8 @@ void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
                 const float edge=min(min(local.x,local.y),min(1.0-local.x,1.0-local.y));
                 const float t=saturate(edge/max(M2FoveaFlags.z,.0001));
                 const float feather=t*t*(3.0-2.0*t);
-                nearDepth=lerp(nearDepth,fineNear,feather);
+                // Invalid/empty NGX fine depth must never erase valid coarse depth.
+                if(fineNear>0.0) nearDepth=lerp(nearDepth,fineNear,feather);
             }
         }
         const float knee = M1Depth.w;

@@ -35,8 +35,12 @@ def fused_seed(crop, fine_step):
             continue
         local = (u - c0) / (c1 - c0)
         # Fine is independently sampled at a distinct (higher) resolution.
-        fine = max(raw_near((int(local * 1024) + t + .5) / 1024,
-                            fine_step[0], fine_step[1]) for t in (-1, 0, 1))
+        fine = 0.0 if fine_step is None else max(
+            raw_near((int(local * 1024) + t + .5) / 1024,
+                     fine_step[0], fine_step[1]) for t in (-1, 0, 1))
+        if fine <= 0.0:
+            result.append(coarse)
+            continue
         edge = min(local, 1 - local)
         t = clamp(edge / .075, 0, 1)
         feather = t*t*(3 - 2*t)
@@ -98,7 +102,7 @@ def verify():
     max_error = 0
     # Crop changes position, fine-depth step, and coarse/fine disagreement.
     for crop in ((.20,.66),(.36,.82)):
-        for fine_step in ((.20,.37),(.45,.54)):
+        for fine_step in ((.20,.37),(.45,.54),None):
             seed=fused_seed(crop,fine_step)
             for sharpness in (.25,.50,.65,.80,.90):
                 d=condition(seed,sharpness)
