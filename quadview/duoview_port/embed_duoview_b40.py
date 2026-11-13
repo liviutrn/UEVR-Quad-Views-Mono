@@ -47,6 +47,7 @@ def main():
             shaders[4],
             ("PSNativeMain","ps_5_0","m1_raster_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_M1_RASTER",)),
             ("CSConditionM1","cs_5_0","m1_condition_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
+            ("CSConditionM1Vertical","cs_5_0","m24_vertical_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
         )
     with tempfile.TemporaryDirectory(prefix="duoview-b40-") as temp:
         for entry,profile,name,source,define in shaders:
