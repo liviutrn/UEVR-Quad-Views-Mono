@@ -58,7 +58,7 @@ change(P,
 '    smooth_slack_periods_.clear();',
 '''    smooth_slack_periods_.clear();
     research_capture_margin_periods_.clear();
-    research_analysis_margin_periods_.clear();''', "reset samples", expected=2)
+    research_analysis_margin_periods_.clear();''', "reset samples", expected=3)
 
 # These are the stock GPU-fence observations. Counting observes state,
 # not changing it. Additional Measured() queries occur only when opted in.
