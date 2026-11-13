@@ -26,14 +26,7 @@ replace(V,
 '#include "vr/StockFrameBindingMigration.hpp"',
 '#include "vr/StockFrameBindingMigration.hpp"\n#define RESEARCH21_UEVR 1\n#include "vr/ResearchTrace21.hpp"',
 "include UEVR trace")
-replace(V,
-"""VR::~VR() {
-    stop_native_openxr_async_wait_worker();""",
-"""VR::~VR() {
-    // Flush bounded research CSV before unloading UEVR code.
-    research_trace21::Sink().Stop();
-    stop_native_openxr_async_wait_worker();""",
-"stop trace on VR teardown")
+
 replace(V,
 """    const auto now = std::chrono::steady_clock::now();
     const auto previous_engine_tick = m_last_engine_tick.load(std::memory_order_relaxed);
