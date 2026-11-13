@@ -169,6 +169,100 @@ change(T, '''    RUN(TestRuntimeDepth22Standby);''',
        '''    RUN(TestRuntimeDepth22Standby);
     RUN(TestLiveSwitch22b);''', "register live switch test")
 
+# Integration fixture: actually run the fake pacing runtime while editing the
+# research file; assert dispatch changes, kind-8 rows and no >1-refresh hitch.
+change(T, '''void TestRuntimeDepth22Standby() {''',
+       '''void TestLiveSwitch22bJit() {
+    const auto folder = std::filesystem::temp_directory_path() /
+        ("vectorxr-livejit22b-" + std::to_string(GetCurrentProcessId()));
+    const auto research_dir = folder / "VectorXR";
+    std::filesystem::create_directories(research_dir);
+    const auto research = research_dir / "framegen-research.txt";
+    const char* old_local = std::getenv("LOCALAPPDATA");
+    const std::string saved = old_local ? old_local : "";
+    _putenv_s("LOCALAPPDATA", folder.string().c_str());
+    _putenv_s("VECTORXR_FRAMEGEN_RESEARCH21", "1");
+    _putenv_s("VECTORXR_CONTENT_CLOCK21", "");
+    _putenv_s("VECTORXR_MAX6_HYSTERESIS21", "");
+    _putenv_s("VECTORXR_FRAMEGEN_RUNTIME_DEPTH", "");
+    auto write = [&](const char* content, int ahead) {
+        std::ofstream output(research, std::ios::trunc);
+        output << content;
+        output.close();
+        std::error_code ec;
+        std::filesystem::last_write_time(research,
+            std::filesystem::file_time_type::clock::now() + std::chrono::seconds(ahead), ec);
+        Check(!ec, "livejit22b: research file saved");
+    };
+    write("VECTORXR_CONTENT_CLOCK21=0\\nVECTORXR_MAX6_HYSTERESIS21=0\\nVECTORXR_FRAMEGEN_RUNTIME_DEPTH=1\\n", 1);
+    SessionLog log("livejit22b");
+    FrameGenPresenter presenter;
+    GpuLog gpu;
+    Runtime runtime;
+    runtime.paced = true;
+    std::unique_ptr<App> owned;
+    App* app = nullptr;
+    StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
+             FrameGenMultiplier::k2, app, runtime, owned, log.logger.get());
+    Check(presenter.RuntimeDepthEnabled22b(), "livejit22b: starts RD=1");
+    const auto started = std::chrono::steady_clock::now();
+    std::thread editor([&] {
+        std::this_thread::sleep_for(1200ms);
+        write("VECTORXR_CONTENT_CLOCK21=1\\nVECTORXR_MAX6_HYSTERESIS21=1\\n"
+              "VECTORXR_FRAMEGEN_RUNTIME_DEPTH=0\\n"
+              "VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX=6\\n", 5);
+    });
+    RunPipelined(*app, 3100ms, 19ms, 20ms);
+    editor.join();
+    Check(!presenter.RuntimeDepthEnabled22b(), "livejit22b: runtime depth turned OFF without restart");
+    const auto submissions = runtime.Snapshot();
+    const auto ended = std::chrono::steady_clock::now();
+    Check(!runtime.ordering_violation && !g_release_violation,
+          "livejit22b: runtime and images remain ordered through live edit");
+    // Quantify the fake-runtime's forward progress. The periodic file check
+    // must not produce a compositor stall over one extra refresh.
+    auto max_gap = std::chrono::steady_clock::duration{};
+    {
+        std::scoped_lock guard(g_xr_mutex);
+        for (std::size_t i = 1; i < runtime.submitted_at.size(); ++i)
+            max_gap = (std::max)(max_gap, runtime.submitted_at[i] - runtime.submitted_at[i-1]);
+    }
+    const auto bound = std::chrono::nanoseconds(2 * kPeriod) + 4ms;
+    Check(max_gap <= bound, "livejit22b: no compositor stall beyond one missed refresh");
+    Check(submissions.size() > 120 &&
+          ended - started > 2s, "livejit22b: more than two seconds of real pacing");
+    presenter.Stop();
+    const auto changes = log.Lines("VectorXR live switch: ");
+    const auto has = [&](const std::string& match) {
+        return std::any_of(changes.begin(), changes.end(),
+            [&](const std::string& line){ return line.find(match)!=std::string::npos; });
+    };
+    Check(has("VECTORXR_CONTENT_CLOCK21=0") && has("VECTORXR_MAX6_HYSTERESIS21=0") &&
+          has("VECTORXR_FRAMEGEN_RUNTIME_DEPTH=1"), "livejit22b: three live setting logs");
+    Check(has("takes effect next session"), "livejit22b: non-live setting logged, not applied");
+    research_trace21::Sink().FlushNow();
+    int schema{}, switches{};
+    for (const auto& item : std::filesystem::directory_iterator(research_dir)) {
+        if (item.path().filename().string().find("vectorxr-real-trace21-") != 0) continue;
+        std::ifstream in(item.path());
+        std::string line;
+        std::getline(in, line); // CSV header
+        std::getline(in, line); // schema row
+        if (line.rfind("0,21,2,",0) == 0) ++schema;
+        while (std::getline(in,line)) if (line.rfind("8,",0)==0) ++switches;
+    }
+    Check(schema >= 1 && switches >= 3, "livejit22b: VectorXR schema 2 and all kind-8 transitions");
+    _putenv_s("LOCALAPPDATA", saved.c_str());
+    _putenv_s("VECTORXR_FRAMEGEN_RESEARCH21", "");
+    std::error_code ignored;
+    std::filesystem::remove_all(folder, ignored);
+}
+
+void TestRuntimeDepth22Standby() {''', "fake runtime with live file edit")
+change(T, '''    RUN(TestLiveSwitch22b);''',
+       '''    RUN(TestLiveSwitch22b);
+    RUN(TestLiveSwitch22bJit);''', "register live integration test")
+
 for path, text in files.items():
     path.write_text(text, encoding="utf-8", newline="")
 X.write_text(LIVE_HEADER, encoding="utf-8", newline="")
