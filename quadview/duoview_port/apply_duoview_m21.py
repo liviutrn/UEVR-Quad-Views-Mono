@@ -313,8 +313,14 @@ float3 GlamExtraWideChange(float2 uv,float3 original) {
         const float down=M1ReadConditioned(pos+float2(0,delta.y));
         const float edge=max(max(abs(mid-left),abs(mid-right)),
                              max(abs(mid-up),abs(mid-down)));
-        const float emphasis=saturate(8.0*edge/max(mid,0.05));
-        result.rgb=lerp(result.rgb,float3(1.0,0.03,0.05),emphasis*.85);
+        // Normalize by the maximum conditioned-depth change per display
+        // pixel. The previous raw inverse-depth divisor made this almost
+        // invisible on 4K eyes. Show a vivid red transition diagnostic.
+        const float slopePerPixel=max(M1Filter.x*float(M1Grid.x)/
+                                      max(float(OutputSize.x),1.0),1.e-8);
+        const float relativeEdge=edge/slopePerPixel;
+        const float emphasis=smoothstep(0.08,0.32,relativeEdge);
+        result.rgb=lerp(result.rgb,float3(1.0,0.02,0.04),emphasis*.95);
     }
 #endif
     return result;'''),
