@@ -1,6 +1,6 @@
-name: TriView B43 + DuoView Mono M2
+name: TriView B43 + DuoView Mono M2.1
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B43 + DuoView Mono M2 (${{ github.run_number }})
+run-name: TriView B43 + DuoView Mono M2.1 (${{ github.run_number }})
 on:
   push:
     branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**']
@@ -288,6 +288,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M2 depth and sharpening overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m2_generated.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'M2 generated source regression checks failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m21.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M2.1 strict pair and globally conditioned depth overlay failed' }
+          python workspace/quadview/duoview_port/test_duoview_m21_generated.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M2.1 final generated contracts failed' }
+          python workspace/quadview/duoview_port/test_duoview_m21_numeric.py
+          if ($LASTEXITCODE -ne 0) { throw 'M2.1 inverse-warp numeric regression failed' }
           python workspace/quadview/duoview_port/embed_duoview_b40.py workspace/duoview backend/src/mods/vr/DuoViewShaderSource.hpp --m1
           if ($LASTEXITCODE -ne 0) { throw 'Mono B40 offline pixel/compute FXC compilation failed' }
           # The independent DuoView tests compile the pinned v208d raster shaders with their original C++.
@@ -497,16 +503,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-M2-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-M21-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-M2-${{ github.run_number }}
+          name: UEVR-DuoView-M21-${{ github.run_number }}
           path: |
-            UEVR-DuoView-M2-*.zip
-            UEVR-DuoView-M2-*.zip.sha256
+            UEVR-DuoView-M21-*.zip
+            UEVR-DuoView-M21-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
