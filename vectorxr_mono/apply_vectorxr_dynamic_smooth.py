@@ -28,6 +28,7 @@ def replace(rel, old, new, label, expected=1):
 H = "layer/include/depthxr/framegen_presenter.h"
 P = "layer/src/framegen/framegen_presenter.cpp"
 CM = "layer/CMakeLists.txt"
+PT = "layer/tests/framegen_presenter_tests.cpp"
 shutil.copyfile(here / "dynamic_smooth.h", root / "layer/include/depthxr/dynamic_smooth.h")
 shutil.copyfile(here / "dynamic_smooth_tests.cpp", root / "layer/tests/dynamic_smooth_tests.cpp")
 replace(P, '#include "depthxr/framegen_presenter.h"\n',
@@ -331,6 +332,102 @@ replace(P, '            ")" + ", copiesSkipped=" + std::to_string(delta(&Totals:
 replace(P, "    ring_short_write_ms_.clear();\n",
         "    ring_short_write_ms_.clear();\n    smooth_end_gaps_ms_.clear();\n    smooth_target_gaps_ms_.clear();\n    smooth_submit_late_ms_.clear();\n    smooth_motion_err_ms_.clear();\n",
         "clear samples at start and summary", expected=2)
+
+# Exercise actual Dynamic/JIT integration using upstream's fake OpenXR runtime.
+# The slow cadence probes what happens around 5.5 refreshes per real frame.
+replace(PT, "// Repeats the one-interval clamp of extrapolation predicts between real frames shown at `times`:",
+        """// Research regression: the presenter must still submit correctly when the
+// application takes roughly 5.5 simulated 90-Hz refreshes per real frame.
+void TestJitDynamicInterpolationSlow() {
+    for (const bool six : {false, true}) {
+        _putenv_s("VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX", six ? "6" : "");
+        FrameGenPresenter presenter;
+        GpuLog gpu;
+        Runtime runtime;
+        runtime.paced = true;
+        std::unique_ptr<App> owned;
+        App* app = nullptr;
+        StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
+                 FrameGenMultiplier::kDynamic, app, runtime, owned);
+        _putenv_s("VECTORXR_FRAMEGEN_FLOW_DYNAMIC_MAX", "");
+        app->eye_speed = 0.5;
+        app->end_offset_periods = 1;
+        RunPipelined(*app, 1000ms, 18ms, 61ms);
+        const std::size_t first = runtime.Submissions();
+        const auto started = std::chrono::steady_clock::now();
+        std::chrono::steady_clock::duration gap{};
+        const int frames = RunPipelined(*app, 1600ms, 18ms, 61ms, {}, &gap);
+        const double elapsed = Seconds(std::chrono::steady_clock::now() - started);
+        const FrameGenStatus status = presenter.Status();
+        const auto log = runtime.Snapshot();
+        const double rate = static_cast<double>(log.size() - first) / std::max(elapsed, 0.001);
+        const double timeline = TimelineShare(runtime, first, 8, app->eye_speed);
+        std::cerr << "  slow Dynamic " << (six ? "max6" : "max4") << ": app "
+                  << frames / std::max(elapsed, 0.001) << " fps, output " << rate
+                  << " fps, timeline " << timeline << ", lead " << status.lead_slots
+                  << ", distinct " << status.distinct_fps << std::endl;
+        Check(status.threaded && status.dynamic && !status.standby,
+              "slow Dynamic: engaged JIT presenter");
+        Check(log.size() > first + 40 && rate > 65.0, "slow Dynamic: output continues each refresh");
+        Check(timeline > 0.80, "slow Dynamic: most images follow content timeline");
+        Check(gap < 250ms, "slow Dynamic: no prolonged app stall");
+        CheckOrderedTimes(log, "slow Dynamic");
+        presenter.Stop();
+        Check(!runtime.ordering_violation && !g_release_violation,
+              "slow Dynamic: runtime and swapchain ordering");
+    }
+}
+
+// Jittered-source smoke: reserve must never break the frame submission path.
+// Precise effectiveness requires measured headset logs, not this fake GPU.
+void TestJitDynamicSlackReserve() {
+    for (const bool reserve : {false, true}) {
+        _putenv_s("VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE", reserve ? "2" : "");
+        FrameGenPresenter presenter;
+        GpuLog gpu;
+        Runtime runtime;
+        runtime.paced = true;
+        std::unique_ptr<App> owned;
+        App* app = nullptr;
+        StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
+                 FrameGenMultiplier::kDynamic, app, runtime, owned);
+        _putenv_s("VECTORXR_FRAMEGEN_FLOW_LEAD_RESERVE", "");
+        app->eye_speed = 0.5;
+        app->end_offset_periods = 1;
+        RunPipelined(*app, 1000ms, 16ms, 32ms);
+        const auto first = runtime.Submissions();
+        const auto started = std::chrono::steady_clock::now();
+        RunPipelined(*app, 2000ms, 16ms, 32ms,
+                     [](int i, const XrFrameState&) {
+                         if (i % 9 == 7) std::this_thread::sleep_for(16ms);
+                     });
+        const auto status = presenter.Status();
+        const auto log = runtime.Snapshot();
+        const double rate = static_cast<double>(log.size() - first) /
+            std::max(Seconds(std::chrono::steady_clock::now() - started), 0.001);
+        std::cerr << "  jittered Dynamic reserve " << (reserve ? "2" : "0")
+                  << ": output " << rate << ", lead " << status.lead_slots
+                  << ", late " << status.late_cpu << "/" << status.late_gpu << std::endl;
+        Check(status.threaded && status.dynamic && !status.standby,
+              "slack reserve: presenter remains engaged");
+        Check(rate > 65.0, "slack reserve: frame submissions continue");
+        Check(status.lead_slots >= 1 && status.lead_slots <= 24,
+              "slack reserve: lead remains bounded");
+        CheckOrderedTimes(log, "slack reserve");
+        presenter.Stop();
+        Check(!runtime.ordering_violation && !g_release_violation,
+              "slack reserve: runtime and swapchain ordering");
+    }
+}
+
+// Repeats the one-interval clamp of extrapolation predicts between real frames shown at `times`:""",
+        "fake-runtime Dynamic slow and jitter tests")
+replace(PT, "    RUN(TestJitDynamicInterpolation);",
+        """    RUN(TestJitDynamicInterpolation);
+    RUN(TestJitDynamicInterpolationSlow);
+    RUN(TestJitDynamicSlackReserve);""",
+        "register fake-runtime regression tests")
+
 replace(CM, "        set_tests_properties(vectorxr_mono_framegen_tests PROPERTIES TIMEOUT 10)\n",
         """        set_tests_properties(vectorxr_mono_framegen_tests PROPERTIES TIMEOUT 10)
         add_executable(vectorxr_dynamic_smooth_tests tests/dynamic_smooth_tests.cpp)
