@@ -39,7 +39,7 @@ struct B40MonoHistory {
         heap.CreationNodeMask=heap.VisibleNodeMask=1;
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
-        desc.Width=64u*3u*4u*sizeof(float);
+        desc.Width=32u*3u*4u*sizeof(float);
         desc.Height=desc.DepthOrArraySize=desc.MipLevels=1;
         desc.SampleDesc.Count=1; desc.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
@@ -80,7 +80,7 @@ struct B40MonoHistory {
         order.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;
         order.UAV.pResource=history;
         cmd->ResourceBarrier(1,&order); // prior XR slot's history writes
-        cmd->Dispatch(1,1,1); // two per-eye fields: 64 knots, 256 groups, 3840 patches
+        cmd->Dispatch(1,1,1); // one Mono image: 32 knots, 128 groups, 1920 paired patches
         cmd->ResourceBarrier(1,&order); // next XR slot sees this history
         transition(cmd,b40_stats_.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE); // pixel sees stable 32 knots
@@ -91,8 +91,8 @@ struct B40MonoHistory {
          '#include <memory>\n#include <chrono>'),
         ("B40 constant layout",
          "    float seam_geometry[4];\n};\nstatic_assert(sizeof(ShaderConstants) == 192);",
-         "    float seam_geometry[4];\n    uint32_t b40_temporal[4];\n    float b40_eye_sharpen[4];\n};\n"
-         "static_assert(sizeof(ShaderConstants) == 224);"),
+         "    float seam_geometry[4];\n    uint32_t b40_temporal[4];\n};\n"
+         "static_assert(sizeof(ShaderConstants) == 208);"),
         ("B40 root DWORD assertion",
          "static_assert(sizeof(ShaderConstants)/4 <= 64); // D3D12 root DWORD budget",
          "static_assert(sizeof(ShaderConstants)/4 + 4 <= 64); // b0 + SRV table + UAV table + history root UAV"),
@@ -116,9 +116,7 @@ struct B40MonoHistory {
          "{frame.settings.seam_reach_px, frame.settings.seam_inward_px,\n                frame.settings.seam_color_strength, 0.f}};",
          "{frame.settings.seam_reach_px, frame.settings.seam_inward_px,\n"
          "                frame.settings.seam_color_strength, frame.settings.seam_ambient_radius_px},\n"
-         "            {b40_timestamp_ms(),frame.settings.seam_time_ms,b40_active?1u:0u,0u},\n"
-         "            {frame.settings.m2_unlinked_sharpen ? frame.settings.m2_left_sharpen : frame.settings.sharpen_strength,\n"
-         "             frame.settings.m2_unlinked_sharpen ? frame.settings.m2_right_sharpen : frame.settings.sharpen_strength,0.f,0.f}};"),
+         "            {b40_timestamp_ms(),frame.settings.seam_time_ms,b40_active?1u:0u,0u}};"),
         ("gather shader state all stages",
          "        transition(cmd, atlas, atlas_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);",
          "        const auto sample_state=b40_active ? D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE :\n"
@@ -145,9 +143,7 @@ struct B40MonoHistory {
          "{frame.config.settings.seam_reach_px, frame.config.settings.seam_inward_px,\n                frame.config.settings.seam_color_strength, 0.f}",
          "{frame.config.settings.seam_reach_px, frame.config.settings.seam_inward_px,\n"
          "                frame.config.settings.seam_color_strength, frame.config.settings.seam_ambient_radius_px},\n"
-         "            {b40_timestamp_ms(),frame.config.settings.seam_time_ms,b40_active?1u:0u,0u},\n"
-         "            {frame.config.settings.m2_unlinked_sharpen ? frame.config.settings.m2_left_sharpen : frame.config.settings.sharpen_strength,\n"
-         "             frame.config.settings.m2_unlinked_sharpen ? frame.config.settings.m2_right_sharpen : frame.config.settings.sharpen_strength,0.f,0.f}"),
+         "            {b40_timestamp_ms(),frame.config.settings.seam_time_ms,b40_active?1u:0u,0u}"),
         ("native source state for compute",
          "        transition(cmd,fovea,fovea_state,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);\n"
          "        transition(cmd,periphery,peripheral_state,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);",
@@ -221,7 +217,7 @@ struct B40MonoHistory {
          '        // Per-fenced-slot analysis output; queue-owned EMA lives separately.\n'
          '        D3D12_RESOURCE_DESC stats{};\n'
          '        stats.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;\n'
-         '        stats.Width=128u*4u*sizeof(float); // 64 knots * target+stable float4\n'
+         '        stats.Width=64u*4u*sizeof(float); // 32 knots * target+stable float4\n'
          '        stats.Height=stats.DepthOrArraySize=stats.MipLevels=1;\n'
          '        stats.SampleDesc.Count=1; stats.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;\n'
          '        stats.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;\n'
@@ -238,7 +234,7 @@ struct B40MonoHistory {
          "        stat_srv.Format=DXGI_FORMAT_UNKNOWN;\n"
          "        stat_srv.ViewDimension=D3D12_SRV_DIMENSION_BUFFER;\n"
          "        stat_srv.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;\n"
-         "        stat_srv.Buffer.NumElements=128;\n"
+         "        stat_srv.Buffer.NumElements=64;\n"
          "        stat_srv.Buffer.StructureByteStride=4*sizeof(float);\n"
          "        auto desc_cpu=srv_cpu_start_;\n"
          "        desc_cpu.ptr+=SIZE_T(2)*srv_descriptor_increment_;\n"
@@ -247,7 +243,7 @@ struct B40MonoHistory {
          "        D3D12_UNORDERED_ACCESS_VIEW_DESC stat_uav{};\n"
          "        stat_uav.Format=DXGI_FORMAT_UNKNOWN;\n"
          "        stat_uav.ViewDimension=D3D12_UAV_DIMENSION_BUFFER;\n"
-         "        stat_uav.Buffer.NumElements=128;\n"
+         "        stat_uav.Buffer.NumElements=64;\n"
          "        stat_uav.Buffer.StructureByteStride=4*sizeof(float);\n"
          "        device->CreateUnorderedAccessView(b40_stats_.Get(),nullptr,&stat_uav,desc_cpu);"),
         ("resource members",
