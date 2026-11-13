@@ -1,9 +1,9 @@
-name: TriView B43 + DuoView Mono M2.1
+name: TriView B43 + DuoView Mono M2.2
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B43 + DuoView Mono M2.1 (${{ github.run_number }})
+run-name: TriView B43 + DuoView Mono M2.2 (${{ github.run_number }})
 on:
   push:
-    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**']
+    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**']
     paths: ['.github/workflows/triview-b1.yml', 'quadview/**']
   workflow_dispatch:
 permissions:
@@ -294,8 +294,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M2.1 depth jitter opt-in overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m21_generated.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'M2.1 final generated contracts failed' }
+          python workspace/quadview/duoview_port/test_duoview_m22_generated.py workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M2.2 4K diagnostic and subpixel shader contracts failed' }
           python workspace/quadview/duoview_port/test_duoview_m21_numeric.py
-          if ($LASTEXITCODE -ne 0) { throw 'M2.1 inverse-warp numeric regression failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'M2.2 4000-pixel inverse-warp regression failed' }
           python workspace/quadview/duoview_port/embed_duoview_b40.py workspace/duoview backend/src/mods/vr/DuoViewShaderSource.hpp --m1
           if ($LASTEXITCODE -ne 0) { throw 'Mono B40 offline pixel/compute FXC compilation failed' }
           # The independent DuoView tests compile the pinned v208d raster shaders with their original C++.
@@ -441,6 +443,7 @@ jobs:
           Copy-Item workspace/quadview/DUOVIEW_PARITY_PHASE1_NOTES.md package/DUOVIEW_PARITY_PHASE1_NOTES.md
           Copy-Item workspace/quadview/DUOVIEW_PARITY_PHASE2_NOTES.md package/DUOVIEW_PARITY_PHASE2_NOTES.md
           Copy-Item workspace/quadview/DUOVIEW_B40_MONO_NOTES.md package/DUOVIEW_B40_MONO_NOTES.md
+          Copy-Item workspace/quadview/DUOVIEW_M22_RELEASE_NOTES.md package/DUOVIEW_M22_RELEASE_NOTES.md
           Copy-Item workspace/quadview/focus_lift_calibration.json package/focus_lift_calibration.json
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
           Copy-Item workspace/quadview/RELEASE_NOTES.md package/QUADVIEW_RELEASE_NOTES.md
@@ -461,6 +464,12 @@ jobs:
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
+          DuoView Mono M2.2 / ID6 (synthetic stereo OFF by default):
+          Fine-depth 5x5 near sampling is opt-in (fine capture OFF by default).
+          Eight-read bracket warp now has a subpixel finish, and the unwarped
+          depth-edge overlay is normalized for 4K eyes. Read DUOVIEW_M22_RELEASE_NOTES.md.
+          New controls are for DuoView mode 6; TriView mode 7 uses its own raster.
+          ---
           UEVR ID7 / TriView B42 = B41.1 + VRAM safety against the BSOD when video memory fills up:
           resize guard (menu: VRAM limit %), sizes snap to 0.05 steps, 1.5 s pause between rebuilds,
           low-resolution start (menu: Start TriView at low resolution / Start resolution scale). Read B42_NOTES.md.
@@ -500,21 +509,21 @@ jobs:
           Read B30_COMBINED_NOTES.md for scope and B31_OPTIMIZATION_NOTES.md for
           shader fast paths, regression checks and remaining headset limitations.
           '@ | Set-Content package/READ_FIRST.txt
-          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json','B31_OPTIMIZATION_NOTES.md','B37_ROOT_CAUSE_NOTES.md','B38_INWARD_FEATHER_NOTES.md','B39_AMBIENT_EDGE_NOTES.md')
+          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json','B31_OPTIMIZATION_NOTES.md','B37_ROOT_CAUSE_NOTES.md','B38_INWARD_FEATHER_NOTES.md','B39_AMBIENT_EDGE_NOTES.md','DUOVIEW_M22_RELEASE_NOTES.md')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-M21-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-M22-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-M21-${{ github.run_number }}
+          name: UEVR-DuoView-M22-${{ github.run_number }}
           path: |
-            UEVR-DuoView-M21-*.zip
-            UEVR-DuoView-M21-*.zip.sha256
+            UEVR-DuoView-M22-*.zip
+            UEVR-DuoView-M22-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
