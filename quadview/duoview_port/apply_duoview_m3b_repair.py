@@ -62,8 +62,8 @@ float M3bRepairRoot(float2 sourceUv,uint eye,bool rootClamped,out uint status) {
     const float confidenceThreshold=max(.01,4.0*gradient);
     if(!rootClamped && abs(target-source)<=confidenceThreshold) return sourceUv.x;
     status=1u;
-    const float rawLeft=M3bSourceDepth(sourceUv-float2(du,0));
-    const float rawRight=M3bSourceDepth(sourceUv+float2(du,0));
+    const float rawLeft=M3bSourceDepth(sourceUv-float2(8.0*du,0));
+    const float rawRight=M3bSourceDepth(sourceUv+float2(8.0*du,0));
     const float direction=rawRight<rawLeft ? 1.0 : -1.0;
     const float foreground=max(target,source);
     [loop] for(uint step=1u;step<=8u;++step) {
