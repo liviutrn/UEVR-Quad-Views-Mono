@@ -95,7 +95,10 @@ def main():
     frame.config.settings.m3_fill=true;
     run(*a,false,Route::direct,"M3a ON, flat depth");
     if (m21_image_hash!=flat_off) throw std::runtime_error("M3a changed an image with no depth edges");
-    m1_depth={coarse_step.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{},lease};
+    // Solid-colour sources only show a warp change across the fovea edge (u=.75): this step's fill
+    // gap (pixels 18-20) reads periphery, while checked pixels 1 and 16 stay on their own source.
+    auto m3_step=upload_depth([&](UINT x){ const float u=(x+.5f)/32.f; return (u>=.52f && u<.70f) ? .45f : .15f; });
+    m1_depth={m3_step.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{},lease};
     frame.config.settings.m3_edges=false;
     run(*a,false,Route::direct,"M3a OFF, depth step");
     const auto step_off=m21_image_hash;
