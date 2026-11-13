@@ -39,16 +39,18 @@ replace(H, "    FrameGenDynamicPolicy dynamic_policy_;",
         """    FrameGenDynamicPolicy dynamic_policy_;
     std::uint32_t smooth_dynamic_max_{4}; // stock default
     std::uint32_t smooth_lead_reserve_{0}; // opt-in adaptive minimum, not pinned
-    std::uint32_t smooth_min_lead_{0}; // floor enforced by the adaptive controller
+    std::chrono::steady_clock::time_point smooth_ring_backoff_until_{}; // reserve disabled after history failure
     bool smooth_diagnostics_{true}; // audit build: enabled unless explicitly disabled
     std::chrono::steady_clock::time_point smooth_last_success_end_{};
     XrTime smooth_last_success_target_{0};
     std::uint64_t smooth_last_interp_pair_{0};
     float smooth_last_interp_fraction_{0.0f};
     XrTime smooth_last_interp_target_{0};
+    XrTime smooth_last_content_{0}; // inferred shown content time, not scanout
     std::vector<double> smooth_end_gaps_ms_; // successful JIT end-return gaps
     std::vector<double> smooth_target_gaps_ms_; // requested XrTime gaps
-    std::vector<double> smooth_submit_late_ms_; // positive scheduler lateness""",
+    std::vector<double> smooth_submit_late_ms_; // positive scheduler lateness
+    std::vector<double> smooth_motion_err_ms_; // proxy content-time cadence errors""",
         "config fields")
 replace(H, "        std::uint64_t generated_distinct{0};",
         """        std::uint64_t generated_distinct{0};
@@ -63,7 +65,13 @@ replace(H, "        std::uint64_t generated_distinct{0};",
         std::uint64_t smooth_late_half{0}; // CPU submit start > half refresh after schedule
         std::uint64_t smooth_interp_pairs{0}; // observed interpolated real-frame pairs
         std::uint64_t smooth_interp_rewinds{0}; // nonincreasing fractions in pair
-        std::uint64_t smooth_interp_gaps{0}; // >1.5 refresh gaps within pair""",
+        std::uint64_t smooth_interp_gaps{0}; // >1.5 refresh gaps within pair
+        std::uint64_t smooth_reserve_ups{0}; // low measured slack increased lead
+        std::uint64_t smooth_ring_backoffs{0}; // history failure disabled reserve
+        std::uint64_t smooth_pauses{0}; // accepted target gap exceeded pause limit
+        std::uint64_t smooth_freezes{0}; // inferred same-content refreshes
+        std::uint64_t smooth_jumps{0}; // inferred content-time jumps
+        std::uint64_t smooth_rewinds{0}; // inferred content-time rewinds""",
         "diagnostic totals")
 replace(P, "    const std::uint64_t research_reads = ResearchFileReads();",
         """    // Session-scoped timing switches remain stock-off; audit telemetry defaults on.
@@ -77,15 +85,17 @@ replace(P, "    const std::uint64_t research_reads = ResearchFileReads();",
         smooth_lead_reserve_ = static_cast<std::uint32_t>(reserve[0] - '0');
     // No change to frame timing with diagnostics enabled. Explicit =0 opts out.
     smooth_diagnostics_ = ReadResearchSwitch("VECTORXR_FRAMEGEN_FLOW_DIAGNOSTICS") != "0";
-    smooth_min_lead_ = 0;
+    smooth_ring_backoff_until_ = Clock::time_point{};
     smooth_last_success_end_ = Clock::time_point{};
     smooth_last_success_target_ = 0;
     smooth_last_interp_pair_ = 0;
     smooth_last_interp_fraction_ = 0.0f;
     smooth_last_interp_target_ = 0;
+    smooth_last_content_ = 0;
     smooth_end_gaps_ms_.clear();
     smooth_target_gaps_ms_.clear();
     smooth_submit_late_ms_.clear();
+    smooth_motion_err_ms_.clear();
     if (logger_ && (smooth_dynamic_max_ != 4 || smooth_lead_reserve_ || smooth_diagnostics_)) {
         logger_->Info("Frame Generation Dynamic Smooth: max=" + std::to_string(smooth_dynamic_max_) +
                       ", reserve=" + std::to_string(smooth_lead_reserve_) +
@@ -104,51 +114,68 @@ replace(P, "                        multiplier <= 4 && !late_write;",
 replace(P, "        !(lead_probe_->ring && multiplier <= 4 && RingJudgedLocked(lead_ring_[multiplier], now))) {",
         "        !(lead_probe_->ring && multiplier < lead_ring_.size() && RingJudgedLocked(lead_ring_[multiplier], now))) {",
         "lead probe ring")
-# Only the opt-in floor is new; the stock controller remains unchanged.
-replace(P, """    if (lead_policy_.pinned_lead) {
-        return; // tests: the lead stays where it was pinned
+# Evidence-based reserve: stock controller scoring and probes are unchanged when reserve=0.
+replace(P, """    if (lead_calm_since_ == Clock::time_point{}) {
+        lead_calm_since_ = now;
+    }""",
+        """    if (lead_calm_since_ == Clock::time_point{}) {
+        lead_calm_since_ = now;
     }
-    const auto now = Clock::now();""",
-        """    if (lead_policy_.pinned_lead) {
-        return; // tests: the lead stays where it was pinned
-    }
-    const std::uint32_t smooth_minimum =
-        smooth_lead_reserve_ && jit_ && jit_interpolate_ && DynamicLocked()
-            ? std::max(1u, std::min(smooth_min_lead_, LeadCapLocked(multiplier)))
-            : 1u;
-    const auto now = Clock::now();""", "controller floor")
-replace(P, "if (step_down && lead_slots_ > 1 &&",
-        "if (step_down && dynamic_smooth::CanProbeDown(lead_slots_, smooth_minimum) &&",
-        "prevent spare probe below reserve")
-replace(P, "    if (lead_probe_ || lead_slots_ <= 1) {",
-        "    if (lead_probe_ || !dynamic_smooth::CanProbeDown(lead_slots_, smooth_minimum)) {",
-        "prevent calm probe below reserve")
-replace(P, """    if (lead_slots_ > cap) {
-        ClampLeadLocked(cap);
-    }
-    // Predict the first slot the frame will really reach.""",
-        """    if (lead_slots_ > cap) {
-        ClampLeadLocked(cap);
-    }
-    // Only Dynamic / JIT / Interpolate gets the opt-in extra reserve.
-    // Enforce the minimum in the controller as well, so its down-probe cannot
-    // repeatedly be undone on the very next wait (resetting its history).
-    smooth_min_lead_ = 0;
-    if (dynamic && interpolate_jit && smooth_lead_reserve_ > 0) {
-        const double interval = dynamic_interval_slots_ > 0.0
-                                    ? dynamic_interval_slots_ * period_ms : app_latency_ms_;
-        const auto floor = dynamic_smooth::LeadFloor(
-            app_latency_ms_, interval, period_ms, smooth_lead_reserve_, cap);
-        smooth_min_lead_ = floor;
-        if (lead_slots_ < floor) {
-            lead_slots_ = floor;
-            lead_probe_.reset();
+    // Only Dynamic / JIT / Interpolate with measured slack: no formula floor.
+    const std::uint32_t smooth_reserve =
+        smooth_lead_reserve_ && jit_ && jit_interpolate_ && DynamicLocked() && now >= smooth_ring_backoff_until_
+            ? smooth_lead_reserve_ : 0u;""", "reserve activation")
+replace(P, """        const bool spare = !late && slack_ms && *slack_ms > period_ms * 1.1;
+        lead_history_.push_back(late ? 1 : spare ? 2 : 0);""",
+        """        const bool spare = !late && slack_ms && *slack_ms > period_ms * 1.1;
+        // Keep stock scoring exactly when reserve is disabled.
+        lead_history_.push_back(smooth_reserve
+            ? dynamic_smooth::ScoreLead(late, slack_ms.has_value(), slack_ms.value_or(0.0), period_ms, smooth_reserve)
+            : (late ? 1 : spare ? 2 : 0));""", "reserve lead scoring")
+replace(P, "        if (judged && !repeated && step_up) {",
+        """        // Raise by only one refresh when 3 of 10 measurements had less
+        // spare slack than the requested reserve; no late frame required.
+        if (smooth_reserve && !lead_probe_ && !step_up && !at_ceiling && lead_slots_ < cap &&
+            count(dynamic_smooth::kLeadThin) >= 3) {
+            ++lead_slots_;
+            ++totals_.smooth_reserve_ups;
             ClearLeadHistoryLocked();
-            lead_calm_since_ = Clock::now();
+            lead_calm_since_ = now;
+            return;
         }
+        if (judged && !repeated && step_up) {""", "reserve one-slot up")
+replace(P, "    if (now - lead_calm_since_ < CalmProbeWaitLocked()) {",
+        """    // Measured reserve uses only spare-time evidence to step down.
+    // Unmeasurable slack eventually allows a rare stock probe.
+    if (smooth_reserve &&
+        (std::count(lead_history_.begin(), lead_history_.end(), dynamic_smooth::kLeadUnknown) < 8 ||
+         now - lead_calm_since_ < lead_policy_.explore_max)) {
+        return;
     }
-    // Predict the first slot the frame will really reach.""",
-        "extra adaptive lead")
+    if (now - lead_calm_since_ < CalmProbeWaitLocked()) {""", "avoid blind reserve probes")
+replace(P, "            totals_.ring_exhausted += write.ring_exhausted ? 1 : 0;",
+        """            totals_.ring_exhausted += write.ring_exhausted ? 1 : 0;
+            // Prevent extra reserve escalation while the history ring is
+            // insufficient; stock adaptive lead control stays in charge.
+            if (smooth_lead_reserve_ && (write.ring_exhausted || write.ring_short)) {
+                const auto now = Clock::now();
+                if (now >= smooth_ring_backoff_until_) ++totals_.smooth_ring_backoffs;
+                smooth_ring_backoff_until_ = now + std::chrono::seconds(120);
+            }""", "ring backoff")
+replace(P, """    jit_frames_.clear();
+    jit_shown_.reset();""",
+        """    jit_frames_.clear();
+    // Restart = new pacing timeline; do not bridge loading screens, standby,
+    // or compositor restarts when evaluating real-time cadence.
+    smooth_last_success_end_ = Clock::time_point{};
+    smooth_last_success_target_ = 0;
+    smooth_last_interp_pair_ = 0;
+    smooth_last_interp_fraction_ = 0.0f;
+    smooth_last_interp_target_ = 0;
+    smooth_last_content_ = 0;
+    smooth_ring_backoff_until_ = Clock::time_point{};
+    jit_shown_.reset();""", "restart telemetry reset")
+
 # Summary percentile helper: only runs at the 30-second summary.
 replace(P, "// \"lead:frames\" for each lead told in a summary window, \"-\" when none.",
         """std::string SmoothP99(std::vector<double> values) {
