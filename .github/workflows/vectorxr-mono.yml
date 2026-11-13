@@ -8,6 +8,7 @@ on:
       - 'review/vectorxr-dynamic6-audit-20261112'
       - 'experiment/vectorxr-dynamic6-evidence-reserve-20261113'
       - 'experiment/vectorxr-dynamic6-reserve19-20261113'
+      - 'experiment/vectorxr-instrumentation21-20261113'
   workflow_dispatch:
 permissions:
   contents: read
@@ -66,6 +67,17 @@ jobs:
           git -C vectorxr add -N layer/include/depthxr/dynamic_smooth.h layer/tests/dynamic_smooth_tests.cpp
           git -C vectorxr diff | Set-Content -Encoding utf8 evidence/vectorxr-mono-dynamic-smooth.patch
           git -C vectorxr diff --stat
+      - name: Apply optional research #21 patches
+        shell: pwsh
+        run: |
+          python workspace/vectorxr_mono/apply_vectorxr_instrumentation21.py vectorxr
+          if ($LASTEXITCODE -ne 0) { throw 'Research21 telemetry patch anchors failed' }
+          python workspace/vectorxr_mono/apply_vectorxr_clock21.py vectorxr
+          if ($LASTEXITCODE -ne 0) { throw 'Research21 clocks patch anchors failed' }
+          python workspace/vectorxr_mono/apply_vectorxr_tests21.py vectorxr
+          if ($LASTEXITCODE -ne 0) { throw 'Research21 fake-runtime tests patch anchors failed' }
+          git -C vectorxr diff | Set-Content -Encoding utf8 evidence/vectorxr-mono-dynamic-smooth-research21.patch
+          git -C vectorxr diff --stat
       - name: Build the layer (Release)
         shell: pwsh
         run: |
@@ -85,7 +97,7 @@ jobs:
           $exe = Get-ChildItem vectorxr/build -Recurse -File -Filter depthxr_framegen_presenter_tests.exe |
             Select-Object -First 1
           if (-not $exe) { throw 'Presenter fake-runtime test executable not found' }
-          foreach ($test in @('TestJitDynamicInterpolationSlow', 'TestJitDynamicSlackReserve')) {
+          foreach ($test in @('TestJitDynamicInterpolationSlow', 'TestJitDynamicSlackReserve', 'TestJitWorldTickIndependentOfDisplayTime', 'TestJitBuild18WarmupFixture')) {
             $env:FG_TEST_ONLY = $test
             if ($test -eq 'TestJitDynamicInterpolationSlow') { $env:FG_TEST_GAPS = '1' }
             $log = "evidence/$test.log"
@@ -112,12 +124,16 @@ jobs:
           Copy-Item vectorxr/THIRD-PARTY-NOTICES.txt $out/
           Copy-Item evidence/vectorxr-mono.patch $out/
           Copy-Item evidence/vectorxr-mono-dynamic-smooth.patch $out/
+          Copy-Item evidence/vectorxr-mono-dynamic-smooth-research21.patch $out/
+          Copy-Item workspace/vectorxr_mono/test-presets21 $out/settings-presets -Recurse -Force
           New-Item -ItemType Directory $out/source -Force | Out-Null
           Copy-Item workspace/vectorxr_mono/* $out/source/
           @'
           VECTORXR 0.20.1 + MONO FRAME GENERATION - PERSONAL TEST BUILD (not an official VectorXR release)
           Built from DienerTech/vectorxr 8fffa72 (tag v0.20.1, MPL-2.0) + the patch in vectorxr-mono.patch / source/.
           Unsigned. Personal use only. HEADSET UNVERIFIED. Dynamic 6x is OFF by default.
+          Research #21: 3 ready-to-copy settings files in settings-presets. All behavior switches default OFF.
+          UEVR tracing requires a matching separately compiled UEVR research DLL.
           See source/README-dynamic-smooth.md for switches and a test plan.
 
           WHAT IT DOES
