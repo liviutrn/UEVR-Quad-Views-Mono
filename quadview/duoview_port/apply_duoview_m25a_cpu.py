@@ -70,7 +70,9 @@ def main():
          '''        uint32_t m25_owned=0;
         if (duo) for(const auto& s:pool_) if(s->m25_pool_role==m25_role) ++m25_owned;
         for (auto& candidate : pool_) {
-            if (candidate->duoview_request != request) continue;
+            // A retired texture may be rebound to a new generation of the SAME
+            // role. Never reuse it while a consumer still holds a lease.
+            if(!duo && candidate->duoview_request != request) continue;
             if(duo && candidate->m25_pool_role!=m25_role &&
                 !(candidate->m25_pool_role==0u && m25_owned<6u)) continue;
             const uint64_t completed'''),
