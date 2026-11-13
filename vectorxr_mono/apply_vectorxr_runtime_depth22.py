@@ -285,59 +285,167 @@ change(T,
             submitted_any_view_depth22.push_back(any_depth22);""",
        "all-view observer")
 
+# Actual synthesis depth-use counters; capture counts alone do not prove the
+# backend consumed depth. Counts cover result.depth after the fake execution.
+change(T,
+       '    std::atomic<int> depth_captures{0};',
+       '''    std::atomic<int> depth_captures{0};
+    std::atomic<int> depth_requested_views22{0};
+    std::atomic<int> depth_used_views22{0};''',
+       "depth-use counters")
+change(T,
+       '''            result.depth.push_back(synthesized && views[i].request.depth && log_->depth &&
+                                   static_cast<int>(i) != log_->depthless_view);''',
+       '''            result.depth.push_back(synthesized && views[i].request.depth && log_->depth &&
+                                   static_cast<int>(i) != log_->depthless_view);
+            if (synthesized && views[i].request.depth) ++log_->depth_requested_views22;
+            if (result.depth.back()) ++log_->depth_used_views22;''',
+       "count real synthesis depth usage")
+
 # Both compositors are exercised with actual fake input depth; prove the FG
 # backend still captures that depth while the runtime gets none.
 change(T,
        "void TestJitBuild18WarmupFixture() {",
-       """void TestRuntimeDepth22Off() {
-    for (const bool jit : {false, true}) {
-        g_jit = jit;
-        _putenv_s("VECTORXR_FRAMEGEN_RUNTIME_DEPTH", "0");
-        FrameGenPresenter presenter;
-        GpuLog gpu;
-        gpu.depth = true;
-        Runtime runtime;
-        runtime.paced = jit;
-        std::unique_ptr<App> owned;
-        App* app = nullptr;
-        if (jit) {
-            StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
-                     FrameGenMultiplier::k2, app, runtime, owned, nullptr);
-        } else {
-            StartPresenter(presenter, gpu, FrameGenSynthesisMode::kInterpolate);
-            presenter.TrackSwapchain(kDepthChain, 20, 1,
-                XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT);
-            owned = std::make_unique<App>(presenter, runtime);
-            owned->depth.subImage.swapchain = kDepthChain;
-            owned->depth.subImage.imageRect = {{0, 0}, {1600, 1600}};
-            owned->depth.nearZ = 0.1f;
-            owned->depth.farZ = 1000.0f;
-            app = owned.get();
-        }
-        _putenv_s("VECTORXR_FRAMEGEN_RUNTIME_DEPTH", "");
-        if (jit) RunPipelined(*app, 1400ms, 18ms, 61ms);
-        else for (int i = 0; i < 18; ++i) app->Frame();
-        presenter.Stop();
-        Check(gpu.depth_captures.load() > 0,
-              "runtimeDepth=0: FG depth capture remains enabled");
-        Check(gpu.executes.load() > 0,
-              "runtimeDepth=0: FG still executes");
+       """struct Depth22Observation {
+    int captures{0};
+    int executes{0};
+    int requested{0};
+    int used{0};
+    bool copied{false};
+    bool generated{false};
+    bool runtime_depth{false};
+};
+
+Depth22Observation RunRuntimeDepth22Case(bool jit, bool off) {
+    g_jit = jit;
+    _putenv_s("VECTORXR_FRAMEGEN_RUNTIME_DEPTH", off ? "0" : "1");
+    FrameGenPresenter presenter;
+    GpuLog gpu;
+    gpu.depth = true;
+    Runtime runtime;
+    runtime.paced = jit;
+    std::unique_ptr<App> owned;
+    App* app = nullptr;
+    if (jit) {
+        StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
+                 FrameGenMultiplier::k2, app, runtime, owned, nullptr);
+    } else {
+        StartPresenter(presenter, gpu, FrameGenSynthesisMode::kInterpolate);
+        presenter.TrackSwapchain(kDepthChain, 20, 1,
+            XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT);
+        owned = std::make_unique<App>(presenter, runtime);
+        owned->depth.subImage.swapchain = kDepthChain;
+        owned->depth.subImage.imageRect = {{0, 0}, {1600, 1600}};
+        owned->depth.nearZ = 0.1f;
+        owned->depth.farZ = 1000.0f;
+        app = owned.get();
+    }
+    _putenv_s("VECTORXR_FRAMEGEN_RUNTIME_DEPTH", "");
+    if (jit) RunPipelined(*app, 1400ms, 18ms, 61ms);
+    else for (int i = 0; i < 18; ++i) app->Frame();
+    presenter.Stop();
+    Depth22Observation out;
+    out.captures = gpu.depth_captures.load();
+    out.executes = gpu.executes.load();
+    out.requested = gpu.depth_requested_views22.load();
+    out.used = gpu.depth_used_views22.load();
+    {
         std::scoped_lock lock(g_xr_mutex);
-        bool copied = false, generated = false, any_runtime_depth = false;
         for (std::size_t i = 0; i < runtime.submitted_any_view_depth22.size(); ++i) {
             if (runtime.submitted_swapchains[i].empty()) continue;
-            copied |= IsAppImage(runtime.submitted_swapchains[i]);
-            generated |= !IsAppImage(runtime.submitted_swapchains[i]);
-            any_runtime_depth |= runtime.submitted_any_view_depth22[i];
+            out.copied |= IsAppImage(runtime.submitted_swapchains[i]);
+            out.generated |= !IsAppImage(runtime.submitted_swapchains[i]);
+            out.runtime_depth |= runtime.submitted_any_view_depth22[i];
         }
-        Check(copied && generated,
-              "runtimeDepth=0: inspected both real copies and generated frames");
-        Check(!any_runtime_depth,
-              "runtimeDepth=0: no submitted projection view has runtime depth");
-        Check(!runtime.ordering_violation && !g_release_violation,
-              "runtimeDepth=0: valid runtime/GPU call order");
+    }
+    Check(!runtime.ordering_violation && !g_release_violation,
+          "runtimeDepth comparison: valid runtime/GPU call order");
+    return out;
+}
+
+void TestRuntimeDepth22Off() {
+    for (const bool jit : {false, true}) {
+        const auto on = RunRuntimeDepth22Case(jit, false);
+        const auto off = RunRuntimeDepth22Case(jit, true);
+        Check(on.captures > 0 && off.captures > 0 &&
+              on.executes > 0 && off.executes > 0,
+              "RD=1 and RD=0: depth capture and FG execution remain active");
+        Check(on.requested > 0 && off.requested > 0 &&
+              on.used == on.requested && off.used == off.requested,
+              "RD=1 and RD=0: every requested synthesized depth is USED");
+        Check(on.copied && on.generated && off.copied && off.generated,
+              "RD comparison: generated and exact real-copy outputs exercised");
+        Check(!off.runtime_depth, "RD=0: no runtime view contains depth");
+        Check(on.runtime_depth, "RD=1: original runtime depth behavior preserved");
+        if (!jit) {
+            // Deterministic 18-frame threaded/inline scenario: exact equality,
+            // not just equal boolean depth use. JIT pacing is wall-clock based.
+            Check(on.used == off.used && on.requested == off.requested &&
+                  on.captures == off.captures,
+                  "RD=1/RD=0: equal internal depth use and capture count");
+        }
     }
     g_jit = false;
+}
+
+// Presenter-owned standby path (no synthesized frame yet), plus the same
+// output-only sanitizer the layer calls when FG no longer owns pacing.
+void TestRuntimeDepth22Standby() {
+    g_jit = false;
+    _putenv_s("VECTORXR_FRAMEGEN_RUNTIME_DEPTH", "0");
+    FrameGenPresenter presenter;
+    GpuLog gpu;
+    Runtime runtime;
+    StartPresenter(presenter, gpu, FrameGenSynthesisMode::kInterpolate);
+    _putenv_s("VECTORXR_FRAMEGEN_RUNTIME_DEPTH", "");
+    App app(presenter, runtime);
+    for (int i = 0; i < 2; ++i) app.Frame();
+    Check(gpu.executes == 0, "RD=0: initial frames truly passed through");
+    {
+        std::scoped_lock lock(g_xr_mutex);
+        Check(runtime.submitted_any_view_depth22.size() == 2 &&
+              !runtime.submitted_any_view_depth22[0] &&
+              !runtime.submitted_any_view_depth22[1],
+              "RD=0: standby pass-through forwards no depth");
+    }
+    presenter.Stop();
+
+    // Bypassed OpenXrLayer::TraceRuntimeEndFrame sends the app's original
+    // frame via SubmitRuntimeFrame. Exercise its exact helper with two stereo
+    // projection layers (including non-primary layer depth).
+    Runtime direct;
+    auto calls = direct.Calls();
+    XrFrameWaitInfo wait{XR_TYPE_FRAME_WAIT_INFO};
+    XrFrameState state{XR_TYPE_FRAME_STATE};
+    XrFrameBeginInfo begin{XR_TYPE_FRAME_BEGIN_INFO};
+    Check(XR_SUCCEEDED(calls.wait(kSession, &wait, &state)), "bypass wait");
+    Check(XR_SUCCEEDED(calls.begin(kSession, &begin)), "bypass begin");
+    std::array<XrCompositionLayerProjectionView, 2> extra = app.views;
+    XrCompositionLayerProjection other = app.projection;
+    other.views = extra.data();
+    const std::array<const XrCompositionLayerBaseHeader*, 2> layers = {
+        reinterpret_cast<const XrCompositionLayerBaseHeader*>(&app.projection),
+        reinterpret_cast<const XrCompositionLayerBaseHeader*>(&other)};
+    XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO};
+    info.displayTime = state.predictedDisplayTime;
+    info.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    info.layerCount = static_cast<std::uint32_t>(layers.size());
+    info.layers = layers.data();
+    const void* original = app.views[0].next;
+    RuntimeDepthlessFrame22 depthless22;
+    const auto* stripped = depthless22.Apply(&info, false);
+    Check(stripped != &info && app.views[0].next == original,
+          "bypass: no in-place mutation of app's source depth");
+    Check(XR_SUCCEEDED(calls.submit(kSession, stripped)), "bypass submit");
+    {
+        std::scoped_lock lock(g_xr_mutex);
+        Check(direct.submitted_any_view_depth22.size() == 1 &&
+              !direct.submitted_any_view_depth22[0],
+              "RD=0: bypass with two projection layers forwards no depth");
+    }
+    RuntimeDepthlessFrame22 enabled22;
+    Check(enabled22.Apply(&info, true) == &info,
+          "RD=1: bypass returns original frame untouched");
 }
 
 void TestJitBuild18WarmupFixture() {""",
@@ -345,7 +453,8 @@ void TestJitBuild18WarmupFixture() {""",
 change(T,
        "    RUN(TestJitBuild18WarmupFixture);",
        """    RUN(TestJitBuild18WarmupFixture);
-    RUN(TestRuntimeDepth22Off);""",
+    RUN(TestRuntimeDepth22Off);
+    RUN(TestRuntimeDepth22Standby);""",
        "register runtime depth regression")
 
 for path, value in files.items():
