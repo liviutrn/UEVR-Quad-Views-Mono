@@ -45,13 +45,11 @@ change(P,
 # that stored data. Clearing has_depth here covers exact copies, JIT as-is
 # fallback, and non-primary projection layers without touching GPU depth.
 change(P,
-       """                                             bool generated_depth,
-                                             std::vector<const XrCompositionLayerBaseHeader*>& pointers) {
-    pointers.clear();""",
-       """                                             bool generated_depth,
-                                             std::vector<const XrCompositionLayerBaseHeader*>& pointers) {
-    generated_depth = generated_depth && runtime_depth_; // #22: output only
-    pointers.clear();""",
+       """    pointers.clear();
+    for (std::size_t i = 0; i < copy.layers.size(); ++i) {""",
+       """    generated_depth = generated_depth && runtime_depth_; // #22: output only
+    pointers.clear();
+    for (std::size_t i = 0; i < copy.layers.size(); ++i) {""",
        "generated depth disabled")
 change(P,
        """            for (std::size_t view = 0; view < layer.views.size(); ++view) {
