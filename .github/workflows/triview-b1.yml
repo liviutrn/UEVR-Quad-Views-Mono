@@ -1,10 +1,10 @@
-name: TriView B43 + DuoView Mono M3a + World trace #21
+name: TriView B43 + DuoView Mono M3b + World trace #21
 # Exact per-role frame binding; original backend/SDK/frontend pins.
 # Original reviewed rollback artifact prefix: UEVR-DuoView-M24- (B31 legacy contract); build output is M25a.
-run-name: TriView B43 + DuoView Mono M3a + World trace #21 (${{ github.run_number }})
+run-name: TriView B43 + DuoView Mono M3b + World trace #21 (${{ github.run_number }})
 on:
   push:
-    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**', 'experiment/duoview-m24-**', 'experiment/duoview-m25a-**', 'experiment/duoview-m3a-**']
+    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**', 'experiment/duoview-m24-**', 'experiment/duoview-m25a-**', 'experiment/duoview-m3a-**', 'experiment/duoview-m3b-**']
     paths: ['.github/workflows/triview-b1.yml', 'quadview/**']
   workflow_dispatch:
 permissions:
@@ -333,7 +333,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M3a generated contracts failed' }
           python workspace/quadview/duoview_port/test_duoview_m3a_numeric.py
           if ($LASTEXITCODE -ne 0) { throw 'M3a numeric model failed' }
-          '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
+          python workspace/quadview/duoview_port/apply_duoview_m3b_gate.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M3b P5 fine gate overlay failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m3b_repair.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M3b P3 edge repair overlay failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m3b_color.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M3b P4 colour-guided depth overlay failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m3b_jitter.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M3b P1 jitter Auto overlay failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m3b_temporal.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M3b P2 temporal overlay failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m3b_debug.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M3b P7 per-eye debug overlay failed' }
+          python workspace/quadview/duoview_port/test_duoview_m3b_generated.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M3b generated-source contracts failed' }
+          python workspace/quadview/duoview_port/test_duoview_m3b_numeric.py
+          if ($LASTEXITCODE -ne 0) { throw 'M3b numeric models failed' }
+          '# Generated backend/HLSL diff: M3b versus approved #235' | Set-Content evidence/M25a-generated-source.patch
           $changes = @(
             @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),
             @('D3D12Component.cpp','backend/src/mods/vr/D3D12Component.cpp'),
@@ -503,7 +519,7 @@ jobs:
           Copy-Item workspace/quadview/DUOVIEW_M24_RELEASE_NOTES.md package/DUOVIEW_M24_RELEASE_NOTES.md
           Copy-Item workspace/quadview/WORLD_TRACE21_NOTES.md package/WORLD_TRACE21_NOTES.md
           Copy-Item workspace/quadview/UNIFIED_M24_TRACE21_NOTES.md package/UNIFIED_M24_TRACE21_NOTES.md
-          Copy-Item workspace/quadview/DUOVIEW_M3A_RELEASE_NOTES.md package/DUOVIEW_M3A_RELEASE_NOTES.md
+          Copy-Item workspace/quadview/DUOVIEW_M3B_RELEASE_NOTES.md package/DUOVIEW_M3B_RELEASE_NOTES.md
           if (Test-Path evidence/TRIVIEW_EDGE_V2_TEST_FAILED.txt) { Copy-Item evidence/TRIVIEW_EDGE_V2_TEST_FAILED.txt package/TRIVIEW_EDGE_V2_TEST_FAILED.txt }
           Copy-Item workspace/quadview/focus_lift_calibration.json package/focus_lift_calibration.json
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
@@ -603,16 +619,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-M3a-Trace21-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-M3b-Trace21-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-M3a-Trace21-${{ github.run_number }}
+          name: UEVR-DuoView-M3b-Trace21-${{ github.run_number }}
           path: |
-            UEVR-DuoView-M3a-Trace21-*.zip
-            UEVR-DuoView-M3a-Trace21-*.zip.sha256
+            UEVR-DuoView-M3b-Trace21-*.zip
+            UEVR-DuoView-M3b-Trace21-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
