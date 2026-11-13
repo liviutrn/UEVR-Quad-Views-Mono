@@ -114,8 +114,8 @@ change(P,
 # Disjoint classification within successful JIT submissions. The prior
 # smoothOther bucket remains untouched for backwards-compatible logs.
 change(P,
-"""                     ++totals_.smooth_submitted;
-                     // A compositor restart,""",
+"""                    ++totals_.smooth_submitted;
+                    // A compositor restart,""",
 """                     ++totals_.smooth_submitted;
                      if (path == 1) {
                          ++totals_.research_no_projection;
