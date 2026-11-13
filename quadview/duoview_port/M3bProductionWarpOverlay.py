@@ -57,6 +57,73 @@ def main():
         std::cout<<"PASS: WARP M3b P5 OFF and default-tuned gate hashes match\n";
     }
 '''
+    block+=r'''    // M3b OFF hashing across independent P1-P4 toggles, current-frame WARP source.
+    {
+        const auto savedK=m1_geometry.k;
+        const auto savedDepth=m1_depth;
+        const auto savedFine=m21_fine_depth;
+        const auto savedMode=frame.config.settings.m3_jitter_mode;
+        const auto savedEdges=frame.config.settings.m3_edges;
+        const auto savedFill=frame.config.settings.m3_fill;
+        const auto savedFineEnabled=frame.config.settings.m2_fovea_depth;
+        const auto savedGateMode=frame.config.settings.m25_fine_mode;
+        const auto savedTemporal=frame.config.settings.m3b_temporal;
+        const auto savedTemporalStrength=frame.config.settings.m3b_temporal_strength;
+        const auto savedRepair=frame.config.settings.m3b_edge_repair;
+        const auto savedRepairMask=frame.config.settings.m3b_edge_mask;
+        const auto savedColor=frame.config.settings.m3b_color_edges;
+        m1_geometry.k={.25f,-.25f};
+        m1_depth={coarse_step.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{},lease};
+        m21_fine_depth={};
+        frame.config.settings.m3_edges=false;frame.config.settings.m3_fill=true;
+        frame.config.settings.m2_fovea_depth=false;frame.config.settings.m25_fine_mode=0u;
+        frame.config.settings.m3_jitter_mode=0u;
+        frame.config.settings.m3b_temporal=false;frame.config.settings.m3b_temporal_strength=.6f;
+        frame.config.settings.m3b_edge_repair=false;frame.config.settings.m3b_edge_mask=false;
+        frame.config.settings.m3b_color_edges=false;
+        (void)take();
+        run(*a,false,Route::direct,"M3b all OFF reference");
+        const auto m3b_base=m21_image_hash;
+        frame.config.settings.m3b_edge_repair=true;
+        run(*a,false,Route::direct,"M3b repair ON (source-depth path)");
+        frame.config.settings.m3b_edge_repair=false;
+        run(*a,false,Route::direct,"M3b repair restored OFF");
+        if(m21_image_hash!=m3b_base)throw std::runtime_error("M3b P3 OFF hash changed");
+        frame.config.settings.m3b_edge_mask=true;
+        run(*a,false,Route::direct,"M3b repair mask inert without repair");
+        if(m21_image_hash!=m3b_base)throw std::runtime_error("M3b P3 mask OFF-path hash changed");
+        frame.config.settings.m3b_edge_mask=false;
+        frame.config.settings.m3b_color_edges=true;
+        run(*a,false,Route::direct,"M3b colour guided ON");
+        frame.config.settings.m3b_color_edges=false;
+        run(*a,false,Route::direct,"M3b colour guided OFF restored");
+        if(m21_image_hash!=m3b_base)throw std::runtime_error("M3b P4 OFF hash changed");
+        frame.config.settings.m3b_temporal=true;
+        for(int m3b_i=0;m3b_i<3;++m3b_i)
+            run(*a,false,Route::direct,"M3b temporal ON");
+        frame.config.settings.m3b_temporal=false;
+        run(*a,false,Route::direct,"M3b temporal OFF restored");
+        if(m21_image_hash!=m3b_base)throw std::runtime_error("M3b P2 OFF hash changed");
+        (void)take();
+        frame.config.settings.m3_jitter_mode=3u;
+        run(*a,false,Route::direct,"M3b Auto jitter with zero jitter");
+        frame.config.settings.m3_jitter_mode=0u;
+        run(*a,false,Route::direct,"M3b jitter OFF restored");
+        if(m21_image_hash!=m3b_base)throw std::runtime_error("M3b P1 OFF hash changed");
+        (void)take();
+        frame.config.settings.m3_jitter_mode=savedMode;
+        frame.config.settings.m3_edges=savedEdges;frame.config.settings.m3_fill=savedFill;
+        frame.config.settings.m2_fovea_depth=savedFineEnabled;
+        frame.config.settings.m25_fine_mode=savedGateMode;
+        frame.config.settings.m3b_temporal=savedTemporal;
+        frame.config.settings.m3b_temporal_strength=savedTemporalStrength;
+        frame.config.settings.m3b_edge_repair=savedRepair;
+        frame.config.settings.m3b_edge_mask=savedRepairMask;
+        frame.config.settings.m3b_color_edges=savedColor;
+        m1_depth=savedDepth;m21_fine_depth=savedFine;m1_geometry.k=savedK;
+        std::cout<<"PASS: M3b independent switches OFF reproduce M3a image hash\\n";
+    }
+'''
     s=s.replace(marker,block+marker)
     v.output.write_text(s,encoding="utf-8",newline="\n")
     print("Generated M3b P5 gate A/B WARP fixture")
