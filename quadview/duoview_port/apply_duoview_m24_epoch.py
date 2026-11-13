@@ -68,8 +68,13 @@ def main():
         slot->m24_present_epoch=duo ?
             m24_present_epoch_.load(std::memory_order_acquire) : 0u;'''),
         ("M24 packet epoch strict argument",
-         '            ID3D12CommandQueue* consumer_queue) {\n        const auto request=duoview_expected_.load(std::memory_order_acquire);',
-         '''            ID3D12CommandQueue* consumer_queue,uint64_t packet_epoch) {
+         '''latest_duoview_pair_submitted(uint64_t generation,
+            uint32_t coarse_w,uint32_t coarse_h,uint32_t fine_w,uint32_t fine_h,
+            ID3D12CommandQueue* consumer_queue) {
+        const auto request=duoview_expected_.load(std::memory_order_acquire);''',
+         '''latest_duoview_pair_submitted(uint64_t generation,
+            uint32_t coarse_w,uint32_t coarse_h,uint32_t fine_w,uint32_t fine_h,
+            ID3D12CommandQueue* consumer_queue,uint64_t packet_epoch) {
         const auto request=duoview_expected_.load(std::memory_order_acquire);'''),
         ("M24 epoch fail closed for missing colour stamp",
          '            !consumer_queue) { m21_pair_reason_.store(1); ++m21_pair_misses_; return {}; }',
