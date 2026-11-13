@@ -3,7 +3,6 @@
 #include <iostream>
 int main() {
     using depthxr::dynamic_smooth::Slots;
-    using depthxr::dynamic_smooth::LeadFloor;
     unsigned errors = 0;
     auto check = [&](bool ok, const char* label) {
         if (!ok) { ++errors; std::cerr << "FAIL: " << label << "\n"; }
@@ -45,9 +44,9 @@ int main() {
     check(ClassifyMotionStep(2*p,2*p,p)==MotionStep::kEven, "content advances with requested gap");
     check(ClassifyMotionStep(p,0,p)==MotionStep::kEven, "no prior target");
     using depthxr::dynamic_smooth::ContentTime;
-    check(ContentTime(0,6*p,0.5f,true,false)==3*p, "interpolated content midpoint");
-    check(ContentTime(0,6*p,1.0f,false,false)==12*p, "extrapolated content interval");
-    check(ContentTime(0,6*p,0.1f,true,true)==6*p, "exact image newest time");
+    check(ContentTime(2*p,8*p,0.5f,true,false)==5*p, "interpolated content midpoint");
+    check(ContentTime(2*p,8*p,1.0f,false,false)==14*p, "extrapolated content interval");
+    check(ContentTime(2*p,8*p,0.1f,true,true)==8*p, "exact image newest time");
     using depthxr::dynamic_smooth::ClassifyJit;
     using depthxr::dynamic_smooth::JitKind;
     check(ClassifyJit(true,3,true,true,false,true)==JitKind::kInterpolate,
