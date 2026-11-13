@@ -132,8 +132,8 @@ def main():
         roles.snapshot(&snap);
         if (snap.layout_generation!=generation+1 || snap.count!=1u || snap.transition_in_progress!=1u)
             throw std::runtime_error("C2 table: layout change not reported");
-        UevrSourceRolesV1 small{}; small.struct_size=8;
-        if (roles.snapshot(&small)) throw std::runtime_error("C2 table accepted a short struct");
+        UevrSourceRolesV1 short_struct{}; short_struct.struct_size=8;
+        if (roles.snapshot(&short_struct)) throw std::runtime_error("C2 table accepted a short struct");
         std::cout<<"PASS: C2 role table versions, transitions and size check\n";
     }
 '''
