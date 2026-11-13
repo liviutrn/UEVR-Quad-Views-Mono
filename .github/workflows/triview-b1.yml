@@ -1,9 +1,9 @@
-name: TriView B43 + DuoView Mono M2.3
+name: TriView B43 + DuoView Mono M2.4
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B43 + DuoView Mono M2.3 (${{ github.run_number }})
+run-name: TriView B43 + DuoView Mono M2.4 (${{ github.run_number }})
 on:
   push:
-    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**']
+    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**', 'experiment/duoview-m24-**']
     paths: ['.github/workflows/triview-b1.yml', 'quadview/**']
   workflow_dispatch:
 permissions:
@@ -302,6 +302,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M2.3 one-history feather continuity / depth pairing / wide / #158 parity regression failed' }
           python workspace/quadview/duoview_port/test_duoview_m21_numeric.py
           if ($LASTEXITCODE -ne 0) { throw 'M2.2 4000-pixel inverse-warp regression failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m24_visual.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M2.4 depth vertical/fade/Mono-wide overlay failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m24_epoch.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'M2.4 epoch capture and fail-safe fine ramp overlay failed' }
+          python workspace/quadview/duoview_port/test_duoview_m24_numeric.py backend workspace/duoview workspace/quadview
+          if ($LASTEXITCODE -ne 0) { throw 'M2.4 2D depth, epoch, fade and source contract tests failed' }
           python workspace/quadview/duoview_port/embed_duoview_b40.py workspace/duoview backend/src/mods/vr/DuoViewShaderSource.hpp --m1
           if ($LASTEXITCODE -ne 0) { throw 'Mono B40 offline pixel/compute FXC compilation failed' }
           # The independent DuoView tests compile the pinned v208d raster shaders with their original C++.
@@ -450,6 +456,7 @@ jobs:
           Copy-Item workspace/quadview/DUOVIEW_B40_MONO_NOTES.md package/DUOVIEW_B40_MONO_NOTES.md
           Copy-Item workspace/quadview/DUOVIEW_M22_RELEASE_NOTES.md package/DUOVIEW_M22_RELEASE_NOTES.md
           Copy-Item workspace/quadview/DUOVIEW_M23_RELEASE_NOTES.md package/DUOVIEW_M23_RELEASE_NOTES.md
+          Copy-Item workspace/quadview/DUOVIEW_M24_RELEASE_NOTES.md package/DUOVIEW_M24_RELEASE_NOTES.md
           if (Test-Path evidence/TRIVIEW_EDGE_V2_TEST_FAILED.txt) { Copy-Item evidence/TRIVIEW_EDGE_V2_TEST_FAILED.txt package/TRIVIEW_EDGE_V2_TEST_FAILED.txt }
           Copy-Item workspace/quadview/focus_lift_calibration.json package/focus_lift_calibration.json
           Copy-Item workspace/quadview/README.md package/QUADVIEW_README.md
@@ -471,7 +478,17 @@ jobs:
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          DuoView Mono M2.3 / ID6 (synthetic stereo OFF by default):
+          DuoView Mono M2.4 / ID6 (synthetic stereo OFF by default):
+          Two-axis conditioned depth (vertical default=2, OFF=0), B40 corner
+          seam projection, separate near/far normal and wide sharpen fades,
+          true wide-only sharpening in Mono, and additive Present-epoch fine
+          pairing rejection with five-good-pair 200ms ramp IN only.
+          Fine NGX depth remains OFF by default. A matching Present epoch alone
+          is NOT proven exact Unreal source-frame identity. See
+          DUOVIEW_M24_RELEASE_NOTES.md, including unimplemented GPU probe
+          and per-pass timestamps, and legacy TriView Edge V2 WARP failure.
+          ---
+          DuoView Mono M2.3 / ID6 (inherited):
           One B40 Mono seam history is PRESERVED; match the periphery throughout
           the existing blend feather, without a conflicting 12-pixel inward ramp.
           Fovea depth can pair safe adjacent NGX outputs across command lists
@@ -524,21 +541,21 @@ jobs:
           Read B30_COMBINED_NOTES.md for scope and B31_OPTIMIZATION_NOTES.md for
           shader fast paths, regression checks and remaining headset limitations.
           '@ | Set-Content package/READ_FIRST.txt
-          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json','B31_OPTIMIZATION_NOTES.md','B37_ROOT_CAUSE_NOTES.md','B38_INWARD_FEATHER_NOTES.md','B39_AMBIENT_EDGE_NOTES.md','DUOVIEW_M22_RELEASE_NOTES.md','DUOVIEW_M23_RELEASE_NOTES.md')
+          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json','B31_OPTIMIZATION_NOTES.md','B37_ROOT_CAUSE_NOTES.md','B38_INWARD_FEATHER_NOTES.md','B39_AMBIENT_EDGE_NOTES.md','DUOVIEW_M22_RELEASE_NOTES.md','DUOVIEW_M23_RELEASE_NOTES.md','DUOVIEW_M24_RELEASE_NOTES.md')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-M23-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-M24-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-M23-${{ github.run_number }}
+          name: UEVR-DuoView-M24-${{ github.run_number }}
           path: |
-            UEVR-DuoView-M23-*.zip
-            UEVR-DuoView-M23-*.zip.sha256
+            UEVR-DuoView-M24-*.zip
+            UEVR-DuoView-M24-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
