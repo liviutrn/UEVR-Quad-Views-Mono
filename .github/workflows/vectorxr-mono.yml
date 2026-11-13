@@ -89,8 +89,12 @@ jobs:
           $files = @(
             'layer/include/depthxr/framegen_presenter.h',
             'layer/src/framegen/framegen_presenter.cpp',
-            'layer/tests/framegen_presenter_tests.cpp'
+            'layer/tests/framegen_presenter_tests.cpp',
+            'layer/src/openxr_layer.cpp',
+            'layer/include/depthxr/openxr_layer.h',
+            'layer/src/framegen_plan.cpp'
           )
+          $newFiles = @('layer/include/depthxr/framegen_runtime_depth22.h')
           foreach ($rel in $files) {
             $dest = Join-Path $before $rel
             New-Item -ItemType Directory (Split-Path $dest -Parent) -Force | Out-Null
@@ -98,7 +102,7 @@ jobs:
           }
           python workspace/vectorxr_mono/apply_vectorxr_runtime_depth22.py vectorxr
           if ($LASTEXITCODE -ne 0) { throw 'VectorXR #22 final patch anchors failed' }
-          foreach ($rel in $files) {
+          foreach ($rel in ($files + $newFiles)) {
             $dest = Join-Path $after $rel
             New-Item -ItemType Directory (Split-Path $dest -Parent) -Force | Out-Null
             Copy-Item (Join-Path 'vectorxr' $rel) $dest
@@ -130,7 +134,7 @@ jobs:
           $exe = Get-ChildItem vectorxr/build -Recurse -File -Filter depthxr_framegen_presenter_tests.exe |
             Select-Object -First 1
           if (-not $exe) { throw 'Presenter fake-runtime test executable not found' }
-          foreach ($test in @('TestJitDynamicInterpolationSlow', 'TestJitDynamicSlackReserve', 'TestJitWorldTickIndependentOfDisplayTime', 'TestJitBuild18WarmupFixture', 'TestRuntimeDepth22Off')) {
+          foreach ($test in @('TestJitDynamicInterpolationSlow', 'TestJitDynamicSlackReserve', 'TestJitWorldTickIndependentOfDisplayTime', 'TestJitBuild18WarmupFixture', 'TestRuntimeDepth22Off', 'TestRuntimeDepth22Standby')) {
             $env:FG_TEST_ONLY = $test
             if ($test -eq 'TestJitDynamicInterpolationSlow') { $env:FG_TEST_GAPS = '1' }
             $log = "evidence/$test.log"
