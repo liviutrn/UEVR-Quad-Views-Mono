@@ -20,7 +20,8 @@ def main():
         "bool m2_fovea_depth{false};", "bool m21_depth_debug{false};", "bool m21_jitter_correct{false};",
         "requested.m2_right_sharpen,0.f,20.f")
     have(vr.parent/"VR.hpp", 'DuoM21DepthDebug', 'DuoM21FoveaDepth')
-    have(root/"VR.cpp", 'm_duo_m21_depth_debug->draw',
+    have(root/"VR.cpp", 'set_duoview_fine_capture_enabled(false)', 
+         'set_duoview_fine_capture_enabled(', 'm_duo_m21_depth_debug->draw',
          'Depth edge sharpness (higher = harder edge)',
          'm21_depth_debug==candidate.m21_depth_debug',
          'm21_jitter_correct==candidate.m21_jitter_correct')
@@ -31,7 +32,8 @@ def main():
          "coarse->list_epoch!=fine->list_epoch",
          "m21_fine_cooldown_until_ms_",
          "const bool fits=candidate->texture",
-         "m21_stats() const", "m21_alloc_", "m21_full_", "m21_pair_gap_us_", "last_used_age_us_.store")
+         "m21_stats() const", "m21_alloc_", "m21_full_", "m21_pair_gap_us_", "last_used_age_us_.store",
+         "m21_allow_fine_capture_.load(std::memory_order_acquire)", "set_duoview_fine_capture_enabled(bool on)")
     have(vr/"D3D12Component.cpp",
          "depths.latest_duoview_pair_submitted",
          "pair.first ? pair.first",

@@ -56,6 +56,22 @@ def captured_pair(mods):
     # Keep original 12-slot safety and TriView selection. For DuoView, prefer
     # reusing an idle texture with matching dimensions/format before resizing.
     patch(path,[
+        ("M21 public producer toggle",
+         '    void set_duoview_expected(uint64_t generation, uint32_t width, uint32_t height,',
+         '''    void set_duoview_fine_capture_enabled(bool on) noexcept {
+        m21_allow_fine_capture_.store(on,std::memory_order_release);
+    }
+    void set_duoview_expected(uint64_t generation, uint32_t width, uint32_t height,'''),
+        ("M21 producer defaults to coarse-only",
+         '    std::atomic<DepthCaptureMode> capture_mode_{DepthCaptureMode::Off};',
+         '''    std::atomic<DepthCaptureMode> capture_mode_{DepthCaptureMode::Off};
+    std::atomic<bool> m21_allow_fine_capture_{false};'''),
+        ("M21 suppress unused fine NGX copies",
+         '''        const bool fine_output=duo && request &&
+            matches_periphery(out_w,out_h,request->fovea_width,request->fovea_height);''',
+         '''        const bool fine_output=duo && request &&
+            m21_allow_fine_capture_.load(std::memory_order_acquire) &&
+            matches_periphery(out_w,out_h,request->fovea_width,request->fovea_height);'''),
         ("M21 prioritize matching texture",
          '            if (!slot || candidate->sequence<slot->sequence) slot=candidate;',
          '''            const auto cd=candidate->texture ? candidate->texture->GetDesc() : D3D12_RESOURCE_DESC{};
@@ -167,6 +183,22 @@ def captured_pair(mods):
     }
 
 private:''' ),
+    ])
+    # Producer has the same frozen Mode-6 source-frame setting as the compositor.
+    # Fine OFF must not make an unnecessary depth copy every NGX fovea Evaluate.
+    patch(mods/"VR.cpp",[
+        ("M21 enable fine producer from the frozen packet",
+         '''            layout.fovea.width, layout.fovea.height);
+    } else {
+        uevr::quadview::ngx::PeripheryDepth::self().set_duoview_expected(0, 0, 0, 0, 0);
+    }''',
+         '''            layout.fovea.width, layout.fovea.height);
+        uevr::quadview::ngx::PeripheryDepth::self().set_duoview_fine_capture_enabled(
+            frame->config.settings.m2_fovea_depth);
+    } else {
+        uevr::quadview::ngx::PeripheryDepth::self().set_duoview_expected(0, 0, 0, 0, 0);
+        uevr::quadview::ngx::PeripheryDepth::self().set_duoview_fine_capture_enabled(false);
+    }'''),
     ])
 
 
