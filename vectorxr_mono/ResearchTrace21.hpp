@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -75,6 +76,19 @@ public:
     explicit Csv(const char* enable_key) {
         const char* p=std::getenv(enable_key);
         enabled_=p && std::strcmp(p,"1")==0;
+        if (!p) {
+            try {
+                const char* home=std::getenv("LOCALAPPDATA");
+                if (home && *home) {
+                    std::ifstream cfg(std::filesystem::path(home)/"VectorXR"/"framegen-research.txt");
+                    std::string line;
+                    const std::string key=std::string(enable_key)+"=";
+                    while (std::getline(cfg,line)) {
+                        if (line.rfind(key,0)==0) { enabled_=(line.substr(key.size())=="1"); break; }
+                    }
+                }
+            } catch (...) {}
+        }
         if (enabled_) worker_=std::thread([this]{ Write(); });
     }
     Csv(const Csv&)=delete;
