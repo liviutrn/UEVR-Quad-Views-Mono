@@ -1,9 +1,9 @@
-name: TriView B43 + DuoView Mono M2.4 + World trace #21
+name: TriView B43 + DuoView Mono M2.5a + World trace #21
 # Exact per-role frame binding; original backend/SDK/frontend pins.
-run-name: TriView B43 + DuoView Mono M2.4 + World trace #21 (${{ github.run_number }})
+run-name: TriView B43 + DuoView Mono M2.5a + World trace #21 (${{ github.run_number }})
 on:
   push:
-    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**', 'experiment/duoview-m24-**']
+    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**', 'experiment/duoview-m24-**', 'experiment/duoview-m25a-**']
     paths: ['.github/workflows/triview-b1.yml', 'quadview/**']
   workflow_dispatch:
 permissions:
@@ -308,6 +308,40 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M2.4 epoch capture and fail-safe fine ramp overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m24_numeric.py backend workspace/duoview workspace/quadview
           if ($LASTEXITCODE -ne 0) { throw 'M2.4 2D depth, epoch, fade and source contract tests failed' }
+          # Apply #235 world trace before taking the generated-source baseline.
+          python workspace/quadview/apply_uevr_world_trace21.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'UEVR research #21 frame trace anchors failed' }
+          $base="evidence/m25a-baseline"
+          New-Item -ItemType Directory $base -Force | Out-Null
+          foreach ($name in @('QuadViewNgxDepth.hpp','D3D12Component.cpp','DuoViewM1D3D12.hpp','DuoViewD3D12.hpp','DuoViewConfig.hpp')) {
+            Copy-Item "backend/src/mods/vr/$name" "$base/$name"
+          }
+          Copy-Item backend/src/mods/VR.cpp "$base/VR.cpp"
+          Copy-Item backend/src/mods/VR.hpp "$base/VR.hpp"
+          Copy-Item workspace/duoview/DuoViewM1Stereo.hlsl "$base/DuoViewM1Stereo.hlsl"
+          Copy-Item workspace/duoview/DuoViewNativeCompositeRaster.hlsl "$base/DuoViewNativeCompositeRaster.hlsl"
+          python workspace/quadview/duoview_port/apply_duoview_m25a_cpu.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M2.5a CPU selection/pool overlay failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m25a_gpu.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M2.5a GPU tile gate overlay failed' }
+          python workspace/quadview/duoview_port/test_duoview_m25a_generated.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M2.5a generated contracts failed' }
+          '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
+          $changes = @(
+            @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),
+            @('D3D12Component.cpp','backend/src/mods/vr/D3D12Component.cpp'),
+            @('DuoViewM1D3D12.hpp','backend/src/mods/vr/DuoViewM1D3D12.hpp'),
+            @('DuoViewD3D12.hpp','backend/src/mods/vr/DuoViewD3D12.hpp'),
+            @('DuoViewConfig.hpp','backend/src/mods/vr/DuoViewConfig.hpp'),
+            @('VR.hpp','backend/src/mods/VR.hpp'),
+            @('VR.cpp','backend/src/mods/VR.cpp'),
+            @('DuoViewM1Stereo.hlsl','workspace/duoview/DuoViewM1Stereo.hlsl'),
+            @('DuoViewNativeCompositeRaster.hlsl','workspace/duoview/DuoViewNativeCompositeRaster.hlsl')
+          )
+          foreach ($pair in $changes) {
+            git diff --no-index -- "evidence/m25a-baseline/$($pair[0])" "$($pair[1])" 2>&1 | Out-File evidence/M25a-generated-source.patch -Append -Encoding utf8
+            $global:LASTEXITCODE=0
+          }
           python workspace/quadview/duoview_port/embed_duoview_b40.py workspace/duoview backend/src/mods/vr/DuoViewShaderSource.hpp --m1
           if ($LASTEXITCODE -ne 0) { throw 'Mono B40 offline pixel/compute FXC compilation failed' }
           # The independent DuoView tests compile the pinned v208d raster shaders with their original C++.
@@ -315,9 +349,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not restore pinned DuoView test inputs' }
           python workspace/quadview/embed_shader.py backend/src/mods/vr/QuadViewShaderBytecode.hpp
           if ($LASTEXITCODE -ne 0) { throw 'QuadView offline shader compilation failed' }
-          # Passive World Trace #21 from successful #234, layered AFTER all M2.4 modifications.
-          python workspace/quadview/apply_uevr_world_trace21.py backend
-          if ($LASTEXITCODE -ne 0) { throw 'UEVR research #21 frame trace anchors failed' }
           python workspace/quadview/test_unified_m24_trace21.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Unified M2.4/Trace21 contract checks failed' }
           python workspace/quadview/SourceCheckpointTests.py
@@ -563,16 +594,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-M24-Trace21-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-M25a-Trace21-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-M24-Trace21-${{ github.run_number }}
+          name: UEVR-DuoView-M25a-Trace21-${{ github.run_number }}
           path: |
-            UEVR-DuoView-M24-Trace21-*.zip
-            UEVR-DuoView-M24-Trace21-*.zip.sha256
+            UEVR-DuoView-M25a-Trace21-*.zip
+            UEVR-DuoView-M25a-Trace21-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
