@@ -74,7 +74,7 @@ def main():
     assert "distance/max(SeamGeometry.y,1.0)" not in seam
     gpu=have(root/"vr/DuoViewD3D12.hpp",
         "sizeof(ShaderConstants) == 208",
-        "sizeof(ShaderConstants)/4 + 4 <= 64",
+        "sizeof(ShaderConstants)/4 + 8 <= 64",
         "stats.Width=64u*4u*sizeof(float)",
         "stat_srv.Buffer.NumElements=64",
         "stat_uav.Buffer.NumElements=64",
