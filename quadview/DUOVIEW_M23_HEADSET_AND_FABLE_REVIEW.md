@@ -1,70 +1,51 @@
-# DuoView Mono synthetic stereo M2.3 — headset response / B43-158 parity
+# DuoView Mono M2.3 — headset-driven fixes / B43-158 parity review
 
-**Date:** 13 November 2026  
-**Base:** Successful M2.2 build #203 (`342f5e45133f16dc53fc2ebac32b768fd77a6c66`).  
-**TriView ground truth:** Successful **UEVR-TriView-B43-158**, GitHub Actions run `43237617658`, commit `67913082328c128d1d65bf6c76b0ad60cdbcb332`. The original `quadview/QuadViewComposite.hlsl` blob `3fd53f95cba42b0703e8fc146151e96a98cb00b7` and `quadview/QuadViewD3D12.hpp` blob `c7c06dbdc0d2c89779203feeb5ba5bb5d29944fb` are pinned as **unchanged** regression contracts.
+**Base:** known-stable M2.2 #203 (`342f5e45133f16dc53fc2ebac32b768fd77a6c66`).  
+**TriView reference:** **UEVR-TriView-B43-158**, successful run `43237617658`, commit `67913082328c128d1d65bf6c76b0ad60cdbcb332`.  
+**Scope:** DuoView synthetic stereo / mode ID6. The original TriView B43-158 `quadview/QuadViewComposite.hlsl` and `quadview/QuadViewD3D12.hpp` are unchanged and their exact blob hashes are checked in CI.  
+**Status:** Requires full CI and PSVR2 headset testing. Known-good #203 remains available.
 
-## Liviu's M2.2 headset feedback
+## Actual M2.2 headset observations
 
-Cyclopean synthetic stereo functions at strength **0.9**, near depth **0.25 m** and edge sharpness **0.25**. Much better and steadier than former asymmetric synthetic stereo; weapon/hand occlusion artifacts remain, but no severe flicker. Increasing peripheral resolution reportedly reduces artifacts; fine-depth toggle and NGX jitter switch have no visible effect. Independent regular per-eye sharpening works, but the extra-wide radius is too large and wide should have independent strength. Mono seam RGB/brightness with blend feather does *not* match the approved TriView B43-158. Excellent device/lifecycle stability: resize, fovea crops, peripheral resolution, Cheeky NR toggle, runtime changes, no crashes. **Preserve that lifecycle.**
+Liviu reports convincing **stable** cyclopean stereo at strength **0.9**, near limit **0.25 m**, depth edge sharpness **0.25**; substantially less flicker than previous asymmetric stereo experiments. Weapon/hand disocclusion artifacts persist. Higher periphery resolution helps quality. Fine NGX depth toggle shows no visible difference, jitter alignment A/B similarly inconclusive. Mono B40 seam brightness/colour matching introduces a visible abrupt transition with wide fovea/periphery blend feather; **without matching ON, the abrupt seam is absent**. Regular per-eye sharpen works; wide radius feels too large and should have its own strengths. Resolution/crop/runtime changes and Cheeky NR toggles remained stable without crashes — **preserve lifecycle and fallback**.
 
-Provided UEVR log: 9369 lines, 709 M2.1 diagnostic lines. Fine flag was false **all 709 samples**, including 351 cumulative pair misses and **zero successful pairs**. Rejections: 628 code 4 (list/epoch), 69 code 3 (nonadjacent sequence), 2 code 2 (missing candidates), plus startup/off records. `coarse=true` 706/709; `jitter_fix=true` 7 diagnostics, proving the switch toggled. Peak depth pool reallocation 62, pool full 0. No evidence of a fatal pool exhaustion. Cheeky was loaded; log **does not prove** Cheeky caused pairing rejection.
+The attached log had 709 M2.1 diagnostics: `fine=false` throughout, 0 successful pairs and 351 pair attempts. The dominant reject reason 4 came from requiring the two NGX evaluations to use the **identical command list and epoch**; codes 3 (sequence) and 2 (missing candidates) also occurred. Cheeky is a separate NGX/NR consumer; whether it interleaves evaluations is **not proved**.
 
-## Fixes in M2.3
+## Changes in M2.3
 
-### 1. Fine depth acquisition actually eligible in DuoView
+### 1. Fine fovea depth: conservative cross-list pairing
 
-Original M2.1 required two captured NGX evaluations from **the exact same D3D12 command-list pointer and recording epoch**. Two genuine scene roles can naturally have separate command lists. This produced reject reason 4 and permanent coarse-only stereo.
+M2.1 rejected genuine fine/coarse NGX source captures recorded on separate D3D12 lists. M2.3 still requires (a) the same immutable rendering-generation/extents/request, (b) distinct expected fine/coarse sizes, (c) valid NGX evaluation, copied depth, role tag and jitter, (d) submission queue and fence validity, (e) both captures within the existing 250ms recency horizon, (f) **adjacent captured** evaluation sequence numbers, and (g) the 500ms coarse-only cooldown on a missing pair.
 
-M2.3 **keeps** per-role dimension validation, immutable generation/request identity, independent jitter data, valid evaluation, 250ms freshness, submission queue/fence ordering, adjacent *captured* sequence numbers and 500ms coarse-only cooldown. If two captures are **not** on the same command list, it now permits them only when (a) they share the same tracked submitting queue and (b) their actual recording timestamps differ by at most **25ms**. It still refuses other cases with reason 4. No second-copy workload, scene render, GPU queue wait, pool enlargement or unsafe depth SRV mutation.
+When the two roles were recorded on different command lists, M2.3 now **additionally** accepts the pair only if both have the **same recorded producer queue** and their NGX capture timestamps differ by **no more than 25ms**. This is a conservative provisional rule, **not proof** that both depths correspond to the exact presented colour frame. Fine remains OFF by default. If new movement artifacts appear, turn fine OFF and inspect `[DuoView][M2.1]` pair/reject/gap lines; do not disable fence safety or widen timing blindly. Jitter remains an opt-in A/B test.
 
-This is a conservative **temporal association**, **not** a proven exact same-colour-frame ID. Liviu/Fable must look for `fine=true`, `pair=N/M` increment, `reject` and `gap_us`, and evaluate motion disocclusion. If still zero pairs, diagnose using captures before broadening the window; never turn off fences or compare unrelated frames.
+### 2. Seam: repair the actual Mono blending defect, keep one shared B40 history
 
-### 2. Actual B43-158 per-eye seam architecture, not one Mono compromise
+An earlier speculative attempt doubled the B40 history to separate eye buffers. **It has been reverted before shipping**. The user correctly noted that the issue appeared only after enabling seam matching; independent sharpening is not the primary explanation.
 
-**Previous parity defect:** DuoView collapsed the two eye-specific 32-knot temporal B40 colour correction fields into **one** 32-knot Mono field. Its seam analysis used **linked** `SharpenStrength` even when displayed synthetic left and right eyes used independent M2 sharpen strengths. This is not the B43-158 architecture, and cannot match both displayed eyes' colours.
+The proven B40 architecture remains exactly **one shared 32-knot Mono correction history**, 128 deterministic spatial subanchors, 15 paired samples per subanchor, componentwise trimmed outliers, one queue-owned temporal EMA with no crop/scene resets, existing GPU ownership and one compute dispatch. TriView B43 uses two histories because it has two separately rendered eye views; DuoView's input image is one shared Mono source, so two histories are unnecessary for a source-domain colour match.
 
-**M2.3:**
-- Keeps the exact B40 spatial model **per eye**: 32 knots * four subanchors * 15 paired RGB samples; componentwise trimmed outlier groups; per-eye 350ms/other preset EMA history with continuous no-reset logic.
-- GPU compute shader uses **64 lanes in one dispatch**, selecting the proper eye's pre-wide sharpen strength from a new `B40EyeSharpen` uniform. Each eye gets a *separate* 32-knot correction field and its own persistent 32-knot EMA.
-- B40 history expands from 32 to 64 knots (a few extra KiB); per-slot stats from 64 to 128 float4, safely preallocated as before, no lifetime changes or additional queue/presentation work. Existing fence-owned resources and single queue remain.
-- Native and gathered periphery pixel shaders select the matching eye's 32-knot correction when rendering synthetic stereo.
-- Preserves TriView B43's policy that the additional wide/detail sharpening is display-only and must **not** contaminate low-frequency seam statistics; ordinary per-eye sharpen and brightness correction **are** applied in both analysis and display.
-- Original B38 inward raw-context feather and B40 exterior matching are preserved. The goal is exact implementation architecture parity, not tuning defaults to hide a broken matcher.
-- The original TriView B43-158 shader and compositor are **byte-for-byte unchanged**; CI checks their actual Git object hashes.
+**Proven code-level mismatch:** DuoView used `DuoB40InwardAnchor()` to erase matched peripheral colours within a **fixed 12px inward strip**, even if the visible peripheral contribution in the real feather stretched over many more pixels. This can produce a dark/light strip right *inside* the crop boundary when matching is ON. The actual final `lerp(periphery,fovea,weight)` already attenuates the corrected periphery by `1-weight` along the entire feather. M2.3 sets the correction anchor to 1.0, allowing only this correct, continuous attenuation. It leaves the original raw colour and gamma handling unchanged. No extra texture pass or GPU memory.
 
-### 3. Regular and wide sharpen are independently controllable
+**Legacy setting:** The former `B38 inward raw-context anchor` slider is no longer shown because it no longer controls a valid separate strip. Its saved field and defaults remain harmless for compatibility. Blend Feather Width continues to control the actual output transition. A new numerical regression tests many feather widths and proves that an ideal constant-offset colour match stays constant over the full feather; the old fixed strip fails this oracle.
 
-- The original regular left/right strengths and their linked/unlinked controls are preserved.
-- Added independent **wide strength** (0–20, default 1.0) and a separate toggle to unlink wide left/right. When unlinked, two further 0–20 wide strength sliders appear. Wide can work while regular=0; regular can work while wide=0.
-- Runs two independent sharpening **calculations** inside the existing final raster pixel shader; does **not** add an extra fullscreen GPU draw/pass or re-render the scene.
-- Wide diagonal/guard offsets changed from 2.8px/7px (**2×** regular 1.4px/3.5px) to 2.1px/5.25px (**1.5×**); the v208d regular kernel is unchanged.
-- The changes apply to the synthetic stereo (`DUOVIEW_M1_RASTER`) path. The original mono fallback still keeps the preexisting linked wide controls. Wide is OFF by default.
+This is a *targeted Mono adaptation* of B43's established B40 matching model. The screenshot/headset outcome, not superficial algorithm naming, determines parity. There may still be differences in colour-space, depth-warp and per-eye sharpening references requiring later measured changes.
 
-## Deliberately unchanged
+**Rendering order note:** Current synthetic stereo mode inverse-warps output sampling UVs first and performs source compositing after warp in the same final raster pixel shader. The foveal regular and wide sharpening calculations occur before the final blend. It does *not* literally composite a separate full Mono texture before stereo synthesis. No new intermediate full-resolution texture has been added.
 
-- The proven mono-to-stereo inverse-depth geometry, eight-sample/continuous inverse warp, globally conditioned coarse grid, 5×5 fine-depth footprint, near-depth cutoff and depth-edge diagnostic.
-- No multi-layer DIBR, disocclusion inpainting, 2nd full-res fine grid, temporal depth accumulation or new GPU allocation in frame callbacks.
-- Runtime reset/resolution/crop/VRAM safety from M2.2 and TriView B43.
-- Cheeky NR is **not** modified; it operates as an independent plugin and potential NGX timing contributor.
-- Jitter A/B remains OFF by default; lack of visible difference is not proof of incorrect jitter.
-- Fine fovea depth remains OFF **by default** until the headset log confirms pairing and quality.
+### 3. Regular and wide sharpening independent
 
-## Headset test / stop criteria
+Regular sharpening remains linked or independently adjustable per left/right eye. Extra-wide sharpening can now be enabled with its **own linked strength (0-20)** or **independent left/right wide strengths (0-20)**, regardless of the regular strength. Wide radius/guard changes from 2.8px / 7.0px to **2.1px / 5.25px**, exactly 1.5x the original regular 1.4px / 3.5px filter. These are **two independent sharpening contributions within the same raster draw**, not another GPU render pass. Applies to synthetic stereo mode; legacy Mono controls remain unchanged. Wide starts OFF, regular user strengths are retained.
 
-1. Preserve #203 binary as the known-stable fallback. Launch #M23 with synthetic stereo ON, fine OFF. Verify your previous 0.9 / 0.25 / 0.25 setup and that resets, cheeky switching, size/resolution controls still work.
-2. With fine OFF, test seam correction ON/OFF, RGB mix at 1, B40 default temporal setting and a larger blend feather. Compare directly with B43-158 (identical scene/settings). Confirm no seam brightness jumps on gaze motion and that both eyes agree. If broken, send still images/video, the UEVR log and B40 warnings.
-3. Test normal sharpen 0 / wide enabled 2; then normal 2 / wide 0; then both 2, and unlinked left/right wide. Confirm independent contribution and that the new radius is visibly narrower.
-4. Enable fine depth and hold still at weapon/hand silhouette. Compare with fine OFF at the **same peripheral resolution**. Expect `[DuoView][M2.1] fine=true` and nonzero `pair`. If not, collect rejects/gap and avoid increasing depth resolution blindly.
-5. Check moving head/object for depth trails, eye rivalry, ghosting or frame-to-frame jumps. These indicate F4 unproven frame correlation and require a stronger frame-stamp method before relaxing pairing further.
-6. Test mode ID7 and compare with B43-158, plus M1 stereo OFF bypass. No regressions or BSODs acceptable.
+## Headset verification sequence
 
-## Fable adversarial review focus
+1. Keep #203 installed/available as fallback. Confirm #M23 synthetic stereo coarse-only looks identical at your 0.9 / 0.25 / 0.25 settings, and crop/resolution/runtime/Cheeky remain stable.
+2. Enable Mono seam matching and move the **Blend Feather Width** broadly (small and large). A correct result must have no abrupt bright/dark band **inside** the crop when matching is ON; compare to B43-158 and to matching OFF, using the same scene and exposure.
+3. Compare regular-only, wide-only (regular strength 0), and both, then independent left/right wide strengths. The wide effect should have shorter radius and independent strength.
+4. Enable fine NGX depth. Watch `[DuoView][M2.1]`: want `fine=true` and growing `pair` count, with a reasonable `gap_us`. If pairing remains 0, leave fine OFF and send log; conservative rejection is better than wrong-frame depth.
+5. Inspect hands/weapon near objects, movement/disocclusion, shadow contours, gaze motion, and any new shimmer or binocular rivalry. Disable fine on any temporal artifact.
+6. Verify TriView ID7 unchanged, synthetic stereo OFF original Mono route, and old stability with resets, crop/periphery sizes, NR toggles. Report any crashes immediately.
 
-1. Is conservative 25ms/adjacent/same-queue cross-list capture sufficient, or should we add exact frame/crop stamps? Does producer queue order + fence evidence guard GPU use correctly?
-2. Validate both per-eye persistent B40 buffers and shader descriptor counts, HLSL root DWORD budget (224B + descriptors), command ownership across runtime/crop resizes, and shader FXC compiled output.
-3. Verify the displayed **per-eye sharpened and anti-vignette-corrected fovea** is exactly the reference sampled in B40 analysis; remaining limitation: wide sharpening remains display-only just like B43-158.
-4. Verify new independent wide intensity cannot borrow regular strength, 1.5× kernel tap distances, stereo OFF baseline, and PBO/performance under 20 FPS.
-5. Watch for GPU regressions in WARP fixture and TriView Edge V2 flaky test; never characterize CI alone as in-headset validation.
+## Fable adversarial review
 
-**Status:** Code + CI may compile; headset verification is required before declaring this usable.
+Priorities: (a) full-feather correction equals `match*(1-BlendWeight)` (no early 12px cutoff) in both Native and Gather paths; verify shader sample domain through stereo warp, (b) one shared B40 history including edge-statistics colour-space/ref sharpening, (c) cross-list fine pairing and true colour-frame provenance risk, (d) M2.3 independent wide strength, 1.5x offsets and potential bypass when regular=0, (e) exact source parity and regression stability for B43-158 and M2.2/203, (f) FXC real compiler, WARP GPU and sanitizer test results. **Never claim CI alone verifies the headset result.**
