@@ -24,7 +24,7 @@ def replace(path,needle,replacement,label):
 
 replace(V,
 '#include "vr/StockFrameBindingMigration.hpp"',
-'#include "vr/StockFrameBindingMigration.hpp"\n#include "vr/ResearchTrace21.hpp"',
+'#include "vr/StockFrameBindingMigration.hpp"\n#define RESEARCH21_UEVR 1\n#include "vr/ResearchTrace21.hpp"',
 "include UEVR trace")
 replace(V,
 """VR::~VR() {
@@ -51,7 +51,7 @@ replace(V,
 "game tick")
 replace(X,
 '#include "../SteamFrameBindings.hpp"',
-'#include "../SteamFrameBindings.hpp"\n#include "../ResearchTrace21.hpp"',
+'#include "../SteamFrameBindings.hpp"\n#define RESEARCH21_UEVR 1\n#include "../ResearchTrace21.hpp"',
 "include OpenXR trace")
 replace(X,
 """void OpenXR::on_pre_render_game_thread(uint32_t frame_count) {
