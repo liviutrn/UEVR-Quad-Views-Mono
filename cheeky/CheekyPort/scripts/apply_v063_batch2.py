@@ -444,8 +444,9 @@ change("src/dlss_nr.cpp",
        "capture invocation uses preclassified mask")
 
 # JSON must not output bare NaN, -inf, +inf: those are INVALID JSON numbers.
-change("src/nr_probe_capture.hpp", "#pragma once", "#pragma once\n#include <cmath>",
-       "capture JSON finite math")
+change("src/dlss_nr.cpp", '#include "../uevr/gpu_memory.hpp"',
+       '#include "../uevr/gpu_memory.hpp"\n#include <cmath>',
+       "capture JSON finite math outside anonymous namespace")
 capture=files["src/nr_probe_capture.hpp"]
 for field in ("intensity","tone","structure","skin","roundness","transition",
               "shape_w","shape_h","exposure_pre","exposure_scale",
