@@ -76,6 +76,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Research21 clocks patch anchors failed' }
           python workspace/vectorxr_mono/apply_vectorxr_tests21.py vectorxr
           if ($LASTEXITCODE -ne 0) { throw 'Research21 fake-runtime tests patch anchors failed' }
+          python workspace/vectorxr_mono/apply_vectorxr_trace21.py vectorxr
+          if ($LASTEXITCODE -ne 0) { throw 'Research21 real-frame trace anchors failed' }
           git -C vectorxr diff | Set-Content -Encoding utf8 evidence/vectorxr-mono-dynamic-smooth-research21.patch
           git -C vectorxr diff --stat
       - name: Build the layer (Release)
