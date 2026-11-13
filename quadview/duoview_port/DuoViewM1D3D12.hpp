@@ -81,7 +81,7 @@ public:
     bool write_constants(ID3D12Device* device, const stereo::Geometry& geometry,
                          const M1DepthInput* input, const M1DepthInput* focus,
                          const std::array<float,4>& crop, float left_sharpen,
-                         float right_sharpen, float near_m, float softness,
+                         float right_sharpen, bool depth_debug, float near_m, float softness,
                          D3D12_CPU_DESCRIPTOR_HANDLE raw_srv,
                          D3D12_CPU_DESCRIPTOR_HANDLE focus_srv) {
         M1Constants data{};
@@ -92,8 +92,9 @@ public:
         std::copy_n(geometry.depth_coefficients.begin(), 3, data.depth);
         data.depth[3] = near_m > 0.f ? 1.f / (near_m * geometry.world_to_meters) : 0.f;
         data.filter[1] = 12.5f / geometry.world_to_meters;
-        data.m2_sharpen[0] = (std::clamp)(left_sharpen,0.f,5.f);
-        data.m2_sharpen[1] = (std::clamp)(right_sharpen,0.f,5.f);
+        data.m2_sharpen[0] = (std::clamp)(left_sharpen,0.f,20.f);
+        data.m2_sharpen[1] = (std::clamp)(right_sharpen,0.f,20.f);
+        data.m2_sharpen[2] = depth_debug ? 1.f : 0.f;
         const bool crop_ok = crop[0] >= 0.f && crop[1] >= 0.f &&
             crop[2] <= 1.f && crop[3] <= 1.f &&
             crop[2] > crop[0] && crop[3] > crop[1] &&
@@ -166,6 +167,14 @@ public:
                 fovea_depth_lease=focus->lease;
                 fine_ok=true;
             }
+        }
+        if(fine_ok) {
+            // Use spare resolution in the existing, bounded <=1024 grid.
+            // Fine-off keeps M1's original grid dimensions and math.
+            data.grid[0]=(std::min)(uint32_t(soft.Width),(std::max)(data.grid[0],focus->rect[2]));
+            data.grid[1]=(std::min)(uint32_t(soft.Height),(std::max)(data.grid[1],focus->rect[3]));
+            const float kmax=(std::max)(std::abs(data.eye[0]),std::abs(data.eye[1]));
+            data.filter[0]=softness/((std::max)(kmax,.00001f)*float(data.grid[0]));
         }
         device->CreateShaderResourceView(fine_ok ? focus->texture : nullptr,&fine_view,focus_srv);
         fovea_depth_active=fine_ok;

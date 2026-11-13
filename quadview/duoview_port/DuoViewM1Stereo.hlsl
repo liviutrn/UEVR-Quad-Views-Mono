@@ -12,6 +12,9 @@ cbuffer DuoViewM1 : register(b1) {
     float4 M2Sharpen; // left/right fovea sharpen; linked values are identical
 };
 
+// Fine NGX depth is sampled only during conditioning, never by the warp.
+Texture2D<float> M2RawFoveaDepth : register(t5);
+
 #ifdef DUOVIEW_M1_CONDITION
 Texture2D<float> M1RawDepth : register(t4);
 RWTexture2D<float> M1ConditionedDepth : register(u2);
@@ -26,6 +29,13 @@ float DecodeM1Depth(int2 pixel) {
     return isfinite(inverse) ? max(inverse, 0.0) : 0.0;
 }
 
+float DecodeM2Depth(int2 pixel) {
+    pixel=clamp(pixel,int2(0,0),int2(M2FoveaRect.zw)-1);
+    const float z=M2RawFoveaDepth.Load(int3(pixel+int2(M2FoveaRect.xy),0));
+    const float inverse=(M1Depth.z*z-M1Depth.x)/M1Depth.y;
+    return isfinite(inverse) ? max(inverse,0.0) : 0.0;
+}
+
 [numthreads(128,1,1)]
 void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
     const uint w = M1Grid.x;
@@ -35,6 +45,25 @@ void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
         [unroll] for (int y = -1; y <= 1; ++y)
             [unroll] for (int dx = -1; dx <= 1; ++dx)
                 nearDepth = max(nearDepth, DecodeM1Depth(center + int2(dx,y)));
+        // Fuse raw seeds BEFORE the one global Lipschitz-envelope pass, so
+        // neither a near object nor the crop transition can fold the warp.
+        [branch] if (M2FoveaFlags.w>0.5) {
+            const float2 fullUv=(float2(x,group.x)+.5)/float2(M1Grid.xy);
+            const float2 local=(fullUv-M2Crop.xy)/(M2Crop.zw-M2Crop.xy);
+            if (all(local>=0.0) && all(local<1.0)) {
+                const float2 dimension=float2(M2FoveaRect.zw);
+                const float2 jit=clamp(local+M2FoveaFlags.xy,.5/dimension,1.0-.5/dimension);
+                const int2 fineCenter=int2(jit*dimension);
+                float fineNear=0.0;
+                [unroll] for(int fy=-1;fy<=1;++fy)
+                    [unroll] for(int fx=-1;fx<=1;++fx)
+                        fineNear=max(fineNear,DecodeM2Depth(fineCenter+int2(fx,fy)));
+                const float edge=min(min(local.x,local.y),min(1.0-local.x,1.0-local.y));
+                const float t=saturate(edge/max(M2FoveaFlags.z,.0001));
+                const float feather=t*t*(3.0-2.0*t);
+                nearDepth=lerp(nearDepth,fineNear,feather);
+            }
+        }
         const float knee = M1Depth.w;
         if (knee > 0.0 && nearDepth > knee) {
             const float excess = nearDepth - knee;
@@ -65,49 +94,44 @@ void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
 
 #ifdef DUOVIEW_M1_RASTER
 Texture2D<float> M1SoftDepth : register(t3);
-Texture2D<float> M2RawFoveaDepth : register(t5);
 
-// Keep fine depth at its original NGX resolution. Blend it over the conditioned
-// full-FOV periphery in the eye-local crop; never blur its entire field down to
-// M1's 1024-cell grid. Invalid/missing/stale captures have valid.w == 0.
-float M2FusedInverseDepth(float2 fullUv, float coarse) {
-    [branch] if (M2FoveaFlags.w < .5) return coarse;
-    const float2 extent = M2Crop.zw-M2Crop.xy;
-    if (any(extent <= 0.0)) return coarse;
-    const float2 local = (fullUv-M2Crop.xy)/extent;
-    if (any(local < 0.0) || any(local >= 1.0)) return coarse;
-    const float2 dimension = float2(M2FoveaRect.zw);
-    const float2 jittered = clamp(local+M2FoveaFlags.xy,
-                                 0.5/dimension,1.0-0.5/dimension);
-    const int2 pixel = int2(jittered*dimension)+int2(M2FoveaRect.xy);
-    const float z = M2RawFoveaDepth.Load(int3(pixel,0));
-    float fine = (M1Depth.z*z-M1Depth.x)/M1Depth.y;
-    if (!isfinite(fine) || fine <= 0.0) return coarse;
-    if (M1Depth.w > 0.0 && fine > M1Depth.w) {
-        const float excess=fine-M1Depth.w;
-        fine=M1Depth.w+excess/(1.0+excess/M1Depth.w);
-    }
-    fine=min(fine,M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y);
-    const float edge=min(min(local.x,local.y),min(1.0-local.x,1.0-local.y));
-    const float t=saturate(edge/max(M2FoveaFlags.z,0.0001));
-    const float feather=t*t*(3.0-2.0*t);
-    return lerp(coarse,fine,feather);
+// The pixel shader always reads the globally conditioned depth field.
+// In particular, it cannot sample a raw fine-depth silhouette.
+float M1ReadConditioned(float2 uv) {
+    const float2 cell=clamp((uv+M1Eye.zw)*float2(M1Grid.xy),
+                            float2(.5,.5),float2(M1Grid.xy)-.5);
+    return M1SoftDepth.SampleLevel(LinearClamp,cell/float2(M1Grid.zw),0);
 }
 
 float2 M1PullUv(float2 eyeUv, uint eye) {
-    const uint row = 3u*eye;
-    const float3 p = float3(eyeUv,1.0);
-    const float w = dot(M1Homography[row+2].xyz,p);
-    const float2 base = float2(dot(M1Homography[row].xyz,p),dot(M1Homography[row+1].xyz,p)) / w;
-    float2 uv = base;
-    [branch] if (M1Grid.x > 0 && abs(M1Eye[eye]) > 1.e-6) {
-        [unroll] for (uint iteration = 0; iteration < 6; ++iteration) {
-            const float2 cell = clamp((uv + M1Eye.zw) * float2(M1Grid.xy),
-                                     float2(.5,.5), float2(M1Grid.xy)-.5);
-            const float d = M1SoftDepth.SampleLevel(LinearClamp, cell / float2(M1Grid.zw),0);
-            const float fused = M2FusedInverseDepth(uv,d);
-            uv.x = base.x + M1Eye[eye] * fused;
+    const uint row=3u*eye;
+    const float3 p=float3(eyeUv,1.0);
+    const float w=dot(M1Homography[row+2].xyz,p);
+    const float2 base=float2(dot(M1Homography[row].xyz,p),
+                             dot(M1Homography[row+1].xyz,p))/w;
+    float2 uv=base;
+    const float k=M1Eye[eye];
+    [branch] if(M1Grid.x>0 && abs(k)>1.e-6) {
+        // Nonnegative depth capped at cap brackets the unique warp root.
+        const float cap=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
+        const float delta=k*cap;
+        const float lo=min(base.x,base.x+delta),hi=max(base.x,base.x+delta);
+        float x0=base.x;
+        float r0=k*M1ReadConditioned(float2(x0,base.y));
+        float x1=clamp(x0+r0,lo,hi);
+        // Eight conditioned-depth reads; safeguarded secant is more accurate
+        // than six plain fixed-point steps when edge sharpness approaches .9.
+        [unroll] for(uint iteration=1u;iteration<8u;++iteration) {
+            const float r1=base.x+k*M1ReadConditioned(float2(x1,base.y))-x1;
+            const float denom=r1-r0;
+            float step=(abs(denom)>1.e-8 && abs(x1-x0)>1.e-8)
+                ? -r1*(x1-x0)/denom : r1;
+            if(!isfinite(step) || abs(step)>60.0*abs(r1) ||
+                x1+step<lo || x1+step>hi) step=r1;
+            const float next=clamp(x1+step,lo,hi);
+            x0=x1;r0=r1;x1=next;
         }
+        uv.x=x1;
     }
     return saturate(uv);
 }
