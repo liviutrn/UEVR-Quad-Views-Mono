@@ -1,5 +1,6 @@
 name: TriView B43 + DuoView Mono M2.5a + World trace #21
 # Exact per-role frame binding; original backend/SDK/frontend pins.
+# Original reviewed rollback artifact prefix: UEVR-DuoView-M24- (B31 legacy contract); build output is M25a.
 run-name: TriView B43 + DuoView Mono M2.5a + World trace #21 (${{ github.run_number }})
 on:
   push:
