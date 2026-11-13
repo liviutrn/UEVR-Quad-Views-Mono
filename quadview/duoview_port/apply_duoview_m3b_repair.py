@@ -17,8 +17,6 @@ def main():
          "float2 M1PullUv(float2 eyeUv, uint eye) {",
          """// The raw NGX SRVs share the existing t4..t7 root range with the M2.5a gate.
 Texture2D<float> M3bCoarseRaw : register(t4);
-Texture2D<float4> M3bGateTiles : register(t6);
-ByteAddressBuffer M3bGateStats : register(t7);
 
 float M3bDecodeInverse(float value) {
     const float inverse=(M1Depth.z*value-M1Depth.x)/M1Depth.y;
@@ -34,9 +32,9 @@ float M3bSourceDepth(float2 fullUv) {
             float useFine=M1Filter.w;
             if(M25Flags.x>.5) {
                 useFine=0.0;
-                if(M3bGateStats.Load(0)==0u) {
+                if(M25StatsRead.Load(0)==0u) {
                     const uint2 tile=min(uint2(fullUv*float2(M1Grid.xy)/16.0),(M1Grid.xy+15u)/16u-1u);
-                    useFine=M3bGateTiles.Load(int3(tile,0)).x;
+                    useFine=M25TileRead.Load(int3(tile,0)).x;
                 }
             }
             if(useFine>.5) {
