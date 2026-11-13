@@ -1,0 +1,32 @@
+name: DuoView M3b source audit snapshot
+on:
+  push:
+    branches: ['experiment/duoview-m3b-**']
+    paths: ['.github/workflows/duoview-m3b-source-review.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package exact overlay sources for independent audit
+        shell: bash
+        run: |
+          tar -czf m3b-review-sources.tar.gz \
+            quadview/duoview_port \
+            duoview/DuoViewM1Stereo.hlsl \
+            duoview/DuoViewNativeCompositeRaster.hlsl \
+            duoview/DuoViewComposite.hlsl \
+            duoview/DuoViewCompositeRaster.hlsl \
+            duoview/DuoViewGlamaryeFovea.hlsl \
+            .github/workflows/triview-b1.yml
+          sha256sum m3b-review-sources.tar.gz > m3b-review-sources.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: M3b-Review-Sources
+          path: |
+            m3b-review-sources.tar.gz
+            m3b-review-sources.tar.gz.sha256
+          if-no-files-found: error
