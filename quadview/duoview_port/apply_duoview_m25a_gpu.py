@@ -29,7 +29,7 @@ def main():
     bool m25_content_active{},m25_pending{};
     uint32_t m25_tile_x{},m25_tile_y{};
     struct M25GpuCounters {uint32_t guard{},cells{},agree{},varied{},passing{},weight_x1000{},reserved[2]{};};
-    inline static std::atomic<uint64_t> gpu_frames{},gpu_guard_off{},gpu_cells{},gpu_agree{},gpu_varied{},gpu_passing{},gpu_weight_x1000{},vertical_dispatches{};
+    inline static std::atomic<uint64_t> gpu_frames{},gpu_guard_off{},gpu_cells{},gpu_agree{},gpu_varied{},gpu_passing{},gpu_weight_x1000{},gpu_active_tiles{},vertical_dispatches{};
     static void m25_count_vertical() {++vertical_dispatches;}
     void m25_read_retired_stats() {
         // Caller owns a retired XR command slot; never wait on the GPU.
@@ -42,15 +42,16 @@ def main():
             m25_readback->Unmap(0,&written);
             ++gpu_frames;gpu_guard_off+=c.guard;gpu_cells+=c.cells;
             gpu_agree+=c.agree;gpu_varied+=c.varied;gpu_passing+=c.passing;
-            gpu_weight_x1000+=c.weight_x1000;
+            gpu_weight_x1000+=c.weight_x1000;gpu_active_tiles+=c.reserved[0];
         }
         m25_pending=false;
     }
-    static std::array<uint64_t,8> m25_take_gpu_window() {
+    static std::array<uint64_t,9> m25_take_gpu_window() {
         return {gpu_frames.exchange(0),gpu_guard_off.exchange(0),
                 gpu_cells.exchange(0),gpu_agree.exchange(0),
                 gpu_varied.exchange(0),gpu_passing.exchange(0),
-                gpu_weight_x1000.exchange(0),vertical_dispatches.exchange(0)};
+                gpu_weight_x1000.exchange(0),gpu_active_tiles.exchange(0),
+                vertical_dispatches.exchange(0)};
     }'''),
         ("M25 required pipelines",
          "bool ready() const { return raster && condition && vertical && soft_depth && constants; }",
@@ -105,7 +106,8 @@ def main():
          "        fovea_depth_active=fine_ok;",
          '''        fovea_depth_active=fine_ok;
         m25_content_active=fine_ok && fine_mode==1u;
-        data.m25_flags[0]=m25_content_active ? 1.f : 0.f;'''),
+        data.m25_flags[0]=m25_content_active ? 1.f : 0.f;
+        data.m25_flags[1]=geometry.world_to_meters>0.f ? .004f/geometry.world_to_meters : 0.f; // 0.004 inverse metres'''),
     ])
     patch(mods/"vr/DuoViewD3D12.hpp",[
         ("M25 writer receives mode",
@@ -260,7 +262,7 @@ void CSAnalyzeM25(uint3 group:SV_GroupID,uint3 tid:SV_GroupThreadID,
     }
     const uint valid=crop && fine>0. ? 1u : 0u;
     M25Valid[lane]=valid;
-    M25Agree[lane]=valid && closest<=max(.004, .03*fine) ? 1u : 0u;
+    M25Agree[lane]=valid && closest<=max(M25Flags.y, .03*fine) ? 1u : 0u;
     M25Min[lane]=valid ? coarse : 1.e9;
     M25Max[lane]=valid ? coarse : 0.;
     GroupMemoryBarrierWithGroupSync();
@@ -287,11 +289,12 @@ void CSAnalyzeM25(uint3 group:SV_GroupID,uint3 tid:SV_GroupThreadID,
 [numthreads(1,1,1)]
 void CSGuardM25(uint3 unused:SV_DispatchThreadID) {
     const uint2 sz=(M1Grid.xy+15u)/16u;
-    uint cells=0u,agree=0u,varied=0u,passing=0u,weightSum=0u;
+    uint cells=0u,agree=0u,varied=0u,passing=0u,weightSum=0u,activeTiles=0u;
     for(uint y=0u;y<sz.y;++y) for(uint x=0u;x<sz.x;++x) {
         const float4 t=M25TileRead.Load(int3(x,y,0));
         const uint n=uint(t.w+.5);
         cells+=n;agree+=uint(t.y*float(n)+.5);
+        activeTiles+=n>0u ? 1u : 0u;
         const bool v=t.z>.5;
         varied+=v ? 1u : 0u;
         passing+=v && t.y>=.6 ? 1u : 0u;
@@ -304,7 +307,7 @@ void CSGuardM25(uint3 unused:SV_DispatchThreadID) {
     M25StatsWrite.Store(12,varied);
     M25StatsWrite.Store(16,passing);
     M25StatsWrite.Store(20,weightSum);
-    M25StatsWrite.Store(24,0u);M25StatsWrite.Store(28,0u);
+    M25StatsWrite.Store(24,activeTiles);M25StatsWrite.Store(28,0u);
 }
 float M25Weight(float2 gridUv) {
     if(M25StatsRead.Load(0)!=0u) return 0.;
