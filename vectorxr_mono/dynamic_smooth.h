@@ -48,7 +48,7 @@ inline MotionStep ClassifyMotionStep(std::int64_t step, std::int64_t target_gap,
 }
 inline std::int64_t ContentTime(std::int64_t previous, std::int64_t newest,
                                 float fraction, bool interpolate, bool exact) {
-    if (exact || newest <= previous) return newest;
+    if (exact || previous <= 0 || newest <= previous) return newest;
     const std::int64_t delta = static_cast<std::int64_t>(
         std::llround(static_cast<double>(fraction) * static_cast<double>(newest - previous)));
     return (interpolate ? previous : newest) + delta;
