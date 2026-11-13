@@ -37,10 +37,20 @@ def main():
             "latest_duoview_fovea_submitted",
             "std::chrono::milliseconds(25)",
             "fine_depth ? &*fine_depth : nullptr")
-    require(sh/"DuoViewM1Stereo.hlsl",
-            "M2RawFoveaDepth : register(t5)",
-            "M2FusedInverseDepth(uv,d)","M2FoveaFlags.w < .5",
-            "return lerp(coarse,fine,feather)")
+    # M2.1 replaces unsafe post-limit raw fine fusion by conditioning the
+    # blended near-max seed BEFORE the global slope envelope. Accept either
+    # implementation here; the M2.1-specific suite requires the safe one.
+    stereo=(sh/"DuoViewM1Stereo.hlsl").read_text(encoding="utf-8")
+    if "M2FusedInverseDepth(uv,d)" in stereo:
+        require(sh/"DuoViewM1Stereo.hlsl",
+                "M2RawFoveaDepth : register(t5)",
+                "M2FoveaFlags.w < .5",
+                "return lerp(coarse,fine,feather)")
+    else:
+        require(sh/"DuoViewM1Stereo.hlsl",
+                "M2RawFoveaDepth : register(t5)",
+                "nearDepth=lerp(nearDepth,fineNear,feather)",
+                "M1ReadConditioned")
     require(sh/"DuoViewNativeCompositeRaster.hlsl",
             "const float fineSharpen=i.pos.x>=OutputSize.x ? M2Sharpen.y : M2Sharpen.x",
             "GlamSharpenNativeFovea(fullUv,fovea.rgb,fineSharpen)")
