@@ -69,6 +69,58 @@ change(P,
        "BuildFrame(content, use_generated ? &views : nullptr, space, flags, views_exact && runtime_depth_, pointers);",
        "legacy exact copy")
 
+# A final output-only guard also covers inline, priming, standby and fallback
+# xrEndFrame paths, which bypass BuildFrame and would otherwise leak app depth.
+# Unknown non-depth chains remain untouched unless a depth node appears later
+# in a chain; in that exceptional opt-in case, omit the rest of the view chain
+# rather than submit a dangling depth pointer. The source frame stays intact.
+change(P,
+       """    XrResult result = XR_SUCCESS;
+    if (trace_.Enabled() && info) {
+        // What the runtime is given: its first projection layer's views.""",
+       """    XrResult result = XR_SUCCESS;
+    // #22: only sanitize the runtime-facing submission. NEVER mutate app
+    // projection views or their source depth chain used by the FG backend.
+    XrFrameEndInfo depthless_end22{};
+    std::vector<const XrCompositionLayerBaseHeader*> depthless_headers22;
+    std::deque<XrCompositionLayerProjection> depthless_projections22;
+    std::deque<std::vector<XrCompositionLayerProjectionView>> depthless_views22;
+    if (!runtime_depth_ && info && info->layers && info->layerCount) {
+        depthless_end22 = *info;
+        depthless_headers22.assign(info->layers, info->layers + info->layerCount);
+        for (std::uint32_t i = 0; i < info->layerCount; ++i) {
+            const auto* header = info->layers[i];
+            if (!header || header->type != XR_TYPE_COMPOSITION_LAYER_PROJECTION) continue;
+            const auto* projection = reinterpret_cast<const XrCompositionLayerProjection*>(header);
+            if (!projection->views || !projection->viewCount) continue;
+            depthless_projections22.push_back(*projection);
+            depthless_views22.emplace_back(projection->views, projection->views + projection->viewCount);
+            for (auto& view : depthless_views22.back()) {
+                const auto* first = static_cast<const XrBaseInStructure*>(view.next);
+                const auto* after = first;
+                while (after && after->type == XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR)
+                    after = after->next;
+                bool depth_later = false;
+                for (auto* node = after; node; node = node->next) {
+                    if (node->type == XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR) {
+                        depth_later = true;
+                        break;
+                    }
+                }
+                if (depth_later) view.next = nullptr; // cannot clone opaque chain links
+                else if (after != first) view.next = after;
+            }
+            depthless_projections22.back().views = depthless_views22.back().data();
+            depthless_headers22[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(
+                &depthless_projections22.back());
+        }
+        depthless_end22.layers = depthless_headers22.data();
+        info = &depthless_end22;
+    }
+    if (trace_.Enabled() && info) {
+        // What the runtime is given: its first projection layer's views.""",
+       "final submission guard")
+
 # Trace kind 7: paths 6/8 carry the fraction of the *previously shown* frame.
 # They are still marked fraction-invalid by aux bit 13: do not reclassify as
 # a new synthesis. An exact extrapolation is fraction 0, not one million.
