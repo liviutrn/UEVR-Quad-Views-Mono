@@ -16,8 +16,18 @@ add_custom_command(
   DEPENDS "${PINNED_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/B40ProductionWarpOverlay.py"
   VERBATIM)
 
+# Extend the existing pinned v208d+B40/M1 fixture; still build and run the
+# same production compositor, but validate M2.1 fine depth and left/right GPU pixels.
+set(GENERATED_M21_WARP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/V208SharedEyeWarpM21.cpp")
+add_custom_command(
+  OUTPUT "${GENERATED_M21_WARP_SOURCE}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/M21ProductionWarpOverlay.py"
+          --source "${GENERATED_WARP_SOURCE}" --output "${GENERATED_M21_WARP_SOURCE}"
+  DEPENDS "${GENERATED_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/M21ProductionWarpOverlay.py"
+  VERBATIM)
+
 if(WIN32)
-  add_executable(DuoViewB40ProductionWarp "${GENERATED_WARP_SOURCE}")
+  add_executable(DuoViewB40ProductionWarp "${GENERATED_M21_WARP_SOURCE}")
   target_compile_features(DuoViewB40ProductionWarp PRIVATE cxx_std_20)
   target_include_directories(DuoViewB40ProductionWarp PRIVATE "${JOYEY_BACKEND_DIR}/src/mods/vr")
   target_link_libraries(DuoViewB40ProductionWarp PRIVATE d3d12 dxgi d3dcompiler)
