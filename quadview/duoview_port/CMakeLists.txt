@@ -26,8 +26,17 @@ add_custom_command(
   DEPENDS "${GENERATED_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/M21ProductionWarpOverlay.py"
   VERBATIM)
 
+# Extend M21's existing exact production WARP fixture with M2.5a content path.
+set(GENERATED_M25_WARP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/V208SharedEyeWarpM25.cpp")
+add_custom_command(
+  OUTPUT "${GENERATED_M25_WARP_SOURCE}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/M25ProductionWarpOverlay.py"
+          --source "${GENERATED_M21_WARP_SOURCE}" --output "${GENERATED_M25_WARP_SOURCE}"
+  DEPENDS "${GENERATED_M21_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/M25ProductionWarpOverlay.py"
+  VERBATIM)
+
 if(WIN32)
-  add_executable(DuoViewB40ProductionWarp "${GENERATED_M21_WARP_SOURCE}")
+  add_executable(DuoViewB40ProductionWarp "${GENERATED_M25_WARP_SOURCE}")
   target_compile_features(DuoViewB40ProductionWarp PRIVATE cxx_std_20)
   target_include_directories(DuoViewB40ProductionWarp PRIVATE "${JOYEY_BACKEND_DIR}/src/mods/vr")
   target_link_libraries(DuoViewB40ProductionWarp PRIVATE d3d12 dxgi d3dcompiler)
