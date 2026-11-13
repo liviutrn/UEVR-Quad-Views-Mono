@@ -30,7 +30,6 @@ def main():
     uint32_t m25_tile_x{},m25_tile_y{};
     struct M25GpuCounters {uint32_t guard{},cells{},agree{},varied{},passing{},weight_x1000{},reserved[2]{};};
     inline static std::atomic<uint64_t> gpu_frames{},gpu_guard_off{},gpu_cells{},gpu_agree{},gpu_varied{},gpu_passing{},gpu_weight_x1000{},vertical_dispatches{};
-    static M25GpuCounters last_debug;
     static void m25_count_vertical() {++vertical_dispatches;}
     void m25_read_retired_stats() {
         // Caller owns a retired XR command slot; never wait on the GPU.
@@ -178,11 +177,11 @@ def main():
                 barrier.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;
                 barrier.UAV.pResource=m1_.m25_tiles.Get();
                 cmd->ResourceBarrier(1,&barrier);
+                transition(cmd,m1_.m25_tiles.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,reads);
                 cmd->SetPipelineState(m1_.m25_guard.Get());
                 cmd->Dispatch(1,1,1);
                 barrier.UAV.pResource=m1_.m25_stats.Get();
                 cmd->ResourceBarrier(1,&barrier);
-                transition(cmd,m1_.m25_tiles.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,reads);
                 transition(cmd,m1_.m25_stats.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,reads);
                 cmd->SetPipelineState(m1_.condition.Get());
             }
