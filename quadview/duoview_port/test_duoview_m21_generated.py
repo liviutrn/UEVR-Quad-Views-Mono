@@ -29,7 +29,7 @@ def main():
          "coarse->producer_list!=fine->producer_list",
          "coarse->list_epoch!=fine->list_epoch",
          "m21_fine_cooldown_until_ms_",
-         "if (!duo && candidate->duoview_request) continue;",
+         "const bool fits=candidate->texture",
          "m21_stats() const", "m21_alloc_", "m21_full_")
     have(vr/"D3D12Component.cpp",
          "depths.latest_duoview_pair_submitted",
