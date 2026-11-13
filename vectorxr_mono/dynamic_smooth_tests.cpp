@@ -31,6 +31,50 @@ int main() {
     check(ScoreLead(false,true,3.1*refresh,refresh,2)==kLeadOnTime,"reserve anti-flap band");
     check(ScoreLead(false,true,3.2*refresh,refresh,2)==kLeadSpare,"reserve measured spare");
     check(ScoreLead(false,true,5.0*refresh,refresh,2)==kLeadSpare,"reserve large slack");
+    // Positive reserve decisions: unlike a smoke-only runtime test, these
+    // assert what the controller would do with known evidence.
+    check(!ReserveWantsUp(2), "two thin is not enough");
+    check(ReserveWantsUp(3), "three thin raises reserve");
+    check(ReserveWantsUp(3) && !ReserveWantsDown(10, 0, 7, 3),
+          "seven spare plus three thin must not simultaneously lower");
+    check(ReserveWantsDown(10, 0, 6, 0),
+          "four unknown and six spare must lower on measured evidence");
+    check(!ReserveWantsDown(10, 4, 4, 2), "two thin block lowering");
+    check(!ReserveWantsDown(10, 4, 2, 0), "too little spare");
+    check(!ReserveWantsDown(7, 0, 7, 0), "not enough history");
+    check(!ReserveWantsDown(10, 0, 4, 0), "too few measured frames");
+    check(!ReserveRingShort(true,true,false,true,true,true,true),
+          "cover does not trigger ring backoff");
+    check(!ReserveRingShort(true,false,false,true,true,true,false),
+          "late presenter does not trigger ring backoff");
+    check(!ReserveRingShort(true,false,false,true,false,true,true),
+          "old lead ring short cannot trigger backoff");
+    check(ReserveRingShort(true,false,false,true,true,true,true),
+          "current lead timely ring short triggers backoff even at ring 3");
+    using Clock = DownHold::Clock;
+    using namespace std::chrono;
+    const auto base = Clock::time_point{} + seconds(1);
+    DownHold hold;
+    check(!hold.NoteUp(base, seconds(60)), "no prior down: no flap");
+    hold.NoteDown(base);
+    check(hold.NoteUp(base + seconds(1), seconds(60)),
+          "up within fifteen seconds triggers hold");
+    check(hold.hold == seconds(20), "first hold is 20 seconds");
+    check(hold.BlockDown(base + seconds(12)), "hold blocks early down");
+    check(!hold.BlockDown(base + seconds(22)), "hold expires");
+    hold.NoteDown(base + seconds(23));
+    check(hold.NoteUp(base + seconds(24), seconds(60)), "second flap");
+    check(hold.hold == seconds(40), "second hold doubles");
+    hold.NoteDown(base + seconds(25));
+    check(hold.NoteUp(base + seconds(26), seconds(60)), "third flap");
+    check(hold.hold == seconds(60), "third hold caps at sixty seconds");
+    hold.NoteDown(base + seconds(27));
+    check(hold.NoteUp(base + seconds(28), seconds(60)), "fourth flap");
+    check(hold.hold == seconds(60), "hold remains capped");
+    DownHold noflap;
+    noflap.NoteDown(base);
+    check(!noflap.NoteUp(base + seconds(15), seconds(60)),
+          "exact fifteen seconds is no flap");
     for (int i=1; i<=5; ++i)
         check(std::abs((i*refresh)/50.0-i/6.0)<1e-10, "20fps 120Hz fractions");
     using depthxr::dynamic_smooth::MotionStep;
