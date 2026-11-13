@@ -340,7 +340,8 @@ void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {'''),
         ("M25 raster debug overlays",
          '''#endif
     return result;''',
-         '''#ifdef DUOVIEW_M1_RASTER
+         '''#endif
+#ifdef DUOVIEW_M1_RASTER
     if(M2Sharpen.z>1.5 && M1Grid.x>0u) {
         const float2 loc=(outputUv-M2Crop.xy)/(M2Crop.zw-M2Crop.xy);
         if(any(loc<0.) || any(loc>=1.) || M25Flags.x<.5)
