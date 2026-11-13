@@ -135,7 +135,17 @@ def test_shader_contracts():
     require(sh/"DuoViewNativeCompositeRaster.hlsl",
         "const float wideSharpen=FocusProfile.y;",
         "fineSharpen*=lerp(M24Fade.z,1.0,t);",
-        "wideSharpen*=lerp(M24Fade.w,1.0,t);")
+        "wideSharpen*=lerp(M24Fade.w,1.0,t);",
+        "GlamExtraWideChange(fullUv, beforeSharpen, wideSharpen)")
+    # Under Mono's atlas fallback, wide must be independent of normal
+    # strength, with a separate wide-only gate; otherwise regular=0 disables
+    # the entire effect despite the enabled wide control.
+    gather=require(sh/"DuoViewCompositeRaster.hlsl",
+        "SharpenStrength > 0.0 ||",
+        "FocusProfile.y > 0.0",
+        "if (SharpenStrength > 0.0)",
+        "GlamExtraWideChange(fullUv, beforeSharpen, FocusProfile.y)")
+    assert "GlamExtraWideChange(fullUv, beforeSharpen)))" not in gather, "legacy two-arg wide wrapper still used"
     require(sh/"DuoViewPhase2Effects.hlsl",
         "void DuoB40CentralSide(", "DuoB40CentralSide(uv,lo,hi,side,along);")
     require(root/"vr/QuadViewNgxDepth.hpp",
