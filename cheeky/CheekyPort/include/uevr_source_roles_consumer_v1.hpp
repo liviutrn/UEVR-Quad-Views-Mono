@@ -23,7 +23,7 @@ inline C2RoleDecision c2_classify_snapshot(
     // Fail closed on incompatible layout; do not read unknown appended fields.
     if (s.version != UEVR_SOURCE_ROLES_VERSION ||
         s.struct_size < sizeof(UevrSourceRolesV1) ||
-        s.count == 0 || s.count > 6 || (s.rendering_method != 6 && s.rendering_method != 7))
+        s.count > 6 || (s.rendering_method != 6 && s.rendering_method != 7))
         return {};
     C2RoleDecision out{};
     out.method = s.rendering_method;
@@ -34,6 +34,7 @@ inline C2RoleDecision c2_classify_snapshot(
         out.transition = true;
         return out;
     }
+    if (s.count == 0) return {}; // not transitioning: fallback to legacy classifier
     for (std::uint32_t i = 0; i < s.count; ++i) {
         const auto& entry = s.entries[i];
         if (entry.ngx_feature_handle != handle) continue;
