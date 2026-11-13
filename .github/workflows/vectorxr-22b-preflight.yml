@@ -48,7 +48,15 @@ jobs:
             cp "vectorxr/$item" "before/$item"
           done
           python3 -I workspace/vectorxr_mono/apply_vectorxr_live22b.py vectorxr
-          cp -a vectorxr/layer after/
+          for item in layer/include/depthxr/framegen_presenter.h \
+            layer/src/framegen/framegen_presenter.cpp \
+            layer/src/framegen_plan.cpp layer/src/openxr_layer.cpp \
+            layer/tests/framegen_presenter_tests.cpp \
+            layer/include/depthxr/ResearchTrace21.hpp \
+            layer/include/depthxr/framegen_live22b.hpp; do
+            mkdir -p "after/$(dirname "$item")"
+            cp "vectorxr/$item" "after/$item"
+          done
           git diff --no-index -- before after > evidence/vectorxr22b-preflight-diff.patch || test "$?" -eq 1
           test -s evidence/vectorxr22b-preflight-diff.patch
           git -C vectorxr diff --check
