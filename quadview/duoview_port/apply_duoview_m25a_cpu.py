@@ -265,7 +265,6 @@ def main():
                                                     s.fine_coarse[0],s.fine_coarse[1],s.fine_coarse[2],s.fine_coarse[3],s.fine_coarse[4],s.fine_coarse[5],s.fine_coarse[6]);
                                             }
                                             if (snapshot && m25_fine && (config.settings.m25_fine_mode==1u || pair.first==snapshot)) {"""),
-    ]);
     ])
     print("M2.5a CPU: opt-in relaxed fenced selection, role-isolated 6+6 slots, histogram counters")
 
