@@ -20,13 +20,16 @@ float3 DuoPhase2FocusLift(float3 color, float2 local) {
     return max(color*gain,0.0);
 }
 
-// B38 restores the B27 raw-context interior feather; the fovea itself
-// remains unblurred. The appearance correction fades in from the inner edge.
+// M2.3: match the peripheral color through the COMPLETE source blend.
+// The v208d/B31 feather itself already fades the peripheral contribution
+// from 1 at the crop edge to 0 in the fovea. Multiplying the B40 correction
+// by a second unrelated 12-pixel anchor created a bright/dark transition
+// while most of the visible pixel was still the uncorrected periphery.
+// Keeping this callable with a constant 1 preserves both Native/gather
+// implementations and all UI settings but removes the redundant ramp.
+// No modification to actual feather weights or fovea source pixels.
 float DuoB40InwardAnchor(float2 uv) {
-    const float2 inside=min(uv-CropUv.xy,CropUv.zw-uv)*float2(OutputSize);
-    const float distance=max(min(inside.x,inside.y),0.0);
-    const float t=saturate(distance/max(SeamGeometry.y,1.0));
-    return 1.0-t*t*(3.0-2.0*t);
+    return 1.0;
 }
 
 // Pixel-center nearest-edge projection, byte-for-byte B40 side-selection logic
