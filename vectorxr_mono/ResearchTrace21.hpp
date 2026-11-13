@@ -12,17 +12,18 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
 
 namespace research_trace21 {
 constexpr std::size_t kLimit=131072; // allocated ONLY with trace enabled
-enum Kind : std::uint32_t { kGameTick=1,kRender=2,kPose=3,kSubmit=4,kXrWait=5,kXrRealEnd=6 };
+enum Kind : std::uint32_t { kGameTick=1,kRender=2,kPose=3,kSubmit=4,kXrWait=5,kXrRealEnd=6,kXrRefresh=7 };
 struct Row {
     std::atomic<std::uint64_t> seq{0};
     std::atomic<std::uint64_t> frame{0},secondary{0},tick{0};
-    std::atomic<std::int64_t> qpc_ns{0},display_xr{0},pose_xr{0},aux{0};
+    std::atomic<std::int64_t> qpc_ns{0},display_xr{0},pose_xr{0},aux{0},extra{0};
     std::atomic<std::uint32_t> kind{0};
 };
 class Csv {
@@ -30,6 +31,7 @@ class Csv {
     std::atomic<std::uint64_t> cursor_{0}, tick_{0};
     std::atomic<bool> stop_{false};
     std::thread writer_;
+    std::mutex snapshot_mutex_; // Serialize periodic and explicit session-end snapshots.
     bool enabled_{false};
     std::filesystem::path path_;
 
@@ -75,12 +77,13 @@ class Csv {
         return os.str();
     }
     void Snapshot() noexcept {
+        std::lock_guard<std::mutex> guard(snapshot_mutex_);
         if (!rows_ || path_.empty()) return;
         try {
             const auto partial=path_.string()+".partial";
             std::ofstream out(partial,std::ios::trunc);
             if (!out) return;
-            out<<"kind,frame,secondary,tick,qpc_ns,display_xr,pose_xr,aux\n";
+            out<<"kind,frame,secondary,tick,qpc_ns,display_xr,pose_xr,aux,extra\n";
             const auto end=cursor_.load(std::memory_order_acquire);
             const auto start=end>kLimit?end-kLimit:0;
             for(std::uint64_t i=start;i<end;++i) {
@@ -95,9 +98,12 @@ class Csv {
                 const auto display=r.display_xr.load(std::memory_order_relaxed);
                 const auto pose=r.pose_xr.load(std::memory_order_relaxed);
                 const auto aux=r.aux.load(std::memory_order_relaxed);
+                const auto extra=r.extra.load(std::memory_order_relaxed);
+                // Keep the payload reads before the second seqlock validation.
+                std::atomic_thread_fence(std::memory_order_acquire);
                 if (r.seq.load(std::memory_order_acquire)!=before) continue;
                 out<<kind<<','<<frame<<','<<secondary<<','<<tick<<','
-                   <<qpc<<','<<display<<','<<pose<<','<<aux<<'\n';
+                   <<qpc<<','<<display<<','<<pose<<','<<aux<<','<<extra<<'\n';
             }
             out.flush();
             out.close();
@@ -138,10 +144,14 @@ public:
     Csv(const Csv&)=delete; Csv& operator=(const Csv&)=delete;
     ~Csv(){Stop();}
     bool Enabled() const {return enabled_;}
+    // Final recording point on OpenXR session teardown, not process exit.
+    // Writer continues afterward; runtime reinit can still be traced.
+    void FlushNow() noexcept { if (enabled_) Snapshot(); }
     std::uint64_t Tick(){return enabled_?tick_.fetch_add(1,std::memory_order_relaxed)+1:0;}
     std::uint64_t LatestTick() const{return tick_.load(std::memory_order_relaxed);}
     void Record(Kind kind,std::uint64_t frame,std::uint64_t secondary,
-                std::int64_t display_xr,std::int64_t pose_xr=0,std::int64_t aux=0) {
+                std::int64_t display_xr,std::int64_t pose_xr=0,std::int64_t aux=0,
+                std::int64_t extra=0) {
         if (!enabled_ || stop_.load(std::memory_order_relaxed)) return;
         const auto index=cursor_.fetch_add(1,std::memory_order_acq_rel);
         Row& r=rows_[index%kLimit];
@@ -154,6 +164,7 @@ public:
         r.display_xr.store(display_xr,std::memory_order_relaxed);
         r.pose_xr.store(pose_xr,std::memory_order_relaxed);
         r.aux.store(aux,std::memory_order_relaxed);
+        r.extra.store(extra,std::memory_order_relaxed);
         r.seq.store(index+1,std::memory_order_release);
     }
     void Stop(){
