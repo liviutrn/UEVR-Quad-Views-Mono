@@ -20,3 +20,10 @@ Use the supplied `settings-presets` directory. Copy A, B, C one at a time to `%L
 When a reliable frame-ID join exists, compute world-tick versus JIT real-frame content stamp **interval error**: P95 >= 3 ms @120Hz supports further dual-clock work; <= 1 ms argues stopping; in between requires headset A/B. For GPU readiness, if measured capture-and-motion margin under one refresh occurs in under 1% of eligible frames, no new lead controller is justified. If join or sample volume is insufficient, declare result inconclusive. DistinctFps is not scanout or visual correctness.
 
 **Review blockers:** confirm the release-phase proxy does not contaminate pose or exact frames; validate UEVR game/render frame join, fence sampling side effects, all CI tests; no headset claim before actual test.
+
+## Claude #21 P0 corrections
+- Mode B uses an EMA mean release phase as the content-time target; the stock exact real-copy rule and pose clock stay untouched. No claim that this equals UE world time.
+- World-tick fake logs GPU synthesis fractions (not just pose-based TimelineShare) and a separate deterministic content-clock residual model.
+- CSV traces retain recent data in a dynamically allocated ring, snapshot every 20 seconds and at shutdown, and use timestamp/mode-specific filenames to preserve A/B/C/D runs without copying files.
+- Analysis completion time is **not** directly measurable with the current backend API. `researchAnalysisLateDue` is a conservative synthesis-outcome indicator, not a first-fence timestamp; `researchGpuMargin` is a conditioned, readiness-before-due sample.
+- D is an optional cadence lock at 120Hz; only use it when the game can sustain its target. A=off, B=clock, C=max6 hysteresis, D=locked cadence. Independent switch, default 0.

@@ -22,7 +22,11 @@ change(H,"    bool research21_{false}; // extra GPU fence sampling; OPT IN only"
 """    bool research21_{false}; // extra GPU fence sampling; OPT IN only
     bool research_content_clock_{false}; // opt-in world fraction, not pose
     bool research_cap_hysteresis_{false}; // opt-in Dynamic step hysteresis
-    mutable std::uint32_t research_dynamic_slots_{0};""","clock policy members")
+    mutable std::uint32_t research_dynamic_slots_{0};
+    XrDuration research_phase_mean_ns_{0};
+    XrTime research_last_target_{0};
+    bool research_phase_mean_valid_{false};
+    std::uint32_t research_cadence_lock_{0};""","clock policy members")
 change(H,"        XrTime time{0};            // the display time it was rendered for\n        XrTime previous_time{0};",
 """        XrTime time{0};            // the display time it was rendered for
         XrTime world_content_time{0}; // optional release-phase clock label
@@ -41,10 +45,20 @@ change(P,
     research_content_clock_ = ReadResearchSwitch("VECTORXR_CONTENT_CLOCK21") == "1";
     research_cap_hysteresis_ = ReadResearchSwitch("VECTORXR_MAX6_HYSTERESIS21") == "1";
     research_dynamic_slots_ = 0;
+    research_phase_mean_ns_ = 0;
+    research_last_target_ = 0;
+    research_phase_mean_valid_ = false;
+    const auto lock21 = ReadResearchSwitch("VECTORXR_CADENCE_LOCK21");
+    research_cadence_lock_ = lock21 == "5" ? 5u : (lock21 == "6" ? 6u : 0u);
     if (logger_) {
         logger_->Info("VectorXR #21 mode: " +
-                      std::string(research_content_clock_ ? "B release-phase content clock" :
+                      std::string(research_cadence_lock_ ? "D locked rhythm" :
+                                  research_content_clock_ ? "B release-phase content clock" :
                                   research_cap_hysteresis_ ? "C max6 cap hysteresis" : "A stock content clock") +
+                      ", contentClock=" + (research_content_clock_ ? "on" : "off") +
+                      ", hysteresis=" + (research_cap_hysteresis_ ? "on" : "off") +
+                      ", cadence=" + std::to_string(research_cadence_lock_) +
+                      ", contentProxyComparable=" + (research_content_clock_ ? "no" : "yes") +
                       ", max=" + std::to_string(smooth_dynamic_max_) +
                       ", reserve=" + std::to_string(smooth_lead_reserve_) +
                       ", gpuProbe=" + (research21_ ? "on" : "off") + ".");
@@ -52,7 +66,7 @@ change(P,
 change(P,
 "    return dynamic_smooth::Slots(dynamic_interval_slots_, smooth_dynamic_max_);",
 """    const auto nominal = dynamic_smooth::Slots(dynamic_interval_slots_, smooth_dynamic_max_);
-    if (!research_cap_hysteresis_ || dynamic_interval_slots_ <= 0.0) return nominal;
+    if (!research_cap_hysteresis_ || smooth_dynamic_max_ <= 4 || dynamic_interval_slots_ <= 0.0) return nominal;
     if (!research_dynamic_slots_) research_dynamic_slots_ = nominal;
     const double measured = dynamic_interval_slots_;
     if (measured > static_cast<double>(research_dynamic_slots_) + 0.75 &&
@@ -74,6 +88,18 @@ change(P,
                 frame.wait_return - phase_wall_).count();
         const XrDuration phase = std::clamp<XrDuration>(
             now_xr - slot_time_, 0, period - 1);
+        if (research_last_target_ &&
+            (frame.target_time <= research_last_target_ ||
+             frame.target_time - research_last_target_ > 12 * period)) {
+            research_phase_mean_valid_ = false; // pause/restart: learn anew
+        }
+        research_last_target_ = frame.target_time;
+        if (!research_phase_mean_valid_) {
+            research_phase_mean_ns_ = phase;
+            research_phase_mean_valid_ = true;
+        } else {
+            research_phase_mean_ns_ += (phase - research_phase_mean_ns_) / 30;
+        }
         frame.world_content_time += phase;
     }
     last_returned_time_ = frame.predicted;""","release phase timestamp")
@@ -101,7 +127,7 @@ change(P,
             if (research_content_clock_ && frame.world_content_time &&
                 next.world_content_time > frame.world_content_time)
                 choice.fraction = FrameGenFraction(FrameGenSynthesisMode::kInterpolate,
-                    frame.world_content_time, next.world_content_time, time);""","interpolated content-only fraction")
+                    frame.world_content_time, next.world_content_time, time + research_phase_mean_ns_);""","interpolated content-only fraction")
 change(P,
 """    choice.fraction = 0.0f;
     if (frame.previous_time && time > frame.time &&""",
@@ -120,7 +146,7 @@ change(P,
             frame.previous_world_time > 0 &&
             frame.world_content_time > frame.previous_world_time) {
             choice.fraction = FrameGenFraction(FrameGenSynthesisMode::kExtrapolate,
-                frame.previous_world_time, frame.world_content_time, time, frame.reach);
+                frame.previous_world_time, frame.world_content_time, time + research_phase_mean_ns_, frame.reach);
         }
     }
     if (newest) {""","extrapolated content-only fraction")
@@ -140,6 +166,16 @@ change(P,
 "    const float eye_time = write.exact ? 0.0f : extrapolate ? choice.fraction : choice.fraction - 1.0f;",
 "    const float eye_time = write.exact ? 0.0f : extrapolate ? choice.pose_fraction : choice.pose_fraction - 1.0f;",
 "preserve view pose timing")
+change(P,
+"""            choice.fraction = std::min(choice.fraction, 1.0f);""",
+"""            choice.fraction = std::min(choice.fraction, 1.0f);
+            choice.pose_fraction = std::min(choice.pose_fraction, 1.0f);""",
+"keep stale pose exactly stock with clock disabled")
+change(P,
+"""    const std::uint32_t cadence = dynamic ? 1 : multiplier;""",
+"""    const std::uint32_t cadence =
+        dynamic ? (research_cadence_lock_ ? research_cadence_lock_ : 1u) : multiplier;""",
+"D: optional refresh-aligned game release cadence")
 for path,s in files.items():
     path.write_text(s,encoding="utf-8",newline="")
 print("Applied #21 content phase and Max6 hysteresis; both default OFF")

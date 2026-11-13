@@ -1,14 +1,20 @@
-VectorXR #21 one-session research presets. ALL experimental behavior defaults OFF if no settings file.
+VectorXR #21 one-session A/B/C/D research presets.
 
-Close STALKER 2 completely before copying a preset.
-Copy ONE preset file and RENAME IT to framegen-research.txt in:
+Close STALKER 2 completely before changing presets.
+Copy ONE of A/B/C/D and RENAME the copied file to framegen-research.txt in:
   C:\Users\livs\AppData\Local\VectorXR\framegen-research.txt
-Restart game after every swap.
-A: stock max4, reserve0, stock scene clock; telemetry on.
-B: stock max4, reserve0, experimental continuous release-phase CONTENT clock; pose clock remains stock.
-C: max6 cap hysteresis, reserve0, stock content clock.
-UEVR trace requires the separately built #21 UEVR DLL, and writes only when enabled via UEVR_WORLD_TRACE21=1.
-Inspect VectorXR startup log for 'VectorXR #21 mode: A/B/C'.
-One scene, 120Hz, 3 minutes per mode: slow head turning and sideways strafing past narrow objects.
-No need to edit text; swap files only. Do not combine B and C during the initial test.
-Stop/go AFTER log analysis: world-stamp interval P95 >=3ms warrants further dual-clock research; <=1ms stops hypothesis; middle inconclusive.
+Restart STALKER 2 between runs; no need to edit any text or copy log files.
+Check startup log for "VectorXR #21 mode", with all individual switches.
+
+A: stock Max4/Reserve0, stock content clock; telemetry ON.
+B: Max4/Reserve0; experimental mean-adjusted continuous release-phase content clock; stock headset pose and exact gate.
+C: Max6, cap hysteresis, Reserve0; stock content clock.
+D: Max6, fixed game-release cadence 6 refreshes @120Hz = target 20 real FPS, Reserve0, stock content clock.
+    Only meaningful if the game reliably holds 20 FPS; below 20 FPS, locking cannot fix missed frames.
+A/B/C/D: UEVR research trace enabled in matching UEVR #21 DLL.
+
+All experimental behavior is OFF without settings; never enable B+C+D simultaneously on initial test.
+Same TriView 120Hz scene, ~3 min per mode; slow head turn and lateral strafe past poles.
+Both UEVR and VectorXR make UNIQUE timestamped and mode-labelled CSVs automatically
+in %LOCALAPPDATA%\VectorXR\; no manual saving between runs.
+No mode is confirmed better until real content-timing data and headset notes are compared.

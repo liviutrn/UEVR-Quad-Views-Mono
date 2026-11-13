@@ -37,13 +37,7 @@ replace("""    // Claimed in the layer's xrEndFrame (ClaimQuadFrame): its primar
                                     frame.target_time, frame.world_content_time);
     const bool claimed = frame.quad && quad && quad->route == FrameGenQuadRoute::kClaimed;""",
 "real-frame end")
-replace("""void FrameGenPresenter::Stop() {
-    trace_.Stop();""",
-"""void FrameGenPresenter::Stop() {
-    trace_.Stop();
-    // Safe outside the presenter lock; flush any buffered research records.
-    research_trace21::Sink().Stop();""",
-"flush research trace")
+
 out=root/"layer/include/depthxr/ResearchTrace21.hpp"
 out.parent.mkdir(parents=True,exist_ok=True)
 shutil.copyfile(here/"ResearchTrace21.hpp",out)

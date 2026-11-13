@@ -48,9 +48,42 @@ change("""            const XrFrameState state = app.Wait();
 anchor="    RUN(TestJitDynamicSlackReserve);"
 change(anchor,anchor+"""
     RUN(TestJitWorldTickIndependentOfDisplayTime);
-    RUN(TestJitBuild18WarmupFixture);""","register research tests")
+    RUN(TestJitBuild18WarmupFixture);
+    RUN(TestResearch21WorldClockSyntheticResidual);""","register research tests")
 marker="// Repeats the one-interval clamp of extrapolation predicts between real frames shown at " + chr(96) + "times" + chr(96) + ":"
-insert="""// #21: compare the old display-clock-driven fake app with a UE-style
+insert="""
+// A reproducible scene-motion model, with variable release phases and exact
+// real frames. Tests content-time interpolation directly; NEVER equates
+// pose-based TimelineShare with actual synthesized world motion.
+void TestResearch21WorldClockSyntheticResidual() {
+    constexpr double period=8.333333; // 120 Hz milliseconds
+    constexpr double phases[]={0.7,7.2,1.3,6.7,2.8,5.9,3.3,4.6};
+    double stock=0.0, corrected=0.0;
+    int samples=0;
+    double mean_phase=phases[0];
+    for (int n=1;n<80;++n) {
+        const double prev=(n-1)*5.0*period;
+        const double next=n*5.0*period;
+        const double p0=phases[(n-1)%8], p1=phases[n%8];
+        mean_phase += (p1-mean_phase)/30.0;
+        const double w0=prev+p0, w1=next+p1;
+        for (int interior=1;interior<5;++interior) {
+            const double target=prev+interior*period;
+            const double grid_fraction=(target-prev)/(next-prev);
+            const double b_fraction=(target+mean_phase-w0)/(w1-w0);
+            const double sceneA=w0+grid_fraction*(w1-w0);
+            const double sceneB=w0+b_fraction*(w1-w0);
+            stock+=std::abs(sceneA-(target+mean_phase));
+            corrected+=std::abs(sceneB-(target+mean_phase));
+            ++samples;
+        }
+    }
+    std::cerr<<"  world-clock synthetic motion residual stock="<<stock/samples
+             <<" ms, B-mean="<<corrected/samples<<" ms"<<std::endl;
+    Check(corrected < stock*0.1,"B phase-mean removes synthetic content-clock bias");
+}
+
+// #21: compare the old display-clock-driven fake app with a UE-style
 // game-thread world tick. Production pose/timestamp paths stay stock unless
 // a separate optional research switch is explicitly enabled.
 void TestJitWorldTickIndependentOfDisplayTime() {
@@ -76,9 +109,28 @@ void TestJitWorldTickIndependentOfDisplayTime() {
         const double rate = static_cast<double>(log.size() - first) /
             std::max(Seconds(std::chrono::steady_clock::now() - began), 0.001);
         const double timeline = TimelineShare(runtime, first, 8, app->eye_speed);
+
+    // This is the actual fake-GPU synthesis fraction, not the view-pose
+    // TimelineShare proxy (which is intentionally unchanged in B).
+    std::size_t moving=0;
+    double sum_fraction=0.0;
+    {
+        std::scoped_lock lock(gpu.syntheses_mutex);
+        for (const auto& output : gpu.syntheses) {
+            if (output.mode == FrameGenSynthesisMode::kInterpolate &&
+                output.fraction > 0.001f && output.fraction < 0.999f) {
+                ++moving;
+                sum_fraction += output.fraction;
+            }
+        }
+    }
+    std::cerr << "  GPU fractional synthesis samples: " << moving
+              << ", avg=" << (moving ? sum_fraction / moving : 0.0) << std::endl;
+    Check(moving > 8, "world-tick fake: genuine synthesized fractions observed");
+
         std::cerr << "  UE-world-tick fake content_clock=" << content_clock
-                  << ", output=" << rate << ", time share=" << timeline
-                  << " (diagnostic; no world-clock improvement assertion)" << std::endl;
+                  << ", output=" << rate << ", view-pose timeline share=" << timeline
+                  << " (pose-only; GPU fractions tested separately)" << std::endl;
         Check(rate > 65.0 && log.size() > first + 40,
               "world tick fake: presenter still submits at display rate");
         CheckOrderedTimes(log, "world tick fake");

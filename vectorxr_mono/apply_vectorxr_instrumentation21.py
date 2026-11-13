@@ -31,7 +31,7 @@ change(H, "    bool smooth_diagnostics_{true}; // audit build: enabled unless ex
 """    bool smooth_diagnostics_{true}; // audit build: enabled unless explicitly disabled
     bool research21_{false}; // extra GPU fence sampling; OPT IN only
     std::vector<double> research_capture_margin_periods_;
-    std::vector<double> research_analysis_margin_periods_;""", "research fields")
+    // Analysis-ready timing is not measured without a safe fence API.""", "research fields")
 
 change(H,"        std::uint64_t smooth_rewinds{0}; // inferred content-time rewinds",
 """        std::uint64_t smooth_rewinds{0}; // inferred content-time rewinds
@@ -57,7 +57,7 @@ change(P,
 '    smooth_slack_periods_.clear();',
 '''    smooth_slack_periods_.clear();
     research_capture_margin_periods_.clear();
-    research_analysis_margin_periods_.clear();''', "reset samples", expected=3)
+    // No synthesized-use margin proxy; use late-due counters only.''', "reset samples", expected=3)
 
 # These are the stock GPU-fence observations. Counting observes state,
 # not changing it. Additional Measured() queries occur only when opted in.
@@ -111,9 +111,7 @@ change(P,
                          period > 0 && source->needed > 0) {
                          if (written && !write.exact && !write.unmeasured) {
                              ++totals_.research_analysis_seen;
-                             AddSample(research_analysis_margin_periods_,
-                                 static_cast<double>(source->needed - time) /
-                                 static_cast<double>(period), kMaxFrameSamples);
+                             // Successful synthesis; NOT first GPU-ready timestamp.
                          } else if (source->needed <= time + period / 2 &&
                                     (write.unmeasured || write.motion_late)) {
                              ++totals_.research_analysis_not_ready_due;
@@ -146,7 +144,7 @@ change(P,
                   ", researchGpuLateDue=" + std::to_string(delta(&Totals::research_gpu_not_ready_due)) +
                   ", researchAnalysisLateDue=" + std::to_string(delta(&Totals::research_analysis_not_ready_due)) +
                   ", researchGpuMarginP05P50=" + Percentiles(research_capture_margin_periods_, 0.05, 0.5) +
-                  ", researchAnalysisMarginP05P50=" + Percentiles(research_analysis_margin_periods_, 0.05, 0.5) +''', "summary counters")
+                  ", researchAnalysisReadyTime=unmeasured" +''', "summary counters")
 
 for path, text in files.items():
     path.write_text(text, encoding="utf-8", newline="")
