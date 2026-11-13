@@ -13,7 +13,7 @@ def controls(mods):
     patch(mods/"vr/DuoViewConfig.hpp",[
         ("M21 fine default safe","    bool m2_fovea_depth{true};","    bool m2_fovea_depth{false};"),
         ("M21 debug config","    bool m2_unlinked_sharpen{false};",
-         "    bool m2_unlinked_sharpen{false};\n    bool m21_depth_debug{false};"),
+         "    bool m21_depth_debug{false};\n    bool m2_unlinked_sharpen{false};"),
         ("M21 debug reconcile","    out.m2_unlinked_sharpen=requested.m2_unlinked_sharpen;",
          "    out.m2_unlinked_sharpen=requested.m2_unlinked_sharpen;\n    out.m21_depth_debug=requested.m21_depth_debug;"),
         ("M21 per-eye 20 range","(std::clamp)(requested.m2_left_sharpen,0.f,5.f)",
