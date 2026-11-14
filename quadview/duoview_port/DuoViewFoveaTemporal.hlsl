@@ -60,7 +60,8 @@ float M7StabilizeEdge(float2 fullUv, float nearZ, float farZ) {
     }
     // Give history a usable pixel budget at high strength, but never let
     // a rejected disocclusion smear a moving silhouette indefinitely.
-    const float matchPixels=lerp(.65,1.50,saturate(M7Controls.x));
+    const float reach=clamp(M7Tuning.x,2.,20.);
+    const float matchPixels=lerp(.65,min(5.0,1.25+reach*.20),saturate(M7Controls.x));
     if (error*disparity>matchPixels) return nearZ;
     const float rotZ=zScale-M6View[2].w*nearZ;
     const float denominator=1.-filtered*M6View[2].w;
@@ -70,7 +71,7 @@ float M7StabilizeEdge(float2 fullUv, float nearZ, float farZ) {
     // accumulated subpixel edge correction. The old fixed 0.35-pixel cap
     // made the entire range practically imperceptible.
     const float strength=saturate(M7Controls.x);
-    const float pixelBudget=lerp(.35,2.0,strength);
+    const float pixelBudget=lerp(.35,reach,strength);
     const float limit=pixelBudget/max(disparity,1.e-5);
     const float retained=lerp(nearZ,clamp(candidate,nearZ-limit,nearZ+limit),strength);
     return max(0.,retained);
@@ -97,8 +98,8 @@ float3 M7AccumulateFillColor(float2 local, float2 fullUv, float backgroundZ) {
     // Previously the 0.07/channel clamp and 0.04..0.16 colour veto almost
     // eliminated any visible accumulation. Preserve motion/depth rejection
     // above, but let accepted stationary background really accumulate.
-    const float retention=saturate(M7Controls.y)*(1.-smoothstep(.16,.55,difference));
-    const float3 bounded=clamp(oldColor,current-.30,current+.30);
+    const float retention=saturate(M7Controls.y)*(1.-smoothstep(.20,.70,difference));
+    const float3 bounded=clamp(oldColor,current-.50,current+.50);
     return lerp(current,bounded,retention);
 }
 #endif
