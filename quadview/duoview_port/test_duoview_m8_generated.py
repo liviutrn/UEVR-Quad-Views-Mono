@@ -63,7 +63,7 @@ def main():
                   "return lerp(original,min(proposed,maxSafe),enabled)",
                   "return enabled*(t*t*(3.-2.*t))",
                   "lerp(M1Filter.x*scale,pf,M9PerEyeMix(source))",
-                  "const float symmetric=max(0.,M1Row[xs]-float(step)*M8AdjustedPenalty(source,M1Filter.x*scale))",
+                  "const float symmetric=max(0.,M1Row[xs]-float(step)*symSlope)",
                   "const float oneSided=ps>0. ?",
                   "const float candidate=lerp(symmetric,oneSided,mix)",
                   "const float pixelBudget=reach",
