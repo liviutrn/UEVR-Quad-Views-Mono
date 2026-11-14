@@ -297,7 +297,7 @@ def backend(mods):
     ])
     edit(mods/"VR.hpp",[
       ("M8 persistent controls",
-       "    const ModSlider::Ptr m_duo_fill_blur{ModSlider::create(generate_name(\"DuoFillBlurPixels\"),0.f,3.f,1.25f)};",
+       "    const ModSlider::Ptr m_duo_fill_blur{ModSlider::create(generate_name(\"DuoFillBlurPixels\"),0.f,32.f,1.25f)};",
        """    const ModSlider::Ptr m_duo_fill_blur{ModSlider::create(generate_name("DuoFillBlurPixels"),0.f,32.f,1.25f)};
     const ModToggle::Ptr m_duo_m8_distance{ModToggle::create(generate_name("DuoM8DistanceEdges"),false)};
     const ModSlider::Ptr m_duo_m8_near_m{ModSlider::create(generate_name("DuoM8StartMeters"),.25f,50.f,2.f)};
