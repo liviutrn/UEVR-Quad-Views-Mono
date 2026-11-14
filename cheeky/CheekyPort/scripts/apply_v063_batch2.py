@@ -285,8 +285,8 @@ change("src/dlss_nr.cpp",
             }
         }
         const auto reserve=static_cast<std::uint64_t>(settings.nr_vram_guard_mib)*MiB;
-        const auto required=feature_bytes+reserve; // <2^64 after validated work dimensions
-        if (!budget.local.valid || budget.local.headroom < required) {
+        if (!nr_batch2_admit(budget.local.valid,budget.local.headroom,
+                              feature_bytes,reserve)) {
             diagnostics.state=DlssNrState::input_preparation_failed;
             diagnostics.skip_reason="NR admission refused: free DXGI local VRAM below feature cost + guard";
             ++diagnostics.failed_calls;
@@ -397,11 +397,14 @@ change("src/dlss_nr.cpp",
     if (settings.nr_feature_reuse) {
         evict_reused_sources_batch2();
         for (auto it=source_reuse_batch2.begin();it!=source_reuse_batch2.end();++it) {
-            if (!(it->feature.key==key) || it->role!=view.source_role ||
-                it->family!=view.feature_source_family || it->device!=runtime.device ||
-                GetTickCount64()-it->retired_at_ms>10000ULL) continue;
             it->feature.uses.collect();
-            if (!it->feature.uses.empty()) continue; // never reuse in-flight NGX
+            if (!nr_batch2_reuse_eligible(settings.nr_feature_reuse,
+                it->role==view.source_role,
+                it->family==view.feature_source_family,
+                it->feature.key==key,
+                it->device==runtime.device,
+                it->feature.uses.empty(),
+                GetTickCount64(),it->retired_at_ms)) continue;
             view.parameters=it->feature.parameters;
             view.handle=it->feature.handle;
             view.key=key;view.has_key=true;view.feature_failed=false;
@@ -445,8 +448,8 @@ change("src/dlss_nr.cpp",
 
 # JSON must not output bare NaN, -inf, +inf: those are INVALID JSON numbers.
 change("src/dlss_nr.cpp", '#include "../uevr/gpu_memory.hpp"',
-       '#include "../uevr/gpu_memory.hpp"\n#include <cmath>',
-       "capture JSON finite math outside anonymous namespace")
+       '#include "../uevr/gpu_memory.hpp"\n#include "nr_batch2_policy.hpp"\n#include <cmath>',
+       "allocation/reuse policy and capture math included")
 capture=files["src/nr_probe_capture.hpp"]
 for field in ("intensity","tone","structure","skin","roundness","transition",
               "shape_w","shape_h","exposure_pre","exposure_scale",
@@ -517,4 +520,5 @@ for name, data in files.items():
     (root/name).write_text(data, encoding="utf-8", newline="\n")
 copyfile(here/"contracts/uevr_source_roles_v1.h", root/"src/uevr_source_roles_v1.h")
 copyfile(here/"include/uevr_source_roles_consumer_v1.hpp",root/"src/uevr_source_roles_consumer_v1.hpp")
+copyfile(here/"include/nr_batch2_policy.hpp",root/"src/nr_batch2_policy.hpp")
 print("PASS Cheeky Batch 2 C2 contract, C5 permanent detours, settings")
