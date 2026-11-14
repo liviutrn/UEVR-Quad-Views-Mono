@@ -341,6 +341,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M4.1 frame-bound depth overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m41_generated.py backend
           if ($LASTEXITCODE -ne 0) { throw 'M4.1 generated contracts failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m5_sharpen.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M5 per-eye sharpening overlay failed' }
+          python workspace/quadview/duoview_port/test_duoview_m5_generated.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M5 generated contracts failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m6_temporal.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView temporal edge overlay failed' }
+          python workspace/quadview/duoview_port/test_duoview_m6_generated.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView temporal edge contracts failed' }
           '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
           $changes = @(
             @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),
@@ -531,12 +539,16 @@ jobs:
           Copy-Item workspace/quadview/FUTURE_LUNA_REVIEW.md package/FUTURE_LUNA_REVIEW.md
           Copy-Item workspace/quadview/FUTURE_SOL61_REVIEW.md package/FUTURE_SOL61_REVIEW.md
           Copy-Item workspace/quadview/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md package/PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md
-          @{ build='TriView-B43-Sharpen-Startup'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B31-110 user-tested'; baselineSource='008c9f7548c43f5977c1197c4180cddb435c64de'; sourceParent='008c9f7548c43f5977c1197c4180cddb435c64de'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B42.5: all source views at origin 0 (no black bar); B42.4 no black blink; B42.3 safe recovery drain (headset off); B42.2 low start also after Reinitialize Runtime; B42.1 low-start fix for saved ID7; B41.1 + VRAM guard for resizes (85% of DXGI budget), 0.05 size snapping, 1.5 s rebuild pause, low-resolution start (0.3, one switch when loaded and VRAM allows), VRAM logs every 2 s and per build; headset test pending'; duoview='M2.4'; researchTrace='UEVR World Trace #21'; traceDefaultOff=$true; baseM24='e4a1f88b02cd586affbb4cd672669b3fb70fbdf0'; traceFrom='55fbe455271fbd328a8497d06a9238e769016c5f'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
+          @{ build='TriView-B43-Sharpen-Startup'; diagnosticOnly=$false; depthCaptureSupported=$true; baseline='B31-110 user-tested'; baselineSource='008c9f7548c43f5977c1197c4180cddb435c64de'; sourceParent='008c9f7548c43f5977c1197c4180cddb435c64de'; overlay=(git -C workspace rev-parse HEAD).Trim(); run=$env:GITHUB_RUN_ID; mode='B42.5: all source views at origin 0 (no black bar); B42.4 no black blink; B42.3 safe recovery drain (headset off); B42.2 low start also after Reinitialize Runtime; B42.1 low-start fix for saved ID7; B41.1 + VRAM guard for resizes (85% of DXGI budget), 0.05 size snapping, 1.5 s rebuild pause, low-resolution start (0.3, one switch when loaded and VRAM allows), VRAM logs every 2 s and per build; headset test pending'; duoview='M4 required fine depth + M5 per-eye sharpening + temporal edges'; researchTrace='UEVR World Trace #21'; traceDefaultOff=$true; baseM24='e4a1f88b02cd586affbb4cd672669b3fb70fbdf0'; traceFrom='55fbe455271fbd328a8497d06a9238e769016c5f'; headsetVerified=$false } | ConvertTo-Json | Set-Content package/QUADVIEW_BUILD.json
           $pdb=Get-ChildItem backend/build -Recurse -Filter UEVRBackend.pdb | Select-Object -First 1
           if (!$pdb) { throw 'Missing exact backend debug symbols' }
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
-          UNIFIED UEVR TEST — TriView B43 (ID7) + DuoView Mono M2.4 (ID6) + World Trace #21.
+          UNIFIED UEVR TEST — TriView B43 (ID7) + DuoView M4 stereo (ID6) + World Trace #21.
+          DuoView M4 requires matched fine depth. This build adds reprojected fine
+          depth at silhouettes and background-only hole blur, independent of
+          sharpening and softness. Sharpening has six per-eye sliders with zero
+          meaning off and retains the existing distance-fade controls.
           Base M2.4 #230 commit e4a1f88b02; World Trace from #234 commit 55fbe45527.
           Both rendering modes included. No experimental M2.4 features are replaced by M2.3.
           World tracing is OFF by default: set UEVR_WORLD_TRACE21=1 in
@@ -706,6 +718,12 @@ jobs:
           g++ -std=c++20 -O1 -g -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer quadview/duoview_port/B40MonoTemporalTests.cpp -o sanitizer-evidence/B40MonoTemporalTests
           sanitizer-evidence/B40MonoTemporalTests > sanitizer-evidence/B40MonoTemporalTests.log 2>&1
           cat sanitizer-evidence/B40MonoTemporalTests.log
+      - name: Validate DuoView fine-depth camera motion with ASan and UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer quadview/duoview_port/DuoViewFineDepthHistoryTests.cpp -o sanitizer-evidence/DuoViewFineDepthHistoryTests
+          sanitizer-evidence/DuoViewFineDepthHistoryTests
       - uses: actions/upload-artifact@v4
         if: always()
         with:

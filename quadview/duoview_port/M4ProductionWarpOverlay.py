@@ -58,6 +58,29 @@ def main():
         frame.config.settings.m3_edges=true;
         frame.config.settings.m3_fill=true;
         run(*a,false,Route::direct,"M4 ON + M3a per-eye edges");
+        // Publish only the previous accepted WARP frame, then change both the
+        // gaze crop and the head position before binding it on another slot.
+        auto history=uevr::duoview::dx12::B40MonoHistory::create(g.device.Get(),g.queue.Get());
+        if (!history) throw std::runtime_error("Fine depth history setup failed");
+        a->set_b40_history(history);
+        b->set_b40_history(history);
+        m1_geometry.fine_depth_camera={{1.5f,.1f,1.2f,-.15f},{0,0,0,1},{0,0,0},1};
+        run(*a,false,Route::direct,"Fine depth history starts with current fine depth");
+        if (a->last_fine_depth_history_used()) throw std::runtime_error("First frame used unproven history");
+        a->note_fine_depth_enqueued();
+        const auto original_layout=frame.config.layout;
+        frame.config.layout.u0+=.04f; frame.config.layout.u1+=.04f;
+        m1_geometry.fine_depth_camera.position[0]=.02f;
+        run(*b,false,Route::direct,"Fine depth history across slots, crop shift and head translation");
+        if (!b->last_fine_depth_history_used()) throw std::runtime_error("Fine depth history was not bound");
+        b->note_fine_depth_enqueued();
+        frame.config.key.generation++;
+        run(*a,false,Route::direct,"Fine depth history rejects previous generation");
+        if (a->last_fine_depth_history_used()) throw std::runtime_error("Old generation leaked into fine depth");
+        frame.config.key.generation--;
+        frame.config.layout=original_layout;
+        a->set_b40_history({});
+        b->set_b40_history({});
         frame.config.settings.m3_edges=false;
         frame.config.settings.m4_fovea_grid=false;
         frame.config.settings.m2_fovea_depth=false;
