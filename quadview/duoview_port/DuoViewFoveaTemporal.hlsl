@@ -67,11 +67,11 @@ float M7StabilizeEdge(float2 fullUv, float nearZ, float farZ) {
     const float denominator=1.-filtered*M6View[2].w;
     if (denominator<=.01 || rotZ<=.01) return nearZ;
     const float candidate=filtered*rotZ/denominator;
-    // 0 means exact current-frame depth, 0.95 allows up to ~2 pixels of
-    // accumulated subpixel edge correction. The old fixed 0.35-pixel cap
-    // made the entire range practically imperceptible.
+    // The reach slider is a true 2..20 output-pixel upper bound. History
+    // strength scales the final correction once (not twice). Motion and
+    // depth-disagreement rejection above still guard stale history.
     const float strength=saturate(M7Controls.x);
-    const float pixelBudget=lerp(.35,reach,strength);
+    const float pixelBudget=reach;
     const float limit=pixelBudget/max(disparity,1.e-5);
     const float retained=lerp(nearZ,clamp(candidate,nearZ-limit,nearZ+limit),strength);
     return max(0.,retained);

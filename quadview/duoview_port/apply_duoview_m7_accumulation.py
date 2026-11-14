@@ -125,7 +125,7 @@ def controls(mods):
          "    out.m4_fovea_grid=requested.m4_fovea_grid;",
          """    out.m4_fovea_grid=requested.m4_fovea_grid;
     if (std::isfinite(requested.edge_history))
-        out.edge_history=(std::clamp)(requested.edge_history,0.f,.95f);
+        out.edge_history=(std::clamp)(requested.edge_history,0.f,1.f);
     if (std::isfinite(requested.fill_history))
         out.fill_history=(std::clamp)(requested.fill_history,0.f,.95f);
     if (std::isfinite(requested.fill_blur_px))
@@ -135,7 +135,7 @@ def controls(mods):
     ])
     patch(mods / "VR.hpp", [
         ("three persistent sliders", '    const ModSlider::Ptr m_duo_m5_right_max{',
-         """    const ModSlider::Ptr m_duo_edge_history{ModSlider::create(generate_name("DuoEdgeHistory"),0.f,.95f,.70f)};
+         """    const ModSlider::Ptr m_duo_edge_history{ModSlider::create(generate_name("DuoEdgeHistory"),0.f,1.f,.70f)};
     const ModSlider::Ptr m_duo_edge_reach{ModSlider::create(generate_name("DuoEdgeHistoryReachPixels"),2.f,20.f,8.f)};
     const ModSlider::Ptr m_duo_fill_history{ModSlider::create(generate_name("DuoFillHistory"),0.f,.95f,.65f)};
     const ModSlider::Ptr m_duo_fill_blur{ModSlider::create(generate_name("DuoFillBlurPixels"),0.f,32.f,1.25f)};

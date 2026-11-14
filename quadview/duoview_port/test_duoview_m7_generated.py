@@ -30,7 +30,7 @@ assert "m4_table.ptr+=3u*srv_descriptor_increment_;" in dx
 assert "D3D12_RESOURCE_STATE_UNORDERED_ACCESS,history_read" in dx
 assert "filtered=history.x;" in stereo
 assert "float4 M7Tuning;" in stereo
-assert "const float pixelBudget=lerp(.35,reach,strength);" in stereo
+assert "const float pixelBudget=reach;" in stereo
 assert "const float3 bounded=clamp(oldColor,current-.50,current+.50);" in stereo
 assert "float4(fine,representativeDepth,packed,rawNear)" in stereo
 assert "float3 oldColor=M7UnpackColor(history.z);" in stereo
@@ -55,5 +55,7 @@ for setting, control in (("edge_history","edge_history"),("fill_history","fill_h
     assert f"*m_duo_{control}," in ui_header
     assert f"m_duo_{control}->draw(" in ui
 assert "out.edge_reach_px=(std::clamp)(requested.edge_reach_px,2.f,20.f);" in settings
+assert "out.edge_history=(std::clamp)(requested.edge_history,0.f,1.f);" in settings
+assert 'generate_name("DuoEdgeHistory"),0.f,1.f,.70f' in ui_header
 assert "out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,32.f);" in settings
 print("PASS: M9 tunable 2-20px temporal depth, wider colour history, masked 32px blur, saved controls")

@@ -61,7 +61,7 @@ def main():
                   "const float maxSafe=.99/max(kmax*float(M4Grid.x),.00001)",
                   "lerp(symmetric,oneSided,M9PerEyeMix(source))",
                   "const float candidate=lerp(symmetric,oneSided,mix)",
-                  "const float pixelBudget=lerp(.35,reach,strength)",
+                  "const float pixelBudget=reach",
                   "const float retention=saturate(M7Controls.y)",
                   "const float3 bounded=clamp(oldColor,current-.50,current+.50)",
                   "fill=float3(dir,d,strength)",
@@ -93,11 +93,13 @@ def main():
     for world_scale in [0.5,0.85,1.0,1.10,1.5]:
         wtm=100.0*world_scale
         assert abs(wtm-(100.*world_scale)) < 1.e-8
-    for history_strength in [0.0,0.25,0.5,0.95]:
+    for history_strength in [0.0,0.25,0.5,0.95,1.0]:
         for reach in [2.,8.,20.]:
-            budget=0.35+(reach-0.35)*history_strength
-            assert 0.35<=budget<=20.0
-            if history_strength==0: assert budget==0.35
+            budget=reach
+            actual_limit=budget*history_strength
+            assert 2.<=budget<=20.
+            assert 0.<=actual_limit<=20.
+            if history_strength==0: assert actual_limit==0.
     for weight in [0.,.2,.5,.75,1.]:
         # Directional M3 edges fade out as the distance weight rises.
         assert abs((1.-weight)+weight-1.)<1.e-8
