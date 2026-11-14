@@ -43,7 +43,11 @@ float M8AdjustedPenalty(float inverseDepth, float original) {
     if (M8Distance.z < .5) return original;
     const float smoothness=lerp(M8Effects.x,M8Effects.y,M8FarWeight(inverseDepth));
     // Larger penalty => narrower/sharper envelope, smaller => broader/softer.
-    return original*lerp(2.0,.35,saturate(smoothness));
+    const float proposed=original*lerp(2.0,.35,saturate(smoothness));
+    // Never make k*dD/du steeper than the warp's no-fold bound.
+    const float kmax=max(max(abs(M1Eye.x),abs(M1Eye.y)),.00001);
+    const float maxSafe=.95/max(kmax*float(M4Grid.x),.00001);
+    return min(proposed,maxSafe);
 }
 float M8FillStrength(float inverseDepth) {
     if (M8Distance.z < .5) return 1.;
