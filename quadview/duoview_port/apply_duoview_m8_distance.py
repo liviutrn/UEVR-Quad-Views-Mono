@@ -71,6 +71,7 @@ def shaders(sh):
         "    float4 M7Controls;\n    uint4 M7ColorExtent;\n"
         "    float4 M8Distance; // inverse depth of start,end; enabled\n"
         "    float4 M8Effects;  // near/far smoothing, near/far fill\n"
+        "    float4 M9PerEye; // near/far intensity of asymmetric eye edges\n"
         "    float4 M5Sharpen;", "M8 shader constants")
     anchor = "// Fine NGX depth is sampled only during conditioning"
     helpers = r"""// All depths passed here are inverse *engine* units from M4, not metres.
@@ -88,12 +89,18 @@ float M8AdjustedPenalty(float inverseDepth, float original) {
     const float proposed=original*lerp(2.0,.35,saturate(smoothness));
     // Never make k*dD/du steeper than the warp's no-fold bound.
     const float kmax=max(max(abs(M1Eye.x),abs(M1Eye.y)),.00001);
-    const float maxSafe=.95/max(kmax*float(M4Grid.x),.00001);
+    const float maxSafe=.99/max(kmax*float(M4Grid.x),.00001);
     return min(proposed,maxSafe);
 }
 float M8FillStrength(float inverseDepth) {
     if (M8Distance.z < .5) return 1.;
     return saturate(lerp(M8Effects.z,M8Effects.w,M8FarWeight(inverseDepth)));
+}
+// 1.0 = original one-sided M3a conditioning, 0.0 = symmetric M4.
+// Fade the *asymmetry*, not just its edge penalty, to prevent distant halos.
+float M9PerEyeMix(float inverseDepth) {
+    if (M8Distance.z < .5) return 1.; // exactly preserve M8-off M3a
+    return saturate(lerp(M9PerEye.x,M9PerEye.y,M8FarWeight(inverseDepth)));
 }
 
 // Fine NGX depth is sampled only during conditioning""";
@@ -128,12 +135,22 @@ float M8FillStrength(float inverseDepth) {
       """            float v=M1Row[x], origin=0.;
             if (M8Distance.z>.5) origin=M8Origin[x];
             if (xf>=0 && xf<int(w)) {
-                const float candidate=M1Row[xf]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[xf] : M1Row[xf],pf);
+                const float source=M8Distance.z>.5 ? M8Origin[xf] : M1Row[xf];
+                const float symmetric=M1Row[xf]-float(step)*M8AdjustedPenalty(source,M1Filter.x*scale);
+                const float oneSided=M1Row[xf]-float(step)*M8AdjustedPenalty(source,pf);
+                const float candidate=lerp(symmetric,oneSided,M9PerEyeMix(source));
                 if (candidate>v) { v=candidate; if (M8Distance.z>.5) origin=M8Origin[xf]; }
             }
-            if (ps>0.0 && xs>=0 && xs<int(w)) {
-                const float candidate=M1Row[xs]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[xs] : M1Row[xs],ps);
-                if (candidate>v) { v=candidate; if (M8Distance.z>.5) origin=M8Origin[xs]; }
+            if (xs>=0 && xs<int(w)) {
+                const float source=M8Distance.z>.5 ? M8Origin[xs] : M1Row[xs];
+                const float mix=M9PerEyeMix(source);
+                if (ps>0.0 || mix<.999) {
+                    const float symmetric=M1Row[xs]-float(step)*M8AdjustedPenalty(source,M1Filter.x*scale);
+                    float oneSided=0.;
+                    if (ps>0.0) oneSided=M1Row[xs]-float(step)*M8AdjustedPenalty(source,ps);
+                    const float candidate=lerp(symmetric,oneSided,mix);
+                    if (candidate>v) { v=candidate; if (M8Distance.z>.5) origin=M8Origin[xs]; }
+                }
             }
             M1Next[x]=v;
             if (M8Distance.z>.5) M8NextOrigin[x]=origin;""",
@@ -254,7 +271,8 @@ def backend(mods):
     bool m8_distance{false}; // OFF preserves M7 output exactly
     float m8_near_m{2.f}, m8_far_m{5.f};
     float m8_edge_near{0.f}, m8_edge_far{1.f};
-    float m8_fill_near{1.f}, m8_fill_far{0.f};"""),
+    float m8_fill_near{1.f}, m8_fill_far{0.f};
+    float m9_eye_near{1.f}, m9_eye_far{0.f}; // 1=directional, 0=symmetric (requires M8)"""),
       ("M8 validation",
        "        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,12.f);",
        """        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,3.f);
@@ -271,7 +289,11 @@ def backend(mods):
     if(std::isfinite(requested.m8_fill_near))
         out.m8_fill_near=(std::clamp)(requested.m8_fill_near,0.f,1.f);
     if(std::isfinite(requested.m8_fill_far))
-        out.m8_fill_far=(std::clamp)(requested.m8_fill_far,0.f,1.f);"""),
+        out.m8_fill_far=(std::clamp)(requested.m8_fill_far,0.f,1.f);
+    if(std::isfinite(requested.m9_eye_near))
+        out.m9_eye_near=(std::clamp)(requested.m9_eye_near,0.f,1.f);
+    if(std::isfinite(requested.m9_eye_far))
+        out.m9_eye_far=(std::clamp)(requested.m9_eye_far,0.f,1.f);"""),
     ])
     edit(mods/"VR.hpp",[
       ("M8 persistent controls",
@@ -283,12 +305,15 @@ def backend(mods):
     const ModSlider::Ptr m_duo_m8_edge_near{ModSlider::create(generate_name("DuoM8EdgeNear"),0.f,1.f,0.f)};
     const ModSlider::Ptr m_duo_m8_edge_far{ModSlider::create(generate_name("DuoM8EdgeFar"),0.f,1.f,1.f)};
     const ModSlider::Ptr m_duo_m8_fill_near{ModSlider::create(generate_name("DuoM8FillNear"),0.f,1.f,1.f)};
-    const ModSlider::Ptr m_duo_m8_fill_far{ModSlider::create(generate_name("DuoM8FillFar"),0.f,1.f,0.f)};"""),
+    const ModSlider::Ptr m_duo_m8_fill_far{ModSlider::create(generate_name("DuoM8FillFar"),0.f,1.f,0.f)};
+    const ModSlider::Ptr m_duo_m9_eye_near{ModSlider::create(generate_name("DuoM9PerEyeNear"),0.f,1.f,1.f)};
+    const ModSlider::Ptr m_duo_m9_eye_far{ModSlider::create(generate_name("DuoM9PerEyeFar"),0.f,1.f,0.f)};"""),
       ("M8 settings persist",
        "*m_duo_edge_history, *m_duo_fill_history, *m_duo_fill_blur,",
        """*m_duo_edge_history, *m_duo_fill_history, *m_duo_fill_blur,
             *m_duo_m8_distance, *m_duo_m8_near_m, *m_duo_m8_far_m,
-            *m_duo_m8_edge_near, *m_duo_m8_edge_far, *m_duo_m8_fill_near, *m_duo_m8_fill_far,"""),
+            *m_duo_m8_edge_near, *m_duo_m8_edge_far, *m_duo_m8_fill_near, *m_duo_m8_fill_far,
+            *m_duo_m9_eye_near, *m_duo_m9_eye_far,"""),
     ])
     edit(mods/"VR.cpp",[
       ("M8 reset",
@@ -297,21 +322,24 @@ def backend(mods):
                     m_duo_m8_distance->value()=false;
                     m_duo_m8_near_m->value()=2.f; m_duo_m8_far_m->value()=5.f;
                     m_duo_m8_edge_near->value()=0.f; m_duo_m8_edge_far->value()=1.f;
-                    m_duo_m8_fill_near->value()=1.f; m_duo_m8_fill_far->value()=0.f;"""),
+                    m_duo_m8_fill_near->value()=1.f; m_duo_m8_fill_far->value()=0.f;
+                    m_duo_m9_eye_near->value()=1.f; m_duo_m9_eye_far->value()=0.f;"""),
       ("M8 frozen profile",
        "        .fill_blur_px=m_duo_fill_blur->value(),",
        """        .fill_blur_px=m_duo_fill_blur->value(),
         .m8_distance=m_duo_m8_distance->value(),
         .m8_near_m=m_duo_m8_near_m->value(), .m8_far_m=m_duo_m8_far_m->value(),
         .m8_edge_near=m_duo_m8_edge_near->value(), .m8_edge_far=m_duo_m8_edge_far->value(),
-        .m8_fill_near=m_duo_m8_fill_near->value(), .m8_fill_far=m_duo_m8_fill_far->value(),"""),
+        .m8_fill_near=m_duo_m8_fill_near->value(), .m8_fill_far=m_duo_m8_fill_far->value(),
+        .m9_eye_near=m_duo_m9_eye_near->value(), .m9_eye_far=m_duo_m9_eye_far->value(),"""),
       ("M8 live changes",
        "        current.fill_blur_px==candidate.fill_blur_px &&",
        """        current.fill_blur_px==candidate.fill_blur_px &&
         current.m8_distance==candidate.m8_distance &&
         current.m8_near_m==candidate.m8_near_m && current.m8_far_m==candidate.m8_far_m &&
         current.m8_edge_near==candidate.m8_edge_near && current.m8_edge_far==candidate.m8_edge_far &&
-        current.m8_fill_near==candidate.m8_fill_near && current.m8_fill_far==candidate.m8_fill_far &&"""),
+        current.m8_fill_near==candidate.m8_fill_near && current.m8_fill_far==candidate.m8_fill_far &&
+        current.m9_eye_near==candidate.m9_eye_near && current.m9_eye_far==candidate.m9_eye_far &&"""),
       ("M8 in-game menu",
        '                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0..12)");',
        """                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0..12)");
@@ -323,6 +351,10 @@ def backend(mods):
                             m_duo_m8_edge_far->draw("Far edge smoothing (0 crisp, 1 soft)");
                             m_duo_m8_fill_near->draw("Close revealed background fill (0 off, 1 full)");
                             m_duo_m8_fill_far->draw("Far revealed background fill (0 off, 1 full)");
+                            if (m_duo_m3_edges->value()) {
+                                m_duo_m9_eye_near->draw("Close per-eye edge asymmetry (1 directional, 0 symmetric)");
+                                m_duo_m9_eye_far->draw("Far per-eye edge asymmetry (1 directional, 0 symmetric)");
+                            }
                         }"""),
     ])
     edit(vr/"DuoViewM1D3D12.hpp",[
@@ -332,14 +364,16 @@ def backend(mods):
     uint32_t m7_color_extent[4]{};
     float m8_distance[4]{};
     float m8_effects[4]{};
+    float m9_per_eye[4]{};
     float m5_sharpen[4]{};"""),
       ("M8 constant size",
-       "sizeof(M1Constants) == 528", "sizeof(M1Constants) == 560"),
+       "sizeof(M1Constants) == 528", "sizeof(M1Constants) == 576"),
       ("M8 new frozen parameters",
        "const std::array<uint32_t,4>& color_extent) {",
        """const std::array<uint32_t,4>& color_extent,
                          bool distance_edges,float near_m8,float far_m8,
-                         float edge_near,float edge_far,float fill_near,float fill_far) {"""),
+                         float edge_near,float edge_far,float fill_near,float fill_far,
+                         float eye_near,float eye_far) {"""),
       ("M8 scale physical distances to inverse engine units",
        "        std::copy(color_extent.begin(),color_extent.end(),data.m7_color_extent);",
        """        std::copy(color_extent.begin(),color_extent.end(),data.m7_color_extent);
@@ -352,7 +386,9 @@ def backend(mods):
         data.m8_effects[0]=edge_near;
         data.m8_effects[1]=edge_far;
         data.m8_effects[2]=fill_near;
-        data.m8_effects[3]=fill_far;"""),
+        data.m8_effects[3]=fill_far;
+        data.m9_per_eye[0]=eye_near;
+        data.m9_per_eye[1]=eye_far;"""),
     ])
     edit(vr/"DuoViewD3D12.hpp",[
       ("M8 source settings into compositor constants",
@@ -360,7 +396,8 @@ def backend(mods):
        """settings.edge_history,settings.fill_history,settings.fill_blur_px,color_extent,
                 settings.m8_distance,settings.m8_near_m,settings.m8_far_m,
                 settings.m8_edge_near,settings.m8_edge_far,
-                settings.m8_fill_near,settings.m8_fill_far);"""),
+                settings.m8_fill_near,settings.m8_fill_far,
+                settings.m9_eye_near,settings.m9_eye_far);"""),
     ])
 
 def main():
@@ -368,7 +405,7 @@ def main():
         raise SystemExit("Usage: apply_duoview_m8_distance.py <backend> <shaders>")
     shaders(Path(sys.argv[2]))
     backend(Path(sys.argv[1])/"src/mods")
-    print("M8: independent distance-aware fine edge smoothness and fill; M7 temporal retained")
+    print("M9: distance-aware per-eye asymmetry, meaningful M7 filters, and M8 controls")
 
 if __name__=="__main__":
     main()
