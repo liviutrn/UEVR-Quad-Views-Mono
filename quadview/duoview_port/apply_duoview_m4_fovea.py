@@ -139,6 +139,48 @@ void CSConditionM4Vertical(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
     GroupMemoryBarrierWithGroupSync();
     }
 }
+[numthreads(128,1,1)]
+void CSConditionM4ProbeConstant(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
+    const uint w=M4Grid.x;
+    if (group.x>=M4Grid.y || w==0u || w>1024u) return;
+    for (uint x=lane;x<w;x+=128u) {
+        M4FoveaConditioned[uint3(x,group.x,0u)]=.15f;
+        M4FoveaConditioned[uint3(x,group.x,1u)]=.15f;
+    }
+}
+
+[numthreads(128,1,1)]
+void CSConditionM4ProbeFine(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
+    const uint w=M4Grid.x;
+    if (group.x>=M4Grid.y || w==0u || w>1024u) return;
+    const float2 dim=max(float2(M2FoveaRect.zw),1.);
+    for (uint x=lane;x<w;x+=128u) {
+        const float2 uv=(float2(x,group.x)+.5f)/float2(M4Grid.xy);
+        const float2 jit=clamp(uv+M2FineJitter(),.5f/dim,1.f-.5f/dim);
+        const int2 xy=int2(floor(jit*dim-.5f));
+        const float z=DecodeM2Depth(xy);
+        M4FoveaConditioned[uint3(x,group.x,0u)]=z;
+        M4FoveaConditioned[uint3(x,group.x,1u)]=z;
+    }
+}
+
+[numthreads(128,1,1)]
+void CSConditionM4ProbeBarrier(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
+    const uint w=M4Grid.x;
+    if (group.x>=M4Grid.y || w==0u || w>1024u) return;
+    const float2 dim=max(float2(M2FoveaRect.zw),1.);
+    for (uint x=lane;x<w;x+=128u) {
+        const float2 uv=(float2(x,group.x)+.5f)/float2(M4Grid.xy);
+        const float2 jit=clamp(uv+M2FineJitter(),.5f/dim,1.f-.5f/dim);
+        M1Row[x]=DecodeM2Depth(int2(floor(jit*dim-.5f)));
+    }
+    GroupMemoryBarrierWithGroupSync(); // All 128 lanes execute this uniformly.
+    for (uint x=lane;x<w;x+=128u) {
+        M4FoveaConditioned[uint3(x,group.x,0u)]=M1Row[x];
+        M4FoveaConditioned[uint3(x,group.x,1u)]=M1Row[x];
+    }
+}
+
 """
 
 M4_READ = r"""float M1ReadCoarseEye(float2 uv, uint eye) {
@@ -225,6 +267,9 @@ def backend(mods):
          "    ComPtr<ID3D12PipelineState> raster, condition, vertical, m25_analyse, m25_guard;\n"
          "    // M4: optional; a failure here disables only M4, never the stereo path.\n"
          "    ComPtr<ID3D12PipelineState> m4_condition, m4_vertical;\n"
+         "    #if defined(DUOVIEW_M4_WARP_PROBE)\n"
+         "    ComPtr<ID3D12PipelineState> m4_probe_constant, m4_probe_fine, m4_probe_barrier;\n"
+         "    #endif\n"
          "    ComPtr<ID3D12Resource> m4_depth;\n"
          "    bool m4_active{};\n"
          "    uint32_t m4_columns{},m4_rows{};\n"
@@ -237,7 +282,15 @@ def backend(mods):
          "        compute.CS={m4_condition_bytecode,sizeof(m4_condition_bytecode)};\n"
          "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_condition)))) m4_condition.Reset();\n"
          "        compute.CS={m4_vertical_bytecode,sizeof(m4_vertical_bytecode)};\n"
-         "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_vertical)))) m4_vertical.Reset();\n"),
+         "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_vertical)))) m4_vertical.Reset();\n"
+         "        #if defined(DUOVIEW_M4_WARP_PROBE)\n"
+         "        compute.CS={m4_probe_constant_bytecode,sizeof(m4_probe_constant_bytecode)};\n"
+         "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_probe_constant)))) return false;\n"
+         "        compute.CS={m4_probe_fine_bytecode,sizeof(m4_probe_fine_bytecode)};\n"
+         "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_probe_fine)))) return false;\n"
+         "        compute.CS={m4_probe_barrier_bytecode,sizeof(m4_probe_barrier_bytecode)};\n"
+         "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_probe_barrier)))) return false;\n"
+         "        #endif\n"),
         ("M4 fovea field texture",
          "            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&soft_depth)))) return false;\n",
          "            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&soft_depth)))) return false;\n"
@@ -273,7 +326,9 @@ def backend(mods):
          "            // The WARP probes must not affect shipping builds.\n"
          "            char m4_probe_stage[24]{};\n"
          "            if(GetEnvironmentVariableA(\"DUOVIEW_M4_DIAG\",m4_probe_stage,sizeof(m4_probe_stage)) &&\n"
-         "               (m4_probe_stage[0]=='c' || m4_probe_stage[0]=='v')) data.m4_flags[0]=0.f;\n"
+         "               (m4_probe_stage[0]=='c' || m4_probe_stage[0]=='v' ||
+               m4_probe_stage[0]=='s' || m4_probe_stage[0]=='k' ||
+               m4_probe_stage[0]=='f' || m4_probe_stage[0]=='b')) data.m4_flags[0]=0.f;\n"
          "            #endif\n"
          "            m4_last_w=w4; m4_last_h=h4; m4_fine_w=focus->rect[2]; m4_fine_h=focus->rect[3];\n"
          "        }\n"
@@ -338,14 +393,27 @@ def backend(mods):
          "            if(m1_.m4_active) {\n"
          "                transition(cmd,m1_.m4_depth.Get(),D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,\n"
          "                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);\n"
-         "                cmd->SetPipelineState(m1_.m4_condition.Get());\n"
-         "                cmd->Dispatch(m1_.m4_rows,1,1);\n"
-         "                bool m4_do_vertical=m1_.vertical_active;\n"
+         "                bool m4_probe_skip=false;\n"
+         "                ID3D12PipelineState* m4_gpu_pso=m1_.m4_condition.Get();\n"
          "                #if defined(DUOVIEW_M4_WARP_PROBE)\n"
          "                char stage[24]{};\n"
-         "                if(GetEnvironmentVariableA(\"DUOVIEW_M4_DIAG\",stage,sizeof(stage)) && stage[0]=='c')\n"
-         "                    m4_do_vertical=false;\n"
+         "                if(GetEnvironmentVariableA(\"DUOVIEW_M4_DIAG\",stage,sizeof(stage))) {\n"
+         "                    m4_probe_skip=(stage[0]=='s');\n"
+         "                    if(stage[0]=='k') m4_gpu_pso=m1_.m4_probe_constant.Get();\n"
+         "                    if(stage[0]=='f') m4_gpu_pso=m1_.m4_probe_fine.Get();\n"
+         "                    if(stage[0]=='b') m4_gpu_pso=m1_.m4_probe_barrier.Get();\n"
+         "                }\n"
          "                #endif\n"
+         "                if(!m4_probe_skip) {\n"
+         "                    cmd->SetPipelineState(m4_gpu_pso);\n"
+         "                    cmd->Dispatch(m1_.m4_rows,1,1);\n"
+         "                }\n"
+         "                bool m4_do_vertical=m1_.vertical_active;\n"
+         "                #if defined(DUOVIEW_M4_WARP_PROBE)\n"
+         "                if(stage[0]=='s' || stage[0]=='k' || stage[0]=='f' ||\n"
+         "                   stage[0]=='b' || stage[0]=='c') m4_do_vertical=false;\n"
+         "                #endif\n"
+
          "                if(m4_do_vertical) {\n"
          "                    D3D12_RESOURCE_BARRIER m4_uav{};\n"
          "                    m4_uav.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;\n"
