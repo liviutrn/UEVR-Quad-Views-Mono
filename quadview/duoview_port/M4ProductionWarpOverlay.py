@@ -81,6 +81,17 @@ def main():
         frame.config.settings.m9_eye_near=1.f;
         frame.config.settings.m9_eye_far=0.f;
         run(*a,false,Route::direct,"M9 M4 distance-adaptive per-eye edges");
+        // Mixed distance case, with both an actual far wall and a near bar.
+        // The original .15/.45 inverse-depth samples exercise only near mode
+        // under a conventional 100 world-units/metre geometry.
+        auto m4_mixed=upload_depth([](UINT x){ return (x>=14u && x<17u) ? .02f : .001f; });
+        m21_fine_depth={m4_mixed.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{},lease};
+        frame.config.settings.m9_eye_near=.25f;
+        frame.config.settings.m9_eye_far=.75f;
+        run(*a,false,Route::direct,"M9 M4 mixed near/far per-eye depth WARP");
+        m21_fine_depth={m4_bar.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{},lease};
+        frame.config.settings.m9_eye_near=1.f;
+        frame.config.settings.m9_eye_far=0.f;
         frame.config.settings.m8_distance=false;
         // Publish only the previous accepted WARP frame, then change both the
         // gaze crop and the head position before binding it on another slot.
