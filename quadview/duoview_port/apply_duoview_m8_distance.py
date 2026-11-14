@@ -21,6 +21,48 @@ def edit(path, transforms):
         text = once(text, old, new, context)
     path.write_text(text, encoding="utf-8")
 
+
+def uniformize_lane_loops(block):
+    """FXC requires all lanes to take the same loop trip count before a group barrier."""
+    token = "for (uint x=lane; x<w; x+=128)"
+    offset = 0
+    count = 0
+    while True:
+        pos = block.find(token, offset)
+        if pos < 0:
+            break
+        j = pos + len(token)
+        while j < len(block) and block[j].isspace():
+            j += 1
+        if j >= len(block):
+            raise RuntimeError("M8 truncated lane loop")
+        if block[j] == "{":
+            depth, end = 1, j + 1
+            while depth > 0:
+                if end >= len(block):
+                    raise RuntimeError("M8 unbalanced lane loop")
+                if block[end] == "{":
+                    depth += 1
+                elif block[end] == "}":
+                    depth -= 1
+                end += 1
+            body = block[j+1:end-1]
+        else:
+            end = block.find(";", j)
+            if end < 0:
+                raise RuntimeError("M8 unterminated lane loop")
+            end += 1
+            body = block[j:end]
+        replacement = ("for (uint tile=0u; tile<(w+127u)/128u; ++tile) {\n"
+                       "    const uint x=128u*tile+lane;\n"
+                       "    if (x<w) {\n" + body + "\n    }\n}")
+        block = block[:pos] + replacement + block[end:]
+        offset = pos + len(replacement)
+        count += 1
+    if count < 1:
+        raise RuntimeError("M8 expected at least one lane loop")
+    return block
+
 def shaders(sh):
     p = sh / "DuoViewM1Stereo.hlsl"
     text = p.read_text(encoding="utf-8")
@@ -103,6 +145,7 @@ float M8FillStrength(float inverseDepth) {
             if (M8Distance.z>.5) M8Origin[x]=M8NextOrigin[x];
         }""",
       "one-sided carry origin between doubling passes")
+    block=uniformize_lane_loops(block)
     text=text[:start]+block+text[end:]
 
     start=text.index("void CSConditionM4(")
@@ -172,23 +215,17 @@ float M8FillStrength(float inverseDepth) {
        "        M8Origin[x]=M1Row[x];\n    }\n    GroupMemoryBarrierWithGroupSync();",
        "        M8Origin[x]=M1Row[x];\n        }\n    }\n    GroupMemoryBarrierWithGroupSync();",
        "end uniform fine-depth seed tile loop outside varying branch")
+    block=uniformize_lane_loops(block)
     text=text[:start]+block+text[end:]
 
     text=once(text,
         "    if(!(stretch>(M3Flags.z>0. ? M3Flags.z : 2.0))) return root;",
         """    // M8 uses an explicit disocclusion gate even when M3 per-eye edges are OFF.
-    const float gate=M8Distance.z>.5 ? 2.0 : M3Flags.z;
+    const float gate=M8Distance.z>.5 ? 2.0 : (M3Flags.z>0. ? M3Flags.z : 2.0);
     if(!(stretch>gate)) return root;""",
         "M8 rejects non-holes before fill sampling")
-    text=once(text,
-        """        [branch] if(inCrop || (M3Flags.x>.5 && M3Flags.z>0.0))
-            uv.x=M3FillHole(base.x,uv.x,base.y,k,eye,fill,inCrop);""",
-        """        // With M8 OFF honor the legacy per-eye fill switch exactly.
-        // With M8 ON use the near/far fill controls within the gaze crop.
-        [branch] if((M8Distance.z>.5 && inCrop) ||
-                    (M3Flags.x>.5 && M3Flags.z>0.0))
-            uv.x=M3FillHole(base.x,uv.x,base.y,k,eye,fill,inCrop);""",
-        "do not force background fill when the user's toggle is OFF")
+    // Do not replace M7's inCrop/M3 fill eligibility. It is essential that
+    // M8 disabled produce the identical old background-fill behavior.
     text=once(text,
         "    if (inCrop && um>M2Crop.x && um<M2Crop.z)\n"
         "        fill=float3(dir,d,1.);\n"
