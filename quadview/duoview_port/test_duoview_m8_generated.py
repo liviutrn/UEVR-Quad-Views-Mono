@@ -36,8 +36,8 @@ def main():
                   "float m9_eye_near{1.f}, m9_eye_far{0.f}",
                   "out.m9_eye_far=(std::clamp)(requested.m9_eye_far,0.f,1.f)"]:
         need(cfg,token,"defaults/validation")
-    for token in ["sizeof(M1Constants) == 592", "float m8_distance[4]",
-                  "float m7_tuning[4]", "data.m7_tuning[0]=edge_reach_px",
+    for token in ["sizeof(M1Constants) == 576", "float m8_distance[4]",
+                  "data.m8_distance[3]=edge_reach_px",
                   "float m8_effects[4]", "float m9_per_eye[4]",
                   "data.m9_per_eye[0]=eye_near", "data.m9_per_eye[1]=eye_far",
                   "geometry.world_to_meters",
@@ -50,7 +50,7 @@ def main():
                   "settings.m9_eye_near,settings.m9_eye_far"]:
         need(dx,token,"frozen parameters")
     for token in ["M8FarWeight(float inverseDepth)", "M8AdjustedPenalty",
-                  "M8FillStrength", "M9PerEyeMix", "float4 M7Tuning", "float4 M8Distance", "float4 M8Effects", "float4 M9PerEye",
+                  "M8FillStrength", "M9PerEyeMix", "clamp(M8Distance.w,2.,20.)", "float4 M8Distance", "float4 M8Effects", "float4 M9PerEye",
                   "groupshared float M8Origin[1024]", "groupshared float M8NextOrigin[1024]",
                   "for (uint tile=0u; tile<(w+127u)/128u; ++tile)",
                   "M8Origin[x]=M1Seed[x]", "M8Origin[xf]", "M8Origin[xs]",
@@ -59,8 +59,8 @@ def main():
                   "if(inCrop || (M3Flags.x>.5 && M3Flags.z>0.0))",
                   "if (x>=step)", "if (x+step<w)",
                   "const float maxSafe=.99/max(kmax*float(M4Grid.x),.00001)",
-                  "lerp(symmetric,oneSided,M9PerEyeMix(source))",
-                  "const float candidate=lerp(symmetric,oneSided,mix)",
+                  "lerp(M1Filter.x*scale,pf,M9PerEyeMix(source))",
+                  "const float slope=lerp(M1Filter.x*scale,ps,mix)",
                   "const float pixelBudget=reach",
                   "const float retention=saturate(M7Controls.y)",
                   "const float3 bounded=clamp(oldColor,current-.50,current+.50)",
@@ -72,6 +72,8 @@ def main():
                   "[unroll] for (int offset=-2;offset<=2;++offset)",
                   "saturate(M7Controls.z/2.)"]:
         need(p,token,"distance-aware fill compositing")
+    assert "float m7_tuning[4]" not in params, "redundant constant field remains"
+    assert "float4 M7Tuning" not in s, "redundant HLSL constant remains"
     for token in ["m_duo_m8_distance", "m_duo_m8_near_m", "m_duo_m8_far_m",
                   "m_duo_m8_edge_near", "m_duo_m8_edge_far",
                   "m_duo_m8_fill_near", "m_duo_m8_fill_far",

@@ -58,6 +58,18 @@ def main():
         frame.config.settings.m3_edges=true;
         frame.config.settings.m3_fill=true;
         run(*a,false,Route::direct,"M4 ON + M3a per-eye edges");
+        // Exercise the actual M9 distance-aware per-eye GPU shader path.
+        frame.config.settings.m8_distance=true;
+        frame.config.settings.m8_near_m=2.f;
+        frame.config.settings.m8_far_m=5.f;
+        frame.config.settings.m8_edge_near=0.f;
+        frame.config.settings.m8_edge_far=1.f;
+        frame.config.settings.m8_fill_near=1.f;
+        frame.config.settings.m8_fill_far=0.f;
+        frame.config.settings.m9_eye_near=1.f;
+        frame.config.settings.m9_eye_far=0.f;
+        run(*a,false,Route::direct,"M9 M4 distance-adaptive per-eye edges");
+        frame.config.settings.m8_distance=false;
         // Publish only the previous accepted WARP frame, then change both the
         // gaze crop and the head position before binding it on another slot.
         auto history=uevr::duoview::dx12::B40MonoHistory::create(g.device.Get(),g.queue.Get());

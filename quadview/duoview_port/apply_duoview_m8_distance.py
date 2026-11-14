@@ -68,8 +68,8 @@ def shaders(sh):
     text = p.read_text(encoding="utf-8")
     text = once(text,
         "    float4 M7Controls;\n    uint4 M7ColorExtent;\n    float4 M7Tuning; // x: maximum temporal edge correction in output pixels\n    float4 M5Sharpen;",
-        "    float4 M7Controls;\n    uint4 M7ColorExtent;\n    float4 M7Tuning; // x: maximum temporal edge correction in output pixels\n"
-        "    float4 M8Distance; // inverse depth of start,end; enabled\n"
+        "    float4 M7Controls;\n    uint4 M7ColorExtent;\n"
+        "    float4 M8Distance; // xyz: inverse near/far/enabled; w: temporal reach\n"
         "    float4 M8Effects;  // near/far smoothing, near/far fill\n"
         "    float4 M9PerEye; // near/far intensity of asymmetric eye edges\n"
         "    float4 M5Sharpen;", "M8 shader constants")
@@ -105,6 +105,10 @@ float M9PerEyeMix(float inverseDepth) {
 
 // Fine NGX depth is sampled only during conditioning""";
     text=once(text,anchor,helpers,"M8 helper insertion")
+    # Pack temporal reach in M8Distance.w instead of an extra float4.
+    # This reduces M4 constant traffic and restores the preceding CB offsets.
+    text=once(text,"clamp(M7Tuning.x,2.,20.)","clamp(M8Distance.w,2.,20.)",
+              "M9 reuse constant register for temporal edge reach")
     text=once(text,
         "groupshared float M1Next[1024];",
         "groupshared float M1Next[1024];\n"
@@ -136,19 +140,18 @@ float M9PerEyeMix(float inverseDepth) {
             if (M8Distance.z>.5) origin=M8Origin[x];
             if (xf>=0 && xf<int(w)) {
                 const float source=M8Distance.z>.5 ? M8Origin[xf] : M1Row[xf];
-                const float symmetric=M1Row[xf]-float(step)*M8AdjustedPenalty(source,M1Filter.x*scale);
-                const float oneSided=M1Row[xf]-float(step)*M8AdjustedPenalty(source,pf);
-                const float candidate=lerp(symmetric,oneSided,M9PerEyeMix(source));
+                // Interpolate one slope, rather than evaluate two candidates.
+                const float slope=lerp(M1Filter.x*scale,pf,M9PerEyeMix(source));
+                const float candidate=M1Row[xf]-float(step)*M8AdjustedPenalty(source,slope);
                 if (candidate>v) { v=candidate; if (M8Distance.z>.5) origin=M8Origin[xf]; }
             }
             if (xs>=0 && xs<int(w)) {
                 const float source=M8Distance.z>.5 ? M8Origin[xs] : M1Row[xs];
                 const float mix=M9PerEyeMix(source);
                 if (ps>0.0 || mix<.999) {
-                    const float symmetric=M1Row[xs]-float(step)*M8AdjustedPenalty(source,M1Filter.x*scale);
-                    float oneSided=0.;
-                    if (ps>0.0) oneSided=M1Row[xs]-float(step)*M8AdjustedPenalty(source,ps);
-                    const float candidate=lerp(symmetric,oneSided,mix);
+                    // Interpolate a depth-edge penalty instead of a zero depth.
+                    const float slope=lerp(M1Filter.x*scale,ps,mix);
+                    const float candidate=M1Row[xs]-float(step)*M8AdjustedPenalty(source,slope);
                     if (candidate>v) { v=candidate; if (M8Distance.z>.5) origin=M8Origin[xs]; }
                 }
             }
@@ -364,13 +367,12 @@ def backend(mods):
        "    float m7_controls[4]{};\n    uint32_t m7_color_extent[4]{};\n    float m7_tuning[4]{};\n    float m5_sharpen[4]{};",
        """    float m7_controls[4]{};
     uint32_t m7_color_extent[4]{};
-    float m7_tuning[4]{};
     float m8_distance[4]{};
     float m8_effects[4]{};
     float m9_per_eye[4]{};
     float m5_sharpen[4]{};"""),
       ("M8 constant size",
-       "sizeof(M1Constants) == 544", "sizeof(M1Constants) == 592"),
+       "sizeof(M1Constants) == 544", "sizeof(M1Constants) == 576"),
       ("M8 new frozen parameters",
        "const std::array<uint32_t,4>& color_extent) {",
        """const std::array<uint32_t,4>& color_extent,
@@ -392,6 +394,11 @@ def backend(mods):
         data.m8_effects[3]=fill_far;
         data.m9_per_eye[0]=eye_near;
         data.m9_per_eye[1]=eye_far;"""),
+    ])
+    edit(vr/"DuoViewM1D3D12.hpp",[
+      ("reuse M8 distance w for temporal reach",
+       "        data.m7_tuning[0]=edge_reach_px;",
+       "        data.m8_distance[3]=edge_reach_px;"),
     ])
     edit(vr/"DuoViewD3D12.hpp",[
       ("M8 source settings into compositor constants",
