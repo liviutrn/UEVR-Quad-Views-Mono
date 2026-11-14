@@ -347,14 +347,18 @@ inline constexpr UINT m1_constant_bytes =
          """        transition(cmd,fovea,sample_state,fovea_state);""",
          """        transition(cmd,fovea,fovea_sample_state,fovea_state);"""),
         ("GPU reads the latest completed write on the same queue",
-         """                cmd->SetPipelineState(m1_.m4_condition.Get());
-                cmd->Dispatch(m1_.m4_rows,1,1);""",
+         """                if(!m4_probe_skip) {
+                    cmd->SetPipelineState(m4_gpu_pso);
+                    cmd->Dispatch(m1_.m4_rows,1,1);
+                }""",
          """                constexpr auto history_read=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
                 if (history_output) transition(cmd,history_output,history_read,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                cmd->SetComputeRootDescriptorTable(0,srv_gpu_start_);
-                cmd->SetPipelineState(m1_.m4_condition.Get());
-                cmd->Dispatch(m1_.m4_rows,1,1);
+                if(!m4_probe_skip) {
+                    cmd->SetComputeRootDescriptorTable(0,srv_gpu_start_);
+                    cmd->SetPipelineState(m4_gpu_pso);
+                    cmd->Dispatch(m1_.m4_rows,1,1);
+                }
                 if (history_output) transition(cmd,history_output,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,history_read);"""),
         ("publish the actual written extent, image index and channel validity",
          """        if (b40_history_ && m1_active && m1_.m4_active) {
