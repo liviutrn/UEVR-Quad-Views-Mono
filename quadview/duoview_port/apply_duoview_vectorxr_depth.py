@@ -45,7 +45,7 @@ def settings(mods):
     patch(p,"frozen setting", "        .m8_fill_near=m_duo_m8_fill_near->value(), .m8_fill_far=m_duo_m8_fill_far->value(),",
         "        .m8_fill_near=m_duo_m8_fill_near->value(), .m8_fill_far=m_duo_m8_fill_far->value(),\n"
         "        .xr_depth_output=m_duo_xr_depth->value(),")
-    patch(p,"settings comparison", "        current.m8_fill_far==candidate.m8_fill_far &&",
+    patch(p,"settings comparison", "current.m8_fill_far==candidate.m8_fill_far &&",
         "        current.m8_fill_far==candidate.m8_fill_far &&\n"
         "        current.xr_depth_output==candidate.xr_depth_output &&")
     patch(p,"UI", '                        m_duo_m8_distance->draw("Distance-based depth edges and background fill");',
