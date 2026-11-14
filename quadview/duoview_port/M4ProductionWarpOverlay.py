@@ -77,8 +77,51 @@ def main():
         frame.config.key.generation++;
         run(*a,false,Route::direct,"Fine depth history rejects previous generation");
         if (a->last_fine_depth_history_used()) throw std::runtime_error("Old generation leaked into fine depth");
-        frame.config.key.generation--;
+        // Read the packed colour from the queue's last written history. One
+        // colour impulse must still affect a third accepted frame.
         frame.config.layout=original_layout;
+        m1_geometry.fine_depth_camera.position={};
+        auto original_primary=primary;
+        const auto history_color=[&]() {
+            const auto& metadata=history->fine_depth;
+            auto* image=history->temporal[metadata.index].Get();
+            if (!metadata.color_valid || !image) throw std::runtime_error("Fill history was not published");
+            const auto description=image->GetDesc();
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT copy_foot{};
+            UINT64 copy_bytes{};
+            g.device->GetCopyableFootprints(&description,0,1,0,&copy_foot,nullptr,nullptr,&copy_bytes);
+            auto cpu=resource(g.device.Get(),buffer(copy_bytes),D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
+            constexpr auto reads=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            transition(g.cmd.Get(),image,reads,D3D12_RESOURCE_STATE_COPY_SOURCE);
+            D3D12_TEXTURE_COPY_LOCATION source{image,D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
+            D3D12_TEXTURE_COPY_LOCATION target{cpu.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+            target.PlacedFootprint=copy_foot;
+            g.cmd->CopyTextureRegion(&target,0,0,0,&source,nullptr);
+            transition(g.cmd.Get(),image,D3D12_RESOURCE_STATE_COPY_SOURCE,reads);
+            g.submit_and_wait();
+            void* mapped{};
+            check(cpu->Map(0,nullptr,&mapped));
+            const auto packed=uint32_t(static_cast<const float*>(mapped)[2]);
+            cpu->Unmap(0,nullptr);
+            return packed&255u;
+        };
+        primary=solid_source(g,keep,32,32,{128,128,143,255});
+        run(*a,false,Route::direct,"Fill history seeds a colour impulse");
+        a->note_fine_depth_enqueued();
+        primary=solid_source(g,keep,32,32,{128,128,128,255});
+        run(*b,false,Route::direct,"Fill history carries that impulse into frame two");
+        b->note_fine_depth_enqueued();
+        run(*a,false,Route::direct,"Fill history still carries it into frame three");
+        a->note_fine_depth_enqueued();
+        const auto accumulated=history_color();
+        frame.config.key.generation++;
+        run(*b,false,Route::direct,"Fill history starts fresh after the generation changes");
+        b->note_fine_depth_enqueued();
+        const auto fresh=history_color();
+        if (accumulated<=fresh) throw std::runtime_error("Fill history lost the impulse by frame three");
+        frame.config.key.generation-=2;
+        primary=original_primary;
         a->set_b40_history({});
         b->set_b40_history({});
         frame.config.settings.m3_edges=false;

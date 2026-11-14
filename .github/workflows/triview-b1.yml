@@ -349,6 +349,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'DuoView temporal edge overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m6_generated.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'DuoView temporal edge contracts failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m7_accumulation.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView accumulated history overlay failed' }
+          python workspace/quadview/duoview_port/test_duoview_m7_generated.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView accumulated history contracts failed' }
           '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
           $changes = @(
             @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),
@@ -545,9 +549,9 @@ jobs:
           @{ overlay=(git -C workspace rev-parse HEAD).Trim(); backend='5ac7edc207866569334175e4ed8a7517971547f6'; sdk='3cffbc82429b6165ceec2714f0f0d9ae48f55596'; binarySha256=(Get-FileHash package/UEVRBackend.dll -Algorithm SHA256).Hash; pdbSha256=(Get-FileHash $pdb.FullName -Algorithm SHA256).Hash; workflow=$env:GITHUB_SHA } | ConvertTo-Json | Set-Content package/BUILD51_BINARY_IDENTITY.json
           @'
           UNIFIED UEVR TEST — TriView B43 (ID7) + DuoView M4 stereo (ID6) + World Trace #21.
-          DuoView M4 requires matched fine depth. This build adds reprojected fine
-          depth at silhouettes and background-only hole blur, independent of
-          sharpening and softness. Sharpening has six per-eye sliders with zero
+          DuoView M4 requires matched fine depth. Fovea depth edges and revealed
+          background colour have independent accumulated, reprojected history.
+          The revealed background has a separate spatial radius control. Sharpening has six per-eye sliders with zero
           meaning off and retains the existing distance-fade controls.
           Base M2.4 #230 commit e4a1f88b02; World Trace from #234 commit 55fbe45527.
           Both rendering modes included. No experimental M2.4 features are replaced by M2.3.
