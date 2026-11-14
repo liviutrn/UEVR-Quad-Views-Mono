@@ -84,6 +84,15 @@ float M8FarWeight(float inverseDepth) {
     const float t=saturate((M8Distance.x-inverseDepth)/span);
     return enabled*(t*t*(3.-2.*t));
 }
+float M8SeedScale(float inverseDepth) {
+    const float smoothness=lerp(M8Effects.x,M8Effects.y,M8FarWeight(inverseDepth));
+    return lerp(2.0,.35,saturate(smoothness));
+}
+float M8SafeLimit() {
+    const float kmax=max(max(abs(M1Eye.x),abs(M1Eye.y)),.00001);
+    const float cropWidth=max(M2Crop.z-M2Crop.x,1.e-5);
+    return .99*cropWidth/max(kmax*float(M4Grid.x),.00001);
+}
 float M8AdjustedPenalty(float inverseDepth, float original) {
     // One return and no branch in the inner envelope iteration. M8 OFF
     // selects original exactly; M8 ON retains the same proposed slope.
@@ -121,7 +130,9 @@ float M9PerEyeMix(float inverseDepth) {
         "groupshared float M1Next[1024];",
         "groupshared float M1Next[1024];\n"
         "groupshared float M8Origin[1024];\n"
-        "groupshared float M8NextOrigin[1024];",
+        "groupshared float M8NextOrigin[1024];\n"
+        "groupshared float M8Scale[1024];\n"
+        "groupshared float M8NextScale[1024];",
         "M8 seed-origin history for stable cone slopes")
 
     start=text.index("void M4Envelope(")
@@ -278,6 +289,45 @@ float M9PerEyeMix(float inverseDepth) {
        "        M8Origin[x]=M1Row[x];\n    }\n    GroupMemoryBarrierWithGroupSync();",
        "        M8Origin[x]=M1Row[x];\n        }\n    }\n    GroupMemoryBarrierWithGroupSync();",
        "end uniform fine-depth seed tile loop outside varying branch")
+    # Precompute per-source slope factors before the synchronized loop. Keep
+    # the existing source-origin and its factor in lockstep each iteration.
+    block=once(block,
+        "        M8Origin[x]=M1Row[x];",
+        "        M8Origin[x]=M1Row[x];\n        M8Scale[x]=M8SeedScale(M1Row[x]);",
+        "seed source slope factor")
+    block=once(block,
+        "const float pen=M1Filter.x*scale;",
+        "const float pen=M1Filter.x*scale;\n        const float m8Safe=M8SafeLimit();",
+        "safe penalty cap outside loop")
+    block=once(block,
+        "const float source=distanceOn ? M8Origin[leftIndex] : M1Row[leftIndex];\n"
+        "                    const float slope=distanceOn ? M8AdjustedPenalty(source,pen) : pen;",
+        "const float slope=distanceOn ? min(pen*M8Scale[leftIndex],m8Safe) : pen;",
+        "left precomputed penalty")
+    block=once(block,
+        "const float source=distanceOn ? M8Origin[rightIndex] : M1Row[rightIndex];\n"
+        "                    const float slope=distanceOn ? M8AdjustedPenalty(source,pen) : pen;",
+        "const float slope=distanceOn ? min(pen*M8Scale[rightIndex],m8Safe) : pen;",
+        "right precomputed penalty")
+    block=once(block,
+        """                    float origin=M8Origin[x];
+                    if (l>v && l>=r) origin=M8Origin[leftIndex];
+                    else if (r>v && r>l) origin=M8Origin[rightIndex];
+                    M8NextOrigin[x]=origin;""",
+        """                    float origin=M8Origin[x], factor=M8Scale[x];
+                    if (l>v && l>=r) { origin=M8Origin[leftIndex]; factor=M8Scale[leftIndex]; }
+                    else if (r>v && r>l) { origin=M8Origin[rightIndex]; factor=M8Scale[rightIndex]; }
+                    M8NextOrigin[x]=origin;
+                    M8NextScale[x]=factor;""",
+        "carry winning depth/factor")
+    block=once(block,
+        "if (M8Distance.z>.5) M8Origin[x]=M8NextOrigin[x];",
+        "if (M8Distance.z>.5) { M8Origin[x]=M8NextOrigin[x]; M8Scale[x]=M8NextScale[x]; }",
+        "publish winning factor")
+    block=once(block,
+        "if (M8Distance.z>.5) M8Origin[x]=M1Seed[x];",
+        "if (M8Distance.z>.5) { M8Origin[x]=M1Seed[x]; M8Scale[x]=M8SeedScale(M1Seed[x]); }",
+        "reset right-eye factor")
     block=uniformize_lane_loops(block)
     # WARP-only differential probes: clone the *generated* M4 seed, and
     # then clone the entire kernel with a compile-time symmetric branch.
@@ -343,21 +393,24 @@ float M9PerEyeMix(float inverseDepth) {
         "no-origin seed")
     no_origin=once(no_origin,
         """                if (M8Distance.z>.5) {
-                    float origin=M8Origin[x];
-                    if (l>v && l>=r) origin=M8Origin[leftIndex];
-                    else if (r>v && r>l) origin=M8Origin[rightIndex];
+                    float origin=M8Origin[x], factor=M8Scale[x];
+                    if (l>v && l>=r) { origin=M8Origin[leftIndex]; factor=M8Scale[leftIndex]; }
+                    else if (r>v && r>l) { origin=M8Origin[rightIndex]; factor=M8Scale[rightIndex]; }
                     M8NextOrigin[x]=origin;
+                    M8NextScale[x]=factor;
                 }""",
         "                // No source-origin propagation in this probe.",
         "no-origin candidate")
     no_origin=no_origin.replace("M8Origin[leftIndex]","M1Row[leftIndex]")
     no_origin=no_origin.replace("M8Origin[rightIndex]","M1Row[rightIndex]")
-    no_origin=no_origin.replace("if (M8Distance.z>.5) M8Origin[x]=M8NextOrigin[x];",
+    no_origin=no_origin.replace("if (M8Distance.z>.5) { M8Origin[x]=M8NextOrigin[x]; M8Scale[x]=M8NextScale[x]; }",
                                 "// No origin-history update")
     origin_only=symmetric.replace("CSConditionM4ProbeSymmetric(","CSConditionM4ProbeOriginOnly(",1)
-    if origin_only.count("const float slope=distanceOn ? M8AdjustedPenalty(source,pen) : pen;")!=2:
+    if origin_only.count("const float slope=distanceOn ? min(pen*M8Scale[")!=2:
         raise RuntimeError("M4 origin-only probe expected two penalty operations")
-    origin_only=origin_only.replace("const float slope=distanceOn ? M8AdjustedPenalty(source,pen) : pen;",
+    origin_only=origin_only.replace("const float slope=distanceOn ? min(pen*M8Scale[leftIndex],m8Safe) : pen;",
+                                    "const float slope=pen;")
+    origin_only=origin_only.replace("const float slope=distanceOn ? min(pen*M8Scale[rightIndex],m8Safe) : pen;",
                                     "const float slope=pen;")
     block=main+"\n"+seed+"\n"+symmetric+"\n"+legacy+"\n"+no_origin+"\n"+origin_only+"\n"+marker+vertical_attr
     text=text[:start]+block+text[end:]
