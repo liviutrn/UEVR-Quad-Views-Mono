@@ -337,6 +337,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M4 full-resolution fovea depth overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m4_generated.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'M4 generated contracts failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m5_sharpen.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M5 six-slider sharpening overlay failed' }
+          python workspace/quadview/duoview_port/test_duoview_m5_generated.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M5 generated contracts failed' }
           '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
           $changes = @(
             @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),
