@@ -23,14 +23,14 @@ def patch_settings(mods):
     if (std::isfinite(requested.stereo_near_m))
         out.stereo_near_m=(std::clamp)(requested.stereo_near_m,0.f,2.f);
     if (std::isfinite(requested.stereo_softness))
-        out.stereo_softness=(std::clamp)(requested.stereo_softness,.25f,.9f);"""),
+        out.stereo_softness=(std::clamp)(requested.stereo_softness,.25f,.99f);"""),
     ])
     patch(mods / "VR.hpp", [
         ("M1 controls", "    const ModToggle::Ptr m_duo_shared_eye{",
          """    const ModToggle::Ptr m_duo_stereo{ModToggle::create(generate_name("DuoViewSyntheticStereo"), false)};
     const ModSlider::Ptr m_duo_stereo_strength{ModSlider::create(generate_name("DuoViewStereoStrength"), 0.f, 1.f, .8f)};
     const ModSlider::Ptr m_duo_stereo_near{ModSlider::create(generate_name("DuoViewStereoNearMeters"), 0.f, 2.f, 1.f)};
-    const ModSlider::Ptr m_duo_stereo_softness{ModSlider::create(generate_name("DuoViewStereoEdgeSoftness"), .25f, .9f, .5f)};
+    const ModSlider::Ptr m_duo_stereo_softness{ModSlider::create(generate_name("DuoViewStereoEdgeSoftness"), .25f, .99f, .5f)};
     const ModToggle::Ptr m_duo_shared_eye{"""),
         ("persist M1 options", "            *m_duo_shared_eye,",
          """            *m_duo_shared_eye, *m_duo_stereo, *m_duo_stereo_strength,
