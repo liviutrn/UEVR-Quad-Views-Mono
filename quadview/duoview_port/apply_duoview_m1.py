@@ -216,7 +216,7 @@ def patch_delivery(vr):
                                             eyes[i]={{q.x,q.y,q.z,q.w},{t.x,t.y,t.z},
                                                 {std::tan(f.angleLeft),std::tan(f.angleRight),std::tan(f.angleUp),std::tan(f.angleDown)}};
                                         }
-                                        const auto scale=double(vr->get_world_to_meters())*vr->get_world_scale();
+                                        // get_world_to_meters() already includes UEVR's world-scale slider.\n                                        // Applying get_world_scale() again squares it and distorts stereo size.\n                                        const auto scale=double(vr->get_world_to_meters());
                                         stereo_geometry=uevr::duoview::stereo::make_geometry(packet_frame->projection,eyes,
                                             scale,packet_frame->config.settings.stereo_strength);
                                         if (stereo_geometry) {
