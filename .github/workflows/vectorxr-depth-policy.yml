@@ -1,0 +1,22 @@
+name: DuoView VectorXR depth policy (isolated)
+on:
+  push:
+    branches:
+      - experiment/duoview-vectorxr-per-eye-depth-20261114
+    paths:
+      - 'quadview/duoview_port/VectorXRDepthPolicy.hpp'
+      - 'quadview/duoview_port/VectorXRDepthPolicyTests.cpp'
+      - '.github/workflows/vectorxr-depth-policy.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  depth-policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build independent two-eye admission contract
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic             quadview/duoview_port/VectorXRDepthPolicyTests.cpp             -o /tmp/duoview-xrdepth-policy
+      - name: Test stale packets, geometry, depth encoding, and both eyes
+        run: /tmp/duoview-xrdepth-policy
