@@ -326,9 +326,9 @@ def backend(mods):
          "            // The WARP probes must not affect shipping builds.\n"
          "            char m4_probe_stage[24]{};\n"
          "            if(GetEnvironmentVariableA(\"DUOVIEW_M4_DIAG\",m4_probe_stage,sizeof(m4_probe_stage)) &&\n"
-         "               (m4_probe_stage[0]=='c' || m4_probe_stage[0]=='v' ||
-               m4_probe_stage[0]=='s' || m4_probe_stage[0]=='k' ||
-               m4_probe_stage[0]=='f' || m4_probe_stage[0]=='b')) data.m4_flags[0]=0.f;\n"
+         "               (m4_probe_stage[0]=='c' || m4_probe_stage[0]=='v' ||\n"
+         "                m4_probe_stage[0]=='s' || m4_probe_stage[0]=='k' ||\n"
+         "                m4_probe_stage[0]=='f' || m4_probe_stage[0]=='b')) data.m4_flags[0]=0.f;\n"
          "            #endif\n"
          "            m4_last_w=w4; m4_last_h=h4; m4_fine_w=focus->rect[2]; m4_fine_h=focus->rect[3];\n"
          "        }\n"
