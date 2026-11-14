@@ -467,6 +467,9 @@ jobs:
           Copy-Item backend/build/bin/uevr/*.dll package/
           Copy-Item backend/build/bin/vr-plugin-nullifier/UEVRPluginNullifier.dll package/
           Copy-Item backend/build/bin/LuaVR/LuaVR.dll package/
+          # .NET SDK 11 single-file publish drops the bundled runtime loaders (NETSDK1236); ship them next to the injector.
+          Copy-Item frontend/UEVR/bundled/openxr_loader.dll package/
+          Copy-Item frontend/UEVR/bundled/openvr_api.dll package/
           Copy-Item workspace/duoview/clean_restart/baseline.lock.json package/
           Copy-Item evidence/exact-baseline-source.json package/
           Copy-Item evidence/duoview-stage1-edits.json package/
@@ -598,7 +601,7 @@ jobs:
           Read B30_COMBINED_NOTES.md for scope and B31_OPTIMIZATION_NOTES.md for
           shader fast paths, regression checks and remaining headset limitations.
           '@ | Set-Content package/READ_FIRST.txt
-          $needed=@('BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json','B31_OPTIMIZATION_NOTES.md','B37_ROOT_CAUSE_NOTES.md','B38_INWARD_FEATHER_NOTES.md','B39_AMBIENT_EDGE_NOTES.md','DUOVIEW_M22_RELEASE_NOTES.md','DUOVIEW_M23_RELEASE_NOTES.md','DUOVIEW_M24_RELEASE_NOTES.md','WORLD_TRACE21_NOTES.md','UNIFIED_M24_TRACE21_NOTES.md')
+          $needed=@('openxr_loader.dll','openvr_api.dll','BUILD50_FINDINGS_STATUS.md','quadview_hook_trace_summary.py','UEVRBackend.dll','UEVRPluginNullifier.dll','LuaVR.dll','READ_FIRST.txt','QUADVIEW_RELEASE_NOTES.md','GLAMARYE_LICENSE.txt','BUILD46_FINDINGS_STATUS.md','BUILD48_FINDINGS_STATUS.md','quadview_log_regression.py','FUTURE_LUNA_REVIEW.md','FUTURE_SOL61_REVIEW.md','PERFORMANCE_AND_ADAPTIVE_FPS_PLAN.md','duoview-stage234-hashes.json','exact-baseline-source.json','quadview-source.json','quadview-source-generated.json','QUADVIEW_BUILD.json','B31_OPTIMIZATION_NOTES.md','B37_ROOT_CAUSE_NOTES.md','B38_INWARD_FEATHER_NOTES.md','B39_AMBIENT_EDGE_NOTES.md','DUOVIEW_M22_RELEASE_NOTES.md','DUOVIEW_M23_RELEASE_NOTES.md','DUOVIEW_M24_RELEASE_NOTES.md','WORLD_TRACE21_NOTES.md','UNIFIED_M24_TRACE21_NOTES.md')
           foreach ($name in $needed) { if (!(Test-Path ("package/" + $name))) { throw "Missing critical package file: $name" } }
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
