@@ -46,6 +46,7 @@ def main():
              ("DUOVIEW_ATLAS_GATHER","DUOVIEW_B40_COMPUTE")),
             shaders[4],
             ("PSNativeMain","ps_5_0","m1_raster_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_M1_RASTER",)),
+            ("PSNativeMain","ps_5_0","m1_depth_raster_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_M1_RASTER","DUOVIEW_M1_EXPORT_DEPTH")),
             ("CSConditionM1","cs_5_0","m1_condition_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
             ("CSConditionM1Vertical","cs_5_0","m24_vertical_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
             ("CSAnalyzeM25","cs_5_0","m25_analysis_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
