@@ -387,6 +387,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'QuadView source checkpoint regression tests failed' }
           python workspace/quadview/source_checkpoint.py capture backend frontend evidence/quadview-source.json
           if ($LASTEXITCODE -ne 0) { throw 'QuadView source checkpoint failed' }
+      - name: Run the generated DuoView B40 and M1 GPU regression fixture
+        shell: pwsh
+        run: |
+          cmake -S workspace/quadview/duoview_port -B duo_b40_tests -G 'Visual Studio 17 2022' -A x64 "-DJOYEY_BACKEND_DIR=$((Resolve-Path backend).Path)" *> evidence/duo-b40-config.log
+          $code=$LASTEXITCODE; Get-Content evidence/duo-b40-config.log
+          if ($code -ne 0) { throw 'Generated DuoView GPU fixture configuration failed' }
+          cmake --build duo_b40_tests --config Release *> evidence/duo-b40-build.log
+          $code=$LASTEXITCODE; Get-Content evidence/duo-b40-build.log
+          if ($code -ne 0) { throw 'Generated DuoView GPU fixture build failed' }
+          ctest --test-dir duo_b40_tests -C Release --output-on-failure --no-tests=error *> evidence/duo-b40-results.log
+          $code=$LASTEXITCODE; Get-Content evidence/duo-b40-results.log
+          if ($code -ne 0) { throw 'Generated DuoView GPU fixture failed' }
       - name: Test QuadView contracts, asynchronous delivery, and production GPU compositor
         shell: pwsh
         run: |
@@ -400,18 +412,6 @@ jobs:
           ctest --test-dir quad_tests -C Release --verbose --output-on-failure --no-tests=error -E '^quadview-edge-v2-production-gpu$' *> evidence/quad-results.log
           $code=$LASTEXITCODE; Get-Content evidence/quad-results.log
           if ($code -ne 0) { throw 'QuadView CPU/asynchronous/GPU tests failed' }
-      - name: Run the generated DuoView B40 and M1 GPU regression fixture
-        shell: pwsh
-        run: |
-          cmake -S workspace/quadview/duoview_port -B duo_b40_tests -G 'Visual Studio 17 2022' -A x64 "-DJOYEY_BACKEND_DIR=$((Resolve-Path backend).Path)" *> evidence/duo-b40-config.log
-          $code=$LASTEXITCODE; Get-Content evidence/duo-b40-config.log
-          if ($code -ne 0) { throw 'Generated DuoView GPU fixture configuration failed' }
-          cmake --build duo_b40_tests --config Release *> evidence/duo-b40-build.log
-          $code=$LASTEXITCODE; Get-Content evidence/duo-b40-build.log
-          if ($code -ne 0) { throw 'Generated DuoView GPU fixture build failed' }
-          ctest --test-dir duo_b40_tests -C Release --output-on-failure --no-tests=error *> evidence/duo-b40-results.log
-          $code=$LASTEXITCODE; Get-Content evidence/duo-b40-results.log
-          if ($code -ne 0) { throw 'Generated DuoView GPU fixture failed' }
       - name: Verify pinned production geometry and pair-state contracts
         shell: pwsh
         run: |
