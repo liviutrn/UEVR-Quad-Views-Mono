@@ -15,6 +15,9 @@ def patch(path, label, old, new):
     src=path.read_text(encoding="utf-8-sig")
     n=src.count(old)
     if n!=1:
+        if label == "enable only synthetic-depth swapchain":
+            p=src.find("auto depth_swapchain_create_info")
+            print("XRDepth depth creation context:",repr(src[max(0,p-1200):p+120]))
         raise RuntimeError(f"XRDepth {label}: expected one anchor, found {n} in {path}: {old[:115]!r}")
     path.write_text(src.replace(old,new,1),encoding="utf-8",newline="\n")
 
