@@ -513,6 +513,84 @@ change("scripts/build-d3d-shaders.py",
        "extract all split NR shader literals without losing bytes")
 print(f"BATCH2 NR shader: {len(original)} original bytes in {len(chunks)} raw literals, comments intact")
 
+# Permanent hook target safety: pin the resident runtime DLL before any NGX
+# detour is installed. Otherwise UEVR may unload the owner while another
+# trampoline still jumps into it (fatal use-after-FreeLibrary).
+change("src/hooks.cpp",
+       '''    minhook_initialized.store(
+        minhook_result == MH_OK ||
+            minhook_result == MH_ERROR_ALREADY_INITIALIZED,
+        std::memory_order_release
+    );
+
+    if (streamline_loaded()) {''',
+       '''    minhook_initialized.store(
+        minhook_result == MH_OK ||
+            minhook_result == MH_ERROR_ALREADY_INITIALIZED,
+        std::memory_order_release
+    );
+    // Process-lifetime code module: other NGX detours may be chained to ours.
+    // A pinned DLL is released only by the Windows loader at process exit.
+    static HMODULE pinned_runtime_batch2{};
+    if (!pinned_runtime_batch2 &&
+        !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN |
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            reinterpret_cast<LPCWSTR>(&hook_evaluate_d3d12),
+            &pinned_runtime_batch2)) {
+        trace_event("[CheekyNR][C5] ERROR: cannot pin detour owner DLL");
+        started.store(false,std::memory_order_release);
+        return false;
+    }
+    trace_event("[CheekyNR][C5] detour owner DLL pinned until process exit");
+
+    if (streamline_loaded()) {''',
+       "pin Cheeky runtime DLL before permanent detours")
+change("src/hooks.cpp",
+       '''    if (streamline_hook_lock_ready.load(std::memory_order_acquire)) {
+        uninstall_streamline_inline_hooks();
+    }
+    shutdown_direct_export_hooks();''',
+       '''    // Retain Streamline MinHook trampolines too. They can be chained by
+    // other plugins, so uninstallation at runtime detach is unsafe.
+    if (streamline_hook_lock_ready.load(std::memory_order_acquire))
+        trace_event("[CheekyNR][C5] Streamline inline hooks retained until process exit");
+    shutdown_direct_export_hooks();''',
+       "never dismantle another detour's trampoline at runtime detach")
+change("src/hooks.cpp",
+       '''        const auto& runtime = d3d11_runtimes[Slot];
+        if (Slot != 0 || !calibration_evaluation_depth)
+            diagnostic_note_dlss_source(DiagnosticApi::d3d11, Slot != 0);
+        if (calibration_evaluation_depth) {''',
+       '''        const auto& runtime = d3d11_runtimes[Slot];
+        if (!started.load(std::memory_order_acquire)) {
+            const auto original = runtime.evaluate_c.load(std::memory_order_acquire);
+            return original ? original(context, handle, parameters, callback) : 0xBAD00007U;
+        }
+        if (Slot != 0 || !calibration_evaluation_depth)
+            diagnostic_note_dlss_source(DiagnosticApi::d3d11, Slot != 0);
+        if (calibration_evaluation_depth) {''',
+       "D3D11 _C evaluation work disabled on detach")
+change("src/hooks.cpp",
+       '''    if (original == nullptr) return 0xBAD00007U;
+    D3D12NgxInterceptionScope scope;
+    if (!scope.outermost()) return original(handle);
+    if (has_d3d12_game_view(handle)) forget_d3d12_game_view(handle);''',
+       '''    if (original == nullptr) return 0xBAD00007U;
+    if (!started.load(std::memory_order_acquire)) return original(handle);
+    D3D12NgxInterceptionScope scope;
+    if (!scope.outermost()) return original(handle);
+    if (has_d3d12_game_view(handle)) forget_d3d12_game_view(handle);''',
+       "D3D12 release detour is pass-through after host stop")
+change("src/hooks.cpp",
+       '''    if (original == nullptr) return 0xBAD00007U;
+    detect_afw_runtime();
+    if (protected_ngx_core_enabled()) {''',
+       '''    if (original == nullptr) return 0xBAD00007U;
+    if (!started.load(std::memory_order_acquire)) return original(handle);
+    detect_afw_runtime();
+    if (protected_ngx_core_enabled()) {''',
+       "D3D12 core release detour is pass-through after host stop")
+
 # Remaining sections for VRAM admission, bounded feature reuse and capture
 # cleanups are appended by this batch before the generated tree is written.
 # Batch script intentionally does not write until all admission anchors pass.
