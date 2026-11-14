@@ -58,9 +58,12 @@ def main():
                   "const float gate=M8Distance.z>.5 ? 2.0 : (M3Flags.z>0. ? M3Flags.z : 2.0)",
                   "if(inCrop || (M3Flags.x>.5 && M3Flags.z>0.0))",
                   "if (x>=step)", "if (x+step<w)",
-                  "const float maxSafe=.99/max(kmax*float(M4Grid.x),.00001)",
+                  "const float cropWidth=max(M2Crop.z-M2Crop.x,1.e-5)",
+                  "const float maxSafe=.99*cropWidth/max(kmax*float(M4Grid.x),.00001)",
                   "lerp(M1Filter.x*scale,pf,M9PerEyeMix(source))",
-                  "const float slope=lerp(M1Filter.x*scale,ps,mix)",
+                  "const float symmetric=max(0.,M1Row[xs]-float(step)*M8AdjustedPenalty(source,M1Filter.x*scale))",
+                  "const float oneSided=ps>0. ?",
+                  "const float candidate=lerp(symmetric,oneSided,mix)",
                   "const float pixelBudget=reach",
                   "const float retention=saturate(M7Controls.y)",
                   "const float3 bounded=clamp(oldColor,current-.50,current+.50)",
@@ -120,7 +123,21 @@ def main():
             smooth=w                   # near=0, far=1
             fill=1.-w                 # near=1, far=0
             assert abs(smooth+fill-1.)<1.e-7
-    print("PASS: M9 stronger temporal/blur, 0.99 fold safety, distance-faded per-eye edges, world scale")
+    # Half-width gaze crops need half the admissible per-cell inverse-depth
+    # slope; otherwise the warp can fold inside a small fovea crop.
+    k=.25
+    grid=32
+    for crop_width in [.2,.5,1.]:
+        safe=.99*crop_width/(k*grid)
+        assert abs(safe*k*grid/crop_width-.99)<1.e-7
+    # With disocclusion penalty disabled, directional=1 must suppress
+    # background spread; directional=0 must restore symmetric spread.
+    symmetric=.6
+    one_sided=0.
+    for mix in [0.,.25,.5,.75,1.]:
+        candidate=(1.-mix)*symmetric+mix*one_sided
+        assert abs(candidate-(1.-mix)*symmetric)<1.e-7
+    print("PASS: M9 temporal/blur, crop-aware 0.99 fold bound, continuous per-eye fade, world scale")
 
 if __name__=="__main__":
     main()

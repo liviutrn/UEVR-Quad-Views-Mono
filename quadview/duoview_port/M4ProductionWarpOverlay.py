@@ -50,6 +50,14 @@ def main():
         const auto m4_off_bar=m21_image_hash;
         frame.config.settings.m4_fovea_grid=true;
         run(*a,false,Route::direct,"M4 ON, fine bar, depth picture");
+        // Run isolation in a fresh process, because device removal is fatal.
+        //  condition = horizontal only, no M4 raster read
+        //  vertical  = both computes, no M4 raster read
+        //  default   = both computes plus the M4 raster read
+        if (const char* stage=std::getenv("DUOVIEW_M4_DIAG");stage && *stage) {
+            std::cout<<"PASS: M4 isolated GPU stage "<<stage<<"\n";
+            return 0;
+        }
         if (!a->last_stereo_fovea_depth()) throw std::runtime_error("M4 fine depth not bound");
         if (m21_image_hash==m4_off_bar) throw std::runtime_error("M4 fovea field did not reach the depth picture");
         if (m21_image_hash==m4_off_absent) throw std::runtime_error("M4 depth picture ignores fine depth");

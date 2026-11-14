@@ -56,10 +56,18 @@ add_custom_command(
 if(WIN32)
   add_executable(DuoViewB40ProductionWarp "${GENERATED_M4_WARP_SOURCE}")
   target_compile_features(DuoViewB40ProductionWarp PRIVATE cxx_std_20)
+  # Fixture-only probes are compiled out of shipping UEVR headers.
+  target_compile_definitions(DuoViewB40ProductionWarp PRIVATE DUOVIEW_M4_WARP_PROBE=1)
   target_include_directories(DuoViewB40ProductionWarp PRIVATE "${JOYEY_BACKEND_DIR}/src/mods/vr")
   target_link_libraries(DuoViewB40ProductionWarp PRIVATE d3d12 dxgi d3dcompiler)
   add_test(NAME duoview-b40-production-warp COMMAND DuoViewB40ProductionWarp)
   set_tests_properties(duoview-b40-production-warp PROPERTIES TIMEOUT 60)
+  add_test(NAME duoview-m4-condition-probe COMMAND DuoViewB40ProductionWarp)
+  set_tests_properties(duoview-m4-condition-probe PROPERTIES TIMEOUT 60
+      ENVIRONMENT "DUOVIEW_M4_DIAG=condition")
+  add_test(NAME duoview-m4-vertical-probe COMMAND DuoViewB40ProductionWarp)
+  set_tests_properties(duoview-m4-vertical-probe PROPERTIES TIMEOUT 60
+      ENVIRONMENT "DUOVIEW_M4_DIAG=vertical")
 else()
   message(STATUS "B40 production WARP test requires Windows D3D12; overlay generation remains available")
 endif()

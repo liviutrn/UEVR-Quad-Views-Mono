@@ -89,7 +89,11 @@ float M8AdjustedPenalty(float inverseDepth, float original) {
     const float proposed=original*lerp(2.0,.35,saturate(smoothness));
     // Never make k*dD/du steeper than the warp's no-fold bound.
     const float kmax=max(max(abs(M1Eye.x),abs(M1Eye.y)),.00001);
-    const float maxSafe=.99/max(kmax*float(M4Grid.x),.00001);
+    // A fovea grid texel spans cropWidth / M4Grid.x in full-eye UV.
+    // The no-fold limit is k * d(depth)/d(full-eye-u) < 1, not
+    // k * d(depth)/d(fovea-local-u) < 1.
+    const float cropWidth=max(M2Crop.z-M2Crop.x,1.e-5);
+    const float maxSafe=.99*cropWidth/max(kmax*float(M4Grid.x),.00001);
     return min(proposed,maxSafe);
 }
 float M8FillStrength(float inverseDepth) {
@@ -149,9 +153,13 @@ float M9PerEyeMix(float inverseDepth) {
                 const float source=M8Distance.z>.5 ? M8Origin[xs] : M1Row[xs];
                 const float mix=M9PerEyeMix(source);
                 if (ps>0.0 || mix<.999) {
-                    // Interpolate a depth-edge penalty instead of a zero depth.
-                    const float slope=lerp(M1Filter.x*scale,ps,mix);
-                    const float candidate=M1Row[xs]-float(step)*M8AdjustedPenalty(source,slope);
+                    // Fade out the directional reverse contribution itself,
+                    // not only its slope: at mix=1 and ps=0 there is no
+                    // reverse spread. At mix=0 use a symmetric envelope.
+                    const float symmetric=max(0.,M1Row[xs]-float(step)*M8AdjustedPenalty(source,M1Filter.x*scale));
+                    const float oneSided=ps>0. ?
+                        max(0.,M1Row[xs]-float(step)*M8AdjustedPenalty(source,ps)) : 0.;
+                    const float candidate=lerp(symmetric,oneSided,mix);
                     if (candidate>v) { v=candidate; if (M8Distance.z>.5) origin=M8Origin[xs]; }
                 }
             }
