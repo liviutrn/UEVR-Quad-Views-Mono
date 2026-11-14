@@ -36,12 +36,18 @@ def settings(mods):
         "    out.m8_fill_far=(std::clamp)(requested.m8_fill_far,0.f,1.f);\n"
         "    out.xr_depth_output=requested.xr_depth_output;")
     p=mods/"VR.hpp"
+    patch(p,"default skip unused depth ON",
+        'ModToggle::create(generate_name("DuoViewSkipDepthSwapchain"), false)',
+        'ModToggle::create(generate_name("DuoViewSkipDepthSwapchain"), true)')
     patch(p,"toggle", '    const ModToggle::Ptr m_duo_m8_distance{',
         '    const ModToggle::Ptr m_duo_xr_depth{ModToggle::create(generate_name("DuoVectorXRDepth"),true)};\n'
         '    const ModToggle::Ptr m_duo_m8_distance{')
     patch(p,"persistence", "            *m_duo_m8_distance, *m_duo_m8_near_m,",
         "            *m_duo_xr_depth,\n            *m_duo_m8_distance, *m_duo_m8_near_m,")
     p=mods/"VR.cpp"
+    patch(p,"reset skip unused depth ON",
+        "m_duo_skip_depth->value()=false; // v208d",
+        "m_duo_skip_depth->value()=true; // v208d: skip unused on by default")
     patch(p,"reset", "                    m_duo_m8_distance->value()=false;",
         "                    m_duo_xr_depth->value()=true;\n"
         "                    m_duo_m8_distance->value()=false;")
@@ -268,47 +274,48 @@ def xr_submission(mods):
 
 def producer(mods):
     p=mods/"vr/D3D12Component.cpp"
-    patch(p,"enable only synthetic-depth swapchain",
-        "    if (vr->get_openxr_runtime()->is_depth_allowed()) {\n        // Even when using AFR",
+    patch(p,"honor existing skip-depth toggle, but allocate automatically when used",
+        "    const bool skip_unused_depth_swapchain =\n"
+        "        vr->get_openxr_runtime()->is_depth_allowed() && vr->should_skip_unused_depth_swapchain();",
         """    const bool duo_depth_chain=vr->is_duoview_renderer_active() &&
         vr->duoview_state().settings().synthetic_stereo &&
         vr->duoview_state().settings().xr_depth_output;
-    // Skip unused depth swapchain ON for ordinary DuoView. Do not touch other modes.
-    if(duo_depth_chain) {
-        const auto depth_formats=vr->get_openxr_runtime()->get_supported_swapchain_formats();
-        const bool supported=vr->get_openxr_runtime()->is_depth_allowed() &&
-            std::find(depth_formats.begin(),depth_formats.end(),DXGI_FORMAT_D32_FLOAT)!=depth_formats.end();
-        if(supported) {
-            auto create_info=standard_swapchain_create_info;
-            create_info.format=DXGI_FORMAT_D32_FLOAT;
-            create_info.createFlags=0;
-            create_info.sampleCount=1;
-            create_info.usageFlags=XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
-                XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                XR_SWAPCHAIN_USAGE_MUTABLE_FORMAT_BIT;
-            create_info.width=vr->get_hmd_width()*2u;
-            create_info.height=vr->get_hmd_height();
-            D3D12_RESOURCE_DESC desc=backbuffer_desc;
-            desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            desc.Width=create_info.width; desc.Height=create_info.height;
-            desc.DepthOrArraySize=desc.MipLevels=1;
-            desc.SampleDesc.Count=1; desc.SampleDesc.Quality=0;
-            desc.Format=DXGI_FORMAT_R32_TYPELESS;
-            desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-            desc.Flags &= ~D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
-            if(auto error=create_swapchain(
-                (uint32_t)runtimes::OpenXR::SwapchainIndex::DEPTH,create_info,desc)) {
-                SPDLOG_WARNING("[DuoView][XRDepth] depth swapchain creation rejected; color-only");
+    const bool skip_unused_depth_swapchain =
+        vr->get_openxr_runtime()->is_depth_allowed() &&
+        vr->should_skip_unused_depth_swapchain() && !duo_depth_chain;""")
+    patch(p,"use runtime-supported single-sample D32_FLOAT for DuoView",
+        "        if (!create_afr_depth) {\n            spdlog::info(\"[VR] Creating double wide depth swapchain\");",
+        """        if(duo_depth_chain) {
+            const auto formats=vr->get_openxr_runtime()->get_supported_swapchain_formats();
+            const bool d32_supported=std::find(formats.begin(),formats.end(),
+                DXGI_FORMAT_D32_FLOAT)!=formats.end();
+            if(d32_supported) {
+                auto duo_ci=standard_swapchain_create_info;
+                duo_ci.format=DXGI_FORMAT_D32_FLOAT; duo_ci.createFlags=0;
+                duo_ci.sampleCount=1;
+                duo_ci.usageFlags=XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+                    XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                    XR_SWAPCHAIN_USAGE_MUTABLE_FORMAT_BIT;
+                duo_ci.width=vr->get_hmd_width()*2u; duo_ci.height=vr->get_hmd_height();
+                D3D12_RESOURCE_DESC duo_desc=backbuffer_desc;
+                duo_desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+                duo_desc.Width=duo_ci.width; duo_desc.Height=duo_ci.height;
+                duo_desc.DepthOrArraySize=duo_desc.MipLevels=1;
+                duo_desc.SampleDesc.Count=1; duo_desc.SampleDesc.Quality=0;
+                duo_desc.Format=DXGI_FORMAT_R32_TYPELESS;
+                duo_desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+                if(auto error=create_swapchain(
+                    (uint32_t)runtimes::OpenXR::SwapchainIndex::DEPTH,duo_ci,duo_desc)) {
+                    SPDLOG_WARNING("[DuoView][XRDepth] runtime rejected D32 depth swapchain; color-only");
+                } else {
+                    SPDLOG_INFO("[DuoView][XRDepth] D32_FLOAT sampleable single-sample depth swapchain {}x{}",
+                        duo_ci.width,duo_ci.height);
+                }
             } else {
-                SPDLOG_INFO("[DuoView][XRDepth] D32_FLOAT sampleable single-sample double-wide swapchain {}x{}",
-                    create_info.width,create_info.height);
+                SPDLOG_WARNING("[DuoView][XRDepth] runtime lacks D32_FLOAT; color-only");
             }
-        } else {
-            SPDLOG_WARNING("[DuoView][XRDepth] D32_FLOAT or XR depth extension unsupported; color-only");
-        }
-    } else if (!vr->is_duoview_renderer_active() &&
-        vr->get_openxr_runtime()->is_depth_allowed()) {
-        // Even when using AFR""")
+        } else if (!create_afr_depth) {
+            spdlog::info("[VR] Creating double wide depth swapchain");""")
     patch(p,"track depth copy input",
         "                            bool stereo_output = false;",
         """                            bool stereo_output = false;
