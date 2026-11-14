@@ -157,6 +157,21 @@ float M8FillStrength(float inverseDepth) {
     text=text[:start]+block+text[end:]
 
     text=once(text,
+        "    if(!(stretch>M3Flags.z)) return root;",
+        """    // M8 uses an explicit disocclusion gate even when M3 per-eye edges are OFF.
+    const float gate=M8Distance.z>.5 ? 2.0 : M3Flags.z;
+    if(!(stretch>gate)) return root;""",
+        "M8 rejects non-holes before fill sampling")
+    text=once(text,
+        """        [branch] if(inCrop || (M3Flags.x>.5 && M3Flags.z>0.0))
+            uv.x=M3FillHole(base.x,uv.x,base.y,k,eye,fill,inCrop);""",
+        """        // With M8 OFF honor the legacy per-eye fill switch exactly.
+        // With M8 ON use the near/far fill controls within the gaze crop.
+        [branch] if((M8Distance.z>.5 && inCrop) ||
+                    (M3Flags.x>.5 && M3Flags.z>0.0))
+            uv.x=M3FillHole(base.x,uv.x,base.y,k,eye,fill,inCrop);""",
+        "do not force background fill when the user's toggle is OFF")
+    text=once(text,
         "    if (inCrop && um>M2Crop.x && um<M2Crop.z)\n"
         "        fill=float3(dir,d,1.);\n"
         "    return clamp(um,0.0,1.0);",
