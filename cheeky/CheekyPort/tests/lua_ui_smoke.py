@@ -99,6 +99,10 @@ if cb.event is None or cb.panel is None:
 cb.event("cheeky.foveated_dlss.load_state.v1", "enabled")
 cb.event("cheeky.foveated_dlss.snapshot.v1", "{}")
 cb.panel()
+# An old native runtime can omit NrTargetMode: opening its panel must NOT
+# emit a speculative default source mask while the user has not edited it.
+if len(lua.globals().__sent):
+    raise RuntimeError("UI sent unsolicited source masks on missing renderer mode")
 seen = lua.globals().__seen
 expected = [
     "Pass 1 source views",

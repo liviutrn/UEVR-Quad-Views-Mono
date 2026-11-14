@@ -84,6 +84,17 @@ change("uevr/scripts/cheeky_foveated_dlss.lua",
        '"FixMotionBlur", "NrProcessingOrder", "NrVramGuardMiB", "NrUseSourceRoles", "NrAllocAdmission", "NrFeatureReuse", "AfwManualCoverage"',
        "drop unsupported Batch2 UI fields after runtime reload")
 
+# The previous UI auto-set its pass masks when a legacy runtime omitted
+# NrTargetMode. Only react to an explicit transition between known modes.
+change("uevr/scripts/cheeky_foveated_dlss.lua",
+       "local before_mode = draft.NrTargetMode or 2",
+       "local before_mode = draft.NrTargetMode",
+       "retain absent renderer mode as nil")
+change("uevr/scripts/cheeky_foveated_dlss.lua",
+       "    if draft.NrTargetMode ~= before_mode then",
+       "    if before_mode ~= nil and draft.NrTargetMode ~= nil and draft.NrTargetMode ~= before_mode then",
+       "do not send automatic mask edits on absent mode")
+
 # C2 ABI copied verbatim, not reinterpreted or changed in Cheeky.
 change("src/settings.cpp",
        '#include "settings.hpp"',
