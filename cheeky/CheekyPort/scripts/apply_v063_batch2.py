@@ -66,8 +66,8 @@ CHEEKY_SETTING("NrAllocAdmission", nr_alloc_admission)
 CHEEKY_SETTING("NrFeatureReuse", nr_feature_reuse)''',
        "persist 3 fields in UEVR")
 change("uevr/runtime.cpp",
-       'std::string_view(name) != "NrDuoFoveaSizeHint" && std::string_view(name) != "NrVramGuardMiB") settings.field = stored.field;',
-       'std::string_view(name) != "NrDuoFoveaSizeHint" && std::string_view(name) != "NrVramGuardMiB" && std::string_view(name) != "NrUseSourceRoles" && std::string_view(name) != "NrAllocAdmission" && std::string_view(name) != "NrFeatureReuse") settings.field = stored.field;',
+       'std::string_view(name) != "NrVramGuardMiB" && std::string_view(name) != "NrDebugView"',
+       'std::string_view(name) != "NrVramGuardMiB" && std::string_view(name) != "NrUseSourceRoles" && std::string_view(name) != "NrAllocAdmission" && std::string_view(name) != "NrFeatureReuse" && std::string_view(name) != "NrDebugView"',
        "protect preferences from NR templates")
 change("uevr/scripts/cheeky_foveated_dlss.lua",
        '        slider("Max VRAM admission reserve (MiB)", "NrVramGuardMiB", 512, 4096, true)',
@@ -200,10 +200,14 @@ change("src/hooks.cpp",
        "D3D12 NGX create bypass")
 # D3D11 has an alternate pipeline; avoid its calibrator work when stopped.
 change("src/hooks.cpp",
-       '''        const auto& runtime = d3d11_runtimes[Slot];
+       '''    static NgxResult evaluate(ID3D11DeviceContext* context, const NgxHandle* handle,
+        const NgxParameters* parameters, NgxProgressCallback callback) {
+        const auto& runtime = d3d11_runtimes[Slot];
         if (Slot != 0 || !calibration_evaluation_depth)
             diagnostic_note_dlss_source''',
-       '''        const auto& runtime = d3d11_runtimes[Slot];
+       '''    static NgxResult evaluate(ID3D11DeviceContext* context, const NgxHandle* handle,
+        const NgxParameters* parameters, NgxProgressCallback callback) {
+        const auto& runtime = d3d11_runtimes[Slot];
         if (!started.load(std::memory_order_acquire)) {
             const auto original = runtime.evaluate.load(std::memory_order_acquire);
             return original ? original(context, handle, parameters, callback) : 0xBAD00007U;
@@ -244,7 +248,7 @@ change("src/dlss_nr.cpp",
        "correct shared-chain pass label and remember feature key")
 change("src/dlss_nr.cpp",
        '''cost.settled=info.CurrentUsage;
-                     const auto delta=[&](std::uint64_t usage) {''',
+                    const auto delta=[&](std::uint64_t usage) {''',
        '''cost.settled=info.CurrentUsage;
                      if (cost.settled > cost.before) {
                          const auto delta_bytes = cost.settled - cost.before;
@@ -420,10 +424,12 @@ change("src/dlss_nr.cpp",
 # Capture source selection currently re-enters the classifier from within
 # nr_mutex; compute only on explicit capture, before that lock is acquired.
 change("src/dlss_nr.cpp",
-       '''    std::lock_guard execution_lock(calibration12_execution_mutex());
+       '''    AfwPrivateWorkScope private_work;
+    std::lock_guard execution_lock(calibration12_execution_mutex());
     std::lock_guard lock(nr_mutex);
     collect_retired_views();''',
-       '''    std::lock_guard execution_lock(calibration12_execution_mutex());
+       '''    AfwPrivateWorkScope private_work;
+    std::lock_guard execution_lock(calibration12_execution_mutex());
     const auto capture_source_mask_batch2 =
         nr_probe_busy.load(std::memory_order_acquire)
             ? cheeky_nr_selected_passes(settings, frame.view_id & ~(1ULL << 63U))
@@ -582,10 +588,16 @@ change("src/hooks.cpp",
     if (has_d3d12_game_view(handle)) forget_d3d12_game_view(handle);''',
        "D3D12 release detour is pass-through after host stop")
 change("src/hooks.cpp",
-       '''    if (original == nullptr) return 0xBAD00007U;
+       '''    const auto original = real_core_release_d3d12.load(
+        std::memory_order_acquire
+    );
+    if (original == nullptr) return 0xBAD00007U;
     detect_afw_runtime();
     if (protected_ngx_core_enabled()) {''',
-       '''    if (original == nullptr) return 0xBAD00007U;
+       '''    const auto original = real_core_release_d3d12.load(
+        std::memory_order_acquire
+    );
+    if (original == nullptr) return 0xBAD00007U;
     if (!started.load(std::memory_order_acquire)) return original(handle);
     detect_afw_runtime();
     if (protected_ngx_core_enabled()) {''',
