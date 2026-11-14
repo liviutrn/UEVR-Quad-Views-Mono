@@ -148,6 +148,139 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Capture V2 compiled UEVR tests patch failed" }
           python CheekyPort/tests/test_v063_preheadset_capture_v2.py upstream-cheeky
           if ($LASTEXITCODE -ne 0) { throw "Capture V2 source/lifetime gate failed" }
+      - name: Freeze the generated #84 baseline and compile its original shaders
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory evidence -Force | Out-Null
+          $base = Join-Path $env:RUNNER_TEMP 'cheeky84-generated'
+          New-Item -ItemType Directory $base -Force | Out-Null
+          foreach ($name in @('src','uevr','shared')) {
+            Copy-Item ("upstream-cheeky/" + $name) (Join-Path $base $name) -Recurse -Force
+          }
+          $upstream = (Resolve-Path upstream-cheeky).Path
+          Get-ChildItem upstream-cheeky/src,upstream-cheeky/uevr,upstream-cheeky/shared -Recurse -File |
+            Sort-Object FullName | ForEach-Object {
+              "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash,
+                $_.FullName.Substring($upstream.Length + 1).Replace('\','/')
+            } | Set-Content evidence/cheeky84-generated-sha256.txt
+          $kits = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Windows Kits/10/bin'
+          $fxc = @(Get-ChildItem $kits -Recurse -Filter fxc.exe -ErrorAction SilentlyContinue |
+            Where-Object {$_.FullName -match '[\/]x64[\/]fxc[.]exe
+        working-directory: cheeky/upstream-cheeky
+        shell: pwsh
+        run: |
+          $sdk = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Windows Kits/10/bin'
+          $fxc = @(Get-ChildItem -Path $sdk -Filter fxc.exe -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]fxc[.]exe$' } |
+            Sort-Object -Property FullName -Descending | Select-Object -First 1)
+          if ($fxc.Count -ne 1) { throw "Windows SDK x64 fxc.exe missing" }
+          python scripts/build-d3d-shaders.py --fxc $fxc[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "Embedded shader regeneration failed" }
+          python scripts/build-d3d-shaders.py --fxc $fxc[0].FullName --check
+          if ($LASTEXITCODE -ne 0) { throw "Generated shader bytes differ from source" }
+      - name: Independently compile generated Lua (Lua 5.1 and 5.4)
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --only-binary=:all: lupa==2.8
+          if ($LASTEXITCODE -ne 0) { throw "Lua compiler dependency unavailable" }
+          python CheekyPort/tests/lua_release_gate.py source upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Generated Lua syntax gate failed" }
+      - name: Exercise generated Lua UI with mocked UEVR event bridge
+        shell: pwsh
+        run: |
+          python CheekyPort/tests/lua_ui_smoke.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Real generated Lua UI smoke test failed" }
+      - name: Compile full upstream solution (no unrelated FG hardware tests)
+        working-directory: cheeky/upstream-cheeky
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild/**/Bin/MSBuild.exe' | Select-Object -First 1
+          if (-not $msbuild) { throw "MSBuild not found" }
+          & $msbuild CheekyFoveatedDLSS.sln /m /nr:false /nologo /verbosity:minimal /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+          if ($LASTEXITCODE -ne 0) { throw "Compilation failed" }
+      - name: Run focused NR and source-view regressions
+        working-directory: cheeky/upstream-cheeky
+        shell: pwsh
+        run: |
+          foreach ($suite in @('--opennr-v063', '--nr-processing', '--d3d12-history', '--stereo-support', '--alignment-history')) {
+            Write-Host "Checking: $suite"
+            ./bin/Release/CheekyTests.exe $suite
+            if ($LASTEXITCODE -ne 0) { throw "Failed regression suite: $suite" }
+          }
+          Write-Host "Testing UEVR host bridge, mode switching and saved setting across reload"
+          ./bin/Release/CheekyUEVRTests.exe
+          if ($LASTEXITCODE -ne 0) { throw "Real UEVR runtime integration failed" }
+      - name: Package UEVR
+        working-directory: cheeky/upstream-cheeky
+        shell: pwsh
+        run: |
+          # The upstream PowerShell packager verifies its ZIP hashes internally.
+          # Its last cmdlet may retain an unrelated native LASTEXITCODE, so verify
+          # the actual output rather than trusting that inherited exit code.
+          ./scripts/package-uevr.ps1 -Configuration Release -Label v063-duotri-preheadset-instrumented -IncludeOpenXRSetup:$false
+          $zip = @(Get-ChildItem bin/Release/*-UEVR-v063-duotri-preheadset-instrumented.zip)
+          if ($zip.Count -ne 1) { throw "Missing or ambiguous UEVR archive" }
+          if ($zip[0].Name -ne "CheekyFoveatedDLSS-0.6.3-UEVR-v063-duotri-preheadset-instrumented.zip") {
+            throw "Incorrect version-stamped UEVR archive: $($zip[0].Name)"
+          }
+          $test = [IO.Compression.ZipFile]::OpenRead($zip[0].FullName)
+          try {
+            foreach ($expected in @("plugins/CheekyFoveatedDLSS.dll",
+                                  "plugins/CheekyFoveatedDLSS/CheekyFoveatedDLSSRuntime.dll",
+                                  "scripts/cheeky_foveated_dlss.lua")) {
+              if (-not @($test.Entries | Where-Object FullName -EQ $expected).Count) {
+                throw "Missing required UEVR payload: $expected"
+              }
+            }
+          } finally { $test.Dispose() }
+          $zip[0] | Get-FileHash -Algorithm SHA256
+      - name: Verify exact packaged Lua bytes and compile every packaged script
+        shell: pwsh
+        run: |
+          python CheekyPort/tests/lua_release_gate.py package upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw "Packaged Lua release gate failed" }
+      - name: Upload experimental headset-test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cheeky-0.6.3-UEVR-NR-Batch2
+          path: |
+            cheeky/upstream-cheeky/bin/Release/*-UEVR-v063-duotri-preheadset-instrumented.zip
+          if-no-files-found: error
+          retention-days: 20
+} |
+            Sort-Object FullName -Descending | Select-Object -First 1)
+          if ($fxc.Count -ne 1) { throw "x64 fxc.exe missing for byte-exact shader reference" }
+          Push-Location upstream-cheeky
+          try {
+            python -I scripts/build-d3d-shaders.py --fxc $fxc[0].FullName
+            if ($LASTEXITCODE -ne 0) { throw 'Baseline #84 shader regeneration failed' }
+            (Get-FileHash src/d3d_shaders.hpp -Algorithm SHA256).Hash |
+              Set-Content ../evidence/cheeky84-shader-sha256.txt
+          } finally { Pop-Location }
+      - name: Apply Batch2 full source patch and independent C2 / VRAM / reuse tests
+        shell: pwsh
+        run: |
+          python -I -m py_compile CheekyPort/scripts/apply_v063_batch2.py CheekyPort/scripts/apply_v063_batch2_tests.py
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid Batch2 Python patcher syntax' }
+          python -I CheekyPort/scripts/apply_v063_batch2.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw 'Batch2 strict source patch failed' }
+          python -I CheekyPort/scripts/apply_v063_batch2_tests.py upstream-cheeky
+          if ($LASTEXITCODE -ne 0) { throw 'Batch2 test patch failed' }
+          $before = Join-Path $env:RUNNER_TEMP 'cheeky84-generated'
+          $after = Join-Path $env:RUNNER_TEMP 'cheeky-batch2-generated'
+          New-Item -ItemType Directory $after -Force | Out-Null
+          foreach ($name in @('src','uevr','shared')) {
+            Copy-Item ("upstream-cheeky/" + $name) (Join-Path $after $name) -Recurse -Force
+          }
+          git -c core.quotePath=false diff --no-index -- $before $after |
+            Set-Content -Encoding utf8 evidence/cheeky-batch2-generated-source.patch
+          if ($LASTEXITCODE -ne 1) { throw 'Expected nonempty generated source diff' }
+          if ((Get-Item evidence/cheeky-batch2-generated-source.patch).Length -lt 500) {
+            throw 'Batch2 generated source diff too small'
+          }
+          git -C upstream-cheeky diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Generated source whitespace check failed' }
       - name: Recompile every embedded HLSL shader from modified sources
         working-directory: cheeky/upstream-cheeky
         shell: pwsh
