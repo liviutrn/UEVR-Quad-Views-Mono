@@ -52,18 +52,9 @@ void M4Envelope(uint w, uint lane, uint eye, float limit, float scale) {
 void CSConditionM4(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
     const uint w=M4Grid.x;
     if (group.x>=M4Grid.y || w==0u || w>1024u) return;
-    const float2 cropMin=M2Crop.xy;
-    const float2 cropSize=M2Crop.zw-M2Crop.xy;
     const float2 dimension=float2(M2FoveaRect.zw);
     for (uint x=lane; x<w; x+=128) {
         const float2 local=(float2(x,group.x)+.5)/float2(M4Grid.xy);
-        const float2 fullUv=cropMin+local*cropSize;
-        // Shared-grid seed at the same place (identical mapping to CSConditionM1).
-        const int2 center=int2((fullUv+M1CoarseCorrection())*float2(M1Rect.zw));
-        float coarse=0.0;
-        [unroll] for (int y=-1; y<=1; ++y)
-            [unroll] for (int dx=-1; dx<=1; ++dx)
-                coarse=max(coarse,DecodeM1Depth(center+int2(dx,y)));
         // One fovea texel covers ~1-1.3 fine texels: 2x2 near-max keeps thin
         // foreground without the 5x5 dilation the shared grid needs.
         const float2 jit=clamp(local+M2FineJitter(),.5/dimension,1.0-.5/dimension);
@@ -72,11 +63,9 @@ void CSConditionM4(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
         [unroll] for (int fy=0; fy<=1; ++fy)
             [unroll] for (int fx=0; fx<=1; ++fx)
                 fine=max(fine,DecodeM2Depth(f0+int2(fx,fy)));
-        const float edge=min(min(local.x,local.y),min(1.0-local.x,1.0-local.y));
-        const float t=saturate(edge/max(M2FoveaFlags.z,.0001));
-        const float feather=t*t*(3.0-2.0*t);
-        // Invalid/empty NGX fine depth must never erase valid coarse depth.
-        float nearDepth=fine>0.0 ? lerp(coarse,fine,feather) : coarse;
+        // A zero inverse depth is a valid far sample. Keep this field entirely
+        // fine depth and blend once, at the true fovea/periphery boundary.
+        float nearDepth=fine;
         const float knee=M1Depth.w;
         if (knee>0.0 && nearDepth>knee) {
             const float excess=nearDepth-knee;

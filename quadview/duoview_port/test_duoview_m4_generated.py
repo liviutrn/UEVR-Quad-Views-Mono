@@ -48,8 +48,9 @@ def main():
     need(hlsl, "const float pf=(eye==0u ? M3Slopes.x : M3Slopes.y)*scale;", "per-eye occlusion slope rescaled")
     need(hlsl, "const float ps=(eye==0u ? M3Slopes.z : M3Slopes.w)*scale;", "per-eye disocclusion slope rescaled")
     need(hlsl, "const float pv=M1Filter.z*M4Flags.z;", "vertical penalty rescaled")
-    # Coarse seed mapping must match CSConditionM1 exactly.
-    need(hlsl, "int2((fullUv+M1CoarseCorrection())*float2(M1Rect.zw))", "M4 coarse seed uses the shared mapping")
+    m4_rows = hlsl.split("void CSConditionM4(", 1)[1].split("void CSConditionM4Vertical(", 1)[0]
+    need(m4_rows, "float nearDepth=fine;", "fovea field only uses fine depth")
+    need(m4_rows, "DecodeM1Depth(", "coarse samples stay out of the fovea field", count=0)
     need(hlsl, "int2((unjittered+correction)*float2(M1Rect.zw))", "M1 coarse seed mapping unchanged")
     need(raster, "if(M2Sharpen.z>3.5 && M1Grid.x>0u) {", "depth picture debug 4")
 

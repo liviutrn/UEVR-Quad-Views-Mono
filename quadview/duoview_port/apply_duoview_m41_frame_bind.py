@@ -15,8 +15,8 @@ from apply_duoview_b40_pipeline import patch
 
 CAPTURE_INTERVAL = r'''
     // Called on the authenticated source marker before its original command.
-    // Earlier RHI commands have recorded their copies, which may still be
-    // pending here. The selector independently checks submission and fences.
+    // Retain both recordings even if the producer has yet to submit them.
+    // The selector only consumes copies after the producer's Signal is queued.
     void m41_close_capture_interval(uint64_t generation, uint64_t serial, uint32_t thread) {
         std::scoped_lock lock(mutex_);
         const bool consecutive = serial && m41_marker_serial_ && serial == m41_marker_serial_ + 1 &&
@@ -27,66 +27,58 @@ CAPTURE_INTERVAL = r'''
 
         const auto coarse = std::exchange(m41_candidates_[0], {});
         const auto fine = std::exchange(m41_candidates_[1], {});
-        if (!serial) return;
+        if (!serial) { m41_packets_ = {}; return; }
+        if (!consecutive) m41_packets_ = {};
         if (!consecutive || coarse.count != 1 || fine.count != 1 ||
             coarse.thread != thread || fine.thread != thread) {
-            ++m41_interval_rejected_;
             return;
         }
 
-        DepthSnapshot* coarse_slot{};
-        DepthSnapshot* fine_slot{};
-        for (const auto& slot : pool_) {
-            if (slot->sequence == coarse.sequence && slot->m25_pool_role == 1) coarse_slot = slot.get();
-            if (slot->sequence == fine.sequence && slot->m25_pool_role == 2) fine_slot = slot.get();
-        }
         const auto request = duoview_expected_.load(std::memory_order_acquire);
-        if (!request || request->generation != generation || !coarse_slot || !fine_slot ||
-            coarse_slot->duoview_request != request || fine_slot->duoview_request != request ||
-            !coarse_slot->valid_evaluation || !fine_slot->valid_evaluation) {
-            ++m41_interval_rejected_;
+        if (!request || request->generation != generation || !coarse.depth || !fine.depth ||
+            coarse.depth->duoview_request != request || fine.depth->duoview_request != request ||
+            !coarse.depth->valid_evaluation || !fine.depth->valid_evaluation) {
             return;
         }
-        coarse_slot->m41_packet_serial = serial;
-        fine_slot->m41_packet_serial = serial;
-        ++m41_interval_bound_;
+        m41_packets_[serial % m41_packets_.size()] = {serial, coarse.depth, fine.depth};
     }
 
-    std::pair<std::shared_ptr<const DepthSnapshot>, std::shared_ptr<const DepthSnapshot>>
-    m41_pair_for_packet(uint64_t generation, uint64_t serial, uint32_t coarse_w, uint32_t coarse_h,
-            uint32_t fine_w, uint32_t fine_h, ID3D12CommandQueue* consumer_queue) {
+    struct M41DepthPair {
+        uint64_t serial{};
+        std::shared_ptr<const DepthSnapshot> coarse, fine;
+    };
+
+    M41DepthPair m41_pair_for_packet(uint64_t generation, uint64_t serial,
+            uint32_t coarse_w, uint32_t coarse_h, uint32_t fine_w, uint32_t fine_h,
+            ID3D12CommandQueue* consumer_queue) {
         std::scoped_lock lock(mutex_);
         const auto request = duoview_expected_.load(std::memory_order_acquire);
-        std::shared_ptr<const DepthSnapshot> coarse, fine;
-        if (serial && consumer_queue && request && request->generation == generation &&
-            request->width == coarse_w && request->height == coarse_h &&
-            request->fovea_width == fine_w && request->fovea_height == fine_h &&
-            capture_mode_.load(std::memory_order_acquire) == DepthCaptureMode::DuoView) {
-            const auto now = std::chrono::steady_clock::now();
-            for (const auto& slot : pool_) {
-                if (slot->m41_packet_serial != serial || slot->duoview_request != request ||
-                    !slot->submitted || !slot->valid_evaluation || !slot->texture ||
-                    !slot->producer_fence || !slot->producer_fence_value ||
-                    now < slot->submitted_at || now - slot->submitted_at >= std::chrono::milliseconds(250)) continue;
-                const auto complete = slot->producer_fence->GetCompletedValue();
-                if (complete == UINT64_MAX || (slot->duoview_producer_queue.Get() != consumer_queue &&
-                    !depth_copy_complete(complete, slot->producer_fence_value))) continue;
-                if (slot->m25_pool_role == 1) coarse = slot;
-                if (slot->m25_pool_role == 2 && slot->jitter_valid) fine = slot;
-            }
-        }
-        if (coarse && fine) {
-            ++m41_exact_;
-            return {coarse, fine};
-        }
-        ++m41_coarse_only_;
-        return {coarse, {}};
+        const auto& pair = m41_packets_[serial % m41_packets_.size()];
+        if (!serial || pair.serial != serial || !consumer_queue || !request ||
+            request->generation != generation || request->width != coarse_w || request->height != coarse_h ||
+            request->fovea_width != fine_w || request->fovea_height != fine_h ||
+            capture_mode_.load(std::memory_order_acquire) != DepthCaptureMode::DuoView) return {};
+        const auto ready = [&request](const auto& slot) {
+            return slot && slot->duoview_request == request && slot->submitted &&
+                slot->valid_evaluation && slot->texture.Get() && slot->duoview_producer_queue.Get() &&
+                slot->producer_fence.Get() && slot->producer_fence_value &&
+                slot->producer_fence->GetCompletedValue() != UINT64_MAX;
+        };
+        if (!ready(pair.coarse) || !ready(pair.fine) || !pair.fine->jitter_valid) return {};
+        return pair;
     }
 
-    struct M41Window { uint64_t bound, rejected, exact, coarse_only; };
-    M41Window m41_take_window() {
-        return {m41_interval_bound_.exchange(0), m41_interval_rejected_.exchange(0),
-            m41_exact_.exchange(0), m41_coarse_only_.exchange(0)};
+    // A foreign-queue producer has already enqueued this fence Signal.
+    // Keep the CPU moving and put the dependency on the consuming GPU queue.
+    static bool m41_order_for_composition(const M41DepthPair& pair, ID3D12CommandQueue* queue) {
+        for (const auto* slot : {pair.coarse.get(), pair.fine.get()}) {
+            const auto completed = slot->producer_fence->GetCompletedValue();
+            if (completed == UINT64_MAX) return false;
+            if (slot->duoview_producer_queue.Get() != queue &&
+                !depth_copy_complete(completed, slot->producer_fence_value) &&
+                FAILED(queue->Wait(slot->producer_fence.Get(), slot->producer_fence_value))) return false;
+        }
+        return true;
     }
 '''
 
@@ -143,6 +135,7 @@ def backend(mods):
                 const auto& owner = duo_source.packet;
                 const bool owns_both = duo_command.deferred_roles == 3u && owner &&
                     owner->duoview_frame && owner->duoview_frame->config.settings.m4_fovea_grid &&
+                    owner->duoview_frame->config.settings.synthetic_stereo &&
                     vr->is_duoview_renderer_active() && duo_source.generation == vr->mono_generation();
                 uevr::quadview::ngx::PeripheryDepth::self().m41_close_capture_interval(
                     duo_source.generation, owns_both ? owner->serial : 0, GetCurrentThreadId());
@@ -151,21 +144,16 @@ def backend(mods):
     ])
 
     patch(vr / "QuadViewNgxDepth.hpp", [
-        ("depth snapshot transaction",
-         """    uint64_t m24_present_epoch{};
-    bool duoview_fovea{};""",
-         """    uint64_t m24_present_epoch{};
-    uint64_t m41_packet_serial{};
-    bool duoview_fovea{};"""),
         ("observe submitted or pending captures in the marker interval",
          "        slot->sequence = ++next_sequence_;",
          """        slot->sequence = ++next_sequence_;
-        slot->m41_packet_serial = 0;
         if (duo && m41_marker_serial_) {
             auto& capture = m41_candidates_[m25_role - 1];
-            capture.count = (std::min)(2u, capture.count + 1);
-            capture.sequence = slot->sequence;
-            capture.thread = GetCurrentThreadId();
+            if (capture.count == 0) {
+                capture = {slot, GetCurrentThreadId(), 1};
+            } else {
+                capture = {nullptr, 0, 2};
+            }
         }"""),
         ("packet selection",
          """        ++m25_cpu_pairs_;
@@ -176,38 +164,141 @@ def backend(mods):
         return latest;
     }
 """ + CAPTURE_INTERVAL),
+        ("release the depth leases when leaving DuoView",
+         """        if (previous == DepthCaptureMode::DuoView && mode != previous)
+            duoview_expected_.store({}, std::memory_order_release);""",
+         """        if (previous == DepthCaptureMode::DuoView && mode != previous) {
+            std::scoped_lock lock(mutex_);
+            duoview_expected_.store({}, std::memory_order_release);
+            m41_candidates_ = {};
+            m41_packets_ = {};
+            m41_marker_serial_ = 0;
+        }"""),
         ("transaction state",
          "    std::atomic<uint64_t> m24_present_epoch_{1};",
          """    std::atomic<uint64_t> m24_present_epoch_{1};
-    struct M41Candidate { uint64_t sequence{}; uint32_t thread{}, count{}; };
+    struct M41Candidate { std::shared_ptr<const DepthSnapshot> depth; uint32_t thread{}, count{}; };
     std::array<M41Candidate, 2> m41_candidates_{};
+    std::array<M41DepthPair, 2> m41_packets_{};
     uint64_t m41_marker_generation_{}, m41_marker_serial_{};
     uint32_t m41_marker_thread_{};
-    std::atomic<uint64_t> m41_interval_bound_{}, m41_interval_rejected_{}, m41_exact_{}, m41_coarse_only_{};"""),
+"""),
     ])
 
     patch(vr / "D3D12Component.cpp", [
-        ("select depth from colour transaction",
-         "                                            const auto snapshot=(config.settings.m25_fine_mode==0u && pair.first) ?",
-         """                                            const auto m41_pair = config.settings.m4_fovea_grid ?
-                                                depths.m41_pair_for_packet(config.key.generation, packet->serial,
-                                                    periphery.width, periphery.height, fovea.width, fovea.height, current_queue) :
-                                                std::pair<std::shared_ptr<const uevr::quadview::ngx::DepthSnapshot>,
-                                                    std::shared_ptr<const uevr::quadview::ngx::DepthSnapshot>>{};
-                                            const auto snapshot=m41_pair.first ? m41_pair.first :
+        ("select the required pair before acquiring an XR image",
+         """                        if (!packet_pair_valid) {
+                            SPDLOG_WARNING_EVERY_N_SEC(2,
+                                "[DuoView][Pair] Waiting""",
+         """                        auto& depths = uevr::quadview::ngx::PeripheryDepth::self();
+                        const bool require_fine = packet_frame && packet_frame->config.settings.synthetic_stereo &&
+                            packet_frame->config.settings.m4_fovea_grid;
+                        const auto queue = g_framework->get_d3d12_hook()->get_command_queue();
+                        const auto fine_pair = packet_pair_valid && require_fine
+                            ? depths.m41_pair_for_packet(packet_frame->config.key.generation, packet->serial,
+                                packet_frame->config.layout.periphery.width, packet_frame->config.layout.periphery.height,
+                                packet_frame->config.layout.fovea.width, packet_frame->config.layout.fovea.height, queue)
+                            : uevr::quadview::ngx::PeripheryDepth::M41DepthPair{};
+                        if (!packet_pair_valid) {
+                            SPDLOG_WARNING_EVERY_N_SEC(2,
+                                "[DuoView][Pair] Waiting"""),
+        ("skip XR image acquisition on missing depth",
+         """                            vr->set_mono_status("Waiting for a complete Native Stereo Fix DuoView source pair");
+                        } else {""",
+         """                            vr->set_mono_status("Waiting for a complete Native Stereo Fix DuoView source pair");
+                        } else if (require_fine && !fine_pair.fine) {
+                            SPDLOG_WARNING_EVERY_N_SEC(2,
+                                "[DuoView][M4] Waiting for matched full-resolution depth, packet={}", packet->serial);
+                            vr->set_mono_status("Waiting for matching full-resolution fovea depth");
+                        } else {"""),
+        ("pass retained pair and its consuming queue",
+         """                                [this, packet, packet_frame, source=m_game_tex.texture,""",
+         """                                [this, packet, packet_frame, require_fine, fine_pair, queue, source=m_game_tex.texture,"""),
+        ("use the exact pair in M4",
+         """                                            const auto snapshot=(config.settings.m25_fine_mode==0u && pair.first) ?""",
+         """                                            const auto snapshot=require_fine ? fine_pair.coarse :
                                                 (config.settings.m25_fine_mode==0u && pair.first) ?"""),
-        ("coarse only on missing fine owner",
-         "                                            const auto m25_fine=(config.settings.m2_fovea_depth &&",
-         """                                            const auto m25_fine=config.settings.m4_fovea_grid ? m41_pair.second :
+        ("use the exact fine image",
+         """                                            const auto m25_fine=(config.settings.m2_fovea_depth &&""",
+         """                                            const auto m25_fine=require_fine ? fine_pair.fine :
                                                 (config.settings.m2_fovea_depth &&"""),
-        ("log accepted and missing pairs",
-         '                                                SPDLOG_INFO("[DuoView][M4] fovea_grid={} frames={} grid={}x{} fine_in={}x{}",',
-         """                                                if (config.settings.m4_fovea_grid) {
-                                                    const auto m41 = depths.m41_take_window();
-                                                    SPDLOG_INFO("[DuoView][M4.1] bound={} rejected={} exact={} coarse_only={}",
-                                                        m41.bound, m41.rejected, m41.exact, m41.coarse_only);
-                                                }
-                                                SPDLOG_INFO("[DuoView][M4] fovea_grid={} frames={} grid={}x{} fine_in={}x{}","""),
+        ("order all depth reads behind their GPU copies",
+         """                                    recorded = compositor.record_native(device, commands.cmd_list.Get(),""",
+         """                                    if (require_fine) {
+                                        if (!stereo_geometry || !stereo_depth || !fine_depth ||
+                                            g_framework->get_d3d12_hook()->get_command_queue() != queue ||
+                                            !uevr::quadview::ngx::PeripheryDepth::m41_order_for_composition(fine_pair, queue)) return;
+                                        commands.seam_submission_queue = queue;
+                                    }
+                                    recorded = compositor.record_native(device, commands.cmd_list.Get(),"""),
+        ("keep previous full-resolution projection eligible, not a previous coarse projection",
+         """                                pose.duoview_stereo_output=stereo_output;""",
+         """                                pose.duoview_stereo_output=stereo_output;
+                                pose.duoview_full_resolution_depth=require_fine;"""),
+        ("keep strict mode armed on generation or pose mismatch",
+         """                                        !uevr::duoview::native_frame_binding(*packet_frame)) {
+                                        compositor_fault = true;""",
+         """                                        !uevr::duoview::native_frame_binding(*packet_frame)) {
+                                        compositor_fault = !require_fine;"""),
+        ("keep strict mode armed when the compositor is not ready",
+         """                                            "[DuoView][Activation] Missing prewarmed compositor for XR command slot");
+                                        compositor_fault = true;""",
+         """                                            "[DuoView][Activation] Missing prewarmed compositor for XR command slot");
+                                        compositor_fault = !require_fine;"""),
+        ("keep mode armed on strict compositor rejection",
+         """                                        compositor_fault = true;
+                                    }
+                                }, std::nullopt, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,""",
+         """                                        compositor_fault = !require_fine;
+                                    }
+                                }, std::nullopt, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,"""),
+    ])
+
+    patch(vr / "DuoViewD3D12.hpp", [
+        ("require the actual fine grid before any GPU draw",
+         "        const bool direct_xr=m1_active ||",
+         """        const bool require_fine=settings.synthetic_stereo && settings.m4_fovea_grid;
+        if (require_fine && (!m1_active || !m1_.m4_active))
+            return reject("Full-resolution fovea depth is required for M4 stereo");
+        const bool direct_xr=m1_active ||"""),
+        ("block the mono gather fallback on strict M4",
+         "            return record_native_gather(device,cmd,primary,secondary,destination,",
+         """            if (require_fine) return reject("M4 stereo requires shader-readable source textures");
+            return record_native_gather(device,cmd,primary,secondary,destination,"""),
+        ("also enforce the requirement through the gather entry point",
+         """        const auto reject = [this](const char* reason) { error_ = reason; return false; };
+        if (!device || !cmd || !primary || !secondary || !destination || primary == secondary ||""",
+         """        const auto reject = [this](const char* reason) { error_ = reason; return false; };
+        if (frame.config.settings.synthetic_stereo && frame.config.settings.m4_fovea_grid)
+            return reject("Gather cannot record M4 full-resolution stereo");
+        if (!device || !cmd || !primary || !secondary || !destination || primary == secondary ||"""),
+    ])
+    patch(vr / "DuoViewM1D3D12.hpp", [
+        ("same-transaction M4 uses full fine weight without the old content veto",
+         "        m25_content_active=fine_ok && fine_mode==1u;",
+         "        m25_content_active=fine_ok && fine_mode==1u && !m4_fovea_grid;"),
+    ])
+    patch(vr / "runtimes/OpenXR.hpp", [
+        ("track which projection was made with fine depth",
+         "        bool duoview_stereo_output{};",
+         "        bool duoview_stereo_output{};\n        bool duoview_full_resolution_depth{};"),
+    ])
+    patch(vr / "runtimes/OpenXR.cpp", [
+        ("do not hold a pre-M4 frame when fine depth is required",
+         """        duoview_holding=false;
+        if (duoview_pending_pose) {""",
+         """        const auto settings=vr->duoview_state().settings();
+        const bool require_fine=settings.synthetic_stereo && settings.m4_fovea_grid;
+        duoview_holding=false;
+        if (require_fine && duoview_pending_pose && !duoview_pending_pose->duoview_full_resolution_depth)
+            duoview_pending_pose.reset();
+        if (duoview_pending_pose) {"""),
+        ("accept only a complete previous fine projection during a short interruption",
+         """        } else if (duoview_submitted_pose &&
+            duoview_continuity.can_hold""",
+         """        } else if (duoview_submitted_pose &&
+            (!require_fine || duoview_submitted_pose->duoview_full_resolution_depth) &&
+            duoview_continuity.can_hold"""),
     ])
 
 
@@ -215,4 +306,4 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit("Usage: apply_duoview_m41_frame_bind.py <backend>")
     backend(Path(sys.argv[1]) / "src/mods")
-    print("M4.1: DuoView depth paired with the colour transaction at the deferred RHI tail")
+    print("M4.1: matched fine depth required for every M4 stereo submission")

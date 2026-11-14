@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Extend the production D3D12 WARP fixture with M4 (full-resolution fovea depth).
 
-Checks on the real compositor: M4 without fine depth changes nothing; with a thin
+Checks on the real compositor: M4 without fine depth cannot record a frame; with a thin
 fine-only near bar the depth picture (debug 4) changes; M4 dispatches cleanly in
 the normal image and together with M3a per-eye edges."""
 from pathlib import Path
@@ -36,8 +36,14 @@ def main():
         run(*a,false,Route::direct,"M4 OFF, fine absent, depth picture");
         const auto m4_off_absent=m21_image_hash;
         frame.config.settings.m4_fovea_grid=true;
-        run(*a,false,Route::direct,"M4 ON, fine absent, depth picture");
-        if (m21_image_hash!=m4_off_absent) throw std::runtime_error("M4 changed the image without fine depth");
+        if (a->record_native(g.device.Get(),g.cmd.Get(),primary.Get(),secondary.Get(),stereo.Get(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,frame,lease,0,
+                &m1_geometry,&m1_depth,nullptr) || a->recorded_commands())
+            throw std::runtime_error("M4 recorded a scene without fine depth");
+        if (a->record_native_gather(g.device.Get(),g.cmd.Get(),primary.Get(),secondary.Get(),stereo.Get(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,frame,lease,0) ||
+                a->recorded_commands())
+            throw std::runtime_error("M4 gather recorded a scene without fine depth");
         m21_fine_depth={m4_bar.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{},lease};
         frame.config.settings.m4_fovea_grid=false;
         run(*a,false,Route::direct,"M4 OFF, fine bar, depth picture");
