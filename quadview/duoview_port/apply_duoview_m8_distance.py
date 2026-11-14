@@ -256,7 +256,7 @@ def backend(mods):
     float m8_edge_near{0.f}, m8_edge_far{1.f};
     float m8_fill_near{1.f}, m8_fill_far{0.f};"""),
       ("M8 validation",
-       "        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,3.f);",
+       "        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,12.f);",
        """        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,3.f);
     out.m8_distance=requested.m8_distance;
     if(std::isfinite(requested.m8_near_m))
@@ -313,8 +313,8 @@ def backend(mods):
         current.m8_edge_near==candidate.m8_edge_near && current.m8_edge_far==candidate.m8_edge_far &&
         current.m8_fill_near==candidate.m8_fill_near && current.m8_fill_far==candidate.m8_fill_far &&"""),
       ("M8 in-game menu",
-       '                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0 = off)");',
-       """                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0 = off)");
+       '                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0..12)");',
+       """                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0..12)");
                         m_duo_m8_distance->draw("Distance-based depth edges and background fill");
                         if (m_duo_m8_distance->value()) {
                             m_duo_m8_near_m->draw("Near behavior until distance (metres)");
