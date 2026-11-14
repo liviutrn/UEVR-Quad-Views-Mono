@@ -224,8 +224,7 @@ float M8FillStrength(float inverseDepth) {
     const float gate=M8Distance.z>.5 ? 2.0 : (M3Flags.z>0. ? M3Flags.z : 2.0);
     if(!(stretch>gate)) return root;""",
         "M8 rejects non-holes before fill sampling")
-    // Do not replace M7's inCrop/M3 fill eligibility. It is essential that
-    // M8 disabled produce the identical old background-fill behavior.
+    # Preserve the original M7 inCrop/M3 fill eligibility for M8-off parity.
     text=once(text,
         "    if (inCrop && um>M2Crop.x && um<M2Crop.z)\n"
         "        fill=float3(dir,d,1.);\n"
