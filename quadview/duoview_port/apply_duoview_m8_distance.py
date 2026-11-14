@@ -56,6 +56,12 @@ float M8FillStrength(float inverseDepth) {
 
 // Fine NGX depth is sampled only during conditioning""";
     text=once(text,anchor,helpers,"M8 helper insertion")
+    text=once(text,
+        "groupshared float M1Next[1024];",
+        "groupshared float M1Next[1024];\n"
+        "groupshared float M8Origin[1024];\n"
+        "groupshared float M8NextOrigin[1024];",
+        "M8 seed-origin history for stable cone slopes")
 
     start=text.index("void M4Envelope(")
     end=text.index("[numthreads(128,1,1)]",start)
@@ -66,12 +72,37 @@ float M8FillStrength(float inverseDepth) {
       "one-sided envelope iteration limit")
     block=once(block,
       "M1Row[xf]-float(step)*pf",
-      "M1Row[xf]-float(step)*M8AdjustedPenalty(M1Row[xf],pf)",
+      "M1Row[xf]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[xf] : M1Row[xf],pf)",
       "one-sided foreground edge")
     block=once(block,
       "M1Row[xs]-float(step)*ps",
-      "M1Row[xs]-float(step)*M8AdjustedPenalty(M1Row[xs],ps)",
+      "M1Row[xs]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[xs] : M1Row[xs],ps)",
       "one-sided background edge")
+    block=once(block,
+      """            float v=M1Row[x];
+            if (xf>=0 && xf<int(w)) v=max(v,M1Row[xf]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[xf] : M1Row[xf],pf));
+            if (ps>0.0 && xs>=0 && xs<int(w)) v=max(v,M1Row[xs]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[xs] : M1Row[xs],ps));
+            M1Next[x]=v;""",
+      """            float v=M1Row[x], origin=0.;
+            if (M8Distance.z>.5) origin=M8Origin[x];
+            if (xf>=0 && xf<int(w)) {
+                const float candidate=M1Row[xf]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[xf] : M1Row[xf],pf);
+                if (candidate>v) { v=candidate; if (M8Distance.z>.5) origin=M8Origin[xf]; }
+            }
+            if (ps>0.0 && xs>=0 && xs<int(w)) {
+                const float candidate=M1Row[xs]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[xs] : M1Row[xs],ps);
+                if (candidate>v) { v=candidate; if (M8Distance.z>.5) origin=M8Origin[xs]; }
+            }
+            M1Next[x]=v;
+            if (M8Distance.z>.5) M8NextOrigin[x]=origin;""",
+      "one-sided preserve original depth of winning contributor")
+    block=once(block,
+      "for (uint x=lane; x<w; x+=128) M1Row[x]=M1Next[x];",
+      """for (uint x=lane; x<w; x+=128) {
+            M1Row[x]=M1Next[x];
+            if (M8Distance.z>.5) M8Origin[x]=M8NextOrigin[x];
+        }""",
+      "one-sided carry origin between doubling passes")
     text=text[:start]+block+text[end:]
 
     start=text.index("void CSConditionM4(")
@@ -83,12 +114,46 @@ float M8FillStrength(float inverseDepth) {
       "symmetric iteration limit")
     block=once(block,
       "M1Row[x-step]-penalty",
-      "M1Row[x-step]-float(step)*M8AdjustedPenalty(M1Row[x-step],pen)",
+      "M1Row[x-step]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[x-step] : M1Row[x-step],pen)",
       "symmetric left contribution")
     block=once(block,
       "M1Row[x+step]-penalty",
-      "M1Row[x+step]-float(step)*M8AdjustedPenalty(M1Row[x+step],pen)",
+      "M1Row[x+step]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[x+step] : M1Row[x+step],pen)",
       "symmetric right contribution")
+    block=once(block,
+       "    const float limit=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;\n    const float scale=M4Flags.y;",
+       """    if (M8Distance.z>.5) {
+        for (uint x=lane; x<w; x+=128) M8Origin[x]=M1Row[x];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    const float limit=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
+    const float scale=M4Flags.y;""",
+       "initialize fovea fine-depth origin for both eye paths")
+    block=once(block,
+       "                M1Next[x]=max(M1Row[x],max(l,r));",
+       """                const float v=M1Row[x];
+                M1Next[x]=max(v,max(l,r));
+                if (M8Distance.z>.5) {
+                    float origin=M8Origin[x];
+                    if (l>v && l>=r) origin=M8Origin[x-step];
+                    else if (r>v && r>l) origin=M8Origin[x+step];
+                    M8NextOrigin[x]=origin;
+                }""",
+       "symmetric carry winning source origin")
+    block=once(block,
+       "for (uint x=lane; x<w; x+=128) M1Row[x]=M1Next[x];",
+       """for (uint x=lane; x<w; x+=128) {
+                M1Row[x]=M1Next[x];
+                if (M8Distance.z>.5) M8Origin[x]=M8NextOrigin[x];
+            }""",
+       "symmetric carry origin between doubling passes")
+    block=once(block,
+       "for (uint x=lane; x<w; x+=128) { M1Left[x] = M1Row[x]; M1Row[x] = M1Seed[x]; }",
+       """for (uint x=lane; x<w; x+=128) {
+            M1Left[x] = M1Row[x]; M1Row[x] = M1Seed[x];
+            if (M8Distance.z>.5) M8Origin[x]=M1Seed[x];
+        }""",
+       "reset origin for right-eye conditioning")
     text=text[:start]+block+text[end:]
 
     text=once(text,
