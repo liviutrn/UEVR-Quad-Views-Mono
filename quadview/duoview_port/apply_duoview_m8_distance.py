@@ -148,7 +148,7 @@ float M8FillStrength(float inverseDepth) {
             }""",
        "symmetric carry origin between doubling passes")
     block=once(block,
-       "for (uint x=lane; x<w; x+=128) { M1Left[x] = M1Row[x]; M1Row[x] = M1Seed[x]; }",
+       "for (uint x=lane; x<w; x+=128) { M1Left[x]=M1Row[x]; M1Row[x]=M1Seed[x]; }",
        """for (uint x=lane; x<w; x+=128) {
             M1Left[x] = M1Row[x]; M1Row[x] = M1Seed[x];
             if (M8Distance.z>.5) M8Origin[x]=M1Seed[x];
