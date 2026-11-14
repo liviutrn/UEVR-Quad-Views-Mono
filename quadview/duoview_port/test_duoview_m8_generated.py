@@ -48,6 +48,9 @@ def main():
                   "groupshared float M8Origin[1024]", "groupshared float M8NextOrigin[1024]",
                   "M8Origin[x]=M1Seed[x]", "M8Origin[xf]", "M8Origin[xs]",
                   "M8Origin[x-step]", "M8Origin[x+step]",
+                  "const float gate=M8Distance.z>.5 ? 2.0 : M3Flags.z",
+                  "if((M8Distance.z>.5 && inCrop)",
+                  "if (x>=step)", "if (x+step<w)",
                   "const float maxSafe=.95/max(kmax*float(M4Grid.x),.00001)",
                   "fill=float3(dir,d,strength)",
                   "return lerp(root,clamp(um,0.0,1.0),strength)"]:
