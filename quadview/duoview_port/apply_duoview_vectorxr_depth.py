@@ -87,7 +87,7 @@ float4 PSNativeMain(VertexOut i) : SV_TARGET0 {
     // The existing M1PullUv already applied Near Depth Limit, foveal field
     // conditioning and the M3/M8 background selection to fullUv.
     // fill.y records the accepted background inverse depth when disoccluded.
-    const float selectedInv=fill.z>.001 ? fill.y : M1ReadConditionedEye(fullUv,xrEye);
+    const float selectedInv=fill.z>.5 ? fill.y : M1ReadConditionedEye(fullUv,xrEye);
     // OpenXR receives physical IPD poses. Reduced synthetic stereo strength
     // is therefore represented by apparent inverse depth reduced by strength.
     xrResult.depth=saturate(max(0.,selectedInv)*M9XRDepth.x*M9XRDepth.y);
@@ -227,6 +227,7 @@ def xr_submission(mods):
         "        bool duoview_stereo_output{};",
         """        bool duoview_depth_output{};
         uint64_t duoview_depth_generation{};
+        uint64_t duoview_depth_handle{},duoview_color_handle{};
         float duoview_depth_far_m{};
         bool duoview_stereo_output{};""")
     p=mods/"vr/runtimes/OpenXR.cpp"
@@ -245,6 +246,10 @@ def xr_submission(mods):
         std::isfinite(submit_state.duoview_depth_far_m) &&
         submit_state.duoview_depth_far_m>0.f && this->is_depth_allowed() &&
         depth_it!=this->swapchains.end() && color_it!=this->swapchains.end() &&
+        submit_state.duoview_depth_handle==
+            reinterpret_cast<uint64_t>(depth_it->second.handle) &&
+        submit_state.duoview_color_handle==
+            reinterpret_cast<uint64_t>(color_it->second.handle) &&
         depth_it->second.width==color_it->second.width &&
         depth_it->second.height==color_it->second.height &&
         depth_it->second.width>0 && (depth_it->second.width%2)==0;
@@ -274,6 +279,9 @@ def xr_submission(mods):
 
 def producer(mods):
     p=mods/"vr/D3D12Component.cpp"
+    patch(p,"SDK near plane in D3D component",
+        "#include <sdk/Utility.hpp>",
+        "#include <sdk/Globals.hpp>\n#include <sdk/Utility.hpp>")
     patch(p,"honor existing skip-depth toggle, but allocate automatically when used",
         "    const bool skip_unused_depth_swapchain =\n"
         "        vr->get_openxr_runtime()->is_depth_allowed() && vr->should_skip_unused_depth_swapchain();",
@@ -306,13 +314,13 @@ def producer(mods):
                 duo_desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
                 if(auto error=create_swapchain(
                     (uint32_t)runtimes::OpenXR::SwapchainIndex::DEPTH,duo_ci,duo_desc)) {
-                    SPDLOG_WARNING("[DuoView][XRDepth] runtime rejected D32 depth swapchain; color-only");
+                    spdlog::warn("[DuoView][XRDepth] runtime rejected D32 depth swapchain; color-only");
                 } else {
                     SPDLOG_INFO("[DuoView][XRDepth] D32_FLOAT sampleable single-sample depth swapchain {}x{}",
                         duo_ci.width,duo_ci.height);
                 }
             } else {
-                SPDLOG_WARNING("[DuoView][XRDepth] runtime lacks D32_FLOAT; color-only");
+                spdlog::warn("[DuoView][XRDepth] runtime lacks D32_FLOAT; color-only");
             }
         } else if (!create_afr_depth) {
             spdlog::info("[VR] Creating double wide depth swapchain");""")
@@ -320,15 +328,17 @@ def producer(mods):
         "                            bool stereo_output = false;",
         """                            bool stereo_output = false;
                             Microsoft::WRL::ComPtr<ID3D12Resource> xr_depth_scratch;
-                            uevr::duoview::dx12::Compositor* xr_depth_owner=nullptr;""")
+                            uevr::duoview::dx12::Compositor* xr_depth_owner=nullptr;
+                            const float xr_near_clip=sdk::globals::get_near_clipping_plane();
+                            const float xr_scale=vr->get_depth_scale();
+                            const float xr_world_units=vr->get_world_to_meters();""")
     patch(p,"capture producer metadata",
         "&recorded_target, &stereo_output, &recorded_compositor](",
-        "&recorded_target, &stereo_output, &xr_depth_scratch, &xr_depth_owner](")
+        "&recorded_target, &stereo_output, &recorded_compositor, &xr_depth_scratch, &xr_depth_owner, xr_near_clip, xr_scale](")
     patch(p,"freeze depth scale alongside final color",
         "                                        fine_depth ? &*fine_depth : nullptr);",
         """                                        fine_depth ? &*fine_depth : nullptr,
-                                        sdk::globals::get_near_clipping_plane(),
-                                        vr->get_depth_scale());""")
+                                        xr_near_clip,xr_scale);""")
     patch(p,"read same slot depth output",
         "                                        stereo_output=compositor.last_stereo_output();",
         """                                        stereo_output=compositor.last_stereo_output();
@@ -343,8 +353,25 @@ def producer(mods):
                                 const auto depth_chain=m_openxr.contexts.find(depth_index);
                                 if(depth_chain!=m_openxr.contexts.end() &&
                                     vr->get_openxr_runtime()->swapchains.contains(depth_index)) {
-                                    // One queue: the copy of depth runs after this frame's
-                                    // stereo draw. The same depth values were written by PS.
+                                    // Swapchains can outlive a mode transition. Never call
+                                    // CopyResource unless byte layout and depth format agree.
+                                    const auto& images=depth_chain->second.textures;
+                                    const auto src=xr_depth_scratch->GetDesc();
+                                    D3D12_RESOURCE_DESC dst{};
+                                    if(!images.empty() && images[0].texture)
+                                        dst=images[0].texture->GetDesc();
+                                    const bool compatible=!images.empty() && images[0].texture &&
+                                        src.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+                                        dst.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+                                        src.Format==DXGI_FORMAT_R32_TYPELESS &&
+                                        (dst.Format==DXGI_FORMAT_R32_TYPELESS ||
+                                         dst.Format==DXGI_FORMAT_D32_FLOAT) &&
+                                        src.Width==dst.Width && src.Height==dst.Height &&
+                                        src.DepthOrArraySize==1 && dst.DepthOrArraySize==1 &&
+                                        src.MipLevels==1 && dst.MipLevels==1 &&
+                                        src.SampleDesc.Count==1 && dst.SampleDesc.Count==1;
+                                    if(compatible) {
+                                    // Same queue, color render then depth copy in order.
                                     xr_depth_copied=m_openxr.copy(depth_index,xr_depth_scratch.Get(),
                                         std::nullopt,std::nullopt,D3D12_RESOURCE_STATE_DEPTH_WRITE,nullptr);
                                     if(xr_depth_copied) {
@@ -358,6 +385,10 @@ def producer(mods):
                                             } else xr_depth_copied=false;
                                         } else xr_depth_copied=false;
                                     }
+                                    } else {
+                                        SPDLOG_WARNING_EVERY_N_SEC(2,
+                                            "[DuoView][XRDepth] stale or incompatible depth swapchain; color-only");
+                                    }
                                 }
                             }
                                 runtimes::OpenXR::PipelineState pose{};""")
@@ -365,10 +396,18 @@ def producer(mods):
         "                                pose.duoview_stereo_output=stereo_output;",
         """                                pose.duoview_depth_output=xr_depth_copied;
                                 pose.duoview_depth_generation=packet_frame->config.key.generation;
-                                const float world_units=vr->get_world_to_meters();
-                                pose.duoview_depth_far_m=world_units>0.f ?
-                                    sdk::globals::get_near_clipping_plane()/world_units *
-                                    vr->get_depth_scale() : 0.f;
+                                const auto depth_sc=vr->get_openxr_runtime()->swapchains.find(
+                                    (uint32_t)runtimes::OpenXR::SwapchainIndex::DEPTH);
+                                const auto color_sc=vr->get_openxr_runtime()->swapchains.find(
+                                    (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE);
+                                pose.duoview_depth_handle=xr_depth_copied &&
+                                    depth_sc!=vr->get_openxr_runtime()->swapchains.end()
+                                    ? reinterpret_cast<uint64_t>(depth_sc->second.handle) : 0;
+                                pose.duoview_color_handle=xr_depth_copied &&
+                                    color_sc!=vr->get_openxr_runtime()->swapchains.end()
+                                    ? reinterpret_cast<uint64_t>(color_sc->second.handle) : 0;
+                                pose.duoview_depth_far_m=xr_world_units>0.f ?
+                                    xr_near_clip/xr_world_units*xr_scale : 0.f;
                                 SPDLOG_INFO_EVERY_N_SEC(2,
                                     "[DuoView][XRDepth] depth produced/copy-queued both-eyes={} coarse={} fine={} source={} generation={}",
                                     xr_depth_copied,bool(xr_depth_scratch),require_fine,
