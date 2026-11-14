@@ -46,10 +46,11 @@ def main():
     for token in ["M8FarWeight(float inverseDepth)", "M8AdjustedPenalty",
                   "M8FillStrength", "float4 M8Distance", "float4 M8Effects",
                   "groupshared float M8Origin[1024]", "groupshared float M8NextOrigin[1024]",
+                  "for (uint tile=0u; tile<(w+127u)/128u; ++tile)",
                   "M8Origin[x]=M1Seed[x]", "M8Origin[xf]", "M8Origin[xs]",
                   "M8Origin[x-step]", "M8Origin[x+step]",
-                  "const float gate=M8Distance.z>.5 ? 2.0 : M3Flags.z",
-                  "if((M8Distance.z>.5 && inCrop)",
+                  "const float gate=M8Distance.z>.5 ? 2.0 : (M3Flags.z>0. ? M3Flags.z : 2.0)",
+                  "if(inCrop || (M3Flags.x>.5 && M3Flags.z>0.0))",
                   "if (x>=step)", "if (x+step<w)",
                   "const float maxSafe=.95/max(kmax*float(M4Grid.x),.00001)",
                   "fill=float3(dir,d,strength)",
@@ -62,6 +63,11 @@ def main():
                   "m_duo_m8_fill_near", "m_duo_m8_fill_far"]:
         need(hdr,token,"persisted sliders")
         need(ui,token,"frozen menu state")
+    start=s.index("void M4Envelope(")
+    end=s.index("void CSConditionM4Vertical(",start)
+    conditioned=s[start:end]
+    assert "for (uint x=lane; x<w; x+=128)" not in conditioned, "FXC-uniform tile contract regressed"
+    assert conditioned.count("for (uint tile=0u; tile<(w+127u)/128u; ++tile)") >= 7
     for world_units in [1.,100.,110.,160.]:
         assert factor(1/(.5*world_units),2.,5.,world_units)==0.
         assert factor(1/(7.*world_units),2.,5.,world_units)==1.
