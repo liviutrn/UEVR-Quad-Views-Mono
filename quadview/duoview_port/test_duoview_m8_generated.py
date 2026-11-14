@@ -56,7 +56,8 @@ def main():
                   "fill=float3(dir,d,strength)",
                   "return lerp(root,clamp(um,0.0,1.0),strength)"]:
         need(s,token,"distance-aware foveal geometry")
-    for token in ["fill.z>.001", "lerp(fovea.rgb,filled,saturate(fill.z))"]:
+    for token in ["fill.z>.001 && (M7Controls.y>0. || M7Controls.z>0. || M8Distance.z>.5)",
+                  "lerp(fovea.rgb,filled,saturate(fill.z))"]:
         need(p,token,"distance-aware fill compositing")
     for token in ["m_duo_m8_distance", "m_duo_m8_near_m", "m_duo_m8_far_m",
                   "m_duo_m8_edge_near", "m_duo_m8_edge_far",
