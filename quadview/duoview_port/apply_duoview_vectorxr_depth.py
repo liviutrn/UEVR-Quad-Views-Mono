@@ -335,7 +335,7 @@ def producer(mods):
                                         xr_depth_scratch=compositor.last_xr_depth_resource();
                                         xr_depth_owner=&compositor;""")
     patch(p,"submit depth after color, before accepting frozen pose",
-        "                            if (submitted && recorded) {\n                                runtimes::OpenXR::PipelineState pose{};",
+        "                                runtimes::OpenXR::PipelineState pose{};",
         """                            bool xr_depth_copied=false;
                             if(submitted && recorded && stereo_output && xr_depth_scratch &&
                                 xr_depth_owner && packet_frame->config.settings.xr_depth_output) {
@@ -360,7 +360,6 @@ def producer(mods):
                                     }
                                 }
                             }
-                            if(submitted && recorded) {
                                 runtimes::OpenXR::PipelineState pose{};""")
     patch(p,"frozen packet depth proof",
         "                                pose.duoview_stereo_output=stereo_output;",
