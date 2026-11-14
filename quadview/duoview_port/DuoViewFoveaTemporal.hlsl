@@ -58,13 +58,22 @@ float M7StabilizeEdge(float2 fullUv, float nearZ, float farZ) {
             }
         }
     }
-    if (error*disparity>.65) return nearZ;
+    // Give history a usable pixel budget at high strength, but never let
+    // a rejected disocclusion smear a moving silhouette indefinitely.
+    const float matchPixels=lerp(.65,1.50,saturate(M7Controls.x));
+    if (error*disparity>matchPixels) return nearZ;
     const float rotZ=zScale-M6View[2].w*nearZ;
     const float denominator=1.-filtered*M6View[2].w;
     if (denominator<=.01 || rotZ<=.01) return nearZ;
     const float candidate=filtered*rotZ/denominator;
-    const float limit=.35/max(disparity,1.e-5);
-    return max(0.,lerp(nearZ,clamp(candidate,nearZ-limit,nearZ+limit),M7Controls.x));
+    // 0 means exact current-frame depth, 0.95 allows up to ~2 pixels of
+    // accumulated subpixel edge correction. The old fixed 0.35-pixel cap
+    // made the entire range practically imperceptible.
+    const float strength=saturate(M7Controls.x);
+    const float pixelBudget=lerp(.35,2.0,strength);
+    const float limit=pixelBudget/max(disparity,1.e-5);
+    const float retained=lerp(nearZ,clamp(candidate,nearZ-limit,nearZ+limit),strength);
+    return max(0.,retained);
 }
 
 float3 M7AccumulateFillColor(float2 local, float2 fullUv, float backgroundZ) {
@@ -85,7 +94,11 @@ float3 M7AccumulateFillColor(float2 local, float2 fullUv, float backgroundZ) {
     const float3 oldColor=M7UnpackColor(history.z);
     const float3 gap=abs(oldColor-current);
     const float difference=max(gap.x,max(gap.y,gap.z));
-    const float retention=M7Controls.y*(1.-smoothstep(.04,.16,difference));
-    return lerp(current,clamp(oldColor,current-.07,current+.07),retention);
+    // Previously the 0.07/channel clamp and 0.04..0.16 colour veto almost
+    // eliminated any visible accumulation. Preserve motion/depth rejection
+    // above, but let accepted stationary background really accumulate.
+    const float retention=saturate(M7Controls.y)*(1.-smoothstep(.16,.55,difference));
+    const float3 bounded=clamp(oldColor,current-.30,current+.30);
+    return lerp(current,bounded,retention);
 }
 #endif
