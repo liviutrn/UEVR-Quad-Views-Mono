@@ -58,7 +58,7 @@ def main():
     for world_units in [1.,100.,110.,160.]:
         assert factor(1/(.5*world_units),2.,5.,world_units)==0.
         assert factor(1/(7.*world_units),2.,5.,world_units)==1.
-        mid=factor(1/(3.125*world_units),2.,5.,world_units)
+        mid=factor(1/((2./(.5+.2))*world_units),2.,5.,world_units)
         assert abs(mid-.5)<1.e-5, mid  # midpoint is in inverse depth
         for depth in [1.,2.,2.5,3.,4.,4.99,5.,10.]:
             w=factor(1/(depth*world_units),2.,5.,world_units)
