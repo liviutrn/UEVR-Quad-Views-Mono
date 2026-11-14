@@ -1,6 +1,7 @@
 name: Cheeky 0.6.3 NR Batch 2 - shared-repo build
 # Candidate preflight: full pinned #84 replay; not for installation.
 on:
+  workflow_call:
   push:
     branches:
       - 'experiment/cheeky-nr-batch1-*'
