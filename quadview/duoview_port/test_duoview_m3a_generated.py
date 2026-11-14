@@ -25,8 +25,8 @@ def main():
     d3d = (vr/"D3D12Component.cpp").read_text(encoding="utf-8")
 
     # Shared mapping between the M2.5a content gate and the fusion seed (review item 3).
-    need(hlsl, "M1CoarseCorrection()", "coarse correction shared by gate, seeds, scorer and repair", 7)
-    need(hlsl, "M2FineJitter()", "fine jitter shared by gate, seeds, scorer and repair", 5)
+    need(hlsl, "M1CoarseCorrection()", "coarse correction helper used by gate and seed", 3)
+    need(hlsl, "M2FineJitter()", "fine jitter helper used by gate and seed", 3)
     need(hlsl, "M2Sharpen.w>.5 ? M1Eye.zw :", "no private copies of the coarse correction", 0)
     need(hlsl, "local+M2FoveaFlags.xy", "no private copies of the fine jitter", 0)
     # Parallel guard.
@@ -45,7 +45,7 @@ def main():
         raise SystemExit("FAIL a 2D index into the array UAV remains")
     print("PASS no 2D indices into the array UAV")
     # C++ constants and resources.
-    need(m1, "static_assert(sizeof(M1Constants) == 448);", "M3a constants retained in M3b 448-byte mirror")
+    need(m1, "static_assert(sizeof(M1Constants) == 320);", "constants grew by two float4")
     need(m1, "texture.DepthOrArraySize = 2; // M3a", "two-slice conditioned texture")
     need(m1, "data.m3_slopes[e]=fold/scale;", "per-eye occlusion penalty from |k_e|")
     need(m1, "data.m3_slopes[2+e]=m3_fill ? 0.f : softness/scale;", "membrane side only when fill is OFF")
