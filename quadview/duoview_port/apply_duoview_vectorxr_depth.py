@@ -322,7 +322,7 @@ def producer(mods):
                             Microsoft::WRL::ComPtr<ID3D12Resource> xr_depth_scratch;
                             uevr::duoview::dx12::Compositor* xr_depth_owner=nullptr;""")
     patch(p,"capture producer metadata",
-        "&recorded_target, &stereo_output](",
+        "&recorded_target, &stereo_output, &recorded_compositor](",
         "&recorded_target, &stereo_output, &xr_depth_scratch, &xr_depth_owner](")
     patch(p,"freeze depth scale alongside final color",
         "                                        fine_depth ? &*fine_depth : nullptr);",
