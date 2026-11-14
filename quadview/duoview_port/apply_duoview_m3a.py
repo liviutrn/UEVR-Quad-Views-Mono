@@ -260,7 +260,7 @@ def backend(mods, here):
          "        if(m3_edges && data.grid[0]) {\n"
          "            data.m3_flags[0]=1.f;\n"
          "            data.m3_flags[2]=m3_fill ? 2.f : 0.f;\n"
-         "            const float fold=(std::clamp)(m3_fold,.5f,.98f);\n"
+         "            const float fold=(std::clamp)(m3_fold,.5f,.99f);\n"
          "            for(int e=0;e<2;++e) {\n"
          "                const float scale=(std::max)(std::abs(data.eye[e]),.00001f)*float(data.grid[0]);\n"
          "                data.m3_slopes[e]=fold/scale;\n"
@@ -304,7 +304,7 @@ def backend(mods, here):
          "    out.m25_fine_mode=(std::min)(requested.m25_fine_mode,1u);\n"
          "    out.m3_edges=requested.m3_edges;\n"
          "    if(std::isfinite(requested.m3_fold_sharpness))\n"
-         "        out.m3_fold_sharpness=(std::clamp)(requested.m3_fold_sharpness,.5f,.98f);\n"
+         "        out.m3_fold_sharpness=(std::clamp)(requested.m3_fold_sharpness,.5f,.99f);\n"
          "    out.m3_fill=requested.m3_fill;\n"
          "    out.m3_jitter_mode=(std::min)(requested.m3_jitter_mode,2u);\n"),
     ])
@@ -314,7 +314,7 @@ def backend(mods, here):
          '    const ModSlider::Ptr m_duo_m25_fine_mode{ModSlider::create(generate_name("DuoM25FineMode"),0.f,1.f,0.f)};\n',
          '    const ModSlider::Ptr m_duo_m25_fine_mode{ModSlider::create(generate_name("DuoM25FineMode"),0.f,1.f,0.f)};\n'
          '    const ModToggle::Ptr m_duo_m3_edges{ModToggle::create(generate_name("DuoM3PerEyeEdges"),false)};\n'
-         '    const ModSlider::Ptr m_duo_m3_fold{ModSlider::create(generate_name("DuoM3OcclusionSharpness"),.5f,.98f,.95f)};\n'
+         '    const ModSlider::Ptr m_duo_m3_fold{ModSlider::create(generate_name("DuoM3OcclusionSharpness"),.5f,.99f,.95f)};\n'
          '    const ModToggle::Ptr m_duo_m3_fill{ModToggle::create(generate_name("DuoM3BackgroundFill"),true)};\n'
          '    const ModCombo::Ptr m_duo_m3_jitter{ModCombo::create(generate_name("DuoM3JitterMode"),s_duo_m3_jitter_modes,0)};\n'),
         ("M3 jitter mode names",
@@ -405,7 +405,7 @@ def backend(mods, here):
          """                    ImGui::TextWrapped("Depth edges (stereo geometry, not image sharpening):");
                     m_duo_m3_edges->draw("M3a per-eye edges (sharp occlusion side; OFF = M2.4 symmetric)");
                     if (m_duo_m3_edges->value()) {
-                        m_duo_m3_fold->draw("Occlusion edge sharpness (0.98 = crispest)");
+                        m_duo_m3_fold->draw("Occlusion edge sharpness (0.99 = crispest)");
                         m_duo_m3_fill->draw("Fill revealed background (OFF = soft membrane on that side)");
                         if (!m_duo_m3_fill->value())
                             m_duo_stereo_softness->draw("Disocclusion softness (higher = harder edge)");
