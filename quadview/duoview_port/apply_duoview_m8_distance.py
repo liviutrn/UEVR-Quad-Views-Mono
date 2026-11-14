@@ -225,6 +225,37 @@ float M9PerEyeMix(float inverseDepth) {
                 if (M8Distance.z>.5) M8Origin[x]=M8NextOrigin[x];
             }""",
        "symmetric carry origin between doubling passes")
+    # Guard every groupshared address even if FXC speculatively evaluates
+    # branch operands for inactive lanes. M4 uses 128 lanes for widths <128.
+    # When distance mode is OFF, retain exact pre-M8 penalty arithmetic.
+    block=once(block,
+       """float l=0.0, r=0.0;
+                if (x>=step)
+                    l=M1Row[x-step]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[x-step] : M1Row[x-step],pen);
+                if (x+step<w)
+                    r=M1Row[x+step]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[x+step] : M1Row[x+step],pen);""",
+       """const uint leftIndex=x>=step ? x-step : x;
+                const uint rightIndex=x+step<w ? x+step : x;
+                const bool distanceOn=M8Distance.z>.5;
+                float l=0.0, r=0.0;
+                if (x>=step) {
+                    const float source=distanceOn ? M8Origin[leftIndex] : M1Row[leftIndex];
+                    const float slope=distanceOn ? M8AdjustedPenalty(source,pen) : pen;
+                    l=M1Row[leftIndex]-float(step)*slope;
+                }
+                if (x+step<w) {
+                    const float source=distanceOn ? M8Origin[rightIndex] : M1Row[rightIndex];
+                    const float slope=distanceOn ? M8AdjustedPenalty(source,pen) : pen;
+                    r=M1Row[rightIndex]-float(step)*slope;
+                }""",
+       "M4 clamp shared addresses and preserve exact M8-off penalty")
+    block=once(block,"if (l>v && l>=r) origin=M8Origin[x-step];",
+                    "if (l>v && l>=r) origin=M8Origin[leftIndex];",
+                    "clamp winning left origin")
+    block=once(block,"else if (r>v && r>l) origin=M8Origin[x+step];",
+                    "else if (r>v && r>l) origin=M8Origin[rightIndex];",
+                    "clamp winning right origin")
+
     block=once(block,
        "for (uint x=lane; x<w; x+=128) { M1Left[x]=M1Row[x]; M1Row[x]=M1Seed[x]; }",
        """for (uint x=lane; x<w; x+=128) {
@@ -264,11 +295,42 @@ float M9PerEyeMix(float inverseDepth) {
     }
 }
 """
+    legacy=marker+"\n"+seed_head.replace("void CSConditionM4(","void CSConditionM4ProbeLegacy(",1)
+    legacy += """    GroupMemoryBarrierWithGroupSync();
+    const float limit=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
+    const float pen=M1Filter.x*M4Flags.y;
+    for (uint step=1u;step<w && float(step-1u)*pen<limit;step*=2u) {
+        for (uint tile=0u;tile<(w+127u)/128u;++tile) {
+            const uint x=128u*tile+lane;
+            if(x<w) {
+                const uint xl=x>=step ? x-step : x;
+                const uint xr=x+step<w ? x+step : x;
+                const float l=x>=step ? M1Row[xl]-float(step)*pen : 0.0;
+                const float r=x+step<w ? M1Row[xr]-float(step)*pen : 0.0;
+                M1Next[x]=max(M1Row[x],max(l,r));
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
+        for (uint tile=0u;tile<(w+127u)/128u;++tile) {
+            const uint x=128u*tile+lane;
+            if(x<w) M1Row[x]=M1Next[x];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    for (uint tile=0u;tile<(w+127u)/128u;++tile) {
+        const uint x=128u*tile+lane;
+        if(x<w) {
+            M4FoveaConditioned[uint3(x,group.x,0u)]=M1Row[x];
+            M4FoveaConditioned[uint3(x,group.x,1u)]=M1Row[x];
+        }
+    }
+}
+"""
     symmetric=marker+"\n"+main.replace("void CSConditionM4(","void CSConditionM4ProbeSymmetric(",1)
     symmetric=symmetric.replace("[branch] if (M3Flags.x<.5)", "if (true)",1)
     if symmetric.count("if (true)")!=1:
         raise RuntimeError("M4 symmetric probe branch absent")
-    block=main+"\n"+seed+"\n"+symmetric+"\n"+marker+vertical_attr
+    block=main+"\n"+seed+"\n"+symmetric+"\n"+legacy+"\n"+marker+vertical_attr
     text=text[:start]+block+text[end:]
 
     text=once(text,
