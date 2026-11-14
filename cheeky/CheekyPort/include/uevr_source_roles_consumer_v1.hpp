@@ -40,15 +40,20 @@ inline C2RoleDecision c2_classify_snapshot(
         if (entry.ngx_feature_handle != handle) continue;
         switch (entry.role) {
         case UEVR_ROLE_DUO_FOVEA:
-            if (s.rendering_method == 6) out.role_mask = 1; break;
+            if (s.rendering_method == 6) out.role_mask = 1;
+            break;
         case UEVR_ROLE_DUO_PERIPHERY:
-            if (s.rendering_method == 6) out.role_mask = 4; break;
+            if (s.rendering_method == 6) out.role_mask = 4;
+            break;
         case UEVR_ROLE_TRI_FOVEA_LEFT:
-            if (s.rendering_method == 7) out.role_mask = 1; break;
+            if (s.rendering_method == 7) out.role_mask = 1;
+            break;
         case UEVR_ROLE_TRI_FOVEA_RIGHT:
-            if (s.rendering_method == 7) out.role_mask = 2; break;
+            if (s.rendering_method == 7) out.role_mask = 2;
+            break;
         case UEVR_ROLE_TRI_PERIPHERY:
-            if (s.rendering_method == 7) out.role_mask = 4; break;
+            if (s.rendering_method == 7) out.role_mask = 4;
+            break;
         default: break;
         }
         out.authoritative = out.role_mask != 0;
