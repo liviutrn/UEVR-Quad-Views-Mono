@@ -45,6 +45,10 @@ def main():
         need(dx,token,"frozen parameters")
     for token in ["M8FarWeight(float inverseDepth)", "M8AdjustedPenalty",
                   "M8FillStrength", "float4 M8Distance", "float4 M8Effects",
+                  "groupshared float M8Origin[1024]", "groupshared float M8NextOrigin[1024]",
+                  "M8Origin[x]=M1Seed[x]", "M8Origin[xf]", "M8Origin[xs]",
+                  "M8Origin[x-step]", "M8Origin[x+step]",
+                  "const float maxSafe=.95/max(kmax*float(M4Grid.x),.00001)",
                   "fill=float3(dir,d,strength)",
                   "return lerp(root,clamp(um,0.0,1.0),strength)"]:
         need(s,token,"distance-aware foveal geometry")
