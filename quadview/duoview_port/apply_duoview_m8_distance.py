@@ -130,14 +130,12 @@ float M8FillStrength(float inverseDepth) {
                     r=M1Row[x+step]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[x+step] : M1Row[x+step],pen);""",
       "never read group-shared origins outside the image")
     block=once(block,
-       "    const float limit=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;\n    const float scale=M4Flags.y;",
-       """    // All threads initialize the shared origins and reach the same barrier.
-    // Branching around GroupMemoryBarrierWithGroupSync is invalid on FXC.
-    for (uint x=lane; x<w; x+=128) M8Origin[x]=M1Row[x];
-    GroupMemoryBarrierWithGroupSync();
-    const float limit=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
-    const float scale=M4Flags.y;""",
-       "initialize fovea fine-depth origin for both eye paths")
+       "        M1Row[x]=knee>0.0 ? nearDepth : min(nearDepth,M1Filter.y);",
+       """        M1Row[x]=knee>0.0 ? nearDepth : min(nearDepth,M1Filter.y);
+        // Initialize source origins within the seed loop; the existing group
+        // barrier after this loop publishes both M1Row and M8Origin.
+        M8Origin[x]=M1Row[x];""",
+       "seed fine-depth source origins before the existing uniform barrier")
     block=once(block,
        "                M1Next[x]=max(M1Row[x],max(l,r));",
        """                const float v=M1Row[x];
