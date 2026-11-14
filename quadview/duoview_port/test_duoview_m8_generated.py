@@ -36,7 +36,8 @@ def main():
                   "float m9_eye_near{1.f}, m9_eye_far{0.f}",
                   "out.m9_eye_far=(std::clamp)(requested.m9_eye_far,0.f,1.f)"]:
         need(cfg,token,"defaults/validation")
-    for token in ["sizeof(M1Constants) == 576", "float m8_distance[4]",
+    for token in ["sizeof(M1Constants) == 592", "float m8_distance[4]",
+                  "float m7_tuning[4]", "data.m7_tuning[0]=edge_reach_px",
                   "float m8_effects[4]", "float m9_per_eye[4]",
                   "data.m9_per_eye[0]=eye_near", "data.m9_per_eye[1]=eye_far",
                   "geometry.world_to_meters",
@@ -49,7 +50,7 @@ def main():
                   "settings.m9_eye_near,settings.m9_eye_far"]:
         need(dx,token,"frozen parameters")
     for token in ["M8FarWeight(float inverseDepth)", "M8AdjustedPenalty",
-                  "M8FillStrength", "M9PerEyeMix", "float4 M8Distance", "float4 M8Effects", "float4 M9PerEye",
+                  "M8FillStrength", "M9PerEyeMix", "float4 M7Tuning", "float4 M8Distance", "float4 M8Effects", "float4 M9PerEye",
                   "groupshared float M8Origin[1024]", "groupshared float M8NextOrigin[1024]",
                   "for (uint tile=0u; tile<(w+127u)/128u; ++tile)",
                   "M8Origin[x]=M1Seed[x]", "M8Origin[xf]", "M8Origin[xs]",
@@ -60,8 +61,9 @@ def main():
                   "const float maxSafe=.99/max(kmax*float(M4Grid.x),.00001)",
                   "lerp(symmetric,oneSided,M9PerEyeMix(source))",
                   "const float candidate=lerp(symmetric,oneSided,mix)",
-                  "const float pixelBudget=lerp(.35,2.0,strength)",
+                  "const float pixelBudget=lerp(.35,reach,strength)",
                   "const float retention=saturate(M7Controls.y)",
+                  "const float3 bounded=clamp(oldColor,current-.50,current+.50)",
                   "fill=float3(dir,d,strength)",
                   "return lerp(root,clamp(um,0.0,1.0),strength)"]:
         need(s,token,"distance-aware foveal geometry")
@@ -73,7 +75,8 @@ def main():
     for token in ["m_duo_m8_distance", "m_duo_m8_near_m", "m_duo_m8_far_m",
                   "m_duo_m8_edge_near", "m_duo_m8_edge_far",
                   "m_duo_m8_fill_near", "m_duo_m8_fill_far",
-                  "m_duo_m9_eye_near", "m_duo_m9_eye_far"]:
+                  "m_duo_m9_eye_near", "m_duo_m9_eye_far",
+                  "m_duo_edge_reach", "m_duo_fill_blur"]:
         need(hdr,token,"persisted sliders")
         need(ui,token,"frozen menu state")
     start=s.index("void M4Envelope(")
@@ -90,6 +93,11 @@ def main():
     for world_scale in [0.5,0.85,1.0,1.10,1.5]:
         wtm=100.0*world_scale
         assert abs(wtm-(100.*world_scale)) < 1.e-8
+    for history_strength in [0.0,0.25,0.5,0.95]:
+        for reach in [2.,8.,20.]:
+            budget=0.35+(reach-0.35)*history_strength
+            assert 0.35<=budget<=20.0
+            if history_strength==0: assert budget==0.35
     for weight in [0.,.2,.5,.75,1.]:
         # Directional M3 edges fade out as the distance weight rises.
         assert abs((1.-weight)+weight-1.)<1.e-8
