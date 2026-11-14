@@ -60,6 +60,8 @@ def main():
                   "if (x>=step)", "if (x+step<w)", "const bool distanceOn=M8Distance.z>.5",
                   "const float cropWidth=max(M2Crop.z-M2Crop.x,1.e-5)",
                   "const float maxSafe=.99*cropWidth/max(kmax*float(M4Grid.x),.00001)",
+                  "return lerp(original,min(proposed,maxSafe),enabled)",
+                  "return enabled*(t*t*(3.-2.*t))",
                   "lerp(M1Filter.x*scale,pf,M9PerEyeMix(source))",
                   "const float symmetric=max(0.,M1Row[xs]-float(step)*M8AdjustedPenalty(source,M1Filter.x*scale))",
                   "const float oneSided=ps>0. ?",
@@ -77,6 +79,7 @@ def main():
         need(p,token,"distance-aware fill compositing")
     assert "float m7_tuning[4]" not in params, "redundant constant field remains"
     assert "float4 M7Tuning" not in s, "redundant HLSL constant remains"
+    assert "if (M8Distance.z < .5) return" not in s, "M8 helper early return reintroduced"
     for token in ["m_duo_m8_distance", "m_duo_m8_near_m", "m_duo_m8_far_m",
                   "m_duo_m8_edge_near", "m_duo_m8_edge_far",
                   "m_duo_m8_fill_near", "m_duo_m8_fill_far",

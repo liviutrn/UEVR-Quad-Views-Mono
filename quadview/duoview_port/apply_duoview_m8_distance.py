@@ -77,13 +77,17 @@ def shaders(sh):
     helpers = r"""// All depths passed here are inverse *engine* units from M4, not metres.
 // The CPU converts the user-specified distance thresholds using world_to_meters.
 float M8FarWeight(float inverseDepth) {
-    if (M8Distance.z < .5) return 0.;
+    // Avoid an early return in the helper reached from a group-synchronized
+    // compute loop; FXC/WARP can lower it into unsafe divergent control flow.
+    const float enabled=step(.5,M8Distance.z);
     const float span=max(M8Distance.x-M8Distance.y,1.e-8);
     const float t=saturate((M8Distance.x-inverseDepth)/span);
-    return t*t*(3.-2.*t);
+    return enabled*(t*t*(3.-2.*t));
 }
 float M8AdjustedPenalty(float inverseDepth, float original) {
-    if (M8Distance.z < .5) return original;
+    // One return and no branch in the inner envelope iteration. M8 OFF
+    // selects original exactly; M8 ON retains the same proposed slope.
+    const float enabled=step(.5,M8Distance.z);
     const float smoothness=lerp(M8Effects.x,M8Effects.y,M8FarWeight(inverseDepth));
     // Larger penalty => narrower/sharper envelope, smaller => broader/softer.
     const float proposed=original*lerp(2.0,.35,saturate(smoothness));
@@ -94,17 +98,17 @@ float M8AdjustedPenalty(float inverseDepth, float original) {
     // k * d(depth)/d(fovea-local-u) < 1.
     const float cropWidth=max(M2Crop.z-M2Crop.x,1.e-5);
     const float maxSafe=.99*cropWidth/max(kmax*float(M4Grid.x),.00001);
-    return min(proposed,maxSafe);
+    return lerp(original,min(proposed,maxSafe),enabled);
 }
 float M8FillStrength(float inverseDepth) {
-    if (M8Distance.z < .5) return 1.;
-    return saturate(lerp(M8Effects.z,M8Effects.w,M8FarWeight(inverseDepth)));
+    const float enabled=step(.5,M8Distance.z);
+    return lerp(1.,saturate(lerp(M8Effects.z,M8Effects.w,M8FarWeight(inverseDepth))),enabled);
 }
 // 1.0 = original one-sided M3a conditioning, 0.0 = symmetric M4.
 // Fade the *asymmetry*, not just its edge penalty, to prevent distant halos.
 float M9PerEyeMix(float inverseDepth) {
-    if (M8Distance.z < .5) return 1.; // exactly preserve M8-off M3a
-    return saturate(lerp(M9PerEye.x,M9PerEye.y,M8FarWeight(inverseDepth)));
+    const float enabled=step(.5,M8Distance.z);
+    return lerp(1.,saturate(lerp(M9PerEye.x,M9PerEye.y,M8FarWeight(inverseDepth))),enabled);
 }
 
 // Fine NGX depth is sampled only during conditioning""";
