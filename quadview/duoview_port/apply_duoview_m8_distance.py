@@ -67,8 +67,8 @@ def shaders(sh):
     p = sh / "DuoViewM1Stereo.hlsl"
     text = p.read_text(encoding="utf-8")
     text = once(text,
-        "    float4 M7Controls;\n    uint4 M7ColorExtent;\n    float4 M5Sharpen;",
-        "    float4 M7Controls;\n    uint4 M7ColorExtent;\n"
+        "    float4 M7Controls;\n    uint4 M7ColorExtent;\n    float4 M7Tuning; // x: maximum temporal edge correction in output pixels\n    float4 M5Sharpen;",
+        "    float4 M7Controls;\n    uint4 M7ColorExtent;\n    float4 M7Tuning; // x: maximum temporal edge correction in output pixels\n"
         "    float4 M8Distance; // inverse depth of start,end; enabled\n"
         "    float4 M8Effects;  // near/far smoothing, near/far fill\n"
         "    float4 M9PerEye; // near/far intensity of asymmetric eye edges\n"
@@ -266,16 +266,16 @@ def backend(mods):
     vr=mods/"vr"
     edit(vr/"DuoViewConfig.hpp",[
       ("M8 option declarations",
-       "    float edge_history{.70f}, fill_history{.65f}, fill_blur_px{1.25f};",
-       """    float edge_history{.70f}, fill_history{.65f}, fill_blur_px{1.25f};
+       "    float edge_history{.70f}, fill_history{.65f}, fill_blur_px{1.25f}, edge_reach_px{8.f};",
+       """    float edge_history{.70f}, fill_history{.65f}, fill_blur_px{1.25f}, edge_reach_px{8.f};
     bool m8_distance{false}; // OFF preserves M7 output exactly
     float m8_near_m{2.f}, m8_far_m{5.f};
     float m8_edge_near{0.f}, m8_edge_far{1.f};
     float m8_fill_near{1.f}, m8_fill_far{0.f};
     float m9_eye_near{1.f}, m9_eye_far{0.f}; // 1=directional, 0=symmetric (requires M8)"""),
       ("M8 validation",
-       "        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,12.f);",
-       """        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,3.f);
+       "        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,32.f);",
+       """        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,32.f);
     out.m8_distance=requested.m8_distance;
     if(std::isfinite(requested.m8_near_m))
         out.m8_near_m=(std::clamp)(requested.m8_near_m,.25f,50.f);
@@ -325,24 +325,26 @@ def backend(mods):
                     m_duo_m8_fill_near->value()=1.f; m_duo_m8_fill_far->value()=0.f;
                     m_duo_m9_eye_near->value()=1.f; m_duo_m9_eye_far->value()=0.f;"""),
       ("M8 frozen profile",
-       "        .fill_blur_px=m_duo_fill_blur->value(),",
+       "        .fill_blur_px=m_duo_fill_blur->value(),\n        .edge_reach_px=m_duo_edge_reach->value(),",
        """        .fill_blur_px=m_duo_fill_blur->value(),
+        .edge_reach_px=m_duo_edge_reach->value(),
         .m8_distance=m_duo_m8_distance->value(),
         .m8_near_m=m_duo_m8_near_m->value(), .m8_far_m=m_duo_m8_far_m->value(),
         .m8_edge_near=m_duo_m8_edge_near->value(), .m8_edge_far=m_duo_m8_edge_far->value(),
         .m8_fill_near=m_duo_m8_fill_near->value(), .m8_fill_far=m_duo_m8_fill_far->value(),
         .m9_eye_near=m_duo_m9_eye_near->value(), .m9_eye_far=m_duo_m9_eye_far->value(),"""),
       ("M8 live changes",
-       "        current.fill_blur_px==candidate.fill_blur_px &&",
+       "        current.fill_blur_px==candidate.fill_blur_px &&\n        current.edge_reach_px==candidate.edge_reach_px &&",
        """        current.fill_blur_px==candidate.fill_blur_px &&
+        current.edge_reach_px==candidate.edge_reach_px &&
         current.m8_distance==candidate.m8_distance &&
         current.m8_near_m==candidate.m8_near_m && current.m8_far_m==candidate.m8_far_m &&
         current.m8_edge_near==candidate.m8_edge_near && current.m8_edge_far==candidate.m8_edge_far &&
         current.m8_fill_near==candidate.m8_fill_near && current.m8_fill_far==candidate.m8_fill_far &&
         current.m9_eye_near==candidate.m9_eye_near && current.m9_eye_far==candidate.m9_eye_far &&"""),
       ("M8 in-game menu",
-       '                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0..12)");',
-       """                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0..12)");
+       '                        m_duo_fill_blur->draw("Revealed background blur radius (output px, 0..32)");',
+       """                        m_duo_fill_blur->draw("Revealed background blur radius (output px, 0..32)");
                         m_duo_m8_distance->draw("Distance-based depth edges and background fill");
                         if (m_duo_m8_distance->value()) {
                             m_duo_m8_near_m->draw("Near behavior until distance (metres)");
@@ -359,15 +361,16 @@ def backend(mods):
     ])
     edit(vr/"DuoViewM1D3D12.hpp",[
       ("M8 constant buffer fields",
-       "    float m7_controls[4]{};\n    uint32_t m7_color_extent[4]{};\n    float m5_sharpen[4]{};",
+       "    float m7_controls[4]{};\n    uint32_t m7_color_extent[4]{};\n    float m7_tuning[4]{};\n    float m5_sharpen[4]{};",
        """    float m7_controls[4]{};
     uint32_t m7_color_extent[4]{};
+    float m7_tuning[4]{};
     float m8_distance[4]{};
     float m8_effects[4]{};
     float m9_per_eye[4]{};
     float m5_sharpen[4]{};"""),
       ("M8 constant size",
-       "sizeof(M1Constants) == 528", "sizeof(M1Constants) == 576"),
+       "sizeof(M1Constants) == 544", "sizeof(M1Constants) == 592"),
       ("M8 new frozen parameters",
        "const std::array<uint32_t,4>& color_extent) {",
        """const std::array<uint32_t,4>& color_extent,
@@ -392,8 +395,9 @@ def backend(mods):
     ])
     edit(vr/"DuoViewD3D12.hpp",[
       ("M8 source settings into compositor constants",
-       "settings.edge_history,settings.fill_history,settings.fill_blur_px,color_extent);",
-       """settings.edge_history,settings.fill_history,settings.fill_blur_px,color_extent,
+       "settings.edge_history,settings.fill_history,settings.fill_blur_px,\n                settings.edge_reach_px,color_extent);",
+       """settings.edge_history,settings.fill_history,settings.fill_blur_px,
+                settings.edge_reach_px,color_extent,
                 settings.m8_distance,settings.m8_near_m,settings.m8_far_m,
                 settings.m8_edge_near,settings.m8_edge_far,
                 settings.m8_fill_near,settings.m8_fill_far,
