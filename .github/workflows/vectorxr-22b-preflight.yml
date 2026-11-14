@@ -1,0 +1,97 @@
+name: VectorXR #22b pinned-source Linux preflight
+on:
+  push:
+    branches:
+      - 'experiment/vectorxr-22-runtime-depth-preflight-*'
+    paths:
+      - 'vectorxr_mono/**'
+      - '.github/workflows/vectorxr-22b-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+      - uses: actions/checkout@v4
+        with:
+          repository: DienerTech/vectorxr
+          ref: 8fffa72e99be8ab1e39457c7353faeb1218ac83f
+          path: vectorxr
+      - name: Replay every patcher with isolated Python on fresh pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python3 -I -m py_compile workspace/vectorxr_mono/apply_vectorxr_live22b.py
+          for patch in apply_vectorxr_mono.py apply_vectorxr_dynamic_smooth.py \
+            apply_vectorxr_instrumentation21.py apply_vectorxr_clock21.py \
+            apply_vectorxr_tests21.py apply_vectorxr_trace21.py \
+            apply_vectorxr_runtime_depth22.py; do
+            python3 -I "workspace/vectorxr_mono/$patch" vectorxr
+          done
+          # #21/#42 schema 1 must be copied byte-for-byte to the VectorXR
+          # generated tree BEFORE the v2 switch is applied.
+          cmp workspace/vectorxr_mono/ResearchTrace21.hpp \
+              vectorxr/layer/include/depthxr/ResearchTrace21.hpp
+          mkdir -p before after
+          for item in layer/include/depthxr/framegen_presenter.h \
+            layer/src/framegen/framegen_presenter.cpp \
+            layer/src/framegen_plan.cpp layer/src/openxr_layer.cpp \
+            layer/tests/framegen_presenter_tests.cpp \
+            layer/include/depthxr/ResearchTrace21.hpp; do
+            mkdir -p "before/$(dirname "$item")"
+            cp "vectorxr/$item" "before/$item"
+          done
+          python3 -I workspace/vectorxr_mono/apply_vectorxr_live22b.py vectorxr
+          for item in layer/include/depthxr/framegen_presenter.h \
+            layer/src/framegen/framegen_presenter.cpp \
+            layer/src/framegen_plan.cpp layer/src/openxr_layer.cpp \
+            layer/tests/framegen_presenter_tests.cpp \
+            layer/include/depthxr/ResearchTrace21.hpp \
+            layer/include/depthxr/framegen_live22b.hpp; do
+            mkdir -p "after/$(dirname "$item")"
+            cp "vectorxr/$item" "after/$item"
+          done
+          git diff --no-index -- before after > evidence/vectorxr22b-preflight-diff.patch || test "$?" -eq 1
+          test -s evidence/vectorxr22b-preflight-diff.patch
+          git -C vectorxr diff --check
+          grep -q 'kLiveSwitch=8' vectorxr/layer/include/depthxr/ResearchTrace21.hpp
+          ! grep -q 'kLiveSwitch=8' workspace/vectorxr_mono/ResearchTrace21.hpp
+          echo 'PASS full chain isolated Python; unique anchors; generated diff; UEVR trace unchanged'
+      - name: C++20 header syntax, file-change and trace regression fixture source checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '#include "depthxr/framegen_live22b.hpp"\nint main(){depthxr::LiveSwitchPoll22b p; return p.Poll(std::chrono::steady_clock::now()).has_value()?0:0;}\n' |
+            clang++ -std=c++20 -fsyntax-only -Wall -Wextra -Werror \
+              -Ivectorxr/layer/include -x c++ -
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('vectorxr/layer')
+          h = (root/'include/depthxr/framegen_presenter.h').read_text()
+          p = (root/'src/framegen/framegen_presenter.cpp').read_text()
+          f = (root/'src/framegen_plan.cpp').read_text()
+          t = (root/'tests/framegen_presenter_tests.cpp').read_text()
+          trace = (root/'include/depthxr/ResearchTrace21.hpp').read_text()
+          assert 'std::atomic<bool> runtime_depth_' in h
+          assert 'lock.unlock();\n        PollLiveSwitches22b();' in p
+          assert 'wanted != "VECTORXR_CONTENT_CLOCK21"' in f
+          assert 'wanted != "VECTORXR_MAX6_HYSTERESIS21"' in f
+          assert 'void TestLiveSwitch22bJit()' in t
+          assert 'RUN(TestLiveSwitch22bJit);' in t
+          assert '0,21,2,0,0,0,0,0,0' in trace
+          assert 'kLiveSwitch=8' in trace
+          print('PASS C++20 poller header; source wiring, trace and test registration')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: VectorXR22b-Linux-Preflight
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14
