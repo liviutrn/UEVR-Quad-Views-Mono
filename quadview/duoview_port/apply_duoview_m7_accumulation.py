@@ -81,16 +81,31 @@ float3 M7UnpackColor(float packed) {
                 // The conditioned fill depth can differ from the raw source.
                 // Compare colours here as well to reject a foreground tap.
                 const float3 diff=abs(accumulated-filled);
-                const float agreement=1.-smoothstep(.035,.14,max(diff.x,max(diff.y,diff.z)));
+                const float agreement=1.-smoothstep(.12,.45,max(diff.x,max(diff.y,diff.z)));
                 filled=lerp(filled,accumulated,agreement);
             }
-            [branch] if (M7Controls.z>0.) {
-                const float2 tap=fullUv+float2(fill.x*M7Controls.z/M23Wide.z,0.);
-                if (all(tap>M2Crop.xy) && all(tap<M2Crop.zw)) {
-                    const float tapDepth=M1ReadConditionedEye(tap,i.pos.x>=OutputSize.x ? 1u : 0u);
-                    if (abs(tapDepth-fill.y)<=max(.05*fill.y,1.e-4))
-                        filled=lerp(filled,DuoReadFocus(tap),.25);
+            [branch] if (M7Controls.z>.001) {
+                // Real depth-aware 5-tap blur of the newly uncovered background.
+                // Unlike the old 25% single-neighbour tap, the max 12px
+                // radius covers an appreciable area and can reach full strength.
+                // Foreground taps never enter the average.
+                float3 sum=filled*1.5;
+                float sumWeight=1.5;
+                const uint eye=i.pos.x>=OutputSize.x ? 1u : 0u;
+                [unroll] for (int offset=-2;offset<=2;++offset) {
+                    if (offset==0) continue;
+                    const float2 tap=fullUv+
+                        float2(fill.x*M7Controls.z/M23Wide.z*(float(offset)*.5),0.);
+                    if (all(tap>M2Crop.xy) && all(tap<M2Crop.zw)) {
+                        const float tapDepth=M1ReadConditionedEye(tap,eye);
+                        if (abs(tapDepth-fill.y)<=max(.08*fill.y,1.e-4)) {
+                            const float weight=abs(offset)==1 ? 1.0 : .7;
+                            sum+=DuoReadFocus(tap)*weight;
+                            sumWeight+=weight;
+                        }
+                    }
                 }
+                filled=lerp(filled,sum/max(sumWeight,.01),saturate(M7Controls.z/2.));
             }
             fovea.rgb=filled;
         }
@@ -114,13 +129,13 @@ def controls(mods):
     if (std::isfinite(requested.fill_history))
         out.fill_history=(std::clamp)(requested.fill_history,0.f,.95f);
     if (std::isfinite(requested.fill_blur_px))
-        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,3.f);"""),
+        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,12.f);"""),
     ])
     patch(mods / "VR.hpp", [
         ("three persistent sliders", '    const ModSlider::Ptr m_duo_m5_right_max{',
          """    const ModSlider::Ptr m_duo_edge_history{ModSlider::create(generate_name("DuoEdgeHistory"),0.f,.95f,.70f)};
     const ModSlider::Ptr m_duo_fill_history{ModSlider::create(generate_name("DuoFillHistory"),0.f,.95f,.65f)};
-    const ModSlider::Ptr m_duo_fill_blur{ModSlider::create(generate_name("DuoFillBlurPixels"),0.f,3.f,1.25f)};
+    const ModSlider::Ptr m_duo_fill_blur{ModSlider::create(generate_name("DuoFillBlurPixels"),0.f,12.f,1.25f)};
     const ModSlider::Ptr m_duo_m5_right_max{"""),
         ("save and load the three controls", "*m_duo_m5_right_max,",
          "*m_duo_m5_right_max, *m_duo_edge_history, *m_duo_fill_history, *m_duo_fill_blur,"),
@@ -150,7 +165,7 @@ def controls(mods):
                     if (m_duo_m4_fovea_grid->value()) {
                         m_duo_edge_history->draw("Fovea depth edge history (0 = off)");
                         m_duo_fill_history->draw("Revealed background history (0 = off)");
-                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0 = off)");
+                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0..12)");
                     }"""),
     ])
 
