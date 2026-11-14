@@ -16,6 +16,8 @@ lua = LuaRuntime(unpack_returned_tuples=True)
 lua.execute(r'''
 __seen = {}
 __cb = {}
+__toggle = {}
+__sent = {}
 fs = {
     read=function(path) return "disableMod=0" end,
     write=function(path,data) return true end
@@ -37,7 +39,14 @@ imgui = {
     begin_disabled = function(...) end,
     end_disabled = function(...) end,
     is_item_active = function() return false end,
-    checkbox = function(label,v) __seen[label]=true; return false,v end,
+    checkbox = function(label,v)
+        __seen[label]=true
+        if __toggle[label] ~= nil then
+            local selected = __toggle[label]; __toggle[label]=nil
+            return true, selected
+        end
+        return false,v
+    end,
     slider_float = function(label,v) __seen[label]=true; return false,v end,
     slider_int = function(label,v) __seen[label]=true; return false,v end,
     combo = function(label,v,values) __seen[label]=true; return false,v end,
@@ -45,7 +54,9 @@ imgui = {
     begin_table = function(...) return false end
 }
 uevr = {
-    api = {dispatch_custom_event=function(...) end},
+    api = {dispatch_custom_event=function(_,evt,payload)
+        __sent[#__sent+1] = {evt, payload}
+    end},
     sdk = {callbacks = {
         on_lua_event=function(f) __cb.event=f end,
         on_frame=function(f) __cb.frame=f end
@@ -104,5 +115,55 @@ expected = [
 absent = [name for name in expected if seen[name] is None]
 if absent:
     raise RuntimeError(f"Generated UI missing {absent}; observed controls={list(seen.keys())}")
+# Exhaust the Batch2 menu paths instead of only checking Lua syntax or
+# a single ready snapshot. Simulate both renderer layouts, 1/2 passes,
+# independently configured crop flags and optional C2 fields.
+lua.execute(r'''
+for mode=0,3 do
+  for passes=1,2 do
+    for full=0,1 do
+      for same=0,1 do
+        __snap.settings.NrTargetMode=mode
+        __snap.settings.NrPasses=passes
+        __snap.settings.NrFoveated=full==1
+        __snap.settings.NrUseSrFoveation=same==1
+        __snap.settings.NrPass2Foveated=full==1
+        __snap.settings.NrPass2SameAsPass1=same==1
+        __cb.event("cheeky.foveated_dlss.snapshot.v1", "{}")
+        __cb.panel()
+      end
+    end
+  end
+end
+assert(__seen["Duo mono fovea rule"])
+assert(__seen["Crop NR inside each source fovea (OFF = full fovea)"])
+assert(__seen["Pass 2 crop width"])
+assert(__seen["Model passes"])
+-- A real change must produce a native command, not merely draw a widget.
+__snap.settings.NrTargetMode=2
+__cb.event("cheeky.foveated_dlss.snapshot.v1", "{}")
+__toggle["Use UEVR source roles (C2; automatic fallback)"]=false
+__cb.panel()
+local delivered=false
+for _,message in ipairs(__sent) do
+  if message[1]=="cheeky.foveated_dlss.command.v1"
+     and type(message[2])=="string"
+     and message[2]:find("NrUseSourceRoles=false", 1, true) then delivered=true end
+end
+assert(delivered, "Batch2 toggle did not reach native command bridge")
+-- A mixed install can reconnect to an older runtime without C2 settings.
+-- Unsupported controls must disappear rather than remain draft-pending.
+__snap.settings.NrVramGuardMiB=nil
+__snap.settings.NrUseSourceRoles=nil
+__snap.settings.NrAllocAdmission=nil
+__snap.settings.NrFeatureReuse=nil
+__cb.event("cheeky.foveated_dlss.snapshot.v1", "{}")
+__seen={}
+__cb.panel()
+assert(not __seen["Max VRAM admission reserve (MiB)"])
+assert(not __seen["Use UEVR source roles (C2; automatic fallback)"])
+assert(not __seen["Admission guard before NGX allocation"])
+assert(not __seen["Reuse retired NGX model for 10 s (2 slots)"])
+''')
 print("PASS Lua 5.4 UI smoke: loaded enabled runtime, decoded snapshot, rendered real NR UI,"
       " validated both source masks, pass-2 crop and 2-pass controls")

@@ -79,6 +79,11 @@ change("uevr/scripts/cheeky_foveated_dlss.lua",
         end''',
        "safety UI")
 
+change("uevr/scripts/cheeky_foveated_dlss.lua",
+       '"FixMotionBlur", "NrProcessingOrder", "AfwManualCoverage"',
+       '"FixMotionBlur", "NrProcessingOrder", "NrVramGuardMiB", "NrUseSourceRoles", "NrAllocAdmission", "NrFeatureReuse", "AfwManualCoverage"',
+       "drop unsupported Batch2 UI fields after runtime reload")
+
 # C2 ABI copied verbatim, not reinterpreted or changed in Cheeky.
 change("src/settings.cpp",
        '#include "settings.hpp"',
