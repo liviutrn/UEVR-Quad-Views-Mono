@@ -240,7 +240,7 @@ float M8FillStrength(float inverseDepth) {
     raster=sh/"DuoViewNativeCompositeRaster.hlsl"
     edit(raster,[
       ("M8 allow fractional fill", "fill.z>.5 && (M7Controls.y>0. || M7Controls.z>0.)",
-       "fill.z>.001 && (M7Controls.y>0. || M7Controls.z>0.)"),
+       "fill.z>.001 && (M7Controls.y>0. || M7Controls.z>0. || M8Distance.z>.5)"),
       ("M8 interpolate fill treatment", "            fovea.rgb=filled;",
        "            fovea.rgb=lerp(fovea.rgb,filled,saturate(fill.z));"),
     ])
