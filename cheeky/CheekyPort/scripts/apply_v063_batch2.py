@@ -603,6 +603,61 @@ change("src/hooks.cpp",
     if (protected_ngx_core_enabled()) {''',
        "D3D12 core release detour is pass-through after host stop")
 
+# A cached NGX handle still owns the runtime's release callbacks. Never
+# clear the D3D12 device / callback table until ALL pooled work retires.
+change("src/dlss_nr.cpp",
+       '''    if (views.empty()) { release(runtime.device); runtime = {}; }''',
+       '''    // Pool eviction is GPU-fence-aware; destroy only completed cached
+    // models and retain callbacks until every GPU use has retired.
+    for (auto it=source_reuse_batch2.begin();it!=source_reuse_batch2.end();) {
+        it->feature.uses.collect();
+        if (!it->feature.uses.empty()) { ++it; continue; }
+        if (it->feature.handle && runtime.release_feature)
+            static_cast<void>(runtime.release_feature(it->feature.handle));
+        if (it->feature.parameters && runtime.destroy_parameters)
+            static_cast<void>(runtime.destroy_parameters(it->feature.parameters));
+        it=source_reuse_batch2.erase(it);
+    }
+    if (views.empty() && source_reuse_batch2.empty()) {
+        release(runtime.device); runtime = {};
+    }''', "fence-safe full teardown of global NGX reuse pool")
+
+# Process-lifetime NGX detours forward directly to the original callbacks on
+# host detach across DX11 create/release and DX12 core create, too.
+change("src/hooks.cpp",
+       '''    static NgxResult create(ID3D11DeviceContext* context, std::uint32_t feature,
+        NgxParameters* parameters, NgxHandle** handle) {
+        return runtime_create_d3d11(d3d11_runtimes[Slot], context, feature, parameters, handle);
+    }''',
+       '''    static NgxResult create(ID3D11DeviceContext* context, std::uint32_t feature,
+        NgxParameters* parameters, NgxHandle** handle) {
+        if (!started.load(std::memory_order_acquire)) {
+            const auto original = d3d11_runtimes[Slot].create.load(std::memory_order_acquire);
+            return original ? original(context, feature, parameters, handle) : 0xBAD00007U;
+        }
+        return runtime_create_d3d11(d3d11_runtimes[Slot], context, feature, parameters, handle);
+    }''', "C5 D3D11 create detach pass-through")
+change("src/hooks.cpp",
+       '''    static NgxResult release(NgxHandle* handle) {
+        return runtime_release_d3d11(d3d11_runtimes[Slot], handle);
+    }''',
+       '''    static NgxResult release(NgxHandle* handle) {
+        if (!started.load(std::memory_order_acquire)) {
+            const auto original = d3d11_runtimes[Slot].release.load(std::memory_order_acquire);
+            return original ? original(handle) : 0xBAD00007U;
+        }
+        return runtime_release_d3d11(d3d11_runtimes[Slot], handle);
+    }''', "C5 D3D11 release detach pass-through")
+change("src/hooks.cpp",
+       '''    const auto original = real_core_create_d3d12.load(std::memory_order_acquire);
+    if (original == nullptr) return 0xBAD00007U;
+    detect_afw_runtime();''',
+       '''    const auto original = real_core_create_d3d12.load(std::memory_order_acquire);
+    if (original == nullptr) return 0xBAD00007U;
+    if (!started.load(std::memory_order_acquire))
+        return original(command_list, feature, parameters, handle);
+    detect_afw_runtime();''', "C5 D3D12 core create detach pass-through")
+
 # Remaining sections for VRAM admission, bounded feature reuse and capture
 # cleanups are appended by this batch before the generated tree is written.
 # Batch script intentionally does not write until all admission anchors pass.
