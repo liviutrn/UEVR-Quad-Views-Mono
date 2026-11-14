@@ -30,11 +30,8 @@ def shaders(sh):
         "    float4 M8Distance; // inverse depth of start,end; enabled\n"
         "    float4 M8Effects;  // near/far smoothing, near/far fill\n"
         "    float4 M5Sharpen;", "M8 shader constants")
-    anchor = "    float4 M5Sharpen;\n};"
-    helpers = r"""    float4 M5Sharpen;
-};
-
-// All depths passed here are inverse *engine* units from M4, not metres.
+    anchor = "// Fine NGX depth is sampled only during conditioning"
+    helpers = r"""// All depths passed here are inverse *engine* units from M4, not metres.
 // The CPU converts the user-specified distance thresholds using world_to_meters.
 float M8FarWeight(float inverseDepth) {
     if (M8Distance.z < .5) return 0.;
@@ -52,7 +49,8 @@ float M8FillStrength(float inverseDepth) {
     if (M8Distance.z < .5) return 1.;
     return saturate(lerp(M8Effects.z,M8Effects.w,M8FarWeight(inverseDepth)));
 }
-"""
+
+// Fine NGX depth is sampled only during conditioning""";
     text=once(text,anchor,helpers,"M8 helper insertion")
 
     start=text.index("void M4Envelope(")
