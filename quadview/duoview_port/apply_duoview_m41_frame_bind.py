@@ -1,166 +1,218 @@
 #!/usr/bin/env python3
-"""DuoView M4.1 (Claude, 14 Nov 2026): bind fovea/periphery depth to the colour
-packet's own OpenXR frame, the same rule DuoView uses for colour (v22
-"projection coherence": a packet carries its frozen projection/crop and its
-mono_source_frame; the compositor never mixes in a live or newer one).
+"""Join M4 depth to the existing DuoView source transaction at the Slate tail.
 
-Problem (Liviu, #262): with eye tracking, fine fovea depth slid with the eyes
-and settled late. Depth images were picked as "newest available": the fine one
-was the next frame's about half the time (seq +1, log 12:14-12:20), and could
-come from another gaze crop than the colour packet being composited.
-
-Fix: every DuoView NGX depth capture is stamped with the OpenXR render-frame
-number that UEVR publishes when that frame's RHI work executes
-(internal_render_frame_count, the counterpart of the colour packet's
-mono_source_frame). With M4 ON the compositor uses only the coarse+fine pair of
-the packet's own frame; if that exact pair is missing it uses coarse only for
-that frame (no fine from a different frame/crop). M4 OFF: selection unchanged.
-Log: [DuoView][M4] exact/miss and where the newest images sat relative to the
-packet frame (-3..+3 histogram).
-
-Run after apply_duoview_m4_fovea.py. Every edit is exact-once.
+A deferred tail with both colour roles marks the end of their RHI commands.
+Between consecutive such tails on one thread, accept exactly one NGX capture
+of each role. An incomplete, split, or ambiguous interval cannot supply fine
+depth. Present still validates the original colour packet and the producer
+queue/fence before consuming any depth.
 """
 import sys
 from pathlib import Path
+
 from apply_duoview_b40_pipeline import patch
 
-PAIR_FN = r'''
-    // M4.1: coarse + fine depth from the colour packet's own OpenXR frame only.
-    std::pair<std::shared_ptr<const DepthSnapshot>,std::shared_ptr<const DepthSnapshot>>
-    m41_pair_for_frame(uint64_t generation,uint32_t coarse_w,uint32_t coarse_h,
-            uint32_t fine_w,uint32_t fine_h,ID3D12CommandQueue* consumer_queue,uint32_t frame) {
-        const auto request=duoview_expected_.load(std::memory_order_acquire);
-        if(!frame || !consumer_queue ||
-           capture_mode_.load(std::memory_order_acquire)!=DepthCaptureMode::DuoView ||
-           !request || request->generation!=generation ||
-           request->width!=coarse_w || request->height!=coarse_h ||
-           request->fovea_width!=fine_w || request->fovea_height!=fine_h) {++m41_miss_;return {};}
+
+CAPTURE_INTERVAL = r'''
+    // Called on the authenticated source marker before its original command.
+    // Earlier RHI commands have recorded their copies, which may still be
+    // pending here. The selector independently checks submission and fences.
+    void m41_close_capture_interval(uint64_t generation, uint64_t serial, uint32_t thread) {
         std::scoped_lock lock(mutex_);
-        std::shared_ptr<DepthSnapshot> coarse,fine,newest_coarse,newest_fine;
-        uint64_t unstamped=0;
-        for(const auto& s:pool_) {
-            if(!s || s->duoview_request!=request || !s->submitted || !s->valid_evaluation ||
-               !s->texture || !s->producer_fence_value) continue;
-            const uint64_t completed=s->producer_fence ? s->producer_fence->GetCompletedValue() : 0;
-            if(completed==UINT64_MAX || !(s->duoview_producer_queue.Get()==consumer_queue ||
-               depth_copy_complete(completed,s->producer_fence_value))) continue;
-            const bool is_fine=s->duoview_fovea;
-            if(!matches_periphery(s->out_w,s->out_h,is_fine ? fine_w : coarse_w,is_fine ? fine_h : coarse_h)) continue;
-            if(is_fine && !s->jitter_valid) continue;
-            if(!s->m41_frame_valid) {++unstamped;continue;}
-            auto& newest=is_fine ? newest_fine : newest_coarse;
-            if(!newest || s->sequence>newest->sequence) newest=s;
-            if(s->m41_frame!=frame) continue;
-            auto& exact=is_fine ? fine : coarse;
-            if(!exact || s->sequence>exact->sequence) exact=s;
+        const bool consecutive = serial && m41_marker_serial_ && serial == m41_marker_serial_ + 1 &&
+            generation == m41_marker_generation_ && thread == m41_marker_thread_;
+        m41_marker_generation_ = generation;
+        m41_marker_serial_ = serial;
+        m41_marker_thread_ = thread;
+
+        const auto coarse = std::exchange(m41_candidates_[0], {});
+        const auto fine = std::exchange(m41_candidates_[1], {});
+        if (!serial) return;
+        if (!consecutive || coarse.count != 1 || fine.count != 1 ||
+            coarse.thread != thread || fine.thread != thread) {
+            ++m41_interval_rejected_;
+            return;
         }
-        const auto bucket=[&](const std::shared_ptr<DepthSnapshot>& s)->size_t {
-            const int32_t d=int32_t(s->m41_frame-frame);
-            return size_t((std::clamp)(d,-3,3)+3);
-        };
-        if(newest_coarse) ++m41_coarse_hist_[bucket(newest_coarse)];
-        if(newest_fine) ++m41_fine_hist_[bucket(newest_fine)];
-        m41_unstamped_+=unstamped;
-        if(coarse && fine) {++m41_exact_;return {coarse,fine};}
-        ++m41_miss_;
-        return {};
+
+        DepthSnapshot* coarse_slot{};
+        DepthSnapshot* fine_slot{};
+        for (const auto& slot : pool_) {
+            if (slot->sequence == coarse.sequence && slot->m25_pool_role == 1) coarse_slot = slot.get();
+            if (slot->sequence == fine.sequence && slot->m25_pool_role == 2) fine_slot = slot.get();
+        }
+        const auto request = duoview_expected_.load(std::memory_order_acquire);
+        if (!request || request->generation != generation || !coarse_slot || !fine_slot ||
+            coarse_slot->duoview_request != request || fine_slot->duoview_request != request ||
+            !coarse_slot->valid_evaluation || !fine_slot->valid_evaluation) {
+            ++m41_interval_rejected_;
+            return;
+        }
+        coarse_slot->m41_packet_serial = serial;
+        fine_slot->m41_packet_serial = serial;
+        ++m41_interval_bound_;
     }
-    struct M41Window { uint64_t exact,miss,unstamped; std::array<uint64_t,7> coarse{},fine{}; };
+
+    std::pair<std::shared_ptr<const DepthSnapshot>, std::shared_ptr<const DepthSnapshot>>
+    m41_pair_for_packet(uint64_t generation, uint64_t serial, uint32_t coarse_w, uint32_t coarse_h,
+            uint32_t fine_w, uint32_t fine_h, ID3D12CommandQueue* consumer_queue) {
+        std::scoped_lock lock(mutex_);
+        const auto request = duoview_expected_.load(std::memory_order_acquire);
+        std::shared_ptr<const DepthSnapshot> coarse, fine;
+        if (serial && consumer_queue && request && request->generation == generation &&
+            request->width == coarse_w && request->height == coarse_h &&
+            request->fovea_width == fine_w && request->fovea_height == fine_h &&
+            capture_mode_.load(std::memory_order_acquire) == DepthCaptureMode::DuoView) {
+            const auto now = std::chrono::steady_clock::now();
+            for (const auto& slot : pool_) {
+                if (slot->m41_packet_serial != serial || slot->duoview_request != request ||
+                    !slot->submitted || !slot->valid_evaluation || !slot->texture ||
+                    !slot->producer_fence || !slot->producer_fence_value ||
+                    now < slot->submitted_at || now - slot->submitted_at >= std::chrono::milliseconds(250)) continue;
+                const auto complete = slot->producer_fence->GetCompletedValue();
+                if (complete == UINT64_MAX || (slot->duoview_producer_queue.Get() != consumer_queue &&
+                    !depth_copy_complete(complete, slot->producer_fence_value))) continue;
+                if (slot->m25_pool_role == 1) coarse = slot;
+                if (slot->m25_pool_role == 2 && slot->jitter_valid) fine = slot;
+            }
+        }
+        if (coarse && fine) {
+            ++m41_exact_;
+            return {coarse, fine};
+        }
+        ++m41_coarse_only_;
+        return {coarse, {}};
+    }
+
+    struct M41Window { uint64_t bound, rejected, exact, coarse_only; };
     M41Window m41_take_window() {
-        M41Window w{m41_exact_.exchange(0),m41_miss_.exchange(0),m41_unstamped_.exchange(0)};
-        for(size_t i=0;i<7;++i) { w.coarse[i]=m41_coarse_hist_[i].exchange(0); w.fine[i]=m41_fine_hist_[i].exchange(0); }
-        return w;
-    }
-    // The OpenXR render-frame number of the RHI work being recorded right now.
-    void m41_set_frame_provider(bool(*provider)(uint32_t&)) noexcept {
-        m41_frame_provider_.store(provider,std::memory_order_release);
+        return {m41_interval_bound_.exchange(0), m41_interval_rejected_.exchange(0),
+            m41_exact_.exchange(0), m41_coarse_only_.exchange(0)};
     }
 '''
 
 
 def backend(mods):
-    vr = mods/"vr"
-    patch(vr/"QuadViewNgxDepth.hpp", [
-        ("M4.1 snapshot frame stamp",
-         "    uint64_t m24_present_epoch{};\n    bool duoview_fovea{};",
-         "    uint64_t m24_present_epoch{};\n"
-         "    uint32_t m41_frame{}; // OpenXR render frame of the RHI work that evaluated it\n"
-         "    bool m41_frame_valid{};\n"
-         "    bool duoview_fovea{};"),
-        ("M4.1 stamp at capture",
-         "        slot->m24_present_epoch=duo ?\n            m24_present_epoch_.load(std::memory_order_acquire) : 0u;\n",
-         "        slot->m24_present_epoch=duo ?\n            m24_present_epoch_.load(std::memory_order_acquire) : 0u;\n"
-         "        slot->m41_frame=0; slot->m41_frame_valid=false;\n"
-         "        if(duo) {\n"
-         "            if(const auto provider=m41_frame_provider_.load(std::memory_order_acquire)) {\n"
-         "                uint32_t frame{};\n"
-         "                if(provider(frame) && frame) { slot->m41_frame=frame; slot->m41_frame_valid=true; }\n"
-         "            }\n"
-         "        }\n"),
-        ("M4.1 exact-frame selection",
-         "        ++m25_cpu_pairs_;\n        return latest;\n    }\n",
-         "        ++m25_cpu_pairs_;\n        return latest;\n    }\n" + PAIR_FN),
-        ("M4.1 state",
-         "    std::atomic<uint64_t> m24_present_epoch_{1};\n",
-         "    std::atomic<uint64_t> m24_present_epoch_{1};\n"
-         "    std::atomic<bool(*)(uint32_t&)> m41_frame_provider_{nullptr};\n"
-         "    std::atomic<uint64_t> m41_exact_{},m41_miss_{},m41_unstamped_{};\n"
-         "    std::array<std::atomic<uint64_t>,7> m41_coarse_hist_{},m41_fine_hist_{};\n"),
+    vr = mods / "vr"
+    patch(vr / "DuoViewDelivery.hpp", [
+        ("track deferred role attachments",
+         """        Source original{};
+        Source owner() const { return original; }
+        Attachment attach(const Source& source) {""",
+         """        Source original{};
+        uint8_t deferred_roles{};
+        Source owner() const { return original; }
+        Attachment attach(const Source& source, bool deferred = false) {"""),
+        ("record only the original attachment's route",
+         """            slot=source;
+            if (!original) original=source;""",
+         """            slot=source;
+            if (deferred) deferred_roles |= uint8_t(1u << static_cast<unsigned>(source.role));
+            if (!original) original=source;"""),
+    ])
+    patch(vr / "FFakeStereoRenderingHook.cpp", [
+        ("depth producer include",
+         '#include "DuoViewGeometry.hpp"',
+         '''#include "DuoViewGeometry.hpp"
+#include "QuadViewNgxDepth.hpp"'''),
+        ("identify deferred marker route",
+         """const FFakeStereoRenderingHook::QuadViewNativeDelivery::Command& quad_native = {}) {
+        std::scoped_lock __{vtable_mutex};""",
+         """const FFakeStereoRenderingHook::QuadViewNativeDelivery::Command& quad_native = {},
+        bool duo_deferred = false) {
+        std::scoped_lock __{vtable_mutex};"""),
+        ("deferred Slate route",
+         """reinterpret_cast<sdk::FRHICommandBase_New*>(*root), frame_count + compensation, duo_source, quad_source, quad_engine, quad_native);""",
+         """reinterpret_cast<sdk::FRHICommandBase_New*>(*root), frame_count + compensation, duo_source, quad_source, quad_engine, quad_native, true);"""),
+        ("deferred Slate UE5.8 route",
+         "SceneViewExtensionAnalyzer::hook_new_rhi_command(root, frame_count + compensation, duo_source, quad_source, quad_engine, quad_native);",
+         "SceneViewExtensionAnalyzer::hook_new_rhi_command(root, frame_count + compensation, duo_source, quad_source, quad_engine, quad_native, true);"),
+        ("deferred Slate legacy discovery route",
+         "SceneViewExtensionAnalyzer::hook_new_rhi_command((sdk::FRHICommandBase_New*)l->root, frame_count + compensation, duo_source, quad_source, quad_engine, quad_native);",
+         "SceneViewExtensionAnalyzer::hook_new_rhi_command((sdk::FRHICommandBase_New*)l->root, frame_count + compensation, duo_source, quad_source, quad_engine, quad_native, true);"),
+        ("preserve route for both source roles",
+         "? owner->second.attach(duo_source) : Attachment::conflict;",
+         "? owner->second.attach(duo_source, duo_deferred) : Attachment::conflict;"),
+        ("preserve first source route",
+         """            command.attach(duo_source);
+            duo_command_sources.emplace""",
+         """            command.attach(duo_source, duo_deferred);
+            duo_command_sources.emplace"""),
+        ("close capture interval before the Slate tail",
+         """            qv_emit_rhi(12,"ORIGINAL_ENTER","engine_callback");""",
+         """            if (N == correct_execute_index && duo_source) {
+                const auto& owner = duo_source.packet;
+                const bool owns_both = duo_command.deferred_roles == 3u && owner &&
+                    owner->duoview_frame && owner->duoview_frame->config.settings.m4_fovea_grid &&
+                    vr->is_duoview_renderer_active() && duo_source.generation == vr->mono_generation();
+                uevr::quadview::ngx::PeripheryDepth::self().m41_close_capture_interval(
+                    duo_source.generation, owns_both ? owner->serial : 0, GetCurrentThreadId());
+            }
+            qv_emit_rhi(12,"ORIGINAL_ENTER","engine_callback");"""),
     ])
 
-    patch(vr/"D3D12Component.cpp", [
-        ("M4.1 render-frame provider",
-         "vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {\n",
-         "// M4.1: frame number of the RHI work being executed (published by UEVR's\n"
-         "// render-pose handoff), i.e. the counterpart of a packet's mono_source_frame.\n"
-         "static bool m41_render_frame(uint32_t& out) {\n"
-         "    const auto vr=VR::get();\n"
-         "    const auto xr=vr ? vr->get_openxr_runtime() : nullptr;\n"
-         "    if(!xr) return false;\n"
-         "    // Lock-free read (called inside NGX evaluation): never block the RHI thread\n"
-         "    // on the XR pose mutex. Both fields are naturally aligned scalars.\n"
-         "    if(!std::atomic_ref<bool>(xr->has_render_frame_count).load(std::memory_order_acquire)) return false;\n"
-         "    out=std::atomic_ref<uint32_t>(xr->internal_render_frame_count).load(std::memory_order_acquire);\n"
-         "    return true;\n"
-         "}\n\n"
-         "vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {\n"),
-        ("M4.1 register provider",
-         "        depth.m24_note_present();\n",
-         "        depth.m24_note_present();\n"
-         "        depth.m41_set_frame_provider(&m41_render_frame);\n"),
-        ("M4.1 coarse from the packet frame",
-         "                                            const auto snapshot=(config.settings.m25_fine_mode==0u && pair.first) ?\n",
-         "                                            const auto m41_pair=config.settings.m4_fovea_grid ?\n"
-         "                                                depths.m41_pair_for_frame(config.key.generation,\n"
-         "                                                    periphery.width,periphery.height,fovea.width,fovea.height,\n"
-         "                                                    current_queue,packet_frame->mono_source_frame.value_or(0u)) :\n"
-         "                                                std::pair<std::shared_ptr<const uevr::quadview::ngx::DepthSnapshot>,\n"
-         "                                                    std::shared_ptr<const uevr::quadview::ngx::DepthSnapshot>>{};\n"
-         "                                            const auto snapshot=m41_pair.first ? m41_pair.first :\n"
-         "                                                (config.settings.m25_fine_mode==0u && pair.first) ?\n"),
-        ("M4.1 fine only from the packet frame",
-         "                                            const auto m25_fine=(config.settings.m2_fovea_depth &&\n",
-         "                                            const auto m25_fine=m41_pair.second ? m41_pair.second :\n"
-         "                                                config.settings.m4_fovea_grid ?\n"
-         "                                                std::shared_ptr<const uevr::quadview::ngx::DepthSnapshot>{} :\n"
-         "                                                (config.settings.m2_fovea_depth &&\n"),
-        ("M4.1 log",
-         "                                                SPDLOG_INFO(\"[DuoView][M4] fovea_grid={} frames={} grid={}x{} fine_in={}x{}\",\n",
-         "                                                const auto m41=depths.m41_take_window();\n"
-         "                                                SPDLOG_INFO(\"[DuoView][M4.1] exact={} miss={} unstamped={} newest_coarse_vs_packet=-3:{},-2:{},-1:{},0:{},1:{},2:{},3:{} newest_fine_vs_packet=-3:{},-2:{},-1:{},0:{},1:{},2:{},3:{}\",\n"
-         "                                                    m41.exact,m41.miss,m41.unstamped,\n"
-         "                                                    m41.coarse[0],m41.coarse[1],m41.coarse[2],m41.coarse[3],m41.coarse[4],m41.coarse[5],m41.coarse[6],\n"
-         "                                                    m41.fine[0],m41.fine[1],m41.fine[2],m41.fine[3],m41.fine[4],m41.fine[5],m41.fine[6]);\n"
-         "                                                SPDLOG_INFO(\"[DuoView][M4] fovea_grid={} frames={} grid={}x{} fine_in={}x{}\",\n"),
+    patch(vr / "QuadViewNgxDepth.hpp", [
+        ("depth snapshot transaction",
+         """    uint64_t m24_present_epoch{};
+    bool duoview_fovea{};""",
+         """    uint64_t m24_present_epoch{};
+    uint64_t m41_packet_serial{};
+    bool duoview_fovea{};"""),
+        ("observe submitted or pending captures in the marker interval",
+         "        slot->sequence = ++next_sequence_;",
+         """        slot->sequence = ++next_sequence_;
+        slot->m41_packet_serial = 0;
+        if (duo && m41_marker_serial_) {
+            auto& capture = m41_candidates_[m25_role - 1];
+            capture.count = (std::min)(2u, capture.count + 1);
+            capture.sequence = slot->sequence;
+            capture.thread = GetCurrentThreadId();
+        }"""),
+        ("packet selection",
+         """        ++m25_cpu_pairs_;
+        return latest;
+    }
+""",
+         """        ++m25_cpu_pairs_;
+        return latest;
+    }
+""" + CAPTURE_INTERVAL),
+        ("transaction state",
+         "    std::atomic<uint64_t> m24_present_epoch_{1};",
+         """    std::atomic<uint64_t> m24_present_epoch_{1};
+    struct M41Candidate { uint64_t sequence{}; uint32_t thread{}, count{}; };
+    std::array<M41Candidate, 2> m41_candidates_{};
+    uint64_t m41_marker_generation_{}, m41_marker_serial_{};
+    uint32_t m41_marker_thread_{};
+    std::atomic<uint64_t> m41_interval_bound_{}, m41_interval_rejected_{}, m41_exact_{}, m41_coarse_only_{};"""),
     ])
 
-
-def main():
-    if len(sys.argv) != 2:
-        raise SystemExit("Usage: apply_duoview_m41_frame_bind.py <backend>")
-    backend(Path(sys.argv[1])/"src/mods")
-    print("M4.1: depth bound to the colour packet's OpenXR frame (M4 ON only)")
+    patch(vr / "D3D12Component.cpp", [
+        ("select depth from colour transaction",
+         "                                            const auto snapshot=(config.settings.m25_fine_mode==0u && pair.first) ?",
+         """                                            const auto m41_pair = config.settings.m4_fovea_grid ?
+                                                depths.m41_pair_for_packet(config.key.generation, packet->serial,
+                                                    periphery.width, periphery.height, fovea.width, fovea.height, current_queue) :
+                                                std::pair<std::shared_ptr<const uevr::quadview::ngx::DepthSnapshot>,
+                                                    std::shared_ptr<const uevr::quadview::ngx::DepthSnapshot>>{};
+                                            const auto snapshot=m41_pair.first ? m41_pair.first :
+                                                (config.settings.m25_fine_mode==0u && pair.first) ?"""),
+        ("coarse only on missing fine owner",
+         "                                            const auto m25_fine=(config.settings.m2_fovea_depth &&",
+         """                                            const auto m25_fine=config.settings.m4_fovea_grid ? m41_pair.second :
+                                                (config.settings.m2_fovea_depth &&"""),
+        ("log accepted and missing pairs",
+         '                                                SPDLOG_INFO("[DuoView][M4] fovea_grid={} frames={} grid={}x{} fine_in={}x{}",',
+         """                                                if (config.settings.m4_fovea_grid) {
+                                                    const auto m41 = depths.m41_take_window();
+                                                    SPDLOG_INFO("[DuoView][M4.1] bound={} rejected={} exact={} coarse_only={}",
+                                                        m41.bound, m41.rejected, m41.exact, m41.coarse_only);
+                                                }
+                                                SPDLOG_INFO("[DuoView][M4] fovea_grid={} frames={} grid={}x{} fine_in={}x{}","""),
+    ])
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 2:
+        raise SystemExit("Usage: apply_duoview_m41_frame_bind.py <backend>")
+    backend(Path(sys.argv[1]) / "src/mods")
+    print("M4.1: DuoView depth paired with the colour transaction at the deferred RHI tail")
