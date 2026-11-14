@@ -16,8 +16,8 @@ def m2_settings(mods):
     bool m2_fovea_depth{true};
     bool m2_unlinked_sharpen{false};
     float m2_left_sharpen{1.f}, m2_right_sharpen{1.f};"""),
-        ("M2 settings validation", "        out.stereo_softness=(std::clamp)(requested.stereo_softness,.25f,.9f);",
-         """        out.stereo_softness=(std::clamp)(requested.stereo_softness,.25f,.9f);
+        ("M2 settings validation", "        out.stereo_softness=(std::clamp)(requested.stereo_softness,.25f,.99f);",
+         """        out.stereo_softness=(std::clamp)(requested.stereo_softness,.25f,.99f);
     out.m2_fovea_depth=requested.m2_fovea_depth;
     out.m2_unlinked_sharpen=requested.m2_unlinked_sharpen;
     if (std::isfinite(requested.m2_left_sharpen))
