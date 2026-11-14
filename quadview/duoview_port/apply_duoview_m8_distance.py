@@ -160,7 +160,8 @@ float M8FillStrength(float inverseDepth) {
         "    if (inCrop && um>M2Crop.x && um<M2Crop.z)\n"
         "        fill=float3(dir,d,1.);\n"
         "    return clamp(um,0.0,1.0);",
-        "    const float strength=inCrop ? M8FillStrength(d) : 1.;\n"
+        "    // Fill strength follows the occluding foreground, not the uncovered wall.
+    const float strength=inCrop ? M8FillStrength(max(dl,dr)) : 1.;\n"
         "    if (inCrop && um>M2Crop.x && um<M2Crop.z && strength>.001)\n"
         "        fill=float3(dir,d,strength);\n"
         "    return lerp(root,clamp(um,0.0,1.0),strength);",
