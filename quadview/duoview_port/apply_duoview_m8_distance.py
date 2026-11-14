@@ -188,46 +188,6 @@ float M9PerEyeMix(float inverseDepth) {
             if (M8Distance.z>.5) M8Origin[x]=M8NextOrigin[x];
         }""",
       "one-sided carry origin between doubling passes")
-    # M9 hardening: the directional branch must not repeatedly evaluate the
-    # depth-dependent penalty helper inside a group-synchronized GPU loop.
-    # Reuse the already-seeded M8Scale and carry its winning source in lockstep
-    # with M8Origin. M8 OFF takes the original scalar penalty path.
-    block=once(block,
-        "    const int fold=k>=0.0 ? 1 : -1;",
-        "    const float safeSlope=M8SafeLimit();\n    const int fold=k>=0.0 ? 1 : -1;",
-        "uniform precomputed safe slope")
-    block=once(block,
-        "            float v=M1Row[x], origin=0.;\n            if (M8Distance.z>.5) origin=M8Origin[x];",
-        "            float v=M1Row[x], origin=0., factor=0.;\n            if (M8Distance.z>.5) { origin=M8Origin[x]; factor=M8Scale[x]; }",
-        "start carried scale")
-    block=once(block,
-        "                const float candidate=M1Row[xf]-float(step)*M8AdjustedPenalty(source,slope);",
-        "                const float applied= M8Distance.z>.5 ? min(slope*M8Scale[xf],safeSlope) : slope;\n                const float candidate=M1Row[xf]-float(step)*applied;",
-        "precomputed foreground penalty")
-    block=once(block,
-        "                if (candidate>v) { v=candidate; if (M8Distance.z>.5) origin=M8Origin[xf]; }",
-        "                if (candidate>v) { v=candidate; if (M8Distance.z>.5) { origin=M8Origin[xf]; factor=M8Scale[xf]; } }",
-        "carry foreground factor")
-    block=once(block,
-        "                    const float symmetric=max(0.,M1Row[xs]-float(step)*M8AdjustedPenalty(source,M1Filter.x*scale));",
-        "                    const float symSlope=M8Distance.z>.5 ? min((M1Filter.x*scale)*M8Scale[xs],safeSlope) : (M1Filter.x*scale);\n                    const float symmetric=max(0.,M1Row[xs]-float(step)*symSlope);",
-        "precomputed reverse symmetric slope")
-    block=once(block,
-        "                    const float oneSided=ps>0. ?\n                        max(0.,M1Row[xs]-float(step)*M8AdjustedPenalty(source,ps)) : 0.;",
-        "                    const float dirSlope=M8Distance.z>.5 ? min(ps*M8Scale[xs],safeSlope) : ps;\n                    const float oneSided=ps>0. ?\n                        max(0.,M1Row[xs]-float(step)*dirSlope) : 0.;",
-        "precomputed reverse one-sided slope")
-    block=once(block,
-        "                    if (candidate>v) { v=candidate; if (M8Distance.z>.5) origin=M8Origin[xs]; }",
-        "                    if (candidate>v) { v=candidate; if (M8Distance.z>.5) { origin=M8Origin[xs]; factor=M8Scale[xs]; } }",
-        "carry reverse factor")
-    block=once(block,
-        "            if (M8Distance.z>.5) M8NextOrigin[x]=origin;",
-        "            if (M8Distance.z>.5) { M8NextOrigin[x]=origin; M8NextScale[x]=factor; }",
-        "stage next factor")
-    block=once(block,
-        "            if (M8Distance.z>.5) M8Origin[x]=M8NextOrigin[x];",
-        "            if (M8Distance.z>.5) { M8Origin[x]=M8NextOrigin[x]; M8Scale[x]=M8NextScale[x]; }",
-        "publish next factor")
     block=uniformize_lane_loops(block)
     text=text[:start]+block+text[end:]
 

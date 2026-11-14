@@ -63,7 +63,7 @@ def main():
                   "return lerp(original,min(proposed,maxSafe),enabled)",
                   "return enabled*(t*t*(3.-2.*t))",
                   "lerp(M1Filter.x*scale,pf,M9PerEyeMix(source))",
-                  "const float symmetric=max(0.,M1Row[xs]-float(step)*symSlope)",
+                  "const float symmetric=max(0.,M1Row[xs]-float(step)*M8AdjustedPenalty(source,M1Filter.x*scale))",
                   "const float oneSided=ps>0. ?",
                   "const float candidate=lerp(symmetric,oneSided,mix)",
                   "const float pixelBudget=reach",
@@ -90,15 +90,6 @@ def main():
     start=s.index("void M4Envelope(")
     end=s.index("void CSConditionM4Vertical(",start)
     conditioned=s[start:end]
-    directional=conditioned[:conditioned.index("[numthreads(128,1,1)]")]
-    assert "M8AdjustedPenalty(" not in directional, "M9 directional envelope still computes expensive depth penalty in barrier loop"
-    for token in ["const float safeSlope=M8SafeLimit();",
-                  "const float applied= M8Distance.z>.5 ? min(slope*M8Scale[xf],safeSlope) : slope;",
-                  "const float symSlope=M8Distance.z>.5 ? min((M1Filter.x*scale)*M8Scale[xs],safeSlope) : (M1Filter.x*scale);",
-                  "const float dirSlope=M8Distance.z>.5 ? min(ps*M8Scale[xs],safeSlope) : ps;",
-                  "M8NextScale[x]=factor;", "M8Scale[x]=M8NextScale[x];",
-                  "M8Scale[x]=M8SeedScale(M1Seed[x]);"]:
-        need(conditioned,token,"precomputed directional slope and source lineage")
     assert "for (uint x=lane; x<w; x+=128)" not in conditioned, "FXC-uniform tile contract regressed"
     assert conditioned.count("for (uint tile=0u; tile<(w+127u)/128u; ++tile)") >= 7
     # Source-level regression for an eye-baseline scale error. Native UEVR
