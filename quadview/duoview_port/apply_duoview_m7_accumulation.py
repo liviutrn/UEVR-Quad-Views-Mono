@@ -120,7 +120,7 @@ def controls(mods):
         ("saved fovea-only temporal settings",
          "    float m5_left_max{.10f}, m5_right_max{.10f}; // M5: per-eye sharpen limiter",
          """    float m5_left_max{.10f}, m5_right_max{.10f}; // M5: per-eye sharpen limiter
-    float edge_history{.70f}, fill_history{.65f}, fill_blur_px{1.25f};"""),
+    float edge_history{.70f}, fill_history{.65f}, fill_blur_px{1.25f}, edge_reach_px{8.f};"""),
         ("validate controls",
          "    out.m4_fovea_grid=requested.m4_fovea_grid;",
          """    out.m4_fovea_grid=requested.m4_fovea_grid;
@@ -129,22 +129,26 @@ def controls(mods):
     if (std::isfinite(requested.fill_history))
         out.fill_history=(std::clamp)(requested.fill_history,0.f,.95f);
     if (std::isfinite(requested.fill_blur_px))
-        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,12.f);"""),
+        out.fill_blur_px=(std::clamp)(requested.fill_blur_px,0.f,32.f);
+    if (std::isfinite(requested.edge_reach_px))
+        out.edge_reach_px=(std::clamp)(requested.edge_reach_px,2.f,20.f);"""),
     ])
     patch(mods / "VR.hpp", [
         ("three persistent sliders", '    const ModSlider::Ptr m_duo_m5_right_max{',
          """    const ModSlider::Ptr m_duo_edge_history{ModSlider::create(generate_name("DuoEdgeHistory"),0.f,.95f,.70f)};
+    const ModSlider::Ptr m_duo_edge_reach{ModSlider::create(generate_name("DuoEdgeHistoryReachPixels"),2.f,20.f,8.f)};
     const ModSlider::Ptr m_duo_fill_history{ModSlider::create(generate_name("DuoFillHistory"),0.f,.95f,.65f)};
-    const ModSlider::Ptr m_duo_fill_blur{ModSlider::create(generate_name("DuoFillBlurPixels"),0.f,12.f,1.25f)};
+    const ModSlider::Ptr m_duo_fill_blur{ModSlider::create(generate_name("DuoFillBlurPixels"),0.f,32.f,1.25f)};
     const ModSlider::Ptr m_duo_m5_right_max{"""),
         ("save and load the three controls", "*m_duo_m5_right_max,",
-         "*m_duo_m5_right_max, *m_duo_edge_history, *m_duo_fill_history, *m_duo_fill_blur,"),
+         "*m_duo_m5_right_max, *m_duo_edge_history, *m_duo_fill_history, *m_duo_fill_blur, *m_duo_edge_reach,"),
     ])
     patch(mods / "VR.cpp", [
         ("reset default values",
          "                    m_duo_m5_left_max->value()=.10f; m_duo_m5_right_max->value()=.10f;",
          """                    m_duo_m5_left_max->value()=.10f; m_duo_m5_right_max->value()=.10f;
                     m_duo_edge_history->value()=.70f;
+                    m_duo_edge_reach->value()=8.f;
                     m_duo_fill_history->value()=.65f;
                     m_duo_fill_blur->value()=1.25f;"""),
         ("freeze controls with the packet",
@@ -152,20 +156,24 @@ def controls(mods):
          """        .m5_right_max=m_duo_m5_right_max->value(),
         .edge_history=m_duo_edge_history->value(),
         .fill_history=m_duo_fill_history->value(),
-        .fill_blur_px=m_duo_fill_blur->value(),"""),
+        .fill_blur_px=m_duo_fill_blur->value(),
+        .edge_reach_px=m_duo_edge_reach->value(),"""),
         ("live setting equality",
          "        current.m5_right_max==candidate.m5_right_max &&",
          """        current.m5_right_max==candidate.m5_right_max &&
         current.edge_history==candidate.edge_history &&
         current.fill_history==candidate.fill_history &&
-        current.fill_blur_px==candidate.fill_blur_px &&"""),
+        current.fill_blur_px==candidate.fill_blur_px &&
+        current.edge_reach_px==candidate.edge_reach_px &&"""),
         ("show in the existing M4 controls",
          '                    m_duo_m4_fovea_grid->draw("M4 FULL-RES FOVEA DEPTH (fovea uses its own sharp depth; turns fine depth on)");',
          """                    m_duo_m4_fovea_grid->draw("M4 FULL-RES FOVEA DEPTH (fovea uses its own sharp depth; turns fine depth on)");
                     if (m_duo_m4_fovea_grid->value()) {
                         m_duo_edge_history->draw("Fovea depth edge history (0 = off)");
+                        if (m_duo_edge_history->value()>0.f)
+                            m_duo_edge_reach->draw("Maximum temporal edge correction (2..20 output px)");
                         m_duo_fill_history->draw("Revealed background history (0 = off)");
-                        m_duo_fill_blur->draw("Revealed background blur radius (px, 0..12)");
+                        m_duo_fill_blur->draw("Revealed background blur radius (output px, 0..32)");
                     }"""),
     ])
 
@@ -187,11 +195,11 @@ def backend(mods):
     float edge_history{};
     uint32_t fovea_view{}, jitter_mode{};"""),
         ("parameter block layout", "    float m5_sharpen[4]{};",
-         "    float m7_controls[4]{};\n    uint32_t m7_color_extent[4]{};\n    float m5_sharpen[4]{};"),
+         "    float m7_controls[4]{};\n    uint32_t m7_color_extent[4]{};\n    float m7_tuning[4]{};\n    float m5_sharpen[4]{};"),
         ("parameter block and CBV remain aligned",
          """sizeof(M1Constants) == 496);
 static_assert(sizeof(M1Constants) <= 2*D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);""",
-         """sizeof(M1Constants) == 528);
+         """sizeof(M1Constants) == 544);
 inline constexpr UINT m1_constant_bytes =
     (sizeof(M1Constants)+D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT-1) &
     ~(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT-1);"""),
@@ -203,7 +211,7 @@ inline constexpr UINT m1_constant_bytes =
                          D3D12_CPU_DESCRIPTOR_HANDLE previous_srv={}) {""",
          """                         const FineDepthHistoryFrame* previous,
                          bool write_history, float edge_history, float fill_history, float fill_blur,
-                         const std::array<uint32_t,4>& color_extent) {"""),
+                         float edge_reach_px, const std::array<uint32_t,4>& color_extent) {"""),
         ("required arguments follow required sharpening",
          "float left_max_change=.10f, float right_max_change=.10f,",
          "float left_max_change, float right_max_change,"),
@@ -214,6 +222,7 @@ inline constexpr UINT m1_constant_bytes =
         data.m7_controls[1]=fill_history;
         data.m7_controls[2]=fill_blur;
         data.m7_controls[3]=write_history ? 1.f : 0.f;
+        data.m7_tuning[0]=edge_reach_px;
         std::copy(color_extent.begin(),color_extent.end(),data.m7_color_extent);
         if (m4_active && previous) {
             const auto motion=stereo::fine_depth_reprojection(geometry.fine_depth_camera,previous->camera);
@@ -301,7 +310,8 @@ inline constexpr UINT m1_constant_bytes =
         ("pass the frozen settings and texture extent into constants",
          "settings.m5_left_max,settings.m5_right_max,previous,m6_previous_srv_);",
          """settings.m5_left_max,settings.m5_right_max,previous,write_history,
-                settings.edge_history,settings.fill_history,settings.fill_blur_px,color_extent);"""),
+                settings.edge_history,settings.fill_history,settings.fill_blur_px,
+                settings.edge_reach_px,color_extent);"""),
         ("bind current and previous history for the retired compositor slot",
          "        ensure_srvs(device,fovea,periphery,sampling_format);",
          """        ensure_srvs(device,fovea,periphery,sampling_format);
