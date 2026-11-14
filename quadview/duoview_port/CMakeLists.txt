@@ -7,6 +7,11 @@ endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 include(CTest)
 
+# VectorXR handoff identity/geometry contract is platform independent.
+add_executable(DuoViewVectorXRDepthPolicyTests VectorXRDepthPolicyTests.cpp)
+target_compile_features(DuoViewVectorXRDepthPolicyTests PRIVATE cxx_std_20)
+add_test(NAME duoview-vectorxr-depth-policy COMMAND DuoViewVectorXRDepthPolicyTests)
+
 set(PINNED_WARP_SOURCE "${CMAKE_CURRENT_LIST_DIR}/../../duoview/joey_stage1/V208SharedEyeWarp.cpp")
 set(GENERATED_WARP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/V208SharedEyeWarpB40.cpp")
 add_custom_command(
