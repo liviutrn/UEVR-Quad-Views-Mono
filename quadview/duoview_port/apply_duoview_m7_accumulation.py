@@ -14,7 +14,7 @@ def shaders(sh):
     end = old.index("[numthreads(128,1,1)]", start)
     patch(path, [
         ("temporal parameters", "    float4 M5Sharpen;",
-         "    float4 M7Controls;\n    uint4 M7ColorExtent;\n    float4 M5Sharpen;"),
+         "    float4 M7Controls;\n    uint4 M7ColorExtent;\n    float4 M7Tuning; // x: maximum temporal edge correction in output pixels\n    float4 M5Sharpen;"),
         ("accumulated history kernels", old[start:end], helper + "\n"),
         ("feed each stabilized seed back into history",
          "        fine=M6StabilizeFineEdge(local,fine,farDepth);",
