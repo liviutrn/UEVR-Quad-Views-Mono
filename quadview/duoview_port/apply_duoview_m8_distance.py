@@ -121,6 +121,15 @@ float M8FillStrength(float inverseDepth) {
       "M1Row[x+step]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[x+step] : M1Row[x+step],pen)",
       "symmetric right contribution")
     block=once(block,
+      """const float l=x>=step ? M1Row[x-step]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[x-step] : M1Row[x-step],pen) : 0.0;
+                const float r=x+step<w ? M1Row[x+step]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[x+step] : M1Row[x+step],pen) : 0.0;""",
+      """float l=0.0, r=0.0;
+                if (x>=step)
+                    l=M1Row[x-step]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[x-step] : M1Row[x-step],pen);
+                if (x+step<w)
+                    r=M1Row[x+step]-float(step)*M8AdjustedPenalty(M8Distance.z>.5 ? M8Origin[x+step] : M1Row[x+step],pen);""",
+      "never read group-shared origins outside the image")
+    block=once(block,
        "    const float limit=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;\n    const float scale=M4Flags.y;",
        """    if (M8Distance.z>.5) {
         for (uint x=lane; x<w; x+=128) M8Origin[x]=M1Row[x];
