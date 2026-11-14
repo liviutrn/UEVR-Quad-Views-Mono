@@ -1,10 +1,10 @@
-name: TriView B43 + DuoView Mono M3a + World trace #21
+name: TriView B43 + DuoView Mono M4 + World trace #21
 # Exact per-role frame binding; original backend/SDK/frontend pins.
 # Original reviewed rollback artifact prefix: UEVR-DuoView-M24- (B31 legacy contract); build output is M25a.
-run-name: TriView B43 + DuoView Mono M3a + World trace #21 (${{ github.run_number }})
+run-name: TriView B43 + DuoView Mono M4 + World trace #21 (${{ github.run_number }})
 on:
   push:
-    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**', 'experiment/duoview-m24-**', 'experiment/duoview-m25a-**', 'experiment/duoview-m3a-**']
+    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**', 'experiment/duoview-m24-**', 'experiment/duoview-m25a-**', 'experiment/duoview-m3a-**', 'experiment/duoview-m4-**']
     paths: ['.github/workflows/triview-b1.yml', 'quadview/**']
   workflow_dispatch:
 permissions:
@@ -333,6 +333,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M3a generated contracts failed' }
           python workspace/quadview/duoview_port/test_duoview_m3a_numeric.py
           if ($LASTEXITCODE -ne 0) { throw 'M3a numeric model failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m4_fovea.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M4 full-resolution fovea depth overlay failed' }
+          python workspace/quadview/duoview_port/test_duoview_m4_generated.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M4 generated contracts failed' }
           '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
           $changes = @(
             @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),
@@ -606,16 +610,16 @@ jobs:
           if (@(Get-ChildItem package -File -Filter *.exe).Count -lt 1) { throw "Missing Joey frontend executable" }
           if ((Get-Content package/READ_FIRST.txt -Raw) -notmatch 'ID7') { throw 'Missing stereo QuadView instructions' }
           Get-ChildItem package -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/package-sha256.json
-          $zip="UEVR-DuoView-M3a-Trace21-${{ github.run_number }}.zip"
+          $zip="UEVR-DuoView-M4-Trace21-${{ github.run_number }}.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
           (Get-FileHash $zip -Algorithm SHA256).Hash | Set-Content "$zip.sha256"
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: UEVR-DuoView-M3a-Trace21-${{ github.run_number }}
+          name: UEVR-DuoView-M4-Trace21-${{ github.run_number }}
           path: |
-            UEVR-DuoView-M3a-Trace21-*.zip
-            UEVR-DuoView-M3a-Trace21-*.zip.sha256
+            UEVR-DuoView-M4-Trace21-*.zip
+            UEVR-DuoView-M4-Trace21-*.zip.sha256
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
