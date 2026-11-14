@@ -69,6 +69,15 @@ def main():
     conditioned=s[start:end]
     assert "for (uint x=lane; x<w; x+=128)" not in conditioned, "FXC-uniform tile contract regressed"
     assert conditioned.count("for (uint tile=0u; tile<(w+127u)/128u; ++tile)") >= 7
+    # Source-level regression for an eye-baseline scale error. Native UEVR
+    # get_world_to_meters() already multiplies m_world_to_meters by WorldScale.
+    # DuoView may not multiply by WorldScale a second time.
+    m1_patch=(Path(__file__).with_name("apply_duoview_m1.py")).read_text(encoding="utf-8")
+    need(m1_patch,"const auto scale=double(vr->get_world_to_meters());","no squared world scale")
+    assert "get_world_to_meters())*vr->get_world_scale()" not in m1_patch
+    for world_scale in [0.5,0.85,1.0,1.10,1.5]:
+        wtm=100.0*world_scale
+        assert abs(wtm-(100.*world_scale)) < 1.e-8
     for world_units in [1.,100.,110.,160.]:
         assert factor(1/(.5*world_units),2.,5.,world_units)==0.
         assert factor(1/(7.*world_units),2.,5.,world_units)==1.
