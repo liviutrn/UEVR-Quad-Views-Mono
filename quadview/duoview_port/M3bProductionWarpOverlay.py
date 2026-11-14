@@ -124,6 +124,83 @@ def main():
         std::cout<<"PASS: M3b independent switches OFF reproduce M3a image hash\\n";
     }
 '''
+    block+=r'''    // M3b P1: force a foveal colour edge and jittered coarse-depth edge in WARP.
+    {
+        auto source_descriptor=texture(32,32,DXGI_FORMAT_B8G8R8A8_TYPELESS,D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+        auto source=resource(g.device.Get(),source_descriptor,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};UINT64 bytes{};
+        g.device->GetCopyableFootprints(&source_descriptor,0,1,0,&fp,nullptr,nullptr,&bytes);
+        fp.Footprint.Format=DXGI_FORMAT_B8G8R8A8_UNORM;
+        auto up=resource(g.device.Get(),buffer(bytes),D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);
+        void* mapped{};check(up->Map(0,&no_reads,&mapped));
+        for(UINT y=0;y<32;++y) for(UINT x=0;x<32;++x) {
+            uint8_t* pixel=static_cast<uint8_t*>(mapped)+y*fp.Footprint.RowPitch+4*x;
+            const uint8_t v=x>=frame.config.layout.fovea.width/2u ? 240u : 20u;
+            pixel[0]=v;pixel[1]=v;pixel[2]=v;pixel[3]=255u;
+        }
+        up->Unmap(0,nullptr);
+        D3D12_TEXTURE_COPY_LOCATION from{up.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};from.PlacedFootprint=fp;
+        D3D12_TEXTURE_COPY_LOCATION to{source.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
+        g.cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+        transition(g.cmd.Get(),source.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_RENDER_TARGET);
+        g.submit_and_wait();keep.push_back(up);keep.push_back(source);
+        const auto savedPrimary=primary;
+        const auto savedDepth=m1_depth;
+        const auto savedJitterMode=frame.config.settings.m3_jitter_mode;
+        const auto savedFineEnabled=frame.config.settings.m2_fovea_depth;
+        const auto savedM25Mode=frame.config.settings.m25_fine_mode;
+        const auto savedStereo=frame.config.settings.synthetic_stereo;
+        const auto savedGeometry=m1_geometry.k;
+        const auto savedFine=m21_fine_depth;
+        using Vote=uevr::duoview::dx12::M1Resources::M3bAutoJitter;
+        Vote::test_window_length.store(4u);
+        primary=source;
+        m1_geometry.k={.25f,-.25f};
+        m21_fine_depth={};
+        frame.config.settings.synthetic_stereo=true;
+        frame.config.settings.m2_fovea_depth=false;
+        frame.config.settings.m25_fine_mode=0u;
+        const int centre=static_cast<int>((cu0+cu1)*16.f);
+        for(const int expected_sign : {1,-1}) {
+            const int step=centre+expected_sign;
+            auto depth=upload_depth([&](UINT x){return int(x)>=step ? .45f : .15f;});
+            m1_depth={depth.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{1.f/32.f,0.f},lease};
+            frame.config.settings.m3_jitter_mode=0u;
+            run(*a,false,Route::direct,"M3b jitter test: flush previous slot");
+            (void)take();
+            {
+                std::scoped_lock lock(Vote::mutex);
+                Vote::sign.store(1);
+                Vote::frames=Vote::streak=0u;Vote::last_vote=99;
+                Vote::scores[0]=Vote::scores[1]=Vote::scores[2]=0u;
+                Vote::pixel_sum=0.0;
+            }
+            frame.config.settings.m3_jitter_mode=3u;
+            for(int i=0;i<12;++i) run(*a,false,Route::direct,"M3b jitter test: measured Auto window");
+            const int sign=Vote::sign.load();
+            frame.config.settings.m3_jitter_mode=0u;
+            run(*a,false,Route::direct,"M3b jitter test: retired readback");
+            const auto scores=take();
+            const uint64_t selected=expected_sign>0 ? scores[11] : scores[9];
+            const uint64_t opposite=expected_sign>0 ? scores[9] : scores[11];
+            if(sign!=expected_sign || selected<=scores[10] || selected<=opposite)
+                throw std::runtime_error("M3b Auto jitter did not select the source-depth aligned sign on WARP");
+        }
+        Vote::test_window_length.store(120u);
+        {
+            std::scoped_lock lock(Vote::mutex);
+            Vote::sign.store(1);Vote::frames=Vote::streak=0u;Vote::last_vote=99;
+            Vote::scores[0]=Vote::scores[1]=Vote::scores[2]=0u;Vote::pixel_sum=0.0;
+        }
+        primary=savedPrimary;m1_depth=savedDepth;m21_fine_depth=savedFine;
+        m1_geometry.k=savedGeometry;
+        frame.config.settings.m3_jitter_mode=savedJitterMode;
+        frame.config.settings.m2_fovea_depth=savedFineEnabled;
+        frame.config.settings.m25_fine_mode=savedM25Mode;
+        frame.config.settings.synthetic_stereo=savedStereo;
+        std::cout<<"PASS: WARP M3b jitter Auto votes for both calibrated signs\n";
+    }
+'''
     s=s.replace(marker,block+marker)
     v.output.write_text(s,encoding="utf-8",newline="\n")
     print("Generated M3b P5 gate A/B WARP fixture")

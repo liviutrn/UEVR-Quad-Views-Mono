@@ -63,7 +63,7 @@ groupshared uint M25Valid[256],M25Agree[256];"""),
     patch(mods/"vr/DuoViewM1D3D12.hpp",[
       ("P1 includes",
        "#include <memory>\n",
-       "#include <memory>\n#include <mutex>\n#include <atomic>\n#include <spdlog/spdlog.h>\n"),
+       "#include <memory>\n#include <mutex>\n#include <atomic>\n"),
       ("P1 shader pipeline and readback flags",
        "    ComPtr<ID3D12PipelineState> raster, condition, vertical, m25_analyse, m25_guard;",
        "    ComPtr<ID3D12PipelineState> raster, condition, vertical, m25_analyse, m25_guard, m3b_jitter_score;"),
@@ -82,6 +82,8 @@ groupshared uint M25Valid[256],M25Agree[256];"""),
         inline static std::mutex mutex{};
         inline static std::atomic<int> sign{1};
         inline static uint32_t frames{},streak{};
+        inline static std::atomic<uint32_t> test_window_length{120u};
+        inline static std::atomic<uint64_t> window_sequence{},last_minus{},last_zero{},last_plus{};
         inline static int last_vote{99};
         inline static uint64_t scores[3]{};
         inline static double pixel_sum{};
@@ -89,19 +91,22 @@ groupshared uint M25Valid[256],M25Agree[256];"""),
             std::scoped_lock lock(mutex);
             scores[0]+=result.m3b_scores[0];scores[1]+=result.m3b_scores[1];scores[2]+=result.m3b_scores[2];
             pixel_sum+=pixelMagnitude;
-            if(++frames<120u) return;
+            const uint32_t window_length=test_window_length.load(std::memory_order_relaxed);
+            if(++frames<window_length) return;
             uint32_t best=0u;
             if(scores[1]>scores[best]) best=1u;
             if(scores[2]>scores[best]) best=2u;
             const uint64_t other=(std::max)(scores[(best+1u)%3u],scores[(best+2u)%3u]);
-            const bool decisive=scores[best]>0u && double(scores[best])>=1.03*double(other) && pixel_sum/120.0>.05;
+            const bool decisive=scores[best]>0u && double(scores[best])>=1.03*double(other) && pixel_sum/double(window_length)>.05;
             const int vote=decisive ? (best==0u ? -1 : (best==2u ? 1 : 0)) : 99;
             if(vote!=99) {
                 streak=vote==last_vote ? streak+1u : 1u;last_vote=vote;
                 if(streak>=2u && vote!=0) sign.store(vote,std::memory_order_relaxed);
             } else {streak=0u;last_vote=99;}
-            spdlog::info("[DuoView][M3b] jitter score minus={} zero={} plus={} vote={} active={} mean_px={:.3f}",
-                scores[0],scores[1],scores[2],vote,sign.load(),pixel_sum/120.0);
+            last_minus.store(scores[0],std::memory_order_relaxed);
+            last_zero.store(scores[1],std::memory_order_relaxed);
+            last_plus.store(scores[2],std::memory_order_relaxed);
+            window_sequence.fetch_add(1,std::memory_order_release);
             scores[0]=scores[1]=scores[2]=0u;frames=0u;pixel_sum=0.0;
         }
     };

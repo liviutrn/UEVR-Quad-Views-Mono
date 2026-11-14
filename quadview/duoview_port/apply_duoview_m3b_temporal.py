@@ -99,10 +99,11 @@ void CSStabilizeM3b(uint3 tid:SV_DispatchThreadID) {
 
 [numthreads(128,1,1)]
 void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {"""),
-      ("P2 use stabilized seed only when ON",
-       "        M1Row[x] = knee > 0.0 ? nearDepth : min(nearDepth, M1Filter.y);",
-       "        M1Row[x] = knee > 0.0 ? nearDepth : min(nearDepth, M1Filter.y);\n"
-       "        [branch] if(M3bTemporal.x>.5) M1Row[x]=M3bStabilizedRead.Load(int3(x,group.x,0));"),
+      ("P2 bypass duplicated seed work when temporal seed was already computed",
+       "    for (uint x = lane; x < w; x += 128) {\n        const float2 unjittered=",
+       "    for (uint x = lane; x < w; x += 128) {\n"
+       "        [branch] if(M3bTemporal.x>.5) { M1Row[x]=M3bStabilizedRead.Load(int3(x,group.x,0)); continue; }\n"
+       "        const float2 unjittered="),
     ])
     patch(mods/"vr/DuoViewM1D3D12.hpp",[
       ("P2 temporal cbuffer",

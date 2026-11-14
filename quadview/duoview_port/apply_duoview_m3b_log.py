@@ -22,6 +22,11 @@ def main():
                                                     uevr::duoview::dx12::M1Resources::M3bAutoJitter::sign.load(std::memory_order_relaxed),
                                                     uevr::duoview::dx12::M1Resources::m3b_temporal_resets.exchange(0));'''),
     ])
+    patch(mods/'vr/D3D12Component.cpp', [
+        ('P7 log each Auto jitter vote from a completed GPU score window',
+         '                                                double(m21.pool_bytes)/1048576.0,\n                                                packet_frame->config.settings.m21_jitter_correct);',
+         '                                                double(m21.pool_bytes)/1048576.0,\n                                                packet_frame->config.settings.m21_jitter_correct);\n                                            using M3bVote=uevr::duoview::dx12::M1Resources::M3bAutoJitter;\n                                            static std::atomic<uint64_t> last_jitter_window_logged{0};\n                                            const uint64_t window=M3bVote::window_sequence.load(std::memory_order_acquire);\n                                            uint64_t observed=last_jitter_window_logged.load(std::memory_order_relaxed);\n                                            if(window>observed && last_jitter_window_logged.compare_exchange_strong(observed,window)) {\n                                                SPDLOG_INFO("[DuoView][M3b] jitter score minus={} zero={} plus={} active={}",\n                                                    M3bVote::last_minus.load(),M3bVote::last_zero.load(),M3bVote::last_plus.load(),\n                                                    M3bVote::sign.load());\n                                            }'),
+    ])
     print('M3b P7: 1-second gate scores, jitter sign, temporal reset counters, documented GPU metric gaps')
 
 if __name__ == '__main__':
