@@ -106,10 +106,12 @@ def main():
             cpu->Unmap(0,nullptr);
             return packed&255u;
         };
-        primary=solid_source(g,keep,32,32,{128,128,143,255});
+        // Keep the WARP compositor's original >=220 red-channel coverage assertion
+        // while injecting a measurable 25/255 red impulse into M7 colour history.
+        primary=solid_source(g,keep,32,32,{128,128,255,255});
         run(*a,false,Route::direct,"Fill history seeds a colour impulse");
         a->note_fine_depth_enqueued();
-        primary=solid_source(g,keep,32,32,{128,128,128,255});
+        primary=solid_source(g,keep,32,32,{128,128,230,255});
         run(*b,false,Route::direct,"Fill history carries that impulse into frame two");
         b->note_fine_depth_enqueued();
         run(*a,false,Route::direct,"Fill history still carries it into frame three");
