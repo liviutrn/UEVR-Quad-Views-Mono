@@ -166,7 +166,7 @@ float M8FillStrength(float inverseDepth) {
     text=text[:start]+block+text[end:]
 
     text=once(text,
-        "    if(!(stretch>M3Flags.z)) return root;",
+        "    if(!(stretch>(M3Flags.z>0. ? M3Flags.z : 2.0))) return root;",
         """    // M8 uses an explicit disocclusion gate even when M3 per-eye edges are OFF.
     const float gate=M8Distance.z>.5 ? 2.0 : M3Flags.z;
     if(!(stretch>gate)) return root;""",
