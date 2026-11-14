@@ -353,6 +353,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'DuoView accumulated history overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m7_generated.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'DuoView accumulated history contracts failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m8_distance.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView distance-aware edge/fill overlay failed' }
+          python workspace/quadview/duoview_port/test_duoview_m8_generated.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView distance-aware edge/fill contracts failed' }
           '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
           $changes = @(
             @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),
