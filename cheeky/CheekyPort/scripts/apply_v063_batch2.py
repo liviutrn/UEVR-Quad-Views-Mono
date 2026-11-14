@@ -73,9 +73,9 @@ change("uevr/scripts/cheeky_foveated_dlss.lua",
        '        slider("Max VRAM admission reserve (MiB)", "NrVramGuardMiB", 512, 4096, true)',
        '''        slider("Max VRAM admission reserve (MiB)", "NrVramGuardMiB", 512, 4096, true)
         if draft.NrUseSourceRoles ~= nil then
-            checkbox("Use UEVR source roles (C2; automatic fallback)", "NrUseSourceRoles")
-            checkbox("Admission guard before NGX allocation", "NrAllocAdmission")
-            checkbox("Reuse retired NGX model for 10 s (2 slots)", "NrFeatureReuse")
+            check("Use UEVR source roles (C2; automatic fallback)", "NrUseSourceRoles")
+            check("Admission guard before NGX allocation", "NrAllocAdmission")
+            check("Reuse retired NGX model for 10 s (2 slots)", "NrFeatureReuse")
         end''',
        "safety UI")
 

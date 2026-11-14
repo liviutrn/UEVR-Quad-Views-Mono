@@ -63,7 +63,9 @@ __snap = {
         EyeProcessingMode=3,CenterMode=0,AutoStereoAlignment=false,
         NrPreset=1,ManualStereoMapping=false,
         FgEnabled=false,D3D11D3D12Transport=false,
-        NrPass2SameAsPass1=true, NrIntensity=1
+        NrPass2SameAsPass1=true, NrIntensity=1,
+        NrVramGuardMiB=1536, NrUseSourceRoles=true,
+        NrAllocAdmission=true, NrFeatureReuse=true
     },
     nr_details={
         processing_width=1355,processing_height=1077,
@@ -94,6 +96,10 @@ expected = [
     "Pass 2 crop width",
     "Pass 2 crop height",
     "Model passes",
+    "Max VRAM admission reserve (MiB)",
+    "Use UEVR source roles (C2; automatic fallback)",
+    "Admission guard before NGX allocation",
+    "Reuse retired NGX model for 10 s (2 slots)",
 ]
 absent = [name for name in expected if seen[name] is None]
 if absent:
