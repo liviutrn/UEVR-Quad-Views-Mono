@@ -161,6 +161,17 @@ float M8FillStrength(float inverseDepth) {
             if (M8Distance.z>.5) M8Origin[x]=M1Seed[x];
         }""",
        "reset origin for right-eye conditioning")
+    # FXC X3663: a post-seed group barrier cannot follow a loop whose exit
+    # condition depends on SV_GroupIndex. All 128 lanes must take the same
+    # number of iterations, even for partial tiles of the last row.
+    block=once(block,
+       "    for (uint x=lane; x<w; x+=128) {\\n        const float2 local=",
+       "    for (uint tile=0u; tile<(w+127u)/128u; ++tile) {\\n        const uint x=128u*tile+lane;\\n        if (x<w) {\\n        const float2 local=",
+       "uniformize fine-depth seed tile loop before group barrier")
+    block=once(block,
+       "        M8Origin[x]=M1Row[x];\\n    }\\n    GroupMemoryBarrierWithGroupSync();",
+       "        M8Origin[x]=M1Row[x];\\n        }\\n    }\\n    GroupMemoryBarrierWithGroupSync();",
+       "end uniform fine-depth seed tile loop outside varying branch")
     text=text[:start]+block+text[end:]
 
     text=once(text,
