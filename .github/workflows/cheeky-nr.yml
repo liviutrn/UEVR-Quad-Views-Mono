@@ -1,5 +1,12 @@
 name: Cheeky 0.6.3 NR Batch 2 - shared-repo build
 on:
+  push:
+    branches:
+      - 'experiment/cheeky-nr-batch1-*'
+      - 'experiment/cheeky-nr-batch2-preflight-*'
+    paths:
+      - 'cheeky/**'
+      - '.github/workflows/cheeky-nr.yml'
   workflow_dispatch:
 permissions:
   contents: read
