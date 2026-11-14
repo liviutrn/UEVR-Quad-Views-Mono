@@ -58,7 +58,7 @@ def shaders(sh):
     patch(raster, [
         ("current accumulated colour is visible to raster",
          '#include "DuoViewM1Stereo.hlsl"',
-         '#include "DuoViewM1Stereo.hlsl"\nTexture2D<float4> M7CurrentHistory : register(t10);'),
+         '#include "DuoViewM1Stereo.hlsl"\nTexture2D<float4> M7CurrentHistory : register(t10);\n'\n         'float3 M7UnpackColor(float packed) {\n'\n         '    const uint bits=uint(packed);\n'\n         '    const float3 encoded=float3(bits&255u,(bits>>8u)&255u,(bits>>16u)&255u)/255.;\n'\n         '    return encoded*encoded;\n'\n         '}'),
         ("hole metadata", "    float2 fill=0.;", "    float3 fill=0.;"),
         ("replace only the foveal component of the uncovered background", old[start:end],
          ""),
