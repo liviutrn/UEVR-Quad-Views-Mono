@@ -119,13 +119,18 @@ void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {"""),
        "    bool m3b_temporal_active{},m3b_history_valid{};\n"
        "    uint32_t m3b_history_index{},m3b_last_width{},m3b_last_height{};\n"
        "    float m3b_last_crop[4]{};\n"
+       "    std::array<float,14> m3b_last_signature{};\n"
+       "    inline static std::atomic<uint64_t> m3b_temporal_resets{};\n"
        "    bool m3b_auto_active{},m3b_pending_auto{},m3b_pending_gate{};"),
+      ("P2 require the two registered temporal pipelines",
+       "m3b_jitter_score && m25_tiles && m25_stats",
+       "m3b_jitter_score && m3b_seed_pipeline && m3b_stabilize_pipeline && m25_tiles && m25_stats"),
       ("P2 pipelines optional",
        "        compute.CS={m3b_jitter_score_bytecode,sizeof(m3b_jitter_score_bytecode)};",
        "        compute.CS={m3b_seed_bytecode,sizeof(m3b_seed_bytecode)};\n"
-       "        (void)device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m3b_seed_pipeline));\n"
+       "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m3b_seed_pipeline)))) return false;\n"
        "        compute.CS={m3b_stabilize_bytecode,sizeof(m3b_stabilize_bytecode)};\n"
-       "        (void)device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m3b_stabilize_pipeline));\n"
+       "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m3b_stabilize_pipeline)))) return false;\n"
        "        compute.CS={m3b_jitter_score_bytecode,sizeof(m3b_jitter_score_bytecode)};"),
       ("P2 allocate bounded grid history",
        """        return SUCCEEDED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&stats,
@@ -159,9 +164,15 @@ void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {"""),
        """        const bool history_resources=m3b_seed && m3b_stabilized && m3b_history[0] && m3b_history[1] &&
              m3b_seed_pipeline && m3b_stabilize_pipeline;
         m3b_temporal_active=temporal && history_resources && data.grid[0]>0u && data.grid[1]>0u;
+        const std::array<float,14> signature{data.eye[0],data.eye[1],data.depth[3],
+            data.filter[0],data.m2_sharpen[3],data.m25_flags[0],float(color_edges),
+            float(edge_repair),float(gate_tuning),data.m3b_gate[0],data.m3b_gate[1],
+            data.m3b_gate[2],data.m3b_gate[3],temporal_strength};
         bool same_layout=m3b_history_valid && m3b_last_width==data.grid[0] &&
-             m3b_last_height==data.grid[1];
+             m3b_last_height==data.grid[1] && m3b_last_signature==signature;
         for(int i=0;i<4;++i) same_layout=same_layout && m3b_last_crop[i]==data.m2_crop[i];
+        m3b_last_signature=signature;
+        if(m3b_temporal_active && !same_layout) ++m3b_temporal_resets;
         m3b_history_valid=m3b_temporal_active && same_layout;
         m3b_last_width=data.grid[0];m3b_last_height=data.grid[1];
         std::copy_n(data.m2_crop,4,m3b_last_crop);

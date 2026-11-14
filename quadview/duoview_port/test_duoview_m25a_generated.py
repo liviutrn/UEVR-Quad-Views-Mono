@@ -93,16 +93,16 @@ def check_files():
         "latest_duoview_content_fine_submitted",
         "config.settings.m25_fine_mode==1u ? 1.f : depths.m24_fine_weight()")
     r=required(root/"vr/DuoViewD3D12.hpp",
-        "m1_raw_range.NumDescriptors=4","m1_output_range.NumDescriptors=3",
+        "m1_raw_range.NumDescriptors=7","m1_output_range.NumDescriptors=5",
         "m1_.m25_analyse.Get()","m1_.m25_guard.Get()",
         "cmd->CopyResource(m1_.m25_readback.Get(),m1_.m25_stats.Get())")
     required(root/"vr/DuoViewM1D3D12.hpp",
-        "sizeof(M1Constants) == 288","m25_read_retired_stats()",
+        "sizeof(M1Constants) == 448","m25_read_retired_stats()",
         "data.m25_flags[0]=m25_content_active ? 1.f : 0.f",
         "m25_analysis_bytecode","m25_guard_bytecode")
     h=required(shaders/"DuoViewM1Stereo.hlsl",
         "void CSAnalyzeM25","void CSGuardM25",
-        "M25StatsRead.Load(0)","smoothstep(.60,.85,ratio)",
+        "M25StatsRead.Load(0)","smoothstep(M3bOptions.x>.5 ? M3bGate.y : .60,M3bOptions.x>.5 ? M3bGate.z : .85,ratio)",
         "passing*2u<varied","M25Weight(fullUv)",
         "if(fineNear>0.0) nearDepth=lerp(nearDepth,fineNear,feather*M1Filter.w)")
     assert "M25Flags.x>.5" in h

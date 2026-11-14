@@ -345,6 +345,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M3b P2 temporal overlay failed' }
           python workspace/quadview/duoview_port/apply_duoview_m3b_debug.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'M3b P7 per-eye debug overlay failed' }
+          python workspace/quadview/duoview_port/apply_duoview_m3b_log.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'M3b P7 runtime log overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m3b_generated.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'M3b generated-source contracts failed' }
           python workspace/quadview/duoview_port/test_duoview_m3b_numeric.py

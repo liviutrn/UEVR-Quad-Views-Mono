@@ -2,6 +2,7 @@
 """Generated-source contracts for the opt-in M3b feature batch."""
 from pathlib import Path
 import sys
+import re
 
 def need(s,needle,label,count=1):
     n=s.count(needle)
@@ -36,7 +37,7 @@ def main():
         need(header,f'generate_name("{key}")',key+" persisted key")
         need(cfg,field+"{",field+" default")
         need(cfg,"out."+field+"=",field+" validation",2 if field=="m3b_ratio_high" else 1)
-        need(ui,"."+field+"=",field+" frozen frame")
+        assert len(re.findall(r"(?m)^\s*\."+re.escape(field)+r"\s*=", ui)) == 1, field+" frozen assignment missing or duplicated"
         need(ui,"current."+field+"==candidate."+field,field+" equality")
     for s in ("bool m3b_gate_tuning{false};","bool m3b_edge_repair{false};",
               "bool m3b_color_edges{false};","bool m3b_temporal{false};"):
@@ -57,7 +58,7 @@ def main():
     for reg in ("register(t8)","register(t9)","register(t10)","register(u5)","register(u6)"):
         need(hlsl,reg,"temporal resource register "+reg)
     need(hlsl,"M3bStabilizedRead.Load(int3(x,group.x,0))","temporal seed branch")
-    need(hlsl,"M3bGuidedCoarse(unjittered)","colour-guided conditional")
+    need(hlsl,"M3bGuidedCoarse(unjittered)","colour-guided conditional in legacy and temporal seed",2)
     need(hlsl,"M3bRepairRoot(uv,eye,rootClamped,repairStatus)","repair conditional")
     need(hlsl,"if(M3bTemporal.z>.5)","history-valid branch")
     need(hlsl,"M3bRepairFlags.x>.5","repair OFF gate")
@@ -69,6 +70,9 @@ def main():
     need(dx,"hd.NumDescriptors = 17;","17 shader-visible descriptors")
     need(raster,"const uint debugEye=i.pos.x>=OutputSize.x ? 1u : 0u;","per-eye depth visual")
     need(raster,"M1ReadConditionedEye(fullUv,rightEye ? 1u : 0u)","per-eye sharpen fade")
+    delivery=(vr/"D3D12Component.cpp").read_text(encoding="utf-8")
+    need(delivery,'[DuoView][M3b] gate',"one-second M3b runtime gate log")
+    need(delivery,'m25_ms+1000',"gate log period 1 second")
     if "DuoFrameGenDepth" in cfg or "XrCompositionLayerDepthInfoKHR" in dx:
         raise SystemExit("FAIL P6 partial integration is forbidden")
     print("M3b generated contracts: all checks passed")

@@ -15,7 +15,7 @@ All new switches are OFF by default; previous M3a controls and keys are unchange
 - P6 VectorXR depth submission is **not implemented**. No extra OpenXR depth swapchain or layer-chain modification.
 - Temporal history currently belongs to the retired compositor command slot, and identity reprojection will reject many samples while the head or gaze moves. It is **not** motion-compensated.
 - M3b GPU features are experimental, not headset-tested. First check that Windows shader, source-contract and WARP tests pass. Do not assume green CI proves perceptual quality.
-- Runtime GPU timing, temporal clamp percentage and pixel-repair percentage are not yet instrumented. The Auto-jitter window logs scores, vote and active sign. Existing M2.5a gate counters remain available.
+- M3b logs gate GPU counters every second, the jitter window scores/vote/active sign, and temporal reset counts. GPU clamp and repair percentages remain uninstrumented and are explicitly marked n/a (never fabricated).
 
 ## Safety
 Switch off each new option to return to the M3a path. Test separately, then combine. Do not overwrite the last user-tested package.

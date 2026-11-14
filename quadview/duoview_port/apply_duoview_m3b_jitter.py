@@ -34,7 +34,7 @@ void CSJitterScoreM3b(uint lane:SV_GroupIndex) {
             const int2 right=int2((corrected+float2(stepUv.x,0))*float2(M1Rect.zw));
             const float d=DecodeM1Depth(center);
             const float ed=abs(DecodeM1Depth(right)-DecodeM1Depth(left))/max(d,.0001);
-            candidates[s]=uint(min(ed*ec*4096.0,65535.0));
+            candidates[s]=uint(min(ed*ec*4096.0,4096.0));
         }
         scoreMinus+=candidates[0];scoreZero+=candidates[1];scorePlus+=candidates[2];
     }
@@ -94,7 +94,7 @@ groupshared uint M25Valid[256],M25Agree[256];"""),
             if(scores[1]>scores[best]) best=1u;
             if(scores[2]>scores[best]) best=2u;
             const uint64_t other=(std::max)(scores[(best+1u)%3u],scores[(best+2u)%3u]);
-            const bool decisive=other>0u && double(scores[best])>=1.03*double(other) && pixel_sum/120.0>.05;
+            const bool decisive=scores[best]>0u && double(scores[best])>=1.03*double(other) && pixel_sum/120.0>.05;
             const int vote=decisive ? (best==0u ? -1 : (best==2u ? 1 : 0)) : 99;
             if(vote!=99) {
                 streak=vote==last_vote ? streak+1u : 1u;last_vote=vote;
