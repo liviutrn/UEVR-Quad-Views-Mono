@@ -543,6 +543,7 @@ change("src/hooks.cpp",
         return false;
     }
     trace_event("[CheekyNR][C5] detour owner DLL pinned until process exit");
+    trace_event("[CheekyNR][C2] consumer ABI version=1 (optional UEVR export, 5s retry)");
 
     if (streamline_loaded()) {''',
        "pin Cheeky runtime DLL before permanent detours")
