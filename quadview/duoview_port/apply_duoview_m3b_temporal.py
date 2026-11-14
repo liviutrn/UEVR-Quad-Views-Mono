@@ -308,9 +308,9 @@ void CSConditionM1(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {"""),
        "m_duo_m3b_color->value()=false; m_duo_m3b_temporal->value()=false; m_duo_m3b_temporal_strength->value()=.6f;"),
       ("P2 freeze",
        "        .m3b_color_edges=m_duo_m3b_color->value(),",
+       "        .m3b_color_edges=m_duo_m3b_color->value(),\n"
        "        .m3b_temporal=m_duo_m3b_temporal->value(),\n"
-       "        .m3b_temporal_strength=m_duo_m3b_temporal_strength->value(),\n"
-       "        .m3b_color_edges=m_duo_m3b_color->value(),"),
+       "        .m3b_temporal_strength=m_duo_m3b_temporal_strength->value(),"),
       ("P2 equality",
        "        current.m3b_color_edges==candidate.m3b_color_edges &&",
        "        current.m3b_temporal==candidate.m3b_temporal &&\n"

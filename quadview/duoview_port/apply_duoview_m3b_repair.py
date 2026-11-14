@@ -164,10 +164,10 @@ float2 M1PullUv(float2 eyeUv, uint eye, out uint repairStatus) {
          "                    m_duo_m3b_repair->value()=false; m_duo_m3b_mask->value()=false;\n"
          "                    m_duo_m3b_gate->value()=false; m_duo_m3b_agree->value()=.03f;"),
         ("P3 freeze",
-         "        .m3b_gate_tuning=m_duo_m3b_gate->value(),",
+         "        .m3b_contrast=m_duo_m3b_contrast->value(),",
+         "        .m3b_contrast=m_duo_m3b_contrast->value(),\n"
          "        .m3b_edge_repair=m_duo_m3b_repair->value(),\n"
-         "        .m3b_edge_mask=m_duo_m3b_mask->value(),\n"
-         "        .m3b_gate_tuning=m_duo_m3b_gate->value(),"),
+         "        .m3b_edge_mask=m_duo_m3b_mask->value(),"),
         ("P3 equality",
          "        current.m3b_gate_tuning==candidate.m3b_gate_tuning &&",
          "        current.m3b_edge_repair==candidate.m3b_edge_repair &&\n"

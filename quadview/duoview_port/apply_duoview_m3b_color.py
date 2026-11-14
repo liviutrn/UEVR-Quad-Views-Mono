@@ -105,9 +105,9 @@ groupshared uint M25Valid[256],M25Agree[256];"""),
        "                    m_duo_m3b_repair->value()=false; m_duo_m3b_mask->value()=false;",
        "                    m_duo_m3b_repair->value()=false; m_duo_m3b_mask->value()=false; m_duo_m3b_color->value()=false;"),
       ("P4 freeze",
-       "        .m3b_edge_repair=m_duo_m3b_repair->value(),",
-       "        .m3b_color_edges=m_duo_m3b_color->value(),\n"
-       "        .m3b_edge_repair=m_duo_m3b_repair->value(),"),
+       "        .m3b_edge_mask=m_duo_m3b_mask->value(),",
+       "        .m3b_edge_mask=m_duo_m3b_mask->value(),\n"
+       "        .m3b_color_edges=m_duo_m3b_color->value(),"),
       ("P4 comparison",
        "        current.m3b_edge_repair==candidate.m3b_edge_repair &&",
        "        current.m3b_color_edges==candidate.m3b_color_edges &&\n"

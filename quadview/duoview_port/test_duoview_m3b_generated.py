@@ -39,6 +39,15 @@ def main():
         need(cfg,"out."+field+"=",field+" validation",2 if field=="m3b_ratio_high" else 1)
         assert len(re.findall(r"(?m)^\s*\."+re.escape(field)+r"\s*=", ui)) == 1, field+" frozen assignment missing or duplicated"
         need(ui,"current."+field+"==candidate."+field,field+" equality")
+    expected_order = ["m3b_gate_tuning", "m3b_agree_tolerance", "m3b_ratio_low",
+                      "m3b_ratio_high", "m3b_contrast", "m3b_edge_repair",
+                      "m3b_edge_mask", "m3b_color_edges", "m3b_temporal",
+                      "m3b_temporal_strength"]
+    declared = re.findall(r"(?m)^\s*(?:bool|float)\s+(m3b_\w+)\s*\{", cfg)
+    initialized = re.findall(r"(?m)^\s*\.(m3b_\w+)\s*=", ui)
+    if declared != expected_order or initialized != declared:
+        raise SystemExit(f"FAIL M3b MSVC C7560 member order: expected={expected_order!r}, declarations={declared!r}, initialized={initialized!r}")
+    print("PASS: M3b designated initializer follows Settings member declaration order")
     for s in ("bool m3b_gate_tuning{false};","bool m3b_edge_repair{false};",
               "bool m3b_color_edges{false};","bool m3b_temporal{false};"):
         need(cfg,s,"OFF default "+s)
