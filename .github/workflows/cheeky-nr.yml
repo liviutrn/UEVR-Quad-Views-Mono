@@ -184,6 +184,17 @@ jobs:
             (Get-FileHash src/d3d_shaders.hpp -Algorithm SHA256).Hash |
               Set-Content ../evidence/cheeky84-shaders-sha256.txt
           } finally { Pop-Location }
+      - name: Package exact #84 generated text into a local-replay diagnostic kit
+        shell: pwsh
+        run: |
+          $kit = Join-Path $env:RUNNER_TEMP 'cheeky84-replay-kit'
+          New-Item -ItemType Directory $kit -Force | Out-Null
+          foreach ($name in @('src','uevr','shared','scripts','tests')) {
+            Copy-Item ("upstream-cheeky/" + $name) (Join-Path $kit $name) -Recurse -Force
+          }
+          Copy-Item CheekyPort (Join-Path $kit 'CheekyPort') -Recurse -Force
+          Compress-Archive -Path (Join-Path $kit '*') -DestinationPath evidence/cheeky84-replay-kit.zip -CompressionLevel Fastest -Force
+          Write-Host "Replay kit bytes=$((Get-Item evidence/cheeky84-replay-kit.zip).Length)"
       - name: Apply complete Cheeky Batch2 patch and fake export/VRAM/reuse fixture
         shell: pwsh
         run: |
