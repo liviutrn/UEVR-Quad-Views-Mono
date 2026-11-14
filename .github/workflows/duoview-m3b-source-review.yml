@@ -16,6 +16,7 @@ jobs:
         run: |
           tar -czf m3b-review-sources.tar.gz \
             quadview/duoview_port \
+            duoview/joey_stage1/V208SharedEyeWarp.cpp \
             duoview/DuoViewNativeCompositeRaster.hlsl \
             duoview/DuoViewComposite.hlsl \
             duoview/DuoViewCompositeRaster.hlsl \
