@@ -330,7 +330,32 @@ float M9PerEyeMix(float inverseDepth) {
     symmetric=symmetric.replace("[branch] if (M3Flags.x<.5)", "if (true)",1)
     if symmetric.count("if (true)")!=1:
         raise RuntimeError("M4 symmetric probe branch absent")
-    block=main+"\n"+seed+"\n"+symmetric+"\n"+legacy+"\n"+marker+vertical_attr
+    # Isolate M8's origin propagation from its per-source penalty function.
+    # Both probes force the symmetric M4 branch at compile time.
+    no_origin=symmetric.replace("CSConditionM4ProbeSymmetric(","CSConditionM4ProbeNoOrigin(",1)
+    no_origin=once(no_origin,
+        "        M8Origin[x]=M1Row[x];",
+        "        // source origins intentionally disabled for this probe",
+        "no-origin seed")
+    no_origin=once(no_origin,
+        """                if (M8Distance.z>.5) {
+                    float origin=M8Origin[x];
+                    if (l>v && l>=r) origin=M8Origin[leftIndex];
+                    else if (r>v && r>l) origin=M8Origin[rightIndex];
+                    M8NextOrigin[x]=origin;
+                }""",
+        "                // No source-origin propagation in this probe.",
+        "no-origin candidate")
+    no_origin=no_origin.replace("M8Origin[leftIndex]","M1Row[leftIndex]")
+    no_origin=no_origin.replace("M8Origin[rightIndex]","M1Row[rightIndex]")
+    no_origin=no_origin.replace("if (M8Distance.z>.5) M8Origin[x]=M8NextOrigin[x];",
+                                "// No origin-history update")
+    origin_only=symmetric.replace("CSConditionM4ProbeSymmetric(","CSConditionM4ProbeOriginOnly(",1)
+    if origin_only.count("const float slope=distanceOn ? M8AdjustedPenalty(source,pen) : pen;")!=2:
+        raise RuntimeError("M4 origin-only probe expected two penalty operations")
+    origin_only=origin_only.replace("const float slope=distanceOn ? M8AdjustedPenalty(source,pen) : pen;",
+                                    "const float slope=pen;")
+    block=main+"\n"+seed+"\n"+symmetric+"\n"+legacy+"\n"+no_origin+"\n"+origin_only+"\n"+marker+vertical_attr
     text=text[:start]+block+text[end:]
 
     text=once(text,

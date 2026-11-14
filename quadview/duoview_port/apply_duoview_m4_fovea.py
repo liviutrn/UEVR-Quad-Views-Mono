@@ -270,6 +270,7 @@ def backend(mods):
          "    #if defined(DUOVIEW_M4_WARP_PROBE)\n"
          "    ComPtr<ID3D12PipelineState> m4_probe_constant, m4_probe_fine, m4_probe_barrier;\n"
          "    ComPtr<ID3D12PipelineState> m4_probe_seed, m4_probe_symmetric, m4_probe_legacy;\n"
+         "    ComPtr<ID3D12PipelineState> m4_probe_no_origin, m4_probe_origin_only;\n"
          "    #endif\n"
          "    ComPtr<ID3D12Resource> m4_depth;\n"
          "    bool m4_active{};\n"
@@ -297,6 +298,10 @@ def backend(mods):
          "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_probe_symmetric)))) return false;\n"
          "        compute.CS={m4_probe_legacy_bytecode,sizeof(m4_probe_legacy_bytecode)};\n"
          "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_probe_legacy)))) return false;\n"
+         "        compute.CS={m4_probe_no_origin_bytecode,sizeof(m4_probe_no_origin_bytecode)};\n"
+         "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_probe_no_origin)))) return false;\n"
+         "        compute.CS={m4_probe_origin_only_bytecode,sizeof(m4_probe_origin_only_bytecode)};\n"
+         "        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_probe_origin_only)))) return false;\n"
          "        #endif\n"),
         ("M4 fovea field texture",
          "            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&soft_depth)))) return false;\n",
@@ -337,7 +342,8 @@ def backend(mods):
          "                m4_probe_stage[0]=='s' || m4_probe_stage[0]=='k' ||\n"
          "                m4_probe_stage[0]=='f' || m4_probe_stage[0]=='b' ||\n"
          "                m4_probe_stage[0]=='e' || m4_probe_stage[0]=='y' ||\n"
-         "                m4_probe_stage[0]=='l')) data.m4_flags[0]=0.f;\n"
+         "                m4_probe_stage[0]=='l' || m4_probe_stage[0]=='n' ||\n"
+         "                m4_probe_stage[0]=='o')) data.m4_flags[0]=0.f;\n"
          "            #endif\n"
          "            m4_last_w=w4; m4_last_h=h4; m4_fine_w=focus->rect[2]; m4_fine_h=focus->rect[3];\n"
          "        }\n"
@@ -414,6 +420,8 @@ def backend(mods):
          "                    if(stage[0]=='e') m4_gpu_pso=m1_.m4_probe_seed.Get();\n"
          "                    if(stage[0]=='y') m4_gpu_pso=m1_.m4_probe_symmetric.Get();\n"
          "                    if(stage[0]=='l') m4_gpu_pso=m1_.m4_probe_legacy.Get();\n"
+         "                    if(stage[0]=='n') m4_gpu_pso=m1_.m4_probe_no_origin.Get();\n"
+         "                    if(stage[0]=='o') m4_gpu_pso=m1_.m4_probe_origin_only.Get();\n"
          "                }\n"
          "                #endif\n"
          "                if(!m4_probe_skip) {\n"
@@ -424,7 +432,8 @@ def backend(mods):
          "                #if defined(DUOVIEW_M4_WARP_PROBE)\n"
          "                if(stage[0]=='s' || stage[0]=='k' || stage[0]=='f' ||\n"
          "                   stage[0]=='b' || stage[0]=='c' || stage[0]=='e' ||\n"
-         "                   stage[0]=='y' || stage[0]=='l') m4_do_vertical=false;\n"
+         "                   stage[0]=='y' || stage[0]=='l' || stage[0]=='n' ||\n"
+         "                   stage[0]=='o') m4_do_vertical=false;\n"
          "                #endif\n"
 
          "                if(m4_do_vertical) {\n"

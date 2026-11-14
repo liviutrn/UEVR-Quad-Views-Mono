@@ -49,6 +49,10 @@ def main():
         run(*a,false,Route::direct,"M4 OFF, fine bar, depth picture");
         const auto m4_off_bar=m21_image_hash;
         frame.config.settings.m4_fovea_grid=true;
+        // Diagnostic only: stage suffix A enables M8 on this first M4 frame.
+        if (const char* diag=std::getenv("DUOVIEW_M4_DIAG");
+            diag && (diag[0]=='n' || diag[0]=='o') && diag[1]=='A')
+            frame.config.settings.m8_distance=true;
         run(*a,false,Route::direct,"M4 ON, fine bar, depth picture");
         // Run isolation in a fresh process, because device removal is fatal.
         //  condition = horizontal only, no M4 raster read

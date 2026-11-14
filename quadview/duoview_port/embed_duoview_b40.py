@@ -58,6 +58,8 @@ def main():
             ("CSConditionM4ProbeSeed","cs_5_0","m4_probe_seed_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
             ("CSConditionM4ProbeSymmetric","cs_5_0","m4_probe_symmetric_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
             ("CSConditionM4ProbeLegacy","cs_5_0","m4_probe_legacy_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
+            ("CSConditionM4ProbeNoOrigin","cs_5_0","m4_probe_no_origin_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
+            ("CSConditionM4ProbeOriginOnly","cs_5_0","m4_probe_origin_only_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
         )
     with tempfile.TemporaryDirectory(prefix="duoview-b40-") as temp:
         for entry,profile,name,source,define in shaders:
