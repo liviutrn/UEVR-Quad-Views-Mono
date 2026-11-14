@@ -244,6 +244,31 @@ float M9PerEyeMix(float inverseDepth) {
        "        M8Origin[x]=M1Row[x];\n        }\n    }\n    GroupMemoryBarrierWithGroupSync();",
        "end uniform fine-depth seed tile loop outside varying branch")
     block=uniformize_lane_loops(block)
+    # WARP-only differential probes: clone the *generated* M4 seed, and
+    # then clone the entire kernel with a compile-time symmetric branch.
+    # These retain the exact seed/history instructions and uniform barriers.
+    # The shipping HLSL can contain unused probe functions; no probe PSOs
+    # or environment switches are compiled into its C++ backend.
+    marker="[numthreads(128,1,1)]"
+    main,separator,vertical_attr=block.rpartition(marker)
+    if not separator or not main.endswith("}\n\n"):
+        raise RuntimeError("M4 probe extraction: missing vertical attribute")
+    seed_head=main.split("    GroupMemoryBarrierWithGroupSync();",1)[0]
+    if "void CSConditionM4(" not in seed_head:
+        raise RuntimeError("M4 probe extraction: seed head missing")
+    seed=marker+"\n"+seed_head.replace("void CSConditionM4(","void CSConditionM4ProbeSeed(",1)
+    seed += """    GroupMemoryBarrierWithGroupSync();
+    for (uint x=lane; x<w; x+=128u) {
+        M4FoveaConditioned[uint3(x,group.x,0u)]=M1Row[x];
+        M4FoveaConditioned[uint3(x,group.x,1u)]=M1Row[x];
+    }
+}
+"""
+    symmetric=marker+"\n"+main.replace("void CSConditionM4(","void CSConditionM4ProbeSymmetric(",1)
+    symmetric=symmetric.replace("[branch] if (M3Flags.x<.5)", "if (true)",1)
+    if symmetric.count("if (true)")!=1:
+        raise RuntimeError("M4 symmetric probe branch absent")
+    block=main+"\n"+seed+"\n"+symmetric+"\n"+marker+vertical_attr
     text=text[:start]+block+text[end:]
 
     text=once(text,
