@@ -74,6 +74,11 @@ def main():
          ".synthetic_stereo=m_duo_stereo->value(),",
          """.synthetic_stereo=m_duo_stereo->value() &&
             m_duo_stereo_bootstrap_ready.load(std::memory_order_acquire),"""),
+        ("B318 cold boot uses PLAIN mono even when the saved stereo profile has mono distance fade enabled",
+         ".m24_distance_fade=m_duo_m24_distance->value(),",
+         """.m24_distance_fade=m_duo_m24_distance->value() &&
+            (!m_duo_stereo->value() ||
+             m_duo_stereo_bootstrap_ready.load(std::memory_order_acquire)),"""),
         ("B318 restore taper 0",
          "m_duo_m24_vertical->value()=2.f;",
          "m_duo_m24_vertical->value()=0.f;"),

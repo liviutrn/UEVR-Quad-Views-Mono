@@ -64,6 +64,9 @@ def main():
         ("source fit user control",
          '    const ModToggle::Ptr m_duo_stereo{ModToggle::create(generate_name("DuoViewSyntheticStereo"), false)};',
          """    const ModToggle::Ptr m_duo_fit_source{ModToggle::create(generate_name("DuoViewFitSourceProjection"),true)};
+    // Source/viewport projection must not change while an OpenXR generation is active.
+    std::atomic<uint64_t> m_duo_fit_latched_generation{0};
+    std::atomic<bool> m_duo_fit_latched_enabled{true};
     const ModToggle::Ptr m_duo_stereo{ModToggle::create(generate_name("DuoViewSyntheticStereo"), false)};"""),
         ("source fit persisted",
          "            *m_duo_shared_eye, *m_duo_stereo, *m_duo_stereo_strength,",
@@ -72,14 +75,19 @@ def main():
     patch(mods/"VR.cpp", [
         ("source fit UI in both mono and stereo",
          '                m_duo_stereo->draw("Synthetic stereo (M1, experimental)");',
-         """                m_duo_fit_source->draw("Fit Unreal periphery source vertically to calibrated view (B318; no XR crop)");
+         """                m_duo_fit_source->draw("Fit Unreal periphery source vertically (B318; apply via Reinitialize Runtime)");
                 m_duo_stereo->draw("Synthetic stereo (M1, experimental)");"""),
         ("read OpenXR bound geometry before creating the shared UE pair",
          """    auto frame=m_duoview.begin(key, get_hmd_width(), get_hmd_height(), frozen,""",
          """    // Cache one safe source envelope for this OpenXR generation. Never
     // resize on eye gaze, and never derive bounds from a different pose.
     auto source_fit=uevr::duoview::SourceFit{};
-    if (m_duo_fit_source->value() && get_openxr_runtime()) {
+    const auto fit_generation=mono_generation();
+    if (m_duo_fit_latched_generation.load(std::memory_order_acquire)!=fit_generation) {
+        m_duo_fit_latched_enabled.store(m_duo_fit_source->value(),std::memory_order_release);
+        m_duo_fit_latched_generation.store(fit_generation,std::memory_order_release);
+    }
+    if (m_duo_fit_latched_enabled.load(std::memory_order_acquire) && get_openxr_runtime()) {
         if (const auto proposed=get_openxr_runtime()->duoview_source_fit(source_frame)) {
             if (std::abs(projection[0][0] - proposed->expected_x_scale) < .0005f &&
                 std::abs(projection[1][1] - proposed->expected_y_scale) < .0005f &&

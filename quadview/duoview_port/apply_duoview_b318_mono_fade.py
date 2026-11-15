@@ -13,6 +13,9 @@ def main():
         raise SystemExit("Usage: apply_duoview_b318_mono_fade.py <backend>")
     mods=Path(sys.argv[1])/"src/mods"
     patch(mods/"VR.cpp", [
+        ("B318 mono coarse depth never requests the optional fine producer",
+         "set_duoview_fine_capture_enabled(\n            frame->config.settings.m2_fovea_depth);",
+         "set_duoview_fine_capture_enabled(\n            frame->config.settings.synthetic_stereo && frame->config.settings.m2_fovea_depth);"),
         ("request existing NGX depth on mono distance fade",
          "if (frame && frame->config.settings.synthetic_stereo) {\n        const auto& layout = frame->config.layout;",
          """if (frame && (frame->config.settings.synthetic_stereo ||
