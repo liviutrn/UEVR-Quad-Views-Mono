@@ -47,11 +47,10 @@ def main():
          """                                        stereo_geometry=uevr::duoview::stereo::make_geometry(packet_frame->projection,eyes,
                                             scale,packet_frame->config.settings.stereo_strength);""",
          """                                        if (mono_distance) {
-                                            // Match the output perspective to the frozen rendered
-                                            // center view, not either physical target eye. In this
-                                            // specialization H=identity and k=0, so the M1 pixel
-                                            // shader only reads depth for sharpening, never warps.
-                                            const auto& p=packet_frame->projection;
+                                            // Match the output to its original shared-camera
+                                            // logical projection O. The Unreal source is F. With
+                                            // k=0 this maps O->F but never creates eye disparity.
+                                            const auto& p=packet_frame->logical_projection;
                                             if (std::isfinite(p[0]) && std::isfinite(p[5]) &&
                                                 std::isfinite(p[8]) && std::isfinite(p[9]) &&
                                                 p[0]>0.f && p[5]>0.f) {
@@ -74,16 +73,18 @@ def main():
                                         }
                                         if (mono_distance && stereo_geometry) {
                                             const auto& h=stereo_geometry->context_h[0];
+                                            const auto& fit=packet_frame->config.source_fit;
+                                            const float inv_span=1.f/fit.span();
                                             const bool identity=std::abs(h[0]-1.f)<.0002f &&
                                                 std::abs(h[1])<.0002f && std::abs(h[2])<.0002f &&
-                                                std::abs(h[4])<.0002f && std::abs(h[5]-1.f)<.0002f &&
-                                                std::abs(h[6])<.0002f && std::abs(h[8])<.0002f &&
+                                                std::abs(h[4])<.0002f && std::abs(h[5]-inv_span)<.0002f &&
+                                                std::abs(h[6]+fit.v0*inv_span)<.0002f && std::abs(h[8])<.0002f &&
                                                 std::abs(h[9])<.0002f && std::abs(h[10]-1.f)<.0002f &&
                                                 std::abs(stereo_geometry->k[0])<1.e-8f &&
                                                 std::abs(stereo_geometry->k[1])<1.e-8f;
                                             if (!identity) {
                                                 SPDLOG_WARNING_EVERY_N_SEC(5,
-                                                    "[DuoView][MonoFade] Reject nonidentity depth projection; use original sharpening");
+                                                    "[DuoView][MonoFade] Reject mismatched O-to-F depth projection; use original sharpening");
                                                 stereo_geometry.reset();
                                             }
                                         }"""),
