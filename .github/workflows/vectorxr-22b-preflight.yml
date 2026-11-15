@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - 'experiment/vectorxr-22-runtime-depth-preflight-*'
+      - 'experiment/vectorxr-stereo-route-release-*'
     paths:
       - 'vectorxr_mono/**'
       - '.github/workflows/vectorxr-22b-preflight.yml'
@@ -88,6 +89,19 @@ jobs:
           assert 'kLiveSwitch=8' in trace
           print('PASS C++20 poller header; source wiring, trace and test registration')
           PY
+      - name: VectorXR #23 route and right-eye fault-patch preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -m py_compile workspace/vectorxr_mono/apply_vectorxr_stereo_route_release23.py
+          python3 -I workspace/vectorxr_mono/apply_vectorxr_stereo_route_release23.py vectorxr
+          git -C vectorxr diff --check
+          grep -q 'FrameGen stereo route: views=' vectorxr/layer/src/framegen/framegen_presenter.cpp
+          grep -q 'void TestJitRightEyeReleaseFailure23()' vectorxr/layer/tests/framegen_presenter_tests.cpp
+          grep -q 'RUN(TestJitRightEyeReleaseFailure23);' vectorxr/layer/tests/framegen_presenter_tests.cpp
+          grep -q 'write.release_failed' vectorxr/layer/src/framegen/framegen_presenter.cpp
+          git -C vectorxr diff --stat | tee evidence/vectorxr23-preflight-stat.txt
+          echo 'PASS: pinned upstream anchor replay and right-eye fault-test registration'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
