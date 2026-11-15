@@ -184,11 +184,11 @@ float2 AtlasSampleUV(uint4 rect, float2 localUv)"""),
     ])
     patch(sh/"DuoViewNativeCompositeRaster.hlsl", [
         ("M6 final point-fill source and logical UV conversion",
-         """    float2 fill=0.;
+         """    float3 fill=0.;
     float2 fullUv=outputUv;
     [branch] if (M2Sharpen.z <= .5)
         fullUv=M1PullUv(outputUv,i.pos.x >= OutputSize.x ? 1u : 0u,fill);""",
-         """    float2 fill=0.;
+         """    float3 fill=0.;
     float2 sourceUv=outputUv;
     [branch] if (M2Sharpen.z <= .5)
         sourceUv=M1PullUv(outputUv,i.pos.x >= OutputSize.x ? 1u : 0u,fill);
@@ -199,9 +199,12 @@ float2 AtlasSampleUV(uint4 rect, float2 localUv)"""),
         ("Catmull-Rom periphery uses physical fitted UV",
          "SamplePeripheryCatmullRom(fullUv, PeripheralRect.zw, NativePeripheryDimensions)",
          "SamplePeripheryCatmullRom(DuoLogicalToSourceUv(fullUv), PeripheralRect.zw, NativePeripheryDimensions)"),
-        ("M6 background fill has its own source projection",
-         "        const float2 fillUv=float2(fill.x,fullUv.y);",
-         "        const float2 fillUv=DuoSourceToLogicalUv(float2(fill.x,sourceUv.y));"),
+        ("M7 background blur checks matching physical depth coordinates",
+         "const float tapDepth=M1ReadConditionedEye(tap,eye);",
+         "const float tapDepth=M1ReadConditionedEye(DuoLogicalToSourceUv(tap),eye);"),
+        ("M7 source-UV fovea crop check for fill",
+         "if (all(tap>M2Crop.xy) && all(tap<M2Crop.zw)) {",
+         "if (all(DuoLogicalToSourceUv(tap)>M2Crop.xy) && all(DuoLogicalToSourceUv(tap)<M2Crop.zw)) {"),
         ("M4 depth picture samples the source's conditioned field",
          "const float D=M1ReadConditionedEye(outputUv,i.pos.x>=OutputSize.x ? 1u : 0u);",
          "const float D=M1ReadConditionedEye(sourceUv,i.pos.x>=OutputSize.x ? 1u : 0u);"),
