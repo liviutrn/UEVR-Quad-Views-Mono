@@ -102,8 +102,8 @@ def main():
     ])
     patch(mods/"vr/DuoViewD3D12.hpp",[
         ("mono distance fade shader admission separate from stereo activation",
-         """        const bool m1_active=settings.synthetic_stereo && stereo_geometry &&
-            xr_raster_compatible && m1_.ready() &&""",
+         """        const bool m1_active=settings.synthetic_stereo && stereo_geometry && xr_raster_compatible &&
+            m1_.ready() &&""",
          """        const bool mono_fade_active=!settings.synthetic_stereo && settings.m24_distance_fade &&
             (settings.sharpen_strength>0.f ||
              (settings.sharpen_wide && settings.m23_wide_strength>0.f));
