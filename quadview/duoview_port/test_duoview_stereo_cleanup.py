@@ -152,7 +152,8 @@ def check_source(backend,shaders):
                   'M7Controls.y>0.', 'M7Controls.z>.001')
     assert_has(raster, 'GlamSharpenNativeFovea(', 'DuoPhase2FocusLift(',
                'DuoB40InwardAnchor(')
-    assert_has(comp, 'settings.edge_reach_px,color_extent')
+    assert_has(comp, 'settings.edge_reach_px,color_extent',
+               'm_duo_m25_fine_mode->value()>=.5f),\n        .m3_edges=')
     assert_has(writer, 'data.m8_distance[3]=edge_reach_px;')
     assert_has(capture, 'config.settings.m25_fine_mode==1u || pair.first==snapshot')
     assert_absent(comp,'2.f,color_extent')
