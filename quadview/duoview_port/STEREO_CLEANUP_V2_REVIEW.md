@@ -1,4 +1,4 @@
-# DuoView stereo V2 cleanup — pre-build review
+# IMPORTANT: This is the ORIGINAL V2 author note, NOT the vetted current status.\n# Read STEREO_CLEANUP_V2_CORRECTION_LEDGER.md and the post-V2 generated-source tests.\n# Do not use this document as production approval; Windows FXC/MSVC/WARP and PSVR2 tests remain unverified.\n\n# DuoView stereo V2 cleanup — pre-build review
 
 **Base:** B318 #333 `5e89842f5b857e727e5aba82c7cfbd4160eee882`.
 **Status:** source-generation overlay only; release build/Windows HLSL/WARP/headset NOT run. No measured GPU FPS or image-quality claim.
