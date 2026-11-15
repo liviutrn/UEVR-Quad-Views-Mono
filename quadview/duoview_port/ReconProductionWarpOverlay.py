@@ -23,7 +23,7 @@ def main():
     block=r'''    // Separate recon smoke gate: actual compiled production pixel/compute
     // shaders, M4, coarse/fine inputs, both signed eyes, no GPU mocks.
     if (const char* recon=std::getenv("DUOVIEW_RECON_REPLAY"); recon && recon[0]=='1') {
-        const auto old_primary=primary,old_secondary=secondary,old_depth=m1_depth;
+        const auto old_primary=primary,old_secondary=secondary;\n        const auto old_depth=m1_depth;
         const auto old_fine=m21_fine_depth;
         const auto old_layout=frame.config.layout;
         const auto old_fine_camera=m1_geometry.fine_depth_camera;
@@ -72,28 +72,28 @@ def main():
             std::memset(mapped,0,static_cast<size_t>(bytes));
             for (UINT y=0;y<32;++y) for(UINT x=0;x<32;++x) {
                 const int xi=int(x),yi=int(y);
-                bool near=false;
+                bool foreground=false;
                 if (scene==0) { // weapon crossing two background layers
                     const int left=10+frame_idx;
-                    near=(xi>=left && xi<left+4 && yi>=4 && yi<28) ||
+                    foreground=(xi>=left && xi<left+4 && yi>=4 && yi<28) ||
                          (yi>=15 && yi<17 && xi>=left-5 && xi<left+10);
                 } else if (scene==1) { // stationary real leaves, false 49-pixel depth patch
-                    near=((xi%7==0) && yi>=4 && yi<28) ||
+                    foreground=((xi%7==0) && yi>=4 && yi<28) ||
                          ((xi+2*yi)%17==0 && yi>=6 && yi<25);
                 } else { // physical sway, true color AND depth move together
-                    near=(((xi-frame_idx)%7+7)%7==0 && yi>=4 && yi<28) ||
+                    foreground=(((xi-frame_idx)%7+7)%7==0 && yi>=4 && yi<28) ||
                          ((xi-frame_idx+2*yi+68)%17==0 && yi>=6 && yi<25);
                 }
                 const bool corrupt=(scene==1 && xi>=18 && xi<25 && yi>=11 && yi<18 && frame_idx%2==1);
                 if (is_depth) {
                     auto* row=reinterpret_cast<float*>(static_cast<uint8_t*>(mapped)+y*fp.Footprint.RowPitch);
-                    row[x]=(near!=corrupt) ? .45f : .15f;
+                    row[x]=(foreground!=corrupt) ? .45f : .15f;
                 } else {
                     uint8_t* px=static_cast<uint8_t*>(mapped)+y*fp.Footprint.RowPitch+4*x;
                     const bool checker=((xi/2+yi/2)&1)!=0;
-                    px[0]=near ? 15 : (checker ? 190 : 85);  // B
-                    px[1]=near ? 20 : (checker ? 95 : 195);  // G
-                    px[2]=near ? 245 : 25;                  // R
+                    px[0]=foreground ? 15 : (checker ? 190 : 85);  // B
+                    px[1]=foreground ? 20 : (checker ? 95 : 195);  // G
+                    px[2]=foreground ? 245 : 25;                  // R
                     px[3]=255;
                 }
             }
