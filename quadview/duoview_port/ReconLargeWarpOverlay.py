@@ -10,19 +10,26 @@ import argparse
 MARKER="    // Restore every touched field; the final legacy comparison is intended"
 
 LARGE_BLOCK=r'''
-    // Full-source RGB-D production replay: 384x216 independent source targets,
+    // Test-only 384x216 baseline or 1024x816 DLSS Quality jitter-stress replay.
     // full-resolution fine depth, 768x216 doublewide output, both signed eyes.
     // The source is analytically coherent (RGB and depth are the SAME scene).
     // The only deliberate incoherence is a 7x7 false-depth foliage fault.
     if(const char* flag=std::getenv("DUOVIEW_RECON_LARGE");flag && flag[0]=='1') {
-        constexpr UINT RW=384u,RH=216u;
+        const bool quality=std::getenv("DUOVIEW_RECON_QUALITY") && std::getenv("DUOVIEW_RECON_QUALITY")[0]=='1';
+        const UINT RW=quality?1024u:384u,RH=quality?816u:216u;
+        const UINT QW=quality?683u:RW,QH=quality?544u:RH;
+        // These are render-pixel jitter offsets (not output-pixel offsets),
+        // as supplied by NGX. The source scene is sampled at -jitter so the
+        // production shader's +jitter UV compensation aligns the raw depth.
+        const float jitter_x[4]={0.f,-.25f,.25f,-.375f};
+        const float jitter_y[4]={0.f,.167f,-.167f,.333f};
         const auto saved_source_frame=frame;
         const auto saved_geom=m1_geometry;
         const auto replay_lease=std::make_shared<const int>(42);
         struct ReplaySample { float r,g,b,dep; };
         auto analytic=[&](float fx,float fy,int scene,int fr,bool fault) -> ReplaySample {
-            const int x=int(std::floor(fx+0.5f));
-            const int y=int(std::floor(fy+0.5f));
+            const int x=int(std::floor((fx+.5f)*384.f/float(RW)));
+            const int y=int(std::floor((fy+.5f)*216.f/float(RH)));
             const int sway=scene==4 ? 2*fr : 0;
             const int weapon_shift=scene==1 ? 3*fr : 0;
             const bool weapon=scene==1 &&
@@ -55,7 +62,8 @@ LARGE_BLOCK=r'''
         };
         auto upload_replay=[&](int scene,int fr,bool fovea,bool depth) {
             const DXGI_FORMAT format=depth ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_B8G8R8A8_TYPELESS;
-            const auto desc=texture(RW,RH,format,depth ? D3D12_RESOURCE_FLAG_NONE : D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+            const auto desc=texture(depth ? QW : RW,depth ? QH : RH,format,
+                depth ? D3D12_RESOURCE_FLAG_NONE : D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
             auto tex=resource(g.device.Get(),desc,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
             D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{}; UINT64 nb{};
             g.device->GetCopyableFootprints(&desc,0,1,0,&fp,nullptr,nullptr,&nb);
@@ -64,13 +72,29 @@ LARGE_BLOCK=r'''
             void* mapped{};const D3D12_RANGE no_reads_local{0,0};
             check(up->Map(0,&no_reads_local,&mapped));
             std::memset(mapped,0,static_cast<size_t>(nb));
-            for(UINT y=0;y<RH;++y) for(UINT x=0;x<RW;++x) {
-                // Source fit: central 50% crop is independently rendered into
-                // the full 384x216 fovea allocation. Sample point coordinates
-                // are recorded in the scorer's separate geometry specification.
-                const float sx=fovea ? 96.f+(float(x)+.5f)*.5f-.5f : float(x);
-                const float sy=fovea ? 54.f+(float(y)+.5f)*.5f-.5f : float(y);
-                const auto p=analytic(sx,sy,scene,fr,true);
+            for(UINT y=0;y<(depth?QH:RH);++y) for(UINT x=0;x<(depth?QW:RW);++x) {
+                // Quality: the depth is raster sampled at 683x544, while
+                // post-SR color remains stable at the 1024x816 output size.
+                // The extra scene=3 phase is deliberately UNTRACKED depth
+                // trembling, not the regular NGX jitter metadata.
+                const float untracked=(depth && quality && scene==3)
+                   ? .39f*std::sin(float(fr)*1.71f) : 0.f;
+                const float dx=(depth && quality)
+                   ? (float(x)+.5f-jitter_x[fr%4]+untracked)*1.5f-.5f
+                   : float(x);
+                const float dy=(depth && quality)
+                   ? (float(y)+.5f-jitter_y[fr%4]+untracked*.5f)*1.5f-.5f
+                   : float(y);
+                // Central 50% source crop; both RGB and depth share world
+                // coordinates within each physical view.
+                const float sx=fovea ? float(RW)*.25f+(dx+.5f)*.5f-.5f : dx;
+                const float sy=fovea ? float(RH)*.25f+(dy+.5f)*.5f-.5f : dy;
+                auto p=analytic(sx,sy,scene,fr,!quality);
+                // One 49-render-pixel false-depth vote per frame when quality.
+                if(depth && quality && scene==3 && fr%2==1 &&
+                   x>=UINT(QW*.45f) && x<UINT(QW*.45f)+7u &&
+                   y>=UINT(QH*.4f) && y<UINT(QH*.4f)+7u)
+                   p.dep=p.dep>.7f ? .12f : 1.f;
                 auto* row=static_cast<uint8_t*>(mapped)+y*fp.Footprint.RowPitch;
                 if(depth) reinterpret_cast<float*>(row)[x]=p.dep;
                 else {
@@ -91,9 +115,9 @@ LARGE_BLOCK=r'''
         };
         auto big=std::make_unique<uevr::duoview::dx12::Compositor>();
         if(!big->prewarm(g.device.Get(),RW,RH,false,0))
-            throw std::runtime_error("384x216 reconstruction WARP prewarm failed");
+            throw std::runtime_error("reconstruction WARP prewarm failed");
         auto big_layout=uevr::duoview::make_layout(RW,RH,.5f,.5f,.25f,1.f,.5f,.5f);
-        if(!big_layout) throw std::runtime_error("384x216 reconstruction layout failed");
+        if(!big_layout) throw std::runtime_error("reconstruction layout failed");
         auto out_desc=texture(2*RW,RH,DXGI_FORMAT_B8G8R8A8_UNORM,D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
         auto out_tex=resource(g.device.Get(),out_desc,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_RENDER_TARGET);
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT out_fp{};UINT64 out_nbytes{};
@@ -139,24 +163,35 @@ LARGE_BLOCK=r'''
             auto geometry=saved_geom;
             geometry.world_to_meters=1.f;
             geometry.depth_coefficients={0.f,1.f,1.f};
-            geometry.k={13.f/float(RW)*strength,-13.f/float(RW)*strength};
+            geometry.k={13.f/384.f*strength,-13.f/384.f*strength};
             geometry.fine_depth_camera={};
             for(auto& h:geometry.context_h)
                 h={1.f,0.f,0.f,0.f,0.f,1.f,0.f,0.f,0.f,0.f,1.f,0.f};
+            const std::array<float,2> jitter_uv={
+                quality ? jitter_x[source_frame%4]/float(QW):0.f,
+                quality ? jitter_y[source_frame%4]/float(QH):0.f};
             uevr::duoview::dx12::M1DepthInput coarse_input{
-                raw.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,RW,RH},{},replay_lease};
+                raw.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,QW,QH},jitter_uv,replay_lease};
             uevr::duoview::dx12::M1DepthInput fine_input{
-                fine.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,RW,RH},{},replay_lease};
+                fine.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,QW,QH},jitter_uv,replay_lease};
             // Add a depth-field capture on the weapon and 49px scenes, without
             // using diagnostic textures as references for RGB truth.
-            for(int dm=0;dm<((scene==1 && fr==0)||(scene==3 && fr==1)?2:1);++dm) {
-                params.config.settings.m21_depth_debug=dm?4u:0u;
+            for(int dm=0;dm<(quality?2:((scene==1 && fr==0)||(scene==3 && fr==1)?2:1));++dm) {
+                // Quality j0: captured NGX jitter; j1: same depth but no
+                // jitter metadata. This isolates *alignment*, not depth truth.
+                auto coarse_test=coarse_input;
+                auto fine_test=fine_input;
+                if(quality && dm==1) {
+                    coarse_test.jitter_uv={0.f,0.f};
+                    fine_test.jitter_uv={0.f,0.f};
+                }
+                params.config.settings.m21_depth_debug=quality?0u:(dm?4u:0u);
                 const float green[]={0.f,1.f,0.f,1.f};
                 g.cmd->ClearRenderTargetView(large_rtv,green,0,nullptr);
                 params.config.key.frame+=1;
                 if(!big->record_native(g.device.Get(),g.cmd.Get(),crop.Get(),full.Get(),out_tex.Get(),
                    D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
-                   params,replay_lease,0,&geometry,&coarse_input,&fine_input)) {
+                   params,replay_lease,0,&geometry,&coarse_test,&fine_test)) {
                     throw std::runtime_error(std::string("384x216 production compositor failed: ")+big->error());
                 }
                 transition(g.cmd.Get(),out_tex.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -182,22 +217,23 @@ LARGE_BLOCK=r'''
                 out_cpu->Unmap(0,nullptr);
                 if(sentinels>RW*RH/2) throw std::runtime_error("384 replay unrendered sentinel eye");
                 if(strength>0.f && diff>1000) ++stereo_different;
-                const auto file=std::string("recon_large_")+names[scene]+
+                const auto file=std::string(quality?"recon_quality_":"recon_large_")+names[scene]+
                     "_f"+std::to_string(source_frame)+"_s"+std::to_string(int(strength*100.f))+
-                    "_d"+std::to_string(dm)+".bgra";
+                    (quality?"_j":"_d")+std::to_string(dm)+".bgra";
                 std::ofstream output(file,std::ios::binary);
                 if(!output.write(reinterpret_cast<const char*>(packed.data()),packed.size()))
                     throw std::runtime_error("384 replay capture write failed");
                 ++captures;
-                std::cout<<"RECON_LARGE,scene="<<names[scene]<<",frame="<<source_frame
+                std::cout<<(quality?"RECON_QUALITY,scene=":"RECON_LARGE,scene=")
+                         <<names[scene]<<",frame="<<source_frame
                          <<",strength="<<strength<<",debug="<<dm
                          <<",eye_diff="<<diff<<",capture="<<file<<"\n";
             }
         }
-        if(captures!=18 || stereo_different<8)
-            throw std::runtime_error("384 WARP replay capture/eye disparity gate failed");
-        std::cout<<"PASS: 384x216 exact production WARP scene replay, captures="
-                 <<captures<<", stereo_nonidentical="<<stereo_different<<"\n";
+        if(captures!=(quality?32u:18u) || stereo_different<8)
+            throw std::runtime_error("WARP replay capture/eye disparity gate failed");
+        std::cout<<"PASS: "<<(quality?"1024x816 DLSS Quality 683x544 jitter replay":"384x216 full-res replay")
+                 <<", captures="<<captures<<", stereo_nonidentical="<<stereo_different<<"\n";
     }
 '''
 

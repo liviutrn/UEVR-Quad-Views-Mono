@@ -433,7 +433,14 @@ jobs:
             if ($capture.Length -ne 663552) { throw "Invalid 768x216 BGRA capture byte size for $($capture.Name)" }
             Copy-Item $capture.FullName -Destination evidence/
           }
-          '384x216 per eye; 768x216 BGRA8 doublewide; exact generated production shader; three source-depth planes; weapon, layers, stationary 49px depth fault, physical sway, stereo strengths 0/0.5/1, two depth debug captures. GPU WARP is not RTX timing.' | Set-Content evidence/recon_large_README.txt
+          '384x216 per eye; 768x216 BGRA8 doublewide; exact generated production shader; weapon, layers, stationary 49px depth fault, physical sway, stereo strengths 0/0.5/1, two depth debug captures. GPU WARP is not RTX timing.' | Set-Content evidence/recon_large_README.txt
+          $quality=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_quality_*.bgra')
+          if ($quality.Count -ne 32) { throw "Expected 32 DLSS Quality WARP captures, found $($quality.Count)" }
+          foreach ($capture in $quality) {
+            if ($capture.Length -ne 6684672) { throw "Invalid 2048x816 BGRA DLSS Quality capture byte size for $($capture.Name)" }
+            Copy-Item $capture.FullName -Destination evidence/
+          }
+          'DLSS Quality analytic test: 1024x816 per eye; raw NGX-like depth 683x544; 2048x816 doublewide BGRA8; four jitter phases; j0 includes supplied pixel-space jitter, j1 has zero metadata against identical depth; scene 3 has extra untracked depth trembling and one 49-input-pixel false-depth vote. Color is idealized stable post-SR, not genuine DLSS output. Full 4060x3228 quality and actual GPU milliseconds remain unmeasured.' | Set-Content evidence/recon_quality_README.txt
       - name: Test QuadView contracts, asynchronous delivery, and production GPU compositor
         shell: pwsh
         run: |
