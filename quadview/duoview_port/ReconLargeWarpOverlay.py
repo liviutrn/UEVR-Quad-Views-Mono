@@ -182,8 +182,8 @@ LARGE_BLOCK=r'''
                 auto coarse_test=coarse_input;
                 auto fine_test=fine_input;
                 if(quality && dm==1) {
-                    coarse_test.jitter_uv={0.f,0.f};
-                    fine_test.jitter_uv={0.f,0.f};
+                    coarse_test.jitter={0.f,0.f};
+                    fine_test.jitter={0.f,0.f};
                 }
                 params.config.settings.m21_depth_debug=quality?0u:(dm?4u:0u);
                 const float green[]={0.f,1.f,0.f,1.f};
