@@ -114,7 +114,10 @@ def main():
         for (int scene=0;scene<3;++scene) for(int fr=0;fr<4;++fr) {
             auto rgb=upload_recon(false,scene,fr);
             auto dep=upload_recon(true,scene,fr);
-            primary=rgb;secondary=rgb;
+            // Production requires different primary/secondary resource objects.
+            // Same procedural pixels, distinct allocations: identical RGB inputs.
+            primary=rgb;
+            secondary=upload_recon(false,scene,fr);
             m1_depth={dep.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{},lease};
             m21_fine_depth={dep.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{},lease};
             frame.config.layout=old_layout;
