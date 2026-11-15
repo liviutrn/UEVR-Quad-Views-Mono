@@ -34,8 +34,8 @@ def main():
          """    std::array<float, 16> projection{};
     std::array<float, 16> logical_projection{};"""),
         ("source fit joins the immutable frame signature",
-         "uint64_t now_ms=0, std::optional<uint32_t> mono_source_frame={}) {",
-         "uint64_t now_ms=0, std::optional<uint32_t> mono_source_frame={}, SourceFit source_fit={}) {"),
+         "uint64_t now_ms=0, std::optional<uint32_t> mono_source_frame={},uint64_t present_epoch=0) {",
+         "uint64_t now_ms=0, std::optional<uint32_t> mono_source_frame={},uint64_t present_epoch=0, SourceFit source_fit={}) {"),
         ("fit physical periphery and source camera before freezing",
          """        slot = ViewFrame{*frozen, projection};
         slot->mono_source_frame = mono_source_frame;""",
@@ -92,8 +92,8 @@ def main():
     }
     auto frame=m_duoview.begin(key, get_hmd_width(), get_hmd_height(), frozen,"""),
         ("pass selected fit into one immutable State::begin",
-         "}, GetTickCount64(), source_frame);",
-         "}, GetTickCount64(), source_frame, source_fit);"),
+         "uevr::quadview::ngx::PeripheryDepth::self().m24_current_epoch());",
+         "uevr::quadview::ngx::PeripheryDepth::self().m24_current_epoch(),source_fit);"),
     ])
     patch(mods/"vr/runtimes/OpenXR.hpp", [
         ("access guarded calibrated view bounds from source frame",
