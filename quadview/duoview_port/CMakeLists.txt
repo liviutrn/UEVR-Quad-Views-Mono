@@ -7,6 +7,18 @@ endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 include(CTest)
 
+# B318 independent source-camera projection/viewport contract. Kept out
+# of the v208d pinned "duoview/" tree so #317 source identity remains intact.
+add_executable(DuoViewB318SourceFit b318_source_fit_tests.cpp)
+target_compile_features(DuoViewB318SourceFit PRIVATE cxx_std_20)
+target_include_directories(DuoViewB318SourceFit PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../duoview")
+if(MSVC)
+  target_compile_options(DuoViewB318SourceFit PRIVATE /UNDEBUG)
+else()
+  target_compile_options(DuoViewB318SourceFit PRIVATE -UNDEBUG)
+endif()
+add_test(NAME duoview-b318-source-fit COMMAND DuoViewB318SourceFit)
+
 set(PINNED_WARP_SOURCE "${CMAKE_CURRENT_LIST_DIR}/../../duoview/joey_stage1/V208SharedEyeWarp.cpp")
 set(GENERATED_WARP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/V208SharedEyeWarpB40.cpp")
 add_custom_command(
