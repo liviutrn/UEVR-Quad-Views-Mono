@@ -425,6 +425,15 @@ jobs:
           if ($captures.Count -ne 24) { throw "Expected 24 stereo reconstruction WARP captures, found $($captures.Count)" }
           foreach ($capture in $captures) { Copy-Item $capture.FullName -Destination evidence/ }
           'Research gate only: 32x32 RGB-D; each .bgra is 64x32 BGRA8, left eye first; 3 scenes x 4 frames x 2 debug modes. Not full-scale headset validation.' | Set-Content evidence/recon_gpu_README.txt
+          # Full-scene, same-frame RGB-D production-shader replay: 384x216
+          # each eye; doublewide BGRA 768x216; no shipping shader modification.
+          $large=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_large_*.bgra')
+          if ($large.Count -ne 18) { throw "Expected 18 larger GPU replay captures, found $($large.Count)" }
+          foreach ($capture in $large) {
+            if ($capture.Length -ne 663552) { throw "Invalid 768x216 BGRA capture byte size for $($capture.Name)" }
+            Copy-Item $capture.FullName -Destination evidence/
+          }
+          '384x216 per eye; 768x216 BGRA8 doublewide; exact generated production shader; three source-depth planes; weapon, layers, stationary 49px depth fault, physical sway, stereo strengths 0/0.5/1, two depth debug captures. GPU WARP is not RTX timing.' | Set-Content evidence/recon_large_README.txt
       - name: Test QuadView contracts, asynchronous delivery, and production GPU compositor
         shell: pwsh
         run: |
