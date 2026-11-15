@@ -121,7 +121,7 @@ def ui_cpp(src):
             ? .99f : m_duo_stereo_softness->value(),
         .m2_fovea_depth=m_duo_m2_fovea_depth->value() || m_duo_m4_fovea_grid->value(),
         // M4 strict pair must use mode 1; mode 0 can reject valid fine depth.
-        .m25_fine_mode=m_duo_m4_fovea_grid->value() ? 1u : uint32_t(m_duo_m25_fine_mode->value()>=.5f)
+        .m25_fine_mode=m_duo_m4_fovea_grid->value() ? 1u : uint32_t(m_duo_m25_fine_mode->value()>=.5f),
         .m3_edges=stereo_ready ? false : m_duo_m3_edges->value(),
         .m3_fold_sharpness=stereo_ready ? .95f : m_duo_m3_fold->value(),
         .m3_fill=stereo_ready ? false : m_duo_m3_fill->value(),
