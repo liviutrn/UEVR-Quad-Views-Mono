@@ -116,6 +116,8 @@ def check_zero_fill():
 def check_source(backend,shaders):
     ui=(backend/'src/mods/VR.cpp').read_text(encoding='utf-8')
     hdr=(backend/'src/mods/VR.hpp').read_text(encoding='utf-8')
+    writer=(backend/'src/mods/vr/DuoViewM1D3D12.hpp').read_text(encoding='utf-8')
+    capture=(backend/'src/mods/vr/D3D12Component.cpp').read_text(encoding='utf-8')
     comp=(backend/'src/mods/vr/DuoViewD3D12.hpp').read_text(encoding='utf-8')
     stereo=(shaders/'DuoViewM1Stereo.hlsl').read_text(encoding='utf-8')
     raster=(shaders/'DuoViewNativeCompositeRaster.hlsl').read_text(encoding='utf-8')
@@ -127,7 +129,7 @@ def check_source(backend,shaders):
                '.m24_vertical_taper=stereo_ready ? 0.f : m_duo_m24_vertical->value()',
                '.m8_fill_near=stereo_ready ? 0.f : m_duo_m8_fill_near->value()',
                '.edge_reach_px=(stereo_ready && !m_duo_depth_legacy_curve->value()) ? 20.f : 2.f',
-               '.m2_fovea_depth=m_duo_m4_fovea_grid->value()',
+               '.m2_fovea_depth=m_duo_m2_fovea_depth->value() || m_duo_m4_fovea_grid->value()',
                'm_duo_m5_left_max->value()', 'm_duo_m5_right_max->value()',
                'm_duo_m2_left->value()', 'm_duo_m2_right->value()',
                'm_duo_stereo_bootstrap_ready.load(std::memory_order_acquire)')
@@ -138,9 +140,10 @@ def check_source(backend,shaders):
                   'm_duo_m9_eye_far->draw(', 'm_duo_fill_blur->draw(',
                   'm_duo_m2_fovea_depth->draw(', 'm_duo_m24_vertical->draw(')
     assert_has(stereo, 'const bool foveaFillEnabled=',
-               'M8Distance.z<=.5', 'M8Effects.z>0.0', 'M8Distance.w<10.0',
-               'const float minimumSlope=adaptive ? slopeCap*.10 : M1Filter.x;',
-               'M8NextScale[x]=winner;', 'M1ConditionedDepth[uint3(x,group.x,0u)]',
+               'M8Effects.z>0.0', 'M8Distance.w<10.0',
+               'M8V2Map(float d)', 'M8V2Unmap(float d)',
+               'const float bound=v2 ? M8V2Map(limit) : limit;',
+               'const float mappedLimit=M8V2Map(limit);', 'M1ConditionedDepth[uint3(x,group.x,0u)]',
                'M1ConditionedDepth[uint3(x,group.x,1u)]',
                'void CSConditionM4(', 'void CSConditionM4Vertical(')
     assert_absent(stereo,'M7StabilizeEdge(', 'M7AccumulateFillColor(',
@@ -149,6 +152,11 @@ def check_source(backend,shaders):
                   'M7Controls.y>0.', 'M7Controls.z>.001')
     assert_has(raster, 'GlamSharpenNativeFovea(', 'DuoPhase2FocusLift(',
                'DuoB40InwardAnchor(')
+    assert_has(comp, 'settings.edge_reach_px,color_extent')
+    assert_has(writer, 'data.m8_distance[3]=edge_reach_px;')
+    assert_has(capture, 'config.settings.m25_fine_mode==1u || pair.first==snapshot')
+    assert_absent(comp,'2.f,color_extent')
+    assert_absent(stereo,'const bool foveaFillEnabled=M8Distance.z<=.5', 'const bool adaptive=M8Distance.z>.5')
     assert_absent(comp, 'b40_history_->temporal', 'state->temporal',
                   'if (history_output)', 'M7CurrentHistory')
     assert_has(comp, 'state->buffer', 'const bool b40_active=',
