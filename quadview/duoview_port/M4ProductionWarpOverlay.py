@@ -82,72 +82,47 @@ def main():
         frame.config.settings.m9_eye_far=0.f;
         run(*a,false,Route::direct,"M9 M4 distance-adaptive per-eye edges");
         frame.config.settings.m8_distance=false;
-        // Publish only the previous accepted WARP frame, then change both the
-        // gaze crop and the head position before binding it on another slot.
+        // V2 depth-mode regression uses the actual compiled M4 field and
+        // compositor write_constants -> GPU constant -> shader dataflow.
+        // Retired M7 temporal history is NOT recreated in this fixture.
+        frame.config.settings.m3_edges=false;
+        frame.config.settings.m8_distance=true;
+        frame.config.settings.m8_fill_near=0.f;
+        frame.config.settings.m8_fill_far=0.f;
+        frame.config.settings.m8_edge_near=.5f;
+        frame.config.settings.m8_edge_far=.5f;
+        frame.config.settings.m21_depth_debug=4u;
+        frame.config.settings.edge_reach_px=2.f;
+        run(*a,false,Route::direct,"M4 legacy depth policy 2 GPU pixels");
+        const auto legacy_policy_hash=m21_image_hash;
+        frame.config.settings.edge_reach_px=20.f;
+        run(*a,false,Route::direct,"M4 revised depth policy 20 GPU pixels");
+        if (legacy_policy_hash==m21_image_hash)
+            throw std::runtime_error("V2 GPU depth policy did not change conditioned M4 pixels");
+        frame.config.settings.edge_reach_px=2.f;
+        frame.config.settings.m21_depth_debug=0u;
+        frame.config.settings.m8_distance=false;
+        // B40 seam metadata and queue history remain live, independent of
+        // the now-retired M6/M7 foveal depth/color history. Exercise two slots,
+        // gaze crop movement, and a generation change without referencing
+        // removed B40MonoHistory::temporal arrays.
         auto history=uevr::duoview::dx12::B40MonoHistory::create(g.device.Get(),g.queue.Get());
-        if (!history) throw std::runtime_error("Fine depth history setup failed");
+        if (!history || !history->buffer) throw std::runtime_error("B40 seam history setup failed");
         a->set_b40_history(history);
         b->set_b40_history(history);
-        m1_geometry.fine_depth_camera={{1.5f,.1f,1.2f,-.15f},{0,0,0,1},{0,0,0},1};
-        run(*a,false,Route::direct,"Fine depth history starts with current fine depth");
-        if (a->last_fine_depth_history_used()) throw std::runtime_error("First frame used unproven history");
-        a->note_fine_depth_enqueued();
         const auto original_layout=frame.config.layout;
+        m1_geometry.fine_depth_camera={{1.5f,.1f,1.2f,-.15f},{0,0,0,1},{0,0,0},1};
+        run(*a,false,Route::direct,"B40 seam history initializes with M4");
+        a->note_fine_depth_enqueued();
         frame.config.layout.u0+=.04f; frame.config.layout.u1+=.04f;
         m1_geometry.fine_depth_camera.position[0]=.02f;
-        run(*b,false,Route::direct,"Fine depth history across slots, crop shift and head translation");
-        if (!b->last_fine_depth_history_used()) throw std::runtime_error("Fine depth history was not bound");
+        run(*b,false,Route::direct,"B40 seam history across slots, gaze crop and head shift");
         b->note_fine_depth_enqueued();
         frame.config.key.generation++;
-        run(*a,false,Route::direct,"Fine depth history rejects previous generation");
-        if (a->last_fine_depth_history_used()) throw std::runtime_error("Old generation leaked into fine depth");
-        // Read the packed colour from the queue's last written history. One
-        // colour impulse must still affect a third accepted frame.
+        run(*a,false,Route::direct,"B40 seam history after generation change");
+        frame.config.key.generation--;
         frame.config.layout=original_layout;
         m1_geometry.fine_depth_camera.position={};
-        auto original_primary=primary;
-        const auto history_color=[&]() {
-            const auto& metadata=history->fine_depth;
-            auto* image=history->temporal[metadata.index].Get();
-            if (!metadata.color_valid || !image) throw std::runtime_error("Fill history was not published");
-            const auto description=image->GetDesc();
-            D3D12_PLACED_SUBRESOURCE_FOOTPRINT copy_foot{};
-            UINT64 copy_bytes{};
-            g.device->GetCopyableFootprints(&description,0,1,0,&copy_foot,nullptr,nullptr,&copy_bytes);
-            auto cpu=resource(g.device.Get(),buffer(copy_bytes),D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
-            constexpr auto reads=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            transition(g.cmd.Get(),image,reads,D3D12_RESOURCE_STATE_COPY_SOURCE);
-            D3D12_TEXTURE_COPY_LOCATION source{image,D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
-            D3D12_TEXTURE_COPY_LOCATION target{cpu.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
-            target.PlacedFootprint=copy_foot;
-            g.cmd->CopyTextureRegion(&target,0,0,0,&source,nullptr);
-            transition(g.cmd.Get(),image,D3D12_RESOURCE_STATE_COPY_SOURCE,reads);
-            g.submit_and_wait();
-            void* mapped{};
-            check(cpu->Map(0,nullptr,&mapped));
-            const auto packed=uint32_t(static_cast<const float*>(mapped)[2]);
-            cpu->Unmap(0,nullptr);
-            return packed&255u;
-        };
-        // Keep the WARP compositor's original >=220 red-channel coverage assertion
-        // while injecting a measurable 25/255 red impulse into M7 colour history.
-        primary=solid_source(g,keep,32,32,{128,128,255,255});
-        run(*a,false,Route::direct,"Fill history seeds a colour impulse");
-        a->note_fine_depth_enqueued();
-        primary=solid_source(g,keep,32,32,{128,128,230,255});
-        run(*b,false,Route::direct,"Fill history carries that impulse into frame two");
-        b->note_fine_depth_enqueued();
-        run(*a,false,Route::direct,"Fill history still carries it into frame three");
-        a->note_fine_depth_enqueued();
-        const auto accumulated=history_color();
-        frame.config.key.generation++;
-        run(*b,false,Route::direct,"Fill history starts fresh after the generation changes");
-        b->note_fine_depth_enqueued();
-        const auto fresh=history_color();
-        if (accumulated<=fresh) throw std::runtime_error("Fill history lost the impulse by frame three");
-        frame.config.key.generation-=2;
-        primary=original_primary;
         a->set_b40_history({});
         b->set_b40_history({});
         frame.config.settings.m3_edges=false;
