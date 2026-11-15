@@ -116,8 +116,9 @@ def ui_cpp(src):
         // a normalized 0.99 maximum with safe per-eye slope bounds.
         .stereo_softness=(stereo_ready && !m_duo_depth_legacy_curve->value())
             ? .99f : m_duo_stereo_softness->value(),
-        .m2_fovea_depth=m_duo_m4_fovea_grid->value(),
-        .m25_fine_mode=0u, // M4 already uses strict frame pairing, not M25
+        .m2_fovea_depth=m_duo_m2_fovea_depth->value() || m_duo_m4_fovea_grid->value(),
+        // M4 strict pair must use mode 1; mode 0 can reject valid fine depth.
+        .m25_fine_mode=m_duo_m4_fovea_grid->value() ? 1u : uint32_t(m_duo_m25_fine_mode->value()>=.5f)
         .m3_edges=stereo_ready ? false : m_duo_m3_edges->value(),
         .m3_fold_sharpness=stereo_ready ? .95f : m_duo_m3_fold->value(),
         .m3_fill=stereo_ready ? false : m_duo_m3_fill->value(),
@@ -223,6 +224,10 @@ def geometric_shader(src):
                       '(M8Distance.z>.5 ? (M8Distance.w<10.0 ? .35 : .10) : 1.)')
     if src.count('(M8Distance.z>.5 ? .35 : 1.)'):
         raise RuntimeError('old 0.35 M4 minimum remains')
+    src=once(src,
+        'const bool foveaFillEnabled=M8Distance.z<=.5 ||\n            M8Effects.z>0.0 || M8Effects.w>0.0;',
+        'const bool foveaFillEnabled=M8Effects.z>0.0 || M8Effects.w>0.0;',
+        'zero effective stereo fill even when legacy M8 distance OFF')
     return src
 
 
@@ -275,10 +280,13 @@ def backend_history(src):
         const FineDepthHistoryFrame* previous=nullptr;
 '''+src[finish:]
     src=once(src,
+        '        const auto now=std::chrono::steady_clock::now();\n        const auto* last=b40_history_ ? &b40_history_->fine_depth : nullptr;\n',
+        '', 'remove unused temporal now/last locals')
+    src=once(src,
         '''                settings.edge_history,fill_history_effective,fill_blur_effective,
                 settings.edge_reach_px,color_extent,''',
         '''                0.f,0.f,0.f,
-                2.f,color_extent,''',
+                settings.edge_reach_px,color_extent,''',
         'zero formerly live synthetic edge/fill history arguments')
     start=src.index('        auto* history_output=write_history && m1_active')
     end=src.index('        // GPU lifetime remains bound to the exact retired OpenXR command slot,',start)
