@@ -162,6 +162,36 @@ def ui_cpp(src):
 
 def geometric_shader(src):
     src = once(src,
+        'float M8FillStrength(float inverseDepth) {',
+        '''// V2: reparameterize inverse depth before a CONSTANT-penalty max envelope.
+// A variable per-source penalty carried only by the current winner is NOT
+// associative: discarded slow cones can win later (reviewed counterexample).
+// Piecewise linear reparameterization has a bounded inverse derivative in
+// [0.10, 1.00]. Thus a 0.99 no-fold bound in mapped depth is still safe
+// after unmapping. Segment boundaries are continuous; no extra resources.
+float M8V2Map(float d) {
+    const float lo=max(0.0,M8Distance.y);
+    const float hi=max(lo+1.e-6,M8Distance.x);
+    const float sc=max(0.10,1.0-.90*saturate(M8Effects.x));
+    const float sf=max(0.10,1.0-.90*saturate(M8Effects.y));
+    const float sm=.5*(sc+sf);
+    const float a=lo/sf;
+    const float b=a+(hi-lo)/sm;
+    return d<=lo ? d/sf : (d<=hi ? a+(d-lo)/sm : b+(d-hi)/sc);
+}
+float M8V2Unmap(float d) {
+    const float lo=max(0.0,M8Distance.y);
+    const float hi=max(lo+1.e-6,M8Distance.x);
+    const float sc=max(0.10,1.0-.90*saturate(M8Effects.x));
+    const float sf=max(0.10,1.0-.90*saturate(M8Effects.y));
+    const float sm=.5*(sc+sf);
+    const float a=lo/sf;
+    const float b=a+(hi-lo)/sm;
+    return d<=a ? d*sf : (d<=b ? lo+(d-a)*sm : hi+(d-b)*sc);
+}
+float M8FillStrength(float inverseDepth) {''',
+        'V2 depth coordinate transform')
+    src = once(src,
         'return lerp(2.0,.35,saturate(smoothness));',
         'return lerp(M8Distance.w<10.0 ? 2.0 : 1.0,\n                M8Distance.w<10.0 ? .35 : .10,saturate(smoothness));',
         'monotone M8 scale')
@@ -174,9 +204,9 @@ def geometric_shader(src):
     src = once(src,
         '        M1Row[x] = knee > 0.0 ? nearDepth : min(nearDepth, M1Filter.y);',
         '''        M1Row[x] = knee > 0.0 ? nearDepth : min(nearDepth, M1Filter.y);
-        // Skip the extra per-seed work for existing legacy profiles.
+        // Map only effective V2 stereo depth; B318 legacy values untouched.
         if(M8Distance.z>.5 && M8Distance.w>=10.0)
-            M8Scale[x] = M8SeedScale(M1Row[x]);''',
+            M1Row[x]=M8V2Map(M1Row[x]);''',
         'coarse per-seed slope initialization')
     old = '''        for (uint step = 1; step < w && float(step-1)*M1Filter.x < limit; step *= 2) {
             for (uint x = lane; x < w; x += 128) {
@@ -189,35 +219,78 @@ def geometric_shader(src):
             for (uint x = lane; x < w; x += 128) M1Row[x] = M1Next[x];
             GroupMemoryBarrierWithGroupSync();
         }'''
-    new = '''        const bool adaptive=M8Distance.z>.5 && M8Distance.w>=10.0;
-        const float eyeMax=max(max(abs(M1Eye.x),abs(M1Eye.y)),.00001);
-        const float slopeCap=.99/max(eyeMax*float(w),.00001);
-        const float minimumSlope=adaptive ? slopeCap*.10 : M1Filter.x;
-        for (uint step=1; step<w && float(step-1)*minimumSlope<limit; step*=2) {
-            for (uint x=lane; x<w; x+=128) {
-                const uint left=x>=step ? x-step : x;
-                const uint right=x+step<w ? x+step : x;
-                const float l=x>=step ? M1Row[left]-float(step)*
-                    (adaptive ? slopeCap*M8Scale[left] : M1Filter.x) : 0.;
-                const float r=x+step<w ? M1Row[right]-float(step)*
-                    (adaptive ? slopeCap*M8Scale[right] : M1Filter.x) : 0.;
-                const float current=M1Row[x];
-                M1Next[x]=max(current,max(l,r));
-                if (adaptive) {
-                    float winner=M8Scale[x];
-                    if (l>current && l>=r) winner=M8Scale[left];
-                    else if (r>current && r>l) winner=M8Scale[right];
-                    M8NextScale[x]=winner;
-                }
+    new = '''        // In legacy mode this is the original B318 fixed-penalty envelope.
+        // In V2 the seeds are mapped and the SAME associative envelope runs
+        // with a single no-fold-bounded per-texel penalty.
+        const bool v2=M8Distance.z>.5 && M8Distance.w>=10.0;
+        const float pen=M1Filter.x;
+        const float bound=v2 ? M8V2Map(limit) : limit;
+        for (uint step=1;step<w && float(step-1)*pen<bound;step*=2) {
+            for (uint x=lane;x<w;x+=128) {
+                const float penalty=float(step)*pen;
+                const float l=x>=step ? M1Row[x-step]-penalty : 0.0;
+                const float r=x+step<w ? M1Row[x+step]-penalty : 0.0;
+                M1Next[x]=max(M1Row[x],max(l,r));
             }
             GroupMemoryBarrierWithGroupSync();
-            for (uint x=lane; x<w; x+=128) {
-                M1Row[x]=M1Next[x];
-                if (adaptive) M8Scale[x]=M8NextScale[x];
-            }
+            for(uint x=lane;x<w;x+=128) M1Row[x]=M1Next[x];
             GroupMemoryBarrierWithGroupSync();
         }'''
     src = once(src,old,new,'coarse slope envelope')
+    src = once(src,
+        '''            M1ConditionedDepth[uint3(x,group.x,0u)] = M1Row[x];
+            M1ConditionedDepth[uint3(x,group.x,1u)] = M1Row[x];''',
+        '''            const float depth=M8Distance.w>=10.0 ? M8V2Unmap(M1Row[x]) : M1Row[x];
+            M1ConditionedDepth[uint3(x,group.x,0u)] = depth;
+            M1ConditionedDepth[uint3(x,group.x,1u)] = depth;''',
+        'coarse V2 field unmapping')
+    # In the effective new V2 mode, bypass M4's unsafe winner-propagation
+    # altogether. Patch ONLY the production kernel, not its probe variants.
+    start=src.index('void CSConditionM4(')
+    end=src.index('void CSConditionM4ProbeSeed(',start)
+    kernel=src[start:end]
+    old_m4='    const float scale=M4Flags.y;\n    [branch] if (M3Flags.x<.5) {'
+    if kernel.count(old_m4)!=1:
+        raise RuntimeError(f'M4 production entry: {kernel.count(old_m4)} anchors')
+    kernel=kernel.replace(old_m4,'    const float scale=M4Flags.y;\n'+'''    // Correct V2 fine envelope: one constant-penalty dilation on mapped depth.
+    // Uniform CB-derived branch lets all threads rendezvous at every barrier.
+    // Legacy M4 and all diagnostic probe kernels retain their old semantics.
+    [branch] if(M8Distance.w>=10.0 && M3Flags.x<.5) {
+        for(uint tile=0u;tile<(w+127u)/128u;++tile) {
+            const uint x=128u*tile+lane;
+            if(x<w) M1Row[x]=M8V2Map(M1Row[x]);
+        }
+        GroupMemoryBarrierWithGroupSync();
+        const float pen=min(M1Filter.x*scale,M8SafeLimit());
+        const float mappedLimit=M8V2Map(limit);
+        for(uint step=1u;step<w && float(step-1u)*pen<mappedLimit;step*=2u) {
+            for(uint tile=0u;tile<(w+127u)/128u;++tile) {
+                const uint x=128u*tile+lane;
+                if(x<w) {
+                    const float left=x>=step ? M1Row[x-step]-float(step)*pen : 0.0;
+                    const float right=x+step<w ? M1Row[x+step]-float(step)*pen : 0.0;
+                    M1Next[x]=max(M1Row[x],max(left,right));
+                }
+            }
+            GroupMemoryBarrierWithGroupSync();
+            for(uint tile=0u;tile<(w+127u)/128u;++tile) {
+                const uint x=128u*tile+lane;
+                if(x<w) M1Row[x]=M1Next[x];
+            }
+            GroupMemoryBarrierWithGroupSync();
+        }
+        for(uint tile=0u;tile<(w+127u)/128u;++tile) {
+            const uint x=128u*tile+lane;
+            if(x<w) {
+                const float depth=M8V2Unmap(M1Row[x]);
+                M4FoveaConditioned[uint3(x,group.x,0u)]=depth;
+                M4FoveaConditioned[uint3(x,group.x,1u)]=depth;
+            }
+        }
+        return;
+    }
+'''+ '    [branch] if (M3Flags.x<.5) {',1)
+    src=src[:start]+kernel+src[end:]
     # In M4, new smooth=1 requires the .10 minimum bound, otherwise the loop
     # could terminate prematurely and omit valid distant propagation.
     src = src.replace('(M8Distance.z>.5 ? .35 : 1.)',
