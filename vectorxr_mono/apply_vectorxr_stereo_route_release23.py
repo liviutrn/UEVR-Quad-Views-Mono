@@ -13,7 +13,8 @@ G = root / "layer/include/depthxr/framegen_gpu.h"
 D = root / "layer/src/framegen/framegen_d3d12.cpp"
 H = root / "layer/include/depthxr/framegen_presenter.h"
 P = root / "layer/src/framegen/framegen_presenter.cpp"
-sources = {p: p.read_text(encoding="utf-8") for p in (G, D, H, P)}
+T = root / "layer/tests/framegen_presenter_tests.cpp"
+sources = {p: p.read_text(encoding="utf-8") for p in (G, D, H, P, T)}
 
 def edit(path, old, new, label):
     count = sources[path].count(old)
@@ -63,10 +64,6 @@ edit(D,
             ok = RunHardwareFlow(recordings, slot, slot_index, error);""",
     "actual per-frame atlas or per-view route")
 
-edit(D,
-    "        timing.hardware_call_ms = slot.hardware_call_ms;\n",
-    "        timing.hardware_call_ms = slot.hardware_call_ms;\n",
-    "hardware-call anchor")
 # Move outside the hardware-only branch so shader analyses are reported too.
 edit(D,
     """        timing.end = clock(stamps[kTimingStamps - 1]);
@@ -185,6 +182,87 @@ edit(P,
             const bool usable = content.valid""",
     "hold last good stereo pair after release error")
 
+
+# A fake-runtime fault in the RIGHT eye's release (after the GPU wrote both
+# images), which must never reach xrEndFrame as a half-updated pair.
+edit(T,
+    "std::map<XrSwapchain, int> g_releases; // images released per swapchain",
+    """std::map<XrSwapchain, int> g_releases; // images released per swapchain
+std::vector<XrSwapchain> g_created_outputs23;
+std::atomic<std::uintptr_t> g_fault_right23{0};
+std::atomic<int> g_fault_count23{0};
+std::atomic<int> g_fault_seen23{0};""",
+    "fake runtime right eye fault globals")
+edit(T,
+    """    ++g_creates;
+    g_create_sizes.push_back({info->width, info->height});""",
+    """    ++g_creates;
+    g_created_outputs23.push_back(*swapchain);
+    g_create_sizes.push_back({info->width, info->height});""",
+    "remember output handles")
+edit(T,
+    """XrResult XRAPI_PTR Release(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo*) {
+    std::scoped_lock lock(g_xr_mutex);
+    auto& images = g_images[swapchain];""",
+    """XrResult XRAPI_PTR Release(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo*) {
+    std::scoped_lock lock(g_xr_mutex);
+    if (g_fault_count23.load() != 0 &&
+        reinterpret_cast<std::uintptr_t>(swapchain) == g_fault_right23.load()) {
+        g_fault_count23.store(0);
+        ++g_fault_seen23;
+        return XR_ERROR_RUNTIME_FAILURE;
+    }
+    auto& images = g_images[swapchain];""",
+    "inject one right output release failure")
+edit(T,
+    "void TestJitWaitsForNoGameFrame() {",
+    """void TestJitRightEyeReleaseFailure23() {
+    FrameGenPresenter presenter;
+    GpuLog gpu;
+    Runtime runtime;
+    runtime.paced = true;
+    std::unique_ptr<App> owned;
+    App* app = nullptr;
+    std::size_t created_before = 0;
+    {
+        std::scoped_lock lock(g_xr_mutex);
+        created_before = g_created_outputs23.size();
+    }
+    StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
+             FrameGenMultiplier::kDynamic, app, runtime, owned);
+    for (int i = 0; i < 15; ++i) app->Frame();
+    XrSwapchain right = XR_NULL_HANDLE;
+    {
+        std::scoped_lock lock(g_xr_mutex);
+        if (g_created_outputs23.size() >= created_before + 2)
+            right = g_created_outputs23.back();
+    }
+    Check(right != XR_NULL_HANDLE, "right eye fault: two output swapchains initialized");
+    g_fault_seen23.store(0);
+    g_fault_right23.store(reinterpret_cast<std::uintptr_t>(right));
+    g_fault_count23.store(1);
+    const auto submits_before = runtime.Submissions();
+    for (int i = 0; i < 30; ++i) app->Frame();
+    const int faults = g_fault_seen23.load();
+    g_fault_count23.store(0);
+    g_fault_right23.store(0);
+    const auto submits_after = runtime.Submissions();
+    presenter.Stop();
+    Check(faults == 1, "right eye fault: exactly one injected failed release reached presenter");
+    Check(submits_after > submits_before,
+          "right eye fault: compositor recovered and submitted following frames");
+    Check(!runtime.ordering_violation && !g_release_violation,
+          "right eye fault: runtime and swapchain call ordering retained");
+}
+
+void TestJitWaitsForNoGameFrame() {""",
+    "right eye fault recovery regression")
+edit(T,
+    "    RUN(TestJitWaitsForNoGameFrame);",
+    """    RUN(TestJitWaitsForNoGameFrame);
+    RUN(TestJitRightEyeReleaseFailure23);""",
+    "right eye regression test registered")
+
 for path, value in sources.items():
     path.write_text(value, encoding="utf-8")
-print("PASS VectorXR stereo route telemetry and paired release checks (4 files)")
+print("PASS VectorXR stereo route telemetry and paired release checks and fake-runtime test (5 files)")
