@@ -4,7 +4,7 @@ name: TriView B43 + DuoView Mono M4 + World trace #21
 run-name: TriView B43 + DuoView Mono M4 + World trace #21 (${{ github.run_number }})
 on:
   push:
-    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**', 'experiment/duoview-m24-**', 'experiment/duoview-m25a-**', 'experiment/duoview-m3a-**', 'experiment/duoview-m4-**', 'experiment/duoview-b318-**']
+    branches: ['claude/triview-**', 'experiment/triview-**', 'experiment/duoview-b40-mono-**', 'experiment/duoview-m1-**', 'experiment/duoview-m21-**', 'experiment/duoview-m22-**', 'experiment/duoview-m23-**', 'experiment/duoview-m24-**', 'experiment/duoview-m25a-**', 'experiment/duoview-m3a-**', 'experiment/duoview-m4-**', 'experiment/duoview-b318-**', 'experiment/duoview-improved-stereo-reconstruction-**']
     paths: ['.github/workflows/triview-b1.yml', 'quadview/**']
   workflow_dispatch:
 permissions:
@@ -419,6 +419,12 @@ jobs:
           ctest --test-dir duo_b40_tests -C Release --output-on-failure --no-tests=error *> evidence/duo-b40-results.log
           $code=$LASTEXITCODE; Get-Content evidence/duo-b40-results.log
           if ($code -ne 0) { throw 'Generated DuoView GPU fixture failed' }
+          # Research-only 32x32 exact production-shader RGB-D replay.
+          # Raw captures are available for offline per-eye scoring (64x32 BGRA).
+          $captures=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_gpu_*.bgra')
+          if ($captures.Count -ne 24) { throw "Expected 24 stereo reconstruction WARP captures, found $($captures.Count)" }
+          foreach ($capture in $captures) { Copy-Item $capture.FullName -Destination evidence/ }
+          'Research gate only: 32x32 RGB-D; each .bgra is 64x32 BGRA8, left eye first; 3 scenes x 4 frames x 2 debug modes. Not full-scale headset validation.' | Set-Content evidence/recon_gpu_README.txt
       - name: Test QuadView contracts, asynchronous delivery, and production GPU compositor
         shell: pwsh
         run: |
