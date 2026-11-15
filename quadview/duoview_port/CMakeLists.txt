@@ -65,14 +65,27 @@ add_custom_command(
   DEPENDS "${GENERATED_M3_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/M4ProductionWarpOverlay.py"
   VERBATIM)
 
+# Research-only: derive fixture from the EXACT generated production source.
+# The augmentation executes only with DUOVIEW_RECON_REPLAY=1; it changes no UEVR shader.
+set(GENERATED_RECON_WARP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/V208SharedEyeWarpRecon.cpp")
+add_custom_command(
+  OUTPUT "${GENERATED_RECON_WARP_SOURCE}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/ReconProductionWarpOverlay.py"
+          --source "${GENERATED_M4_WARP_SOURCE}" --output "${GENERATED_RECON_WARP_SOURCE}"
+  DEPENDS "${GENERATED_M4_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/ReconProductionWarpOverlay.py"
+  VERBATIM)
+
 if(WIN32)
-  add_executable(DuoViewB40ProductionWarp "${GENERATED_M4_WARP_SOURCE}")
+  add_executable(DuoViewB40ProductionWarp "${GENERATED_RECON_WARP_SOURCE}")
   target_compile_features(DuoViewB40ProductionWarp PRIVATE cxx_std_20)
   # Fixture-only probes are compiled out of shipping UEVR headers.
   target_compile_definitions(DuoViewB40ProductionWarp PRIVATE DUOVIEW_M4_WARP_PROBE=1)
   target_include_directories(DuoViewB40ProductionWarp PRIVATE "${JOYEY_BACKEND_DIR}/src/mods/vr")
   target_link_libraries(DuoViewB40ProductionWarp PRIVATE d3d12 dxgi d3dcompiler)
   add_test(NAME duoview-b40-production-warp COMMAND DuoViewB40ProductionWarp)
+  add_test(NAME duoview-reconstruction-production-warp COMMAND DuoViewB40ProductionWarp)
+  set_tests_properties(duoview-reconstruction-production-warp PROPERTIES
+      TIMEOUT 120 ENVIRONMENT "DUOVIEW_RECON_REPLAY=1")
   set_tests_properties(duoview-b40-production-warp PROPERTIES TIMEOUT 60)
   add_test(NAME duoview-m4-condition-probe COMMAND DuoViewB40ProductionWarp)
   set_tests_properties(duoview-m4-condition-probe PROPERTIES TIMEOUT 60
