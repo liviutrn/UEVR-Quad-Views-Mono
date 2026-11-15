@@ -366,6 +366,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'B318 physical source-fit and shader coordinate overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m8_generated.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'DuoView distance-aware edge/fill contracts failed' }
+          # Stereo V2 cleanup: equivalence-first zero-fill gate, then deliberate
+          # retirement of directional/fill/temporal modes. Keep these after
+          # B318 source-fit and the original B318/M8 regression test.
+          python workspace/quadview/duoview_port/apply_duoview_stereo_zero_fill.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView stereo zero-fill overlay anchors failed' }
+          python workspace/quadview/duoview_port/apply_duoview_stereo_cleanup.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView stereo V2 cleanup overlay anchors failed' }
+          python workspace/quadview/duoview_port/test_duoview_stereo_cleanup.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'DuoView stereo V2 numeric/generated regression checks failed' }
           '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
           $changes = @(
             @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),
