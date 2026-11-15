@@ -228,9 +228,14 @@ edit(T,
         std::scoped_lock lock(g_xr_mutex);
         created_before = g_created_outputs23.size();
     }
+    // Fixed 3x plus deliberate game work makes JIT engagement deterministic.
+    // Dynamic can remain on standby with a tight app->Frame loop.
     StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
-             FrameGenMultiplier::kDynamic, app, runtime, owned);
-    for (int i = 0; i < 15; ++i) app->Frame();
+             FrameGenMultiplier::k3, app, runtime, owned);
+    for (int i = 0; i < 3; ++i) app->Frame();
+    RunPipelined(*app, 900ms, 20ms, 30ms);
+    Check(presenter.Status().threaded && gpu.analyzes.load() > 0,
+          "right eye fault: active JIT and analysis established");
     XrSwapchain left = XR_NULL_HANDLE, right = XR_NULL_HANDLE;
     {
         std::scoped_lock lock(g_xr_mutex);
@@ -245,7 +250,7 @@ edit(T,
     g_fault_right23.store(reinterpret_cast<std::uintptr_t>(right));
     g_fault_count23.store(1);
     const auto submits_before = runtime.Submissions();
-    for (int i = 0; i < 30; ++i) app->Frame();
+    RunPipelined(*app, 900ms, 20ms, 30ms);
     const int faults = g_fault_seen23.load();
     g_fault_count23.store(0);
     g_fault_right23.store(0);
