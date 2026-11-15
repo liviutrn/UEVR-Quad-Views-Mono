@@ -231,13 +231,16 @@ edit(T,
     StartJit(presenter, gpu, FrameGenSynthesisMode::kInterpolate,
              FrameGenMultiplier::kDynamic, app, runtime, owned);
     for (int i = 0; i < 15; ++i) app->Frame();
-    XrSwapchain right = XR_NULL_HANDLE;
+    XrSwapchain left = XR_NULL_HANDLE, right = XR_NULL_HANDLE;
     {
         std::scoped_lock lock(g_xr_mutex);
-        if (g_created_outputs23.size() >= created_before + 2)
+        if (g_created_outputs23.size() >= created_before + 2) {
             right = g_created_outputs23.back();
+            left = g_created_outputs23[g_created_outputs23.size() - 2];
+        }
     }
-    Check(right != XR_NULL_HANDLE, "right eye fault: two output swapchains initialized");
+    Check(left != XR_NULL_HANDLE && right != XR_NULL_HANDLE,
+          "right eye fault: two output swapchains initialized");
     g_fault_seen23.store(0);
     g_fault_right23.store(reinterpret_cast<std::uintptr_t>(right));
     g_fault_count23.store(1);
@@ -248,6 +251,16 @@ edit(T,
     g_fault_right23.store(0);
     const auto submits_after = runtime.Submissions();
     presenter.Stop();
+    const auto submitted = runtime.Snapshot();
+    std::size_t checked_pairs = 0;
+    for (const auto& frame : submitted) {
+        if (frame.swapchains.size() != 2 || frame.releases.size() != 2 ||
+            frame.swapchains[0] != left || frame.swapchains[1] != right) continue;
+        ++checked_pairs;
+        Check(frame.releases[0] == frame.releases[1],
+              "right eye fault: never submitted an unequal left/right output release generation");
+    }
+    Check(checked_pairs > 0, "right eye fault: saw generated stereo submissions");
     Check(faults == 1, "right eye fault: exactly one injected failed release reached presenter");
     Check(submits_after > submits_before,
           "right eye fault: compositor recovered and submitted following frames");
