@@ -13,19 +13,6 @@ def main():
         raise SystemExit("Usage: apply_duoview_b318_mono_fade.py <backend>")
     mods=Path(sys.argv[1])/"src/mods"
     patch(mods/"VR.cpp", [
-        ("B318 distance fade exposed directly in true-mono menu",
-         'm_duo_shared_eye->draw("Same image for both eyes (v208)");',
-         """m_duo_shared_eye->draw("Same image for both eyes (v208)");
-                    m_duo_m24_distance->draw("Distance-faded sharpening (true mono)");
-                    if (m_duo_m24_distance->value()) {
-                        m_duo_m24_near->draw("Full sharpness nearer than (metres)");
-                        m_duo_m24_far->draw("Fade complete at (metres)");
-                        m_duo_m24_regular_pct->draw("Far normal sharpen (%)");
-                        m_duo_m24_wide_pct->draw("Far wide sharpen (%)");
-                    }"""),
-        ("B318 stereo menu label reflects both modes",
-         'm_duo_m24_distance->draw("M2.4 Distance-faded sharpening (synthetic stereo only)");',
-         'm_duo_m24_distance->draw("M2.4 Distance-faded sharpening (mono and stereo)");'),
         ("request existing NGX depth on mono distance fade",
          "if (frame && frame->config.settings.synthetic_stereo) {\n        const auto& layout = frame->config.layout;",
          """if (frame && (frame->config.settings.synthetic_stereo ||
