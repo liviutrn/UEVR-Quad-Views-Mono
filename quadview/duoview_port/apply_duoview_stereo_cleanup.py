@@ -100,6 +100,8 @@ def ui_cpp(src):
         SPDLOG_INFO("[DuoView] Stereo depth profile V2 migrated (close={}, far={}), legacy transition kept until edit; obsolete fill/edge/temporal modes disabled",
             m_duo_depth_close->value(), m_duo_depth_far->value());
     }
+    const bool stereo_ready=m_duo_stereo->value() &&
+        m_duo_stereo_bootstrap_ready.load(std::memory_order_acquire);
     uevr::duoview::Settings candidate{''',
         'one-time migration in configure')
     src = once(src,
@@ -112,12 +114,14 @@ def ui_cpp(src):
         .m3_jitter_mode=uint32_t((std::clamp)(m_duo_m3_jitter->value(),0,2)),''',
         '''        // True mono distance-fade keeps its old M1 slope; stereo V2 uses
         // a normalized 0.99 maximum with safe per-eye slope bounds.
-        .stereo_softness=(m_duo_stereo->value() && m_duo_stereo_bootstrap_ready.load(std::memory_order_acquire) &&
-                         !m_duo_depth_legacy_curve->value()) ? .99f : m_duo_stereo_softness->value(),
+        .stereo_softness=(stereo_ready && !m_duo_depth_legacy_curve->value())
+            ? .99f : m_duo_stereo_softness->value(),
         .m2_fovea_depth=m_duo_m4_fovea_grid->value(),
         .m25_fine_mode=0u, // M4 already uses strict frame pairing, not M25
-        .m3_edges=false, .m3_fold_sharpness=.95f,
-        .m3_fill=false, .m3_jitter_mode=0u,''',
+        .m3_edges=stereo_ready ? false : m_duo_m3_edges->value(),
+        .m3_fold_sharpness=stereo_ready ? .95f : m_duo_m3_fold->value(),
+        .m3_fill=stereo_ready ? false : m_duo_m3_fill->value(),
+        .m3_jitter_mode=stereo_ready ? 0u : uint32_t((std::clamp)(m_duo_m3_jitter->value(),0,2)),''',
         'retire M2-only, directional M3, old slope controls')
     src = once(src,
         '''        .edge_history=m_duo_edge_history->value(),
@@ -127,24 +131,28 @@ def ui_cpp(src):
         .m8_distance=m_duo_m8_distance->value(),''',
         '''        .edge_history=0.f, .fill_history=0.f,
         .fill_blur_px=0.f, .edge_reach_px=2.f,
-        .m8_distance=m_duo_stereo->value() && m_duo_stereo_bootstrap_ready.load(std::memory_order_acquire) &&
-            (!m_duo_depth_legacy_curve->value() || m_duo_m8_distance->value()),''',
+        .m8_distance=stereo_ready ?
+            (!m_duo_depth_legacy_curve->value() || m_duo_m8_distance->value()) : m_duo_m8_distance->value(),''',
         'retire temporal and force stereo distance policy')
     src = once(src,
         '''        .m8_edge_near=m_duo_m8_edge_near->value(), .m8_edge_far=m_duo_m8_edge_far->value(),
         .m8_fill_near=m_duo_m8_fill_near->value(), .m8_fill_far=m_duo_m8_fill_far->value(),
         .m9_eye_near=m_duo_m9_eye_near->value(), .m9_eye_far=m_duo_m9_eye_far->value(),''',
-        '''        .m8_edge_near=m_duo_depth_legacy_curve->value() ? m_duo_m8_edge_near->value() : m_duo_depth_close->value(),
-        .m8_edge_far=m_duo_depth_legacy_curve->value() ? m_duo_m8_edge_far->value() : m_duo_depth_far->value(),
-        .m8_fill_near=0.f, .m8_fill_far=0.f,
-        // M9 is retired. Its unused x lane carries the legacy-curve marker.
-        .m9_eye_near=m_duo_depth_legacy_curve->value() ? 1.f : 0.f, .m9_eye_far=0.f,''',
+        '''        .m8_edge_near=(stereo_ready && !m_duo_depth_legacy_curve->value())
+            ? m_duo_depth_close->value() : m_duo_m8_edge_near->value(),
+        .m8_edge_far=(stereo_ready && !m_duo_depth_legacy_curve->value())
+            ? m_duo_depth_far->value() : m_duo_m8_edge_far->value(),
+        .m8_fill_near=stereo_ready ? 0.f : m_duo_m8_fill_near->value(),
+        .m8_fill_far=stereo_ready ? 0.f : m_duo_m8_fill_far->value(),
+        // M9 is retired in stereo. Its unused x lane carries the legacy marker.
+        .m9_eye_near=stereo_ready ? (m_duo_depth_legacy_curve->value() ? 1.f : 0.f) : m_duo_m9_eye_near->value(),
+        .m9_eye_far=stereo_ready ? 0.f : m_duo_m9_eye_far->value(),''',
         'retire M8 fill and M9')
     src = once(src,
         '''        .m21_jitter_correct=m_duo_m21_jitter->value(),
         .m24_vertical_taper=m_duo_m24_vertical->value(),''',
-        '''        .m21_jitter_correct=false,
-        .m24_vertical_taper=0.f,''',
+        '''        .m21_jitter_correct=stereo_ready ? false : m_duo_m21_jitter->value(),
+        .m24_vertical_taper=stereo_ready ? 0.f : m_duo_m24_vertical->value(),''',
         'retire jitter and vertical taper')
     return src
 
