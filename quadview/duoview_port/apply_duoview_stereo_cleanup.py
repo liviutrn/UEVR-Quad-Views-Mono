@@ -85,8 +85,8 @@ def ui_cpp(src):
         '''    const auto current = m_duoview.settings();
     // Once per legacy profile, migrate effective M4 endpoint *slopes*, not
     // numeric old sliders. Old distance-OFF maps to constant smoothing.
-    // Preserve the old piecewise/clamped curve via the retired M9 flag lane
-    // until the first new smoothing-slider edit. This preserves all distances.
+    // Preserve the old piecewise/clamped curve via the retired temporal-reach
+    // constant lane, until explicit user conversion. This preserves all distances.
     if (!m_duo_depth_schema_v2->value()) {
         const float base=(std::clamp)(m_duo_stereo_softness->value(),.25f,.99f);
         const bool old_distance=m_duo_m8_distance->value();
@@ -164,6 +164,10 @@ def ui_cpp(src):
 
 
 def geometric_shader(src):
+    src = once(src,
+        'float4 M8Distance; // xyz: inverse near/far/enabled; w: temporal reach',
+        'float4 M8Distance; // xyz inverse near/far/enabled; w: depth policy (2 legacy, 20 V2)',
+        'name GPU constant depth-policy lane')
     src = once(src,
         'float M8FillStrength(float inverseDepth) {',
         '''// V2: reparameterize inverse depth before a CONSTANT-penalty max envelope.
