@@ -19,14 +19,14 @@ Synthetic stereo on/off; close/far depth smoothing 0..1; depth transition start/
 | `DuoM4FoveaDepthGrid` | Preserved M4 strict-paired detail; off = coarse |
 | `DuoM25FineMode`, `DuoM21FoveaDepth` | Old keys load but do not activate obsolete M2-only detail |
 | `DuoM3PerEyeEdges`, `DuoM3OcclusionSharpness`, `DuoM3BackgroundFill`, `DuoM3JitterMode`, `DuoM21JitterCorrect` | Retired effective asymmetric/fill/jitter controls |
-| `DuoM9PerEyeNear`, `DuoM9PerEyeFar` | Retired per-eye asymmetry; unused M9 constant x lane carries the new legacy-curve marker, never the old M9 saved value |
+| `DuoM9PerEyeNear`, `DuoM9PerEyeFar` | Retired per-eye asymmetry; retired temporal-edge-reach lane carries the new legacy-curve marker (2 = legacy; 20 = new), while original M9 values remain available for true mono |
 | `DuoM8FillNear`, `DuoM8FillFar`, `DuoFillHistory`, `DuoFillBlurPixels` | Effective zero; synthetic color fill/history/blur retired |
 | `DuoEdgeHistory`, `DuoEdgeHistoryReachPixels` | Synthetic M6/M7 edge accumulation retired. **Deliberate image change**: archived edge history 0.70 was active |
 | `DuoM24VerticalTaper` | Effective zero; its passes already skipped at zero |
 | `DuoM25DepthDebug` | Kept developer diagnostic |
 | `DuoM2LeftSharpen`, `DuoM2RightSharpen`, `DuoM5LeftMaxSharpness`, `DuoM5RightMaxSharpness`, `DuoM23WideLeft/Right` | Preserved independently per eye |
 
-Migration: old curve was `clamp(base*(2-1.65*lerp(oldNear,oldFar,distanceWeight)),0,.99)` and could plateau for much of the transition. Merely mapping endpoints would change the image. Existing profiles therefore continue using the old curve internally until the user moves either new smoothing slider. New slider movement activates a monotonic `0.99*(1-0.90*smoothing)` profile. Old slopes below the new minimum 0.099 are not directly representable, but are preserved in the hidden legacy path until first edit. Other retired effects remain retired even in legacy mode.
+Migration: old curve was `clamp(base*(2-1.65*lerp(oldNear,oldFar,distanceWeight)),0,.99)` and could plateau for much of the transition. Merely mapping endpoints would change the image. Existing profiles therefore continue using the old curve internally until the user moves either new smoothing slider. The retired temporal-history reach constant is the internal 2/20 selector; no M9 directional constant is overloaded. New slider movement activates a monotonic `0.99*(1-0.90*smoothing)` profile. Old slopes below the new minimum 0.099 are not directly representable, but are preserved in the hidden legacy path until first edit. Other retired effects remain retired even in legacy mode.
 
 ## Source/running-work accounting
 

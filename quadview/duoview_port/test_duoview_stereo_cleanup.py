@@ -126,6 +126,7 @@ def check_source(backend,shaders):
                '.edge_history=0.f',
                '.m24_vertical_taper=stereo_ready ? 0.f : m_duo_m24_vertical->value()',
                '.m8_fill_near=stereo_ready ? 0.f : m_duo_m8_fill_near->value()',
+               '.edge_reach_px=(stereo_ready && !m_duo_depth_legacy_curve->value()) ? 20.f : 2.f',
                '.m2_fovea_depth=m_duo_m4_fovea_grid->value()',
                'm_duo_m5_left_max->value()', 'm_duo_m5_right_max->value()',
                'm_duo_m2_left->value()', 'm_duo_m2_right->value()',
@@ -137,7 +138,7 @@ def check_source(backend,shaders):
                   'm_duo_m9_eye_far->draw(', 'm_duo_fill_blur->draw(',
                   'm_duo_m2_fovea_depth->draw(', 'm_duo_m24_vertical->draw(')
     assert_has(stereo, 'const bool foveaFillEnabled=',
-               'M8Distance.z<=.5', 'M8Effects.z>0.0', 'M9PerEye.x>.5',
+               'M8Distance.z<=.5', 'M8Effects.z>0.0', 'M8Distance.w<10.0',
                'const float minimumSlope=adaptive ? slopeCap*.10 : M1Filter.x;',
                'M8NextScale[x]=winner;', 'M1ConditionedDepth[uint3(x,group.x,0u)]',
                'M1ConditionedDepth[uint3(x,group.x,1u)]',

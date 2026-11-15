@@ -130,7 +130,9 @@ def ui_cpp(src):
         .edge_reach_px=m_duo_edge_reach->value(),
         .m8_distance=m_duo_m8_distance->value(),''',
         '''        .edge_history=0.f, .fill_history=0.f,
-        .fill_blur_px=0.f, .edge_reach_px=2.f,
+        .fill_blur_px=0.f,
+        // Retired temporal reach lane is a 2/20 version selector in shader.
+        .edge_reach_px=(stereo_ready && !m_duo_depth_legacy_curve->value()) ? 20.f : 2.f,
         .m8_distance=stereo_ready ?
             (!m_duo_depth_legacy_curve->value() || m_duo_m8_distance->value()) : m_duo_m8_distance->value(),''',
         'retire temporal and force stereo distance policy')
@@ -144,8 +146,8 @@ def ui_cpp(src):
             ? m_duo_depth_far->value() : m_duo_m8_edge_far->value(),
         .m8_fill_near=stereo_ready ? 0.f : m_duo_m8_fill_near->value(),
         .m8_fill_far=stereo_ready ? 0.f : m_duo_m8_fill_far->value(),
-        // M9 is retired in stereo. Its unused x lane carries the legacy marker.
-        .m9_eye_near=stereo_ready ? (m_duo_depth_legacy_curve->value() ? 1.f : 0.f) : m_duo_m9_eye_near->value(),
+        // M9 asymmetry is retired in stereo; true mono retains saved values.
+        .m9_eye_near=stereo_ready ? 0.f : m_duo_m9_eye_near->value(),
         .m9_eye_far=stereo_ready ? 0.f : m_duo_m9_eye_far->value(),''',
         'retire M8 fill and M9')
     src = once(src,
@@ -160,11 +162,11 @@ def ui_cpp(src):
 def geometric_shader(src):
     src = once(src,
         'return lerp(2.0,.35,saturate(smoothness));',
-        'return lerp(M9PerEye.x>.5 ? 2.0 : 1.0,\n                M9PerEye.x>.5 ? .35 : .10,saturate(smoothness));',
+        'return lerp(M8Distance.w<10.0 ? 2.0 : 1.0,\n                M8Distance.w<10.0 ? .35 : .10,saturate(smoothness));',
         'monotone M8 scale')
     src = once(src,
         'const float proposed=original*lerp(2.0,.35,saturate(smoothness));',
-        'const float proposed=original*lerp(M9PerEye.x>.5 ? 2.0 : 1.0,\n            M9PerEye.x>.5 ? .35 : .10,saturate(smoothness));',
+        'const float proposed=original*lerp(M8Distance.w<10.0 ? 2.0 : 1.0,\n            M8Distance.w<10.0 ? .35 : .10,saturate(smoothness));',
         'monotone M8 adjusted penalty')
     # Preserve full-grid fixed penalty in the old *mono* M1 path, but use the
     # source-origin M8 policy for coarse synthetic stereo as well as M4.
@@ -172,7 +174,7 @@ def geometric_shader(src):
         '        M1Row[x] = knee > 0.0 ? nearDepth : min(nearDepth, M1Filter.y);',
         '''        M1Row[x] = knee > 0.0 ? nearDepth : min(nearDepth, M1Filter.y);
         // Skip the extra per-seed work for existing legacy profiles.
-        if(M8Distance.z>.5 && M9PerEye.x<=.5)
+        if(M8Distance.z>.5 && M8Distance.w>=10.0)
             M8Scale[x] = M8SeedScale(M1Row[x]);''',
         'coarse per-seed slope initialization')
     old = '''        for (uint step = 1; step < w && float(step-1)*M1Filter.x < limit; step *= 2) {
@@ -186,7 +188,7 @@ def geometric_shader(src):
             for (uint x = lane; x < w; x += 128) M1Row[x] = M1Next[x];
             GroupMemoryBarrierWithGroupSync();
         }'''
-    new = '''        const bool adaptive=M8Distance.z>.5 && M9PerEye.x<=.5;
+    new = '''        const bool adaptive=M8Distance.z>.5 && M8Distance.w>=10.0;
         const float eyeMax=max(max(abs(M1Eye.x),abs(M1Eye.y)),.00001);
         const float slopeCap=.99/max(eyeMax*float(w),.00001);
         const float minimumSlope=adaptive ? slopeCap*.10 : M1Filter.x;
@@ -218,7 +220,7 @@ def geometric_shader(src):
     # In M4, new smooth=1 requires the .10 minimum bound, otherwise the loop
     # could terminate prematurely and omit valid distant propagation.
     src = src.replace('(M8Distance.z>.5 ? .35 : 1.)',
-                      '(M8Distance.z>.5 ? (M9PerEye.x>.5 ? .35 : .10) : 1.)')
+                      '(M8Distance.z>.5 ? (M8Distance.w<10.0 ? .35 : .10) : 1.)')
     if src.count('(M8Distance.z>.5 ? .35 : 1.)'):
         raise RuntimeError('old 0.35 M4 minimum remains')
     return src
