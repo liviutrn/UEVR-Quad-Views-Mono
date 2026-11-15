@@ -40,11 +40,11 @@ LARGE_BLOCK=r'''
             const bool mid_obj=scene==2 &&
                 (((x>91 && x<279 && y>52 && y<141) ||
                   (x>311 && x<328 && y>30 && y<186)));
-            const bool check=(((x/11+y/10)%2)+2)%2!=0;
+            const bool checker=(((x/11+y/10)%2)+2)%2!=0;
             ReplaySample pixel{};
             if(near_obj) pixel={.85f,.11f,.07f,1.0f};
             else if(mid_obj) pixel={.33f,.49f,.17f,.47f};
-            else pixel={check?.21f:.47f,check?.55f:.24f,check?.62f:.38f,.12f};
+            else pixel={checker?.21f:.47f,checker?.55f:.24f,checker?.62f:.38f,.12f};
             // False alpha/TAA depth vote: one coherent 49-pixel cell alternates
             // while stationary scene RGB and true foliage geometry never change.
             if(fault && scene==3 && fr%2==1 &&
@@ -74,7 +74,7 @@ LARGE_BLOCK=r'''
                 auto* row=static_cast<uint8_t*>(mapped)+y*fp.Footprint.RowPitch;
                 if(depth) reinterpret_cast<float*>(row)[x]=p.dep;
                 else {
-                    auto to_u8=[](float v) -> uint8_t { return static_cast<uint8_t>(std::lround(std::max(0.f,std::min(1.f,v))*255.f)); };
+                    auto to_u8=[](float v) -> uint8_t { return static_cast<uint8_t>(std::lround((std::max)(0.f,(std::min)(1.f,v))*255.f)); };
                     row[4*x+0]=to_u8(p.b);row[4*x+1]=to_u8(p.g);
                     row[4*x+2]=to_u8(p.r);row[4*x+3]=255;
                 }
