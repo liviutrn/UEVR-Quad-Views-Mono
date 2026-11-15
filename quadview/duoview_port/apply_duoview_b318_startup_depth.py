@@ -64,10 +64,7 @@ def main():
         ("B318 config taper 0",
          "    float m24_vertical_taper{2.f};",
          "    float m24_vertical_taper{0.f};"),
-        # Keep one shared XR image in a temporary stereo-not-ready fallback.
-        ("B318 mono fallback shared-eye",
-         "    out.shared_eye_image=!out.synthetic_stereo && requested.shared_eye_image;",
-         "    out.shared_eye_image=requested.shared_eye_image || out.synthetic_stereo;"),
+        # Preserve M1's proven stereo invariant: only mono may submit shared-eye.
     ])
     patch(mods/"VR.cpp",[
         ("B318 guard requested stereo until first visible mono",
@@ -97,6 +94,11 @@ def main():
             }
             if (duoview_holding) ++duoview_hold_submits;"""),
     ])
+    # B318 must not force the same XR image on left/right when M1 stereo is active.
+    # Fail the release build if a future overlay inadvertently regresses this.
+    config_text=(mods/"vr/DuoViewConfig.hpp").read_text(encoding="utf-8")
+    if "out.shared_eye_image=!out.synthetic_stereo && requested.shared_eye_image;" not in config_text:
+        raise RuntimeError("B318 requires separate-eye images for synthetic stereo")
     print("B318 startup/depth: ID6 mono-first activation, M1 fallback preserved, early XR depth skip and taper=0")
 
 
