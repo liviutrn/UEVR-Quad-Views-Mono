@@ -23,7 +23,8 @@ def main():
     block=r'''    // Separate recon smoke gate: actual compiled production pixel/compute
     // shaders, M4, coarse/fine inputs, both signed eyes, no GPU mocks.
     if (const char* recon=std::getenv("DUOVIEW_RECON_REPLAY"); recon && recon[0]=='1') {
-        const auto old_primary=primary,old_secondary=secondary;\n        const auto old_depth=m1_depth;
+        const auto old_primary=primary,old_secondary=secondary;
+        const auto old_depth=m1_depth;
         const auto old_fine=m21_fine_depth;
         const auto old_layout=frame.config.layout;
         const auto old_fine_camera=m1_geometry.fine_depth_camera;
