@@ -58,14 +58,17 @@ def ui_cpp(src):
     end = src.index('                } else {\n                    m_duo_shared_eye->draw("Same image for both eyes (v208)");',start)
     new_ui = '''                m_duo_stereo->draw("Synthetic stereo");
                 if (m_duo_stereo->value()) {
-                    const float old_close=m_duo_depth_close->value();
-                    const float old_far=m_duo_depth_far->value();
-                    m_duo_depth_close->draw("Close depth smoothing (0 sharp, 1 smooth)");
-                    m_duo_depth_far->draw("Far depth smoothing (0 sharp, 1 smooth)");
-                    // The old piecewise-clamped distance curve is retained only
-                    // until the first intentional edit of a new depth slider.
-                    if (old_close!=m_duo_depth_close->value() || old_far!=m_duo_depth_far->value())
-                        m_duo_depth_legacy_curve->value()=false;
+                    // Do not silently replace an old clamped transition curve
+                    // on a tiny slider movement: endpoint migration is not a
+                    // whole-distance curve equivalence.
+                    if (m_duo_depth_legacy_curve->value()) {
+                        ImGui::TextDisabled("Original depth curve preserved from saved profile.");
+                        if (ImGui::Button("Switch to revised depth smoothing (changes appearance)"))
+                            m_duo_depth_legacy_curve->value()=false;
+                    } else {
+                        m_duo_depth_close->draw("Close depth smoothing (0 sharp, 1 smooth)");
+                        m_duo_depth_far->draw("Far depth smoothing (0 sharp, 1 smooth)");
+                    }
                     m_duo_m8_near_m->draw("Depth transition starts (metres)");
                     m_duo_m8_far_m->draw("Depth transition ends (metres)");
                     if (ImGui::TreeNode("Stereo calibration and developer diagnostics")) {
