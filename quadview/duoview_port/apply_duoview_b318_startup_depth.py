@@ -92,18 +92,7 @@ def main():
             }
             if (duoview_holding) ++duoview_hold_submits;"""),
     ])
-    patch(mods/"vr/DuoViewD3D12.hpp",[
-        ("B318 stereo requires usable matching coarse depth",
-         """        const bool m1_active=settings.synthetic_stereo && stereo_geometry && xr_raster_compatible &&
-            m1_.ready() && m1_.write_constants(device,*stereo_geometry,stereo_depth,""",
-         """        // Missing or stale depth must not silently create a stereo-looking
-        // image with zero disparity. Keep presenting the common mono image.
-        const bool m1_active=settings.synthetic_stereo && stereo_geometry &&
-            stereo_depth && stereo_depth->texture && stereo_depth->lease &&
-            xr_raster_compatible && m1_.ready() &&
-            m1_.write_constants(device,*stereo_geometry,stereo_depth,"""),
-    ])
-    print("B318 startup/depth: ID6 mono-first activation, valid-depth stereo gate, early XR depth skip and taper=0")
+    print("B318 startup/depth: ID6 mono-first activation, M1 fallback preserved, early XR depth skip and taper=0")
 
 
 if __name__=="__main__":

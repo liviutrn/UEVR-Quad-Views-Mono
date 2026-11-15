@@ -13,6 +13,19 @@ def main():
         raise SystemExit("Usage: apply_duoview_b318_mono_fade.py <backend>")
     mods=Path(sys.argv[1])/"src/mods"
     patch(mods/"VR.cpp", [
+        ("B318 distance fade exposed directly in true-mono menu",
+         'm_duo_shared_eye->draw("Same image for both eyes (v208)");',
+         """m_duo_shared_eye->draw("Same image for both eyes (v208)");
+                    m_duo_m24_distance->draw("Distance-faded sharpening (true mono)");
+                    if (m_duo_m24_distance->value()) {
+                        m_duo_m24_near->draw("Full sharpness nearer than (metres)");
+                        m_duo_m24_far->draw("Fade complete at (metres)");
+                        m_duo_m24_regular_pct->draw("Far normal sharpen (%)");
+                        m_duo_m24_wide_pct->draw("Far wide sharpen (%)");
+                    }"""),
+        ("B318 stereo menu label reflects both modes",
+         'm_duo_m24_distance->draw("M2.4 Distance-faded sharpening (synthetic stereo only)");',
+         'm_duo_m24_distance->draw("M2.4 Distance-faded sharpening (mono and stereo)");'),
         ("request existing NGX depth on mono distance fade",
          "if (frame && frame->config.settings.synthetic_stereo) {\n        const auto& layout = frame->config.layout;",
          """if (frame && (frame->config.settings.synthetic_stereo ||
@@ -103,14 +116,16 @@ def main():
     patch(mods/"vr/DuoViewD3D12.hpp",[
         ("mono distance fade shader admission separate from stereo activation",
          """        const bool m1_active=settings.synthetic_stereo && stereo_geometry &&
-            stereo_depth && stereo_depth->texture && stereo_depth->lease &&
             xr_raster_compatible && m1_.ready() &&""",
          """        const bool mono_fade_active=!settings.synthetic_stereo && settings.m24_distance_fade &&
             (settings.sharpen_strength>0.f ||
              (settings.sharpen_wide && settings.m23_wide_strength>0.f));
-        const bool m1_active=(settings.synthetic_stereo || mono_fade_active) && stereo_geometry &&
-            stereo_depth && stereo_depth->texture && stereo_depth->lease &&
-            xr_raster_compatible && m1_.ready() &&"""),
+        const bool mono_depth_ready=mono_fade_active &&
+            stereo_depth && stereo_depth->texture && stereo_depth->lease;
+        // Preserve M1's proven zero-disparity fallback for synthetic stereo.
+        // In true mono, do not run the conditioner without matched depth.
+        const bool m1_active=(settings.synthetic_stereo || mono_depth_ready) &&
+            stereo_geometry && xr_raster_compatible && m1_.ready() &&"""),
         ("mono fade must not fetch fine NGX depth or invoke M4",
          "settings.m2_fovea_depth ? stereo_fovea_depth : nullptr,",
          "(settings.synthetic_stereo && settings.m2_fovea_depth) ? stereo_fovea_depth : nullptr,"),
