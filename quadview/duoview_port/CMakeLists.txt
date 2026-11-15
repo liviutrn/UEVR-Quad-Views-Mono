@@ -75,8 +75,18 @@ add_custom_command(
   DEPENDS "${GENERATED_M4_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/ReconProductionWarpOverlay.py"
   VERBATIM)
 
+# Second gated replay extends the original 32x32 GPU fixture to 384x216
+# without modifying the production shader or removing earlier M4 probes.
+set(GENERATED_LARGE_WARP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/V208SharedEyeWarpReconLarge.cpp")
+add_custom_command(
+  OUTPUT "${GENERATED_LARGE_WARP_SOURCE}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/ReconLargeWarpOverlay.py"
+          --source "${GENERATED_RECON_WARP_SOURCE}" --output "${GENERATED_LARGE_WARP_SOURCE}"
+  DEPENDS "${GENERATED_RECON_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/ReconLargeWarpOverlay.py"
+  VERBATIM)
+
 if(WIN32)
-  add_executable(DuoViewB40ProductionWarp "${GENERATED_RECON_WARP_SOURCE}")
+  add_executable(DuoViewB40ProductionWarp "${GENERATED_LARGE_WARP_SOURCE}")
   target_compile_features(DuoViewB40ProductionWarp PRIVATE cxx_std_20)
   # Fixture-only probes are compiled out of shipping UEVR headers.
   target_compile_definitions(DuoViewB40ProductionWarp PRIVATE DUOVIEW_M4_WARP_PROBE=1)
@@ -86,6 +96,9 @@ if(WIN32)
   add_test(NAME duoview-reconstruction-production-warp COMMAND DuoViewB40ProductionWarp)
   set_tests_properties(duoview-reconstruction-production-warp PROPERTIES
       TIMEOUT 120 ENVIRONMENT "DUOVIEW_RECON_REPLAY=1")
+  add_test(NAME duoview-reconstruction-large-production-warp COMMAND DuoViewB40ProductionWarp)
+  set_tests_properties(duoview-reconstruction-large-production-warp PROPERTIES
+      TIMEOUT 420 ENVIRONMENT "DUOVIEW_RECON_LARGE=1")
   set_tests_properties(duoview-b40-production-warp PROPERTIES TIMEOUT 60)
   add_test(NAME duoview-m4-condition-probe COMMAND DuoViewB40ProductionWarp)
   set_tests_properties(duoview-m4-condition-probe PROPERTIES TIMEOUT 60
