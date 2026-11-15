@@ -204,7 +204,7 @@ float2 AtlasSampleUV(uint4 rect, float2 localUv)"""),
          "const float D=M1ReadConditionedEye(sourceUv,i.pos.x>=OutputSize.x ? 1u : 0u);"),
         ("mono and stereo depth both sample the fitted source UV",
          "const float D=M1ReadConditioned(fullUv);",
-         "const float D=M1ReadConditioned(sourceUv);"),
+         "const float D=M1ReadConditionedEye(sourceUv,i.pos.x >= OutputSize.x ? 1u : 0u);"),
     ])
     patch(sh/"DuoViewCompositeRaster.hlsl",[
         ("packed fallback uses the fitted periphery too",
