@@ -9,7 +9,12 @@ d3d = (root / 'src/mods/vr/D3D12Component.cpp').read_text(encoding='utf-8')
 hdr = (root / 'src/mods/vr/ResearchTrace21.hpp').read_text(encoding='utf-8')
 checks = {
     'M2.4 scene depth packet Present epoch': 'm24_current_epoch()' in vr,
-    'M2.4 vertical taper controls': 'm_duo_m24_vertical->draw(' in vr,
+    # Original M2.4 displayed taper. Stereo V2 intentionally hides it and
+    # forces zero ONLY during active synthetic stereo; true mono must retain
+    # the old saved taper. Accept either contract, never a blanket deletion.
+    'M2.4 vertical taper contract': (
+        'm_duo_m24_vertical->draw(' in vr or
+        '.m24_vertical_taper=stereo_ready ? 0.f : m_duo_m24_vertical->value()' in vr),
     'M2.4 distance fade controls': 'm_duo_m24_distance->draw(' in vr,
     'M2.4 epoch producer boundary': 'm24_note_present()' in d3d,
     'M2.4 fine depth ramp': 'm24_fine_weight()' in d3d,
