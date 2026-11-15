@@ -199,6 +199,9 @@ float2 AtlasSampleUV(uint4 rect, float2 localUv)"""),
         ("Catmull-Rom periphery uses same physical coordinates",
          "SamplePeripheryCatmullRom(fullUv, PeripheralRect.zw, NativePeripheryDimensions)",
          "SamplePeripheryCatmullRom(sourceUv, PeripheralRect.zw, NativePeripheryDimensions)"),
+        ("mono and stereo depth both sample the fitted source UV",
+         "const float D=M1ReadConditioned(fullUv);",
+         "const float D=M1ReadConditioned(sourceUv);"),
     ])
     patch(sh/"DuoViewCompositeRaster.hlsl",[
         ("packed fallback uses the fitted periphery too",
