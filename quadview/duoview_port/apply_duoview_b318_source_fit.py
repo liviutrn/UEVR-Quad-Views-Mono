@@ -180,25 +180,28 @@ float2 DuoSourceToLogicalUv(float2 sourceUv) {
 float2 AtlasSampleUV(uint4 rect, float2 localUv)"""),
     ])
     patch(sh/"DuoViewNativeCompositeRaster.hlsl", [
-        ("distinguish periphery source from logical crop on stereo and mono",
-         """#ifdef DUOVIEW_M1_RASTER
-    const float2 fullUv = M1PullUv(outputUv, i.pos.x >= OutputSize.x ? 1u : 0u);
-#else
-    const float2 fullUv = outputUv;
-#endif""",
-         """#ifdef DUOVIEW_M1_RASTER
-    const float2 sourceUv=M1PullUv(outputUv,i.pos.x>=OutputSize.x ? 1u : 0u);
-    const float2 fullUv=DuoSourceToLogicalUv(sourceUv);
-#else
-    const float2 fullUv=outputUv;
-    const float2 sourceUv=DuoLogicalToSourceUv(fullUv);
-#endif"""),
-        ("bilinear periphery from physical fitted Unreal source",
-         "    const float2 peripherySample=NativePeripheryUV(fullUv);",
-         "    const float2 peripherySample=NativePeripheryUV(sourceUv);"),
-        ("Catmull-Rom periphery uses same physical coordinates",
+        ("M6 final point-fill source and logical UV conversion",
+         """    float2 fill=0.;
+    float2 fullUv=outputUv;
+    [branch] if (M2Sharpen.z <= .5)
+        fullUv=M1PullUv(outputUv,i.pos.x >= OutputSize.x ? 1u : 0u,fill);""",
+         """    float2 fill=0.;
+    float2 sourceUv=outputUv;
+    [branch] if (M2Sharpen.z <= .5)
+        sourceUv=M1PullUv(outputUv,i.pos.x >= OutputSize.x ? 1u : 0u,fill);
+    const float2 fullUv=DuoSourceToLogicalUv(sourceUv);"""),
+        ("periphery UV helper applies projection fit for all users including seam",
+         "float2 NativePeripheryUV(float2 uv) {",
+         "float2 NativePeripheryUV(float2 uv) {\n    uv=DuoLogicalToSourceUv(uv);"),
+        ("Catmull-Rom periphery uses physical fitted UV",
          "SamplePeripheryCatmullRom(fullUv, PeripheralRect.zw, NativePeripheryDimensions)",
-         "SamplePeripheryCatmullRom(sourceUv, PeripheralRect.zw, NativePeripheryDimensions)"),
+         "SamplePeripheryCatmullRom(DuoLogicalToSourceUv(fullUv), PeripheralRect.zw, NativePeripheryDimensions)"),
+        ("M6 background fill has its own source projection",
+         "        const float2 fillUv=float2(fill.x,fullUv.y);",
+         "        const float2 fillUv=DuoSourceToLogicalUv(float2(fill.x,sourceUv.y));"),
+        ("M4 depth picture samples the source's conditioned field",
+         "const float D=M1ReadConditionedEye(outputUv,i.pos.x>=OutputSize.x ? 1u : 0u);",
+         "const float D=M1ReadConditionedEye(sourceUv,i.pos.x>=OutputSize.x ? 1u : 0u);"),
         ("mono and stereo depth both sample the fitted source UV",
          "const float D=M1ReadConditioned(fullUv);",
          "const float D=M1ReadConditioned(sourceUv);"),
