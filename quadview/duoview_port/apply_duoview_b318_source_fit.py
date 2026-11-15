@@ -17,7 +17,7 @@ def main():
         raise SystemExit("Usage: apply_duoview_b318_source_fit.py <backend> <shaders>")
     mods=Path(sys.argv[1])/"src/mods"
     sh=Path(sys.argv[2])
-    here=Path(__file__).resolve().parents[2] / "duoview"
+    here=Path(__file__).resolve().parent
     shutil.copyfile(here/"DuoViewSourceFit.hpp",mods/"vr/DuoViewSourceFit.hpp")
 
     patch(mods/"vr/DuoViewConfig.hpp", [
