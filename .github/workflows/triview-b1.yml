@@ -407,6 +407,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'QuadView source checkpoint regression tests failed' }
           python workspace/quadview/source_checkpoint.py capture backend frontend evidence/quadview-source.json
           if ($LASTEXITCODE -ne 0) { throw 'QuadView source checkpoint failed' }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Regenerate and verify frozen independent V3 RGB-D corpus
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check numpy==2.3.5 scipy==1.17.0 opencv-python-headless==4.13.0.92 Pillow==12.3.0 *> evidence/recon-v3-deps.log
+          if ($LASTEXITCODE -ne 0) { Get-Content evidence/recon-v3-deps.log | Select-Object -Last 50; throw 'Pinned V3 Python dependency installation failed' }
+          python workspace/quadview/duoview_port/recon_v3_lab/export_recon_inputs.py --out workspace/quadview/duoview_port/recon_corpus_generated --frames 4 --scenarios weapon layers stationary_false49 physical_sway *> evidence/recon-v3-generator.log
+          if ($LASTEXITCODE -ne 0) { Get-Content evidence/recon-v3-generator.log; throw 'Frozen V3 input generation failed' }
+          python workspace/quadview/duoview_port/recon_v3_lab/verify_recon_v3.py --corpus workspace/quadview/duoview_port/recon_corpus_generated --expected workspace/quadview/duoview_port/recon_v3_lab/expected.json --check-projection *> evidence/recon-v3-verify.log
+          $code=$LASTEXITCODE; Get-Content evidence/recon-v3-verify.log
+          if ($code -ne 0) { throw "V3 original 160-file corpus/hash/homography verification failed ($code)" }
+          Copy-Item workspace/quadview/duoview_port/recon_corpus_generated/manifest.json evidence/recon-v3-input-manifest.json
       - name: Run the generated DuoView B40 and M1 GPU regression fixture
         shell: pwsh
         run: |
@@ -419,6 +433,21 @@ jobs:
           ctest --test-dir duo_b40_tests -C Release --output-on-failure --no-tests=error *> evidence/duo-b40-results.log
           $code=$LASTEXITCODE; Get-Content evidence/duo-b40-results.log
           if ($code -ne 0) { throw 'Generated DuoView GPU fixture failed' }
+          # Independent V3: 20 production signed-eye captures plus 5 zero-stereo
+          # source-registration controls; no reference colors passed to WARP.
+          $v3=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_v3_*.bgra')
+          if ($v3.Count -ne 25) { throw "Expected 25 V3 WARP captures, found $($v3.Count)" }
+          foreach ($capture in $v3) {
+            if ($capture.Length -ne 663552) { throw "Invalid V3 doublewide BGRA capture size: $($capture.Name)" }
+            Copy-Item $capture.FullName -Destination evidence/
+          }
+          $contracts=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_v3_capture_contract.jsonl')
+          if ($contracts.Count -ne 1) { throw "Expected one GPU V3 capture contract, found $($contracts.Count)" }
+          $rows=@(Get-Content $contracts[0].FullName)
+          if ($rows.Count -ne 25) { throw "Expected 25 GPU V3 contract records, found $($rows.Count)" }
+          Copy-Item $contracts[0].FullName evidence/recon_v3_capture_contract.jsonl
+          Get-Content evidence/recon_v3_capture_contract.jsonl | Select-Object -First 2
+          '25 independent V3 WARP test captures; 384x216/eye, packed BGRA8 left/right. Original SHA256-verified RGB-D inputs; evaluator-only GT never passed to shader. A passing CTest is NOT proof of pixelwise quality.' | Set-Content evidence/recon_v3_README.txt
           # Research-only 32x32 exact production-shader RGB-D replay.
           # Raw captures are available for offline per-eye scoring (64x32 BGRA).
           $captures=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_gpu_*.bgra')

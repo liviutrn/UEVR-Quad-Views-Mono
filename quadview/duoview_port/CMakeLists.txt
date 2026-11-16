@@ -85,8 +85,17 @@ add_custom_command(
   DEPENDS "${GENERATED_RECON_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/ReconLargeWarpOverlay.py"
   VERBATIM)
 
+# Generated-source-only V3 independent corpus replay; shipping shaders untouched.
+set(GENERATED_V3_WARP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/V208SharedEyeWarpReconV3.cpp")
+add_custom_command(
+  OUTPUT "${GENERATED_V3_WARP_SOURCE}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/ReconV3CorpusWarpOverlay.py"
+          --source "${GENERATED_LARGE_WARP_SOURCE}" --output "${GENERATED_V3_WARP_SOURCE}"
+  DEPENDS "${GENERATED_LARGE_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/ReconV3CorpusWarpOverlay.py"
+  VERBATIM)
+
 if(WIN32)
-  add_executable(DuoViewB40ProductionWarp "${GENERATED_LARGE_WARP_SOURCE}")
+  add_executable(DuoViewB40ProductionWarp "${GENERATED_V3_WARP_SOURCE}")
   target_compile_features(DuoViewB40ProductionWarp PRIVATE cxx_std_20)
   # Fixture-only probes are compiled out of shipping UEVR headers.
   target_compile_definitions(DuoViewB40ProductionWarp PRIVATE DUOVIEW_M4_WARP_PROBE=1)
@@ -102,6 +111,9 @@ if(WIN32)
   add_test(NAME duoview-reconstruction-quality-jitter-warp COMMAND DuoViewB40ProductionWarp)
   set_tests_properties(duoview-reconstruction-quality-jitter-warp PROPERTIES
       TIMEOUT 600 ENVIRONMENT "DUOVIEW_RECON_LARGE=1;DUOVIEW_RECON_QUALITY=1")
+  add_test(NAME duoview-reconstruction-v3-corpus-warp COMMAND DuoViewB40ProductionWarp)
+  set_tests_properties(duoview-reconstruction-v3-corpus-warp PROPERTIES
+      TIMEOUT 1200 ENVIRONMENT "DUOVIEW_RECON_V3=1;DUOVIEW_RECON_V3_DIR=${CMAKE_CURRENT_LIST_DIR}/recon_corpus_generated")
   set_tests_properties(duoview-b40-production-warp PROPERTIES TIMEOUT 60)
   add_test(NAME duoview-m4-condition-probe COMMAND DuoViewB40ProductionWarp)
   set_tests_properties(duoview-m4-condition-probe PROPERTIES TIMEOUT 60
