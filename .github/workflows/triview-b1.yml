@@ -421,6 +421,21 @@ jobs:
           $code=$LASTEXITCODE; Get-Content evidence/recon-v3-verify.log
           if ($code -ne 0) { throw "V3 original 160-file corpus/hash/homography verification failed ($code)" }
           Copy-Item workspace/quadview/duoview_port/recon_corpus_generated/manifest.json evidence/recon-v3-input-manifest.json
+      - name: Regenerate and verify independent metric-depth raycast corpus
+        shell: pwsh
+        run: |
+          $ray='workspace/quadview/duoview_port/raycast_generated'
+          python workspace/quadview/duoview_port/raycast_lab/stereo_ground_truth_fixture.py --out "$ray/original" --width 512 --height 408 --frames 4 *> evidence/raycast-generator.log
+          if ($LASTEXITCODE -ne 0) { Get-Content evidence/raycast-generator.log; throw 'Original pinned raycast generator failed' }
+          python workspace/quadview/duoview_port/raycast_lab/export_raycast_inputs.py --input "$ray/original" --out "$ray/corpus" *> evidence/raycast-export.log
+          if ($LASTEXITCODE -ne 0) { Get-Content evidence/raycast-export.log; throw 'Raycast metric-inverse-depth input exporter failed' }
+          python workspace/quadview/duoview_port/raycast_lab/score_raycast_warp.py --corpus "$ray/corpus" --expected workspace/quadview/duoview_port/raycast_lab/raycast_expected.json --verify-only *> evidence/raycast-verify.log
+          $verify=$LASTEXITCODE; Get-Content evidence/raycast-verify.log
+          if ($verify -ne 0) { throw "Raycast exact 120-binary independent source/GT hash check failed ($verify)" }
+          python workspace/quadview/duoview_port/raycast_lab/check_raycast_contract.py --corpus "$ray/corpus" --original "$ray/original" --out evidence/raycast-geometry-oracle.json *> evidence/raycast-oracle.log
+          $oracle=$LASTEXITCODE; Get-Content evidence/raycast-oracle.log
+          if ($oracle -ne 0) { throw "Metric raycast sign/occlusion geometry oracle failed ($oracle)" }
+          Copy-Item "$ray/corpus/raycast_replay_manifest.json" evidence/raycast-input-manifest.json
       - name: Run the generated DuoView B40 and M1 GPU regression fixture
         shell: pwsh
         run: |
@@ -454,6 +469,24 @@ jobs:
           Get-Content evidence/recon-v3-score.log | Select-Object -Last 12
           if ($score_code -ne 0) { throw "Independent V3 production-WARP quality/calibration gate failed ($score_code)" }
           if (!(Test-Path evidence/recon_v3_scores/paired_mono_stereo.json)) { throw 'V3 paired source-limited baseline scorecard missing' }
+          # Separate 512x408 metric raycast WARP replay: both signs, 12 mono
+          # controls and 12 stereo captures. Never feed GT or target depth into
+          # the compositor; the evaluator uses them AFTER GPU capture.
+          $raycaptures=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_raycast_*.bgra')
+          if ($raycaptures.Count -ne 24) { throw "Expected 24 raycast WARP captures, got $($raycaptures.Count)" }
+          foreach ($capture in $raycaptures) {
+            if ($capture.Length -ne 1671168) { throw "Raycast 1024x408 doublewide capture size mismatch: $($capture.Name)" }
+            Copy-Item $capture.FullName -Destination evidence/
+          }
+          $raymeta=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_raycast_capture_contract.jsonl')
+          if ($raymeta.Count -ne 1) { throw "Expected one raycast GPU metadata file, found $($raymeta.Count)" }
+          if (@(Get-Content $raymeta[0].FullName).Count -ne 24) { throw 'Raycast GPU metadata must contain exactly 24 records' }
+          Copy-Item $raymeta[0].FullName evidence/recon_raycast_capture_contract.jsonl
+          python workspace/quadview/duoview_port/raycast_lab/score_raycast_warp.py --corpus workspace/quadview/duoview_port/raycast_generated/corpus --expected workspace/quadview/duoview_port/raycast_lab/raycast_expected.json --captures evidence --original workspace/quadview/duoview_port/raycast_generated/original --out evidence/raycast_scores *> evidence/raycast-score.log
+          $rayscore=$LASTEXITCODE; Get-Content evidence/raycast-score.log | Select-Object -Last 12
+          if ($rayscore -ne 0) { throw "Independent raycast 12/12 mono calibration or GT scoring failed ($rayscore)" }
+          if (!(Test-Path evidence/raycast_scores/raycast_baseline_scores.json)) { throw 'Raycast independent scorecard missing' }
+          '12 raycast frames x 2 modes = 24 512x408 native WARP captures; mono/eye sources have frozen SHA256; signed pinhole +/-0.0304 and inverse-metre input only; GT evaluator-only. WARP is not RTX rendering performance.' | Set-Content evidence/recon_raycast_README.txt
           '40 independent V3 WARP test captures: 20 zero-strength + 20 stereo, paired per input frame. 384x216/eye, packed BGRA8. Original strict SHA256 RGB-D inputs; GT is evaluator-only. CI scoring requires all 20 zero registrations, and does not establish headset or RTX timing.' | Set-Content evidence/recon_v3_README.txt
           # Research-only 32x32 exact production-shader RGB-D replay.
           # Raw captures are available for offline per-eye scoring (64x32 BGRA).
