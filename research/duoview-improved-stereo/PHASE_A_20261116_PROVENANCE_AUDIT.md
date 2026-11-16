@@ -23,7 +23,7 @@ Important distinction: the archived `m25a-baseline` source is **pre-generation**
 ## Limits / independent reviewer notes
 
 - No real STALKER 2 synchronized RGB/depth/pose trace in the uploaded handoff; its 49px depth fault remains synthetic.
-- This branch contains investigation notes only. The full user-visible Phase A packet includes twelve offline policy/source contract tests and a machine-readable source evidence JSON. These are *not* D3D12 build/runtime tests.
+- This branch contains investigation notes only. The full user-visible Phase A packet includes 22 offline policy/source contract and M41 interval-model tests and a machine-readable source evidence JSON. These are *not* D3D12 build/runtime tests.
 - Do not turn a static missing grep match into a claim that an API is unreachable. Inspect complete generated build, not selected evidence snippets.
 - No playable build, shader replacement, or frontend/UI change is proposed in this note.
 
