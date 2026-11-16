@@ -436,7 +436,7 @@ jobs:
           # Independent V3: 20 production signed-eye captures plus 5 zero-stereo
           # source-registration controls; no reference colors passed to WARP.
           $v3=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_v3_*.bgra')
-          if ($v3.Count -ne 25) { throw "Expected 25 V3 WARP captures, found $($v3.Count)" }
+          if ($v3.Count -ne 40) { throw "Expected 40 paired V3 WARP captures, found $($v3.Count)" }
           foreach ($capture in $v3) {
             if ($capture.Length -ne 663552) { throw "Invalid V3 doublewide BGRA capture size: $($capture.Name)" }
             Copy-Item $capture.FullName -Destination evidence/
@@ -444,10 +444,17 @@ jobs:
           $contracts=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_v3_capture_contract.jsonl')
           if ($contracts.Count -ne 1) { throw "Expected one GPU V3 capture contract, found $($contracts.Count)" }
           $rows=@(Get-Content $contracts[0].FullName)
-          if ($rows.Count -ne 25) { throw "Expected 25 GPU V3 contract records, found $($rows.Count)" }
+          if ($rows.Count -ne 40) { throw "Expected 40 GPU V3 contract records, found $($rows.Count)" }
           Copy-Item $contracts[0].FullName evidence/recon_v3_capture_contract.jsonl
           Get-Content evidence/recon_v3_capture_contract.jsonl | Select-Object -First 2
-          '25 independent V3 WARP test captures; 384x216/eye, packed BGRA8 left/right. Original SHA256-verified RGB-D inputs; evaluator-only GT never passed to shader. A passing CTest is NOT proof of pixelwise quality.' | Set-Content evidence/recon_v3_README.txt
+          # Evaluate independently against frozen left/right GT AFTER the 40
+          # GPU captures are emitted. Fail closed on 20/20 zero-source gates.
+          python workspace/quadview/duoview_port/recon_v3_lab/score_warp_v3.py --corpus workspace/quadview/duoview_port/recon_corpus_generated --captures evidence --out evidence/recon_v3_scores *> evidence/recon-v3-score.log
+          $score_code=$LASTEXITCODE
+          Get-Content evidence/recon-v3-score.log | Select-Object -Last 12
+          if ($score_code -ne 0) { throw "Independent V3 production-WARP quality/calibration gate failed ($score_code)" }
+          if (!(Test-Path evidence/recon_v3_scores/paired_mono_stereo.json)) { throw 'V3 paired source-limited baseline scorecard missing' }
+          '40 independent V3 WARP test captures: 20 zero-strength + 20 stereo, paired per input frame. 384x216/eye, packed BGRA8. Original strict SHA256 RGB-D inputs; GT is evaluator-only. CI scoring requires all 20 zero registrations, and does not establish headset or RTX timing.' | Set-Content evidence/recon_v3_README.txt
           # Research-only 32x32 exact production-shader RGB-D replay.
           # Raw captures are available for offline per-eye scoring (64x32 BGRA).
           $captures=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_gpu_*.bgra')

@@ -122,9 +122,10 @@ BLOCK = r'''
             uevr::duoview::dx12::M1DepthInput fine_input{
                 fine.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,RW,RH},{0.f,0.f},replay_lease};
             for(int mode=0;mode<2;++mode) {
-                // One zero-stereo/identity-H calibration image per scene, plus
-                // one true signed-stereo capture for every corpus frame.
-                if(mode==0 && fr!=0) continue;
+                // Paired zero-stereo control and signed-stereo WARP output for
+                // EVERY frame. This provides a fair source-limited mono baseline
+                // even when the scene, gaze jitter or depth change over time.
+                // Both modes use identical frozen RGB-D source allocations.
                 const bool calibrate=mode==0;
                 const float strength=calibrate ? 0.f : 1.f;
                 auto params=saved_frame;
@@ -239,7 +240,7 @@ BLOCK = r'''
             }
         }
         metadata.flush();
-        if(!metadata || captures!=25u || nonidentical<16u)
+        if(!metadata || captures!=40u || nonidentical<16u)
             throw std::runtime_error("V3 WARP capture count/stereo contract failed");
         std::cout<<"PASS: calibrated V3 corpus production WARP, captures="<<captures
                  <<",stereo_nonidentical="<<nonidentical<<"\n";

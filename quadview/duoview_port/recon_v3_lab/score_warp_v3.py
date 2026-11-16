@@ -51,52 +51,52 @@ def calibrate(root:Path,captures:Path,scenes)->dict:
     try:
         for scene in scenes:
             name=scene['files_dir']
-            out=rgb(captures/f'recon_v3_zero_{name}_f0.bgra',True)
-            left,right=out[:,:W],out[:,W:]
-            if not np.array_equal(left,right):raise RuntimeError(f'V3 zero strength eyes differ: {name}')
             folder=root/name
-            native=expected_color(folder/'00_source_fovea.bgra',W//2,H//2)
-            target_fovea=native
-            # Central rendered fovea spans exactly [96:288]x[54:162].
-            src_fovea=left[H//4:3*H//4,W//4:3*W//4]
-            cvmask=c_mask[H//4:3*H//4,W//4:3*W//4]
-            f_err=np.abs(src_fovea.astype(np.int16)-target_fovea.astype(np.int16))
-            import PIL.Image
-            native_p=expected_color(folder/'00_source_full.bgra',W//4,H//4)
-            p_interp=np.asarray(Image.fromarray(native_p,'RGB').resize((W,H),Image.Resampling.BICUBIC))
-            p_err=np.abs(left.astype(np.int16)-p_interp.astype(np.int16))
-            # The expected filter is approximate for natural images, but the
-            # interior native fovea is a strong absolute alignment reference.
-            fm=float(f_err[cvmask].mean());pm=float(p_err[p_mask].mean())
-            result={'scene':name,'fovea_interior_mae_rgb8':fm,'periphery_bicubic_mae_rgb8':pm,
-                    'left_right_equal':True,'pass':fm<=2.5 and pm<=3.0}
-            records.append(result)
-        return {'pass':all(z['pass'] for z in records),'records':records,
+            for fr in range(4):
+                out=rgb(captures/f'recon_v3_zero_{name}_f{fr}.bgra',True)
+                left,right=out[:,:W],out[:,W:]
+                if not np.array_equal(left,right):
+                    raise RuntimeError(f'V3 zero-strength eyes differ: {name}, frame {fr}')
+                target_fovea=expected_color(folder/f'{fr:02}_source_fovea.bgra',W//2,H//2)
+                # Interior excludes the 2-stage fovea blend and seam.
+                src_fovea=left[H//4:3*H//4,W//4:3*W//4]
+                cvmask=c_mask[H//4:3*H//4,W//4:3*W//4]
+                f_err=np.abs(src_fovea.astype(np.int16)-target_fovea.astype(np.int16))
+                native_p=expected_color(folder/f'{fr:02}_source_full.bgra',W//4,H//4)
+                p_interp=np.asarray(Image.fromarray(native_p,'RGB').resize((W,H),Image.Resampling.BICUBIC))
+                p_err=np.abs(left.astype(np.int16)-p_interp.astype(np.int16))
+                fm=float(f_err[cvmask].mean());pm=float(p_err[p_mask].mean())
+                result={'scene':name,'frame':fr,'fovea_interior_mae_rgb8':fm,
+                        'periphery_bicubic_mae_rgb8':pm,'left_right_equal':True,
+                        'pass':fm<=2.5 and pm<=3.0}
+                records.append(result)
+        return {'pass':len(records)==20 and all(z['pass'] for z in records),
+                'records':records, 'record_count':len(records),
                 'acceptance':{'fovea_mae_le':2.5,'periphery_mae_le':3.0},
-                'contract':'Source sampled bilinearly to native 192x108/96x54 then rendered with linear/Catmull-Rom; zero stereo, identity H.'}
+                'contract':'Each of 20 source frames: 192x108 native fovea plus 96x54 Catmull-Rom peripheral filter; zero stereo, identity H.'}
     except (RuntimeError,ValueError) as e:
         return {'pass':False,'error':str(e),'records':records}
-
 
 def validate_capture_contract(captures:Path)->dict:
     f=captures/'recon_v3_capture_contract.jsonl'
     if not f.is_file():raise RuntimeError('GPU-written V3 capture contract missing')
     rows=[json.loads(z) for z in f.read_text().splitlines() if z.strip()]
-    if len(rows)!=25:raise RuntimeError(f'Expected 25 V3 GPU capture metadata rows, got {len(rows)}')
+    if len(rows)!=40:raise RuntimeError(f'Expected 40 paired V3 GPU capture metadata rows, got {len(rows)}')
     expected=[]
     for scene in EXPECTED_SCENES:
-      expected.append((scene,0,True))
-      for fr in range(4):expected.append((scene,fr,False))
+      for fr in range(4):
+          expected.append((scene,fr,True))
+          expected.append((scene,fr,False))
     got={(r['scene'],r['frame'],r['calibration']) for r in rows}
     if got!=set(expected):raise RuntimeError(f'V3 metadata missing/mismatched scenes: {set(expected)^got}')
-    assert len(got)==len(rows)
+    if len(got)!=len(rows):raise RuntimeError('V3 capture metadata duplicate records')
     for row in rows:
         if row['output']!='doublewide_bgra8' or row['eye_order']!='left_right' or row['fine_depth']!='full_r32_inverse_z':
             raise RuntimeError('V3 GPU output format/depth contract mismatch')
         if (row['width'],row['height'])!=(W,H):raise RuntimeError('V3 GPU output dimensions mismatch')
         if row['active_rects']!={'periphery':[96,54],'fovea':[192,108]}:
             raise RuntimeError('V3 GPU active rectangle mismatch')
-        if row['file'] not in {f'recon_v3_{row["scene"]}_f{row["frame"]}.bgra',f'recon_v3_zero_{row["scene"]}_f0.bgra'}:
+        if row['file'] not in {f'recon_v3_{row["scene"]}_f{row["frame"]}.bgra',f'recon_v3_zero_{row["scene"]}_f{row["frame"]}.bgra'}:
             raise RuntimeError('Unexpected V3 GPU capture filename')
         if not (captures/row['file']).is_file():raise RuntimeError('Missing V3 GPU output '+row['file'])
         strength=0. if row['calibration'] else 1.
@@ -114,7 +114,9 @@ def validate_capture_contract(captures:Path)->dict:
                0.,1.,e*.31/H if pan else 0.,0.,0.,0.,1.,0.]
             if np.max(np.abs(np.asarray(h)-row['homography'][eye]))>2e-7:
                 raise RuntimeError(f'V3 HLSL H differs from independent projector: {row["file"]} eye {eye}')
-    return {'pass':True,'metadata_records':len(rows),'frame_keys_unique':len({(r['generation'],r['frame_key']) for r in rows})==len(rows)}
+    if len({(r['generation'],r['frame_key']) for r in rows}) != len(rows):
+        raise RuntimeError('Duplicate GPU frame-key/generation pair in V3 capture contract')
+    return {'pass':True,'metadata_records':len(rows),'frame_keys_unique':True}
 
 
 def masks_for(scene,fr,eye,gtids,srcids,pan):
@@ -170,6 +172,73 @@ def montage(path,mono,gt,pred,ids,er,title):
     out.save(path)
 
 
+
+def region_masks(full_mask:dict)->dict:
+    yy,xx=np.indices((H,W))
+    core=(xx>=108)&(xx<276)&(yy>=64)&(yy<152)
+    outer=( (xx<72)|(xx>=312)|(yy<36)|(yy>=180) )
+    valid=full_mask['valid']
+    return {'valid':valid,'fovea_core':core&valid,'periphery_outer':outer&valid,
+            'near_edge':full_mask['near_edge'],
+            'fovea_near_edge':core&full_mask['near_edge'],
+            'periphery_near_edge':outer&full_mask['near_edge'],
+            'visible':full_mask['visible'],'disoccluded':full_mask['disoccluded'],
+            'fovea_disoccluded':core&full_mask['disoccluded'],
+            'periphery_disoccluded':outer&full_mask['disoccluded']}
+
+
+def compare_errors(mono_error,stereo_error,mask):
+    a=mono_error[mask];b=stereo_error[mask]
+    if not len(a):return {'pixels':0,'mono_mae':None,'stereo_mae':None,
+                          'delta_mae':None,'relative_gain_pct':None,'mono_p99':None,'stereo_p99':None}
+    m=float(a.mean());s=float(b.mean())
+    return {'pixels':int(len(a)),'mono_mae':m,'stereo_mae':s,
+            'delta_mae':s-m,'relative_gain_pct':100*(m-s)/m if m>1e-8 else None,
+            'mono_p99':float(np.percentile(a,99)),
+            'stereo_p99':float(np.percentile(b,99))}
+
+
+def pooled_comparison(rows):
+    result={}
+    if not rows:return result
+    for region in rows[0]['regions']:
+        region_rows=[r['regions'][region] for r in rows]
+        pixels=sum(r['pixels'] for r in region_rows)
+        if pixels==0:continue
+        mono=sum(r['mono_mae']*r['pixels'] for r in region_rows if r['pixels'])/pixels
+        stereo=sum(r['stereo_mae']*r['pixels'] for r in region_rows if r['pixels'])/pixels
+        result[region]={'pixels':pixels,'mono_mae':mono,'stereo_mae':stereo,
+                        'delta_mae':stereo-mono,'relative_gain_pct':100*(mono-stereo)/mono if mono>1e-8 else None,
+                        'worse_eye_frame_count':sum(r['delta_mae']>0 for r in region_rows if r['pixels'])}
+    return result
+
+
+def temporal_stationary(corpus:Path,captures:Path):
+    name='foliage_stationary_false49'
+    folder=corpus/name
+    # Fail if the purportedly stationary color or independent GT moves.
+    for field in ['source_full.bgra','source_fovea.bgra','gt_left.bgra','gt_right.bgra']:
+        if len({(folder/f'{fr:02}_{field}').read_bytes() for fr in range(4)})!=1:
+            raise RuntimeError('Stationary V3 color/GT changed unexpectedly: '+field)
+    # Here use fixed valid geometry regions, not ground-truth occlusion masks.
+    yy,xx=np.indices((H,W));core=(xx>=108)&(xx<276)&(yy>=64)&(yy<152)
+    outer=(xx<72)|(xx>=312)|(yy<36)|(yy>=180)
+    frames=[rgb(captures/f'recon_v3_{name}_f{fr}.bgra',True) for fr in range(4)]
+    rows=[]
+    for fr in range(3):
+        for index,eye in enumerate(('left','right')):
+            a=frames[fr][:,index*W:(index+1)*W].astype(np.float32)
+            b=frames[fr+1][:,index*W:(index+1)*W].astype(np.float32)
+            delta=np.abs(a-b).mean(axis=2)
+            rows.append({'from_frame':fr,'to_frame':fr+1,'eye':eye,
+                         'mean_rgb8':float(delta.mean()),
+                         'p99_rgb8':float(np.percentile(delta,99)),
+                         'max_rgb8':float(delta.max()),
+                         'nonzero_fraction':float(np.mean(delta>0)),
+                         'fovea_mean_rgb8':float(delta[core].mean()),
+                         'outer_mean_rgb8':float(delta[outer].mean())})
+    return rows
+
 def evaluate(corpus:Path, captures:Path, output:Path, expected:Path)->dict:
     verify_result=verify(corpus,expected,s)
     contract=validate_capture_contract(captures)
@@ -183,13 +252,14 @@ def evaluate(corpus:Path, captures:Path, output:Path, expected:Path)->dict:
         (output/'gate_failure.json').write_text(json.dumps(result,indent=2))
         return result
     manifest=json.loads((corpus/'manifest.json').read_text())
-    scores=[];frames=[]
+    scores=[];frames=[];pair_rows=[]
     for record in manifest['scenes']:
         name,scene,pan=record['files_dir'],record['scene'],record['pan_mode']
         sc=s.texture_layers(scene)
         for frmeta in record['frames']:
             fr=frmeta['frame'];folder=corpus/name
             data=rgb(captures/f'recon_v3_{name}_f{fr}.bgra',True)
+            zero_data=rgb(captures/f'recon_v3_zero_{name}_f{fr}.bgra',True)
             mono=rgb(folder/f'{fr:02}_source_full.bgra')
             # This independent center-ID oracle is evaluator-only. Never make
             # it a runtime D3D12 shader SRV or a loss/method input.
@@ -200,6 +270,12 @@ def evaluate(corpus:Path, captures:Path, output:Path, expected:Path)->dict:
                 gt=rgb(folder/f'{fr:02}_gt_{eye}.bgra')
                 ids=np.fromfile(folder/f'{fr:02}_gt_{eye}_ids.u8',np.uint8).reshape(H,W)
                 row,er,mask=frame_scores(got,gt,ids,centerids,name,fr,eye,pan)
+                zero_eye=zero_data[:,ei*W:(ei+1)*W]
+                zero_error=np.abs(zero_eye.astype(np.int16)-gt.astype(np.int16)).mean(axis=2)
+                reg=region_masks(mask)
+                pair_rows.append({'scene':name,'frame':fr,'eye':eye,
+                                  'regions':{key:compare_errors(zero_error,er,region_mask)
+                                             for key,region_mask in reg.items()}})
                 scores.append(row);frames.append((row,mono,gt,got,ids,er))
     assert len(scores)==40
     average={}
@@ -229,10 +305,32 @@ def evaluate(corpus:Path, captures:Path, output:Path, expected:Path)->dict:
                         'edge_p99':a['edge']['p99_rgb8'],
                         'near_edge_p99':a['near_edge']['p99_rgb8'],
                         'disocclusion_mae':a['disoccluded']['mae_rgb8']})
+    pooled={name:pooled_comparison([r for r in pair_rows if r['scene']==name])
+            for name in EXPECTED_SCENES}
+    pooled['ALL_SCENES']=pooled_comparison(pair_rows)
+    stationary=temporal_stationary(corpus,captures)
+    (output/'paired_mono_stereo.json').write_text(json.dumps(
+        {'origin':'Matched 40 exact-production WARP captures: 20 zero strength vs 20 signed stereo',
+         'units':'RGB8 absolute error vs independent left/right GT, no learned perceptual weighting',
+         'regions':{'fovea_core':'x=108..275, y=64..151',
+                    'periphery_outer':'x<72 or x>=312 or y<36 or y>=180',
+                    'near_edge':'5px dilated GT object-ID boundary'},
+         'scene_pooled':pooled,'by_eye_frame':pair_rows,
+         'stationary_temporal':stationary},indent=2))
+    with (output/'paired_mono_stereo.csv').open('w',newline='') as f:
+        writer=csv.DictWriter(f,fieldnames=['scene','frame','eye','region','pixels',
+                                            'mono_mae','stereo_mae','delta_mae','relative_gain_pct',
+                                            'mono_p99','stereo_p99'])
+        writer.writeheader()
+        for row in pair_rows:
+            for region,values in row['regions'].items():
+                writer.writerow({'scene':row['scene'],'frame':row['frame'],
+                                 'eye':row['eye'],'region':region,**values})
     result={'valid_scoring':True,'capture_origin':'GPU WARP (external artifact, not CI functional status)',
             'corpus':verify_result,'contract':contract,'zero_calibration':zero,
             'measurement_units':'RGB8 channel levels 0..255; p95/p99 of per-pixel mean RGB8 abs error',
-            'frames':scores,'scene_means':average,
+            'frames':scores,'scene_means':average,'paired_mono_stereo_pooled':pooled,
+            'stationary_temporal':stationary,
             'worst_near_edge':[{k:v for k,v in x[0].items() if k in ('scene','frame','eye','near_edge')} for x in worst],
             'limitations':['synthetic monocular RGB-D only, no real DLSS','periphery source reduced to 96x54',
                            'no M1 owner or hole mask SRV in baseline capture; labels come from evaluator-only GT',
@@ -252,7 +350,8 @@ def main():
     result=evaluate(args.corpus,args.captures,args.out,args.expected)
     print('RECON_V3_SCORE '+json.dumps({'valid_scoring':result['valid_scoring'],
           'zero_calibration':result['zero_calibration'].get('pass'),
-          'scenes':result.get('scene_means')},sort_keys=True))
+          'scenes':result.get('scene_means'),
+          'paired_regions':result.get('paired_mono_stereo_pooled')},sort_keys=True))
     if not result['valid_scoring']:sys.exit(1)
 
 if __name__=='__main__':main()

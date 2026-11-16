@@ -48,3 +48,19 @@ The evaluator first requires zero-stereo source registration for *every* scene; 
 2. Verify zero-stereo source registration and expected signed-eye H, then score 20-frame independent GT.
 3. Add temporal GT-compensated scoring and ray-cast metric-depth separate path. Do not rank candidate algorithms until first two are met.
 4. Only after defensible WARP quality evidence: consider an isolated feature-gated reconstruction candidate. Never merge without real GPU frametime and in-headset validation.
+
+## 2026-11-16 paired WARP baseline extension
+
+After the first 25-capture V3 run passed its five source-registration gates,
+this test-only research branch now requests **40** captures: both a zero-strength
+native source-sampling reference and the signed stereo result for **each** of
+20 corpus frames. All 20 zero-strength captures must pass the original, unchanged
+fovea (2.5 RGB8) and periphery (3.0 RGB8) registration thresholds.
+
+`score_warp_v3.py` now reports both *absolute* RGB8 ground-truth error and
+**paired mono→stereo delta** per eye, frame and spatial/visibility region.
+Negative deltas mean stereo is closer to independent GT, positive deltas worse.
+These are descriptive synthetic WARP measurements, not user-perceived quality or
+RTX frametimes. The stationary false-depth scene also gets exact frame-pair
+output-difference statistics, with independently asserted unchanged RGB/GT.
+No production shader, shader macro, runtime settings or active game mode changes.
