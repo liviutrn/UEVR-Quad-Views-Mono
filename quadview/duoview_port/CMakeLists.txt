@@ -102,6 +102,9 @@ if(WIN32)
   add_test(NAME duoview-reconstruction-quality-jitter-warp COMMAND DuoViewB40ProductionWarp)
   set_tests_properties(duoview-reconstruction-quality-jitter-warp PROPERTIES
       TIMEOUT 600 ENVIRONMENT "DUOVIEW_RECON_LARGE=1;DUOVIEW_RECON_QUALITY=1")
+  add_test(NAME duoview-reconstruction-projection-calibration-warp COMMAND DuoViewB40ProductionWarp)
+  set_tests_properties(duoview-reconstruction-projection-calibration-warp PROPERTIES
+      TIMEOUT 300 ENVIRONMENT "DUOVIEW_RECON_LARGE=1;DUOVIEW_RECON_CALIBRATE=1")
   set_tests_properties(duoview-b40-production-warp PROPERTIES TIMEOUT 60)
   add_test(NAME duoview-m4-condition-probe COMMAND DuoViewB40ProductionWarp)
   set_tests_properties(duoview-m4-condition-probe PROPERTIES TIMEOUT 60
