@@ -47,7 +47,10 @@ def verify(root:Path, expected:Path, lab_module=None)->dict:
     golden=json.loads(expected.read_text())
     root=root.resolve()
     manifest=root/'manifest.json'
-    if sha(manifest)!=golden['manifest_sha256']:
+    # Windows text-mode write_text emits CRLF; canonical V3 JSON used LF.
+    # Normalize only manifest line endings, not any of the 160 binary files.
+    canonical=manifest.read_bytes().replace(b'\r\n',b'\n')
+    if hashlib.sha256(canonical).hexdigest()!=golden['manifest_sha256']:
         raise RuntimeError('V3 manifest does not match the frozen original corpus')
     meta=json.loads(manifest.read_text())
     if (meta['width'],meta['height'],meta['seed'])!=(384,216,261115):
@@ -77,7 +80,10 @@ def verify(root:Path, expected:Path, lab_module=None)->dict:
                             raise RuntimeError(f'bad inverse depth: {file}')
     if (count,files)!=(golden['frame_count'],golden['files_count']):
         raise RuntimeError(f'V3 unexpected {count=} {files=}')
-    result={'pass':True,'frames':count,'files':files,'manifest_sha256':sha(manifest),
+    result={'pass':True,'frames':count,'files':files,
+            'manifest_sha256':hashlib.sha256(canonical).hexdigest(),
+            'manifest_raw_sha256':sha(manifest),
+            'manifest_crlf_normalized':canonical!=manifest.read_bytes(),
             'scenes':list(EXPECTED_SCENES),'reference_only_not_bound_to_gpu':True}
     if lab_module is not None:result['homography_max_error_px']=assert_projection(lab_module)
     return result
