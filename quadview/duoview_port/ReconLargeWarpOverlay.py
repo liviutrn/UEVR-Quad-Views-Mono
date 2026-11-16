@@ -60,6 +60,14 @@ LARGE_BLOCK=r'''
             }
             return pixel;
         };
+        // WARP fixture: the Native compositor samples ONLY the active source
+        // rectangles in layout, not all RWxRH allocated BGRA texels. Fill each
+        // active rectangle with the correct full-FOV or central-crop image.
+        auto big_layout=uevr::duoview::make_layout(RW,RH,.5f,.5f,.25f,1.f,.5f,.5f);
+        if(!big_layout) throw std::runtime_error("reconstruction layout failed");
+        std::cout<<"RECON_CAPTURE_CONTRACT,output="<<RW<<"x"<<RH
+                 <<",fovea_active="<<big_layout->fovea.width<<"x"<<big_layout->fovea.height
+                 <<",periphery_active="<<big_layout->periphery.width<<"x"<<big_layout->periphery.height<<"\n";
         auto upload_replay=[&](int scene,int fr,bool fovea,bool depth) {
             const DXGI_FORMAT format=depth ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_B8G8R8A8_TYPELESS;
             const auto desc=texture(depth ? QW : RW,depth ? QH : RH,format,
@@ -72,19 +80,24 @@ LARGE_BLOCK=r'''
             void* mapped{};const D3D12_RANGE no_reads_local{0,0};
             check(up->Map(0,&no_reads_local,&mapped));
             std::memset(mapped,0,static_cast<size_t>(nb));
+            const UINT activeW=depth ? QW : (fovea ? big_layout->fovea.width : big_layout->periphery.width);
+            const UINT activeH=depth ? QH : (fovea ? big_layout->fovea.height : big_layout->periphery.height);
+            if(activeW==0 || activeH==0 || activeW>(depth?QW:RW) || activeH>(depth?QH:RH))
+                throw std::runtime_error("invalid active WARP replay source rectangle");
             for(UINT y=0;y<(depth?QH:RH);++y) for(UINT x=0;x<(depth?QW:RW);++x) {
-                // Quality: the depth is raster sampled at 683x544, while
-                // post-SR color remains stable at the 1024x816 output size.
-                // The extra scene=3 phase is deliberately UNTRACKED depth
-                // trembling, not the regular NGX jitter metadata.
+                // The remainder of the resource is padding, not input pixels.
+                if(!depth && (x>=activeW || y>=activeH)) continue;
+                // Quality: depth is NGX-style raster sampled at 683x544.
+                // Color is native lower-resolution; its texel centers must
+                // span the full output FOV or central foveal crop.
                 const float untracked=(depth && quality && scene==3)
                    ? .39f*std::sin(float(fr)*1.71f) : 0.f;
                 const float dx=(depth && quality)
                    ? (float(x)+.5f-jitter_x[fr%4]+untracked)*1.5f-.5f
-                   : float(x);
+                   : depth ? float(x) : (float(x)+.5f)*float(RW)/float(activeW)-.5f;
                 const float dy=(depth && quality)
                    ? (float(y)+.5f-jitter_y[fr%4]+untracked*.5f)*1.5f-.5f
-                   : float(y);
+                   : depth ? float(y) : (float(y)+.5f)*float(RH)/float(activeH)-.5f;
                 // Central 50% source crop; both RGB and depth share world
                 // coordinates within each physical view.
                 const float sx=fovea ? float(RW)*.25f+(dx+.5f)*.5f-.5f : dx;
@@ -116,8 +129,6 @@ LARGE_BLOCK=r'''
         auto big=std::make_unique<uevr::duoview::dx12::Compositor>();
         if(!big->prewarm(g.device.Get(),RW,RH,false,0))
             throw std::runtime_error("reconstruction WARP prewarm failed");
-        auto big_layout=uevr::duoview::make_layout(RW,RH,.5f,.5f,.25f,1.f,.5f,.5f);
-        if(!big_layout) throw std::runtime_error("reconstruction layout failed");
         auto out_desc=texture(2*RW,RH,DXGI_FORMAT_B8G8R8A8_UNORM,D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
         auto out_tex=resource(g.device.Get(),out_desc,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_RENDER_TARGET);
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT out_fp{};UINT64 out_nbytes{};
