@@ -451,6 +451,13 @@ jobs:
             Copy-Item $capture.FullName -Destination evidence/
           }
           'Zero stereo-strength scene controls at 1024x816 and provenance chart RGB=(world x/1023,world y/815,view source tag). Chart must be independently registered before scoring any reference IoU. All five maps include both eye images. No production renderer modification.' | Set-Content evidence/recon_map_README.txt
+          $compare=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_compare_*.bgra')
+          if ($compare.Count -ne 48) { throw "Expected 48 WARP jitter-path comparison captures, found $($compare.Count)" }
+          foreach ($capture in $compare) {
+            if ($capture.Length -ne 6684672) { throw "Invalid 2048x816 jitter compare capture size for $($capture.Name)" }
+            Copy-Item $capture.FullName -Destination evidence/
+          }
+          'Production HLSL M1 jitter path A-B-C; 1024x816 per eye, 683x544 input depth; v0=legacy post-conditioning jitter correction with fine weight1; v1=source-space preconditioning jitter correction with fine weight1; v2=same correction with fine weight0.75 (fine still ON); other inputs fixed; 4 scenes x4 frames x3 modes=48; WARP not RTX 5070 GPU time.' | Set-Content evidence/recon_compare_README.txt
       - name: Test QuadView contracts, asynchronous delivery, and production GPU compositor
         shell: pwsh
         run: |

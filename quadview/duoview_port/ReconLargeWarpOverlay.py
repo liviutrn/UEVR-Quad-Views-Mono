@@ -16,7 +16,8 @@ LARGE_BLOCK=r'''
     // The only deliberate incoherence is a 7x7 false-depth foliage fault.
     if(const char* flag=std::getenv("DUOVIEW_RECON_LARGE");flag && flag[0]=='1') {
         const bool calibrate=std::getenv("DUOVIEW_RECON_CALIBRATE") && std::getenv("DUOVIEW_RECON_CALIBRATE")[0]=='1';
-        const bool quality=calibrate || (std::getenv("DUOVIEW_RECON_QUALITY") && std::getenv("DUOVIEW_RECON_QUALITY")[0]=='1');
+        const bool compare_jitter=std::getenv("DUOVIEW_RECON_COMPARE_JITTER") && std::getenv("DUOVIEW_RECON_COMPARE_JITTER")[0]=='1';
+        const bool quality=calibrate || compare_jitter || (std::getenv("DUOVIEW_RECON_QUALITY") && std::getenv("DUOVIEW_RECON_QUALITY")[0]=='1');
         const UINT RW=quality?1024u:384u,RH=quality?816u:216u;
         const UINT QW=quality?683u:RW,QH=quality?544u:RH;
         // These are render-pixel jitter offsets (not output-pixel offsets),
@@ -138,8 +139,8 @@ LARGE_BLOCK=r'''
         // physical signed eye disparities. Others run full strength.
         const char* names[]={"calibration","weapon","layers","false49","physical","uvchart"};
         unsigned captures=0;unsigned stereo_different=0;
-        for(int scene=(calibrate?1:0);scene<(calibrate?6:5);++scene)
-        for(int fr=0;fr<(calibrate?1:(scene==0?3:scene==2?1:4));++fr) {
+        for(int scene=(calibrate||compare_jitter?1:0);scene<(calibrate?6:5);++scene)
+        for(int fr=0;fr<(calibrate?1:(compare_jitter?4:(scene==0?3:scene==2?1:4)));++fr) {
             const float strength=calibrate?0.f:(scene==0 ? float(fr)*.5f : 1.f);
             const int source_frame=scene==0?0:fr;
             const auto full=upload_replay(scene,source_frame,false,false);
@@ -182,12 +183,20 @@ LARGE_BLOCK=r'''
                 fine.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,QW,QH},jitter_uv,replay_lease};
             // Add a depth-field capture on the weapon and 49px scenes, without
             // using diagnostic textures as references for RGB truth.
-            for(int dm=0;dm<(calibrate?1:(quality?2:((scene==1 && fr==0)||(scene==3 && fr==1)?2:1)));++dm) {
+            for(int dm=0;dm<(calibrate?1:(compare_jitter?3:(quality?2:((scene==1 && fr==0)||(scene==3 && fr==1)?2:1))));++dm) {
                 // Quality j0: captured NGX jitter; j1: same depth but no
                 // jitter metadata. This isolates *alignment*, not depth truth.
                 auto coarse_test=coarse_input;
                 auto fine_test=fine_input;
-                if(quality && dm==1) {
+                if(compare_jitter) {
+                    // All variants use the SAME raw NGX-like depth and jitter.
+                    // v0: legacy field-space compensation, fine weight 1.0.
+                    // v1: source-space precondition alignment, fine weight 1.0.
+                    // v2: source-space precondition alignment, fine weight 0.75.
+                    // Fine depth remains physically captured and enabled in ALL.
+                    params.config.settings.m21_jitter_correct=dm>0;
+                    fine_test.fine_weight=(dm==2 ? .75f : 1.f);
+                } else if(quality && dm==1) {
                     coarse_test.jitter={0.f,0.f};
                     fine_test.jitter={0.f,0.f};
                 }
@@ -223,9 +232,9 @@ LARGE_BLOCK=r'''
                 out_cpu->Unmap(0,nullptr);
                 if(sentinels>RW*RH/2) throw std::runtime_error("384 replay unrendered sentinel eye");
                 if(strength>0.f && diff>1000) ++stereo_different;
-                const auto file=std::string(calibrate?"recon_map_":(quality?"recon_quality_":"recon_large_"))+names[scene]+
+                const auto file=std::string(calibrate?"recon_map_":(compare_jitter?"recon_compare_":(quality?"recon_quality_":"recon_large_")))+names[scene]+
                     "_f"+std::to_string(source_frame)+"_s"+std::to_string(int(strength*100.f))+
-                    (quality?"_j":"_d")+std::to_string(dm)+".bgra";
+                    (compare_jitter?"_v":(quality?"_j":"_d"))+std::to_string(dm)+".bgra";
                 std::ofstream output(file,std::ios::binary);
                 if(!output.write(reinterpret_cast<const char*>(packed.data()),packed.size()))
                     throw std::runtime_error("384 replay capture write failed");
@@ -236,9 +245,9 @@ LARGE_BLOCK=r'''
                          <<",eye_diff="<<diff<<",capture="<<file<<"\n";
             }
         }
-        if(captures!=(calibrate?5u:(quality?32u:18u)) || (!calibrate && stereo_different<8))
+        if(captures!=(calibrate?5u:(compare_jitter?48u:(quality?32u:18u))) || (!calibrate && stereo_different<8))
             throw std::runtime_error("WARP replay capture/eye disparity gate failed");
-        std::cout<<"PASS: "<<(quality?"1024x816 DLSS Quality 683x544 jitter replay":"384x216 full-res replay")
+        std::cout<<"PASS: "<<(compare_jitter?"1024x816 source-jitter alignment/fine-weight A-B-C GPU replay":(quality?"1024x816 DLSS Quality 683x544 jitter replay":"384x216 full-res replay"))
                  <<", captures="<<captures<<", stereo_nonidentical="<<stereo_different<<"\n";
     }
 '''
