@@ -341,6 +341,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'M4.1 frame-bound depth overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m41_generated.py backend
           if ($LASTEXITCODE -ne 0) { throw 'M4.1 generated contracts failed' }
+          # Opt-in M41 diagnostic, experimental branch only. No rendering changes.
+          python workspace/quadview/duoview_port/apply_m41_metadata_probe.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'M4.1 diagnostic source anchors failed' }
+          python workspace/quadview/duoview_port/test_duoview_m41_probe_generated.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'M4.1 diagnostic generated-source contract failed' }
           python workspace/quadview/duoview_port/apply_duoview_m5_sharpen.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'M5 per-eye sharpening overlay failed' }
           python workspace/quadview/duoview_port/test_duoview_m5_generated.py backend workspace/duoview
