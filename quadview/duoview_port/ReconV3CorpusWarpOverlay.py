@@ -19,6 +19,16 @@ BLOCK = r'''
             throw std::runtime_error("DUOVIEW_RECON_V3_DIR missing");
         const fs::path corpus(corpus_env);
         const UINT RW=384u,RH=216u;
+        // Measurement profiles select effective post-configure settings only.
+        // No saved profile or shipping source is changed by this test fixture.
+        const char* profile_env=std::getenv("DUOVIEW_EDGE_PROFILE");
+        const std::string profile=profile_env ? profile_env : "P0";
+        if(profile!="P0" && profile!="P1" && profile!="P2")
+            throw std::runtime_error("Unknown baseline profile");
+        const char* probe_env=std::getenv("DUOVIEW_EDGE_PROBE");
+        const std::string probe=probe_env ? probe_env : "rgb";
+        if(probe!="rgb" && probe!="uv" && probe!="depth" && probe!="constants")
+            throw std::runtime_error("Unknown baseline readback probe");
         const char* names[]={"weapon_object_motion","layers_object_motion",
             "foliage_stationary_false49","foliage_physical_sway","natural_physical_sway"};
         const auto saved_frame=frame;
@@ -158,6 +168,28 @@ BLOCK = r'''
                 params.config.settings.m9_eye_near=0.f;
                 params.config.settings.m9_eye_far=0.f;
                 params.config.settings.edge_reach_px=20.f;
+                if(profile!="P0") {
+                    params.config.settings.stereo_softness=.99f;
+                    params.config.settings.m24_vertical_taper=0.f;
+                    params.config.settings.m21_jitter_correct=false;
+                    params.config.settings.edge_history=0.f;
+                    params.config.settings.fill_history=0.f;
+                    params.config.settings.stereo_near_m=.2f;
+                    params.config.settings.m8_near_m=7.869f;
+                    params.config.settings.m8_far_m=32.052f;
+                    params.config.settings.m8_edge_near=0.f;
+                    params.config.settings.m8_edge_far=profile=="P1" ? 0.f : .9f;
+                }
+                // 18/19 retain V2 (>=10), and mark copied TEST-ONLY DXBC.
+                // The ordinary production DXBC uses 20 and is never replaced.
+                if(probe!="rgb") params.config.settings.edge_reach_px=probe=="uv" ? 19.f : probe=="depth" ? 18.f : 17.f;
+                if(!params.config.settings.m8_distance || params.config.settings.m3_edges ||
+                   params.config.settings.edge_reach_px<10.f ||
+                   (profile!="P0" && (params.config.settings.stereo_softness!=.99f ||
+                    params.config.settings.stereo_near_m!=.2f ||
+                    params.config.settings.m8_edge_near!=0.f ||
+                    params.config.settings.m8_edge_far!=(profile=="P1" ? 0.f : .9f))))
+                    throw std::runtime_error("Effective V2 baseline profile not applied");
                 auto geometry=saved_geometry;
                 geometry.world_to_meters=1.f;
                 geometry.depth_coefficients={0.f,1.f,1.f};
@@ -219,6 +251,15 @@ BLOCK = r'''
                     <<",\"width\":"<<RW<<",\"height\":"<<RH
                     <<",\"output\":\"doublewide_bgra8\",\"eye_order\":\"left_right\""
                     <<",\"fine_depth\":\"full_r32_inverse_z\",\"strength\":"<<strength
+                    <<",\"profile\":\""<<profile<<"\",\"probe\":\""<<probe<<"\""
+                    <<",\"schema\":\"effective_v2\",\"legacy_curve\":false"
+                    <<",\"close\":"<<params.config.settings.m8_edge_near
+                    <<",\"far\":"<<params.config.settings.m8_edge_far
+                    <<",\"start_m\":"<<params.config.settings.m8_near_m
+                    <<",\"end_m\":"<<params.config.settings.m8_far_m
+                    <<",\"near_m\":"<<params.config.settings.stereo_near_m
+                    <<",\"softness\":"<<params.config.settings.stereo_softness
+                    <<",\"policy\":"<<params.config.settings.edge_reach_px
                     <<",\"generation\":"<<params.config.key.generation<<",\"frame_key\":"<<params.config.key.frame
                     <<",\"eye_k\":["<<geometry.k[0]<<","<<geometry.k[1]<<"]"
                     <<",\"active_rects\":{\"periphery\":[96,54],\"fovea\":[192,108]}"
@@ -240,7 +281,7 @@ BLOCK = r'''
             }
         }
         metadata.flush();
-        if(!metadata || captures!=40u || nonidentical<16u)
+        if(!metadata || captures!=40u || (probe=="rgb" && nonidentical<16u))
             throw std::runtime_error("V3 WARP capture count/stereo contract failed");
         std::cout<<"PASS: calibrated V3 corpus production WARP, captures="<<captures
                  <<",stereo_nonidentical="<<nonidentical<<"\n";

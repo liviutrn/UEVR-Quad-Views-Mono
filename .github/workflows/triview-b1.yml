@@ -396,6 +396,10 @@ jobs:
           }
           python workspace/quadview/duoview_port/embed_duoview_b40.py workspace/duoview backend/src/mods/vr/DuoViewShaderSource.hpp --m1
           if ($LASTEXITCODE -ne 0) { throw 'Mono B40 offline pixel/compute FXC compilation failed' }
+          # Copy-only measurement probe; original backend/header and all shipped DXBC stay unchanged.
+          python workspace/quadview/duoview_port/prepare_edge_probe.py --shaders workspace/duoview --backend backend --out edge_baseline_probe
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated baseline readback probe compilation failed' }
+          Copy-Item edge_baseline_probe/identity.json evidence/edge-probe-identity.json
           # The independent DuoView tests compile the pinned v208d raster shaders with their original C++.
           git -C workspace restore -- duoview
           if ($LASTEXITCODE -ne 0) { throw 'Could not restore pinned DuoView test inputs' }
@@ -421,10 +425,12 @@ jobs:
           $code=$LASTEXITCODE; Get-Content evidence/recon-v3-verify.log
           if ($code -ne 0) { throw "V3 original 160-file corpus/hash/homography verification failed ($code)" }
           Copy-Item workspace/quadview/duoview_port/recon_corpus_generated/manifest.json evidence/recon-v3-input-manifest.json
+          python workspace/quadview/duoview_port/recon_v3_lab/test_edge_baseline_score.py
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline metric/negative controls failed' }
       - name: Run the generated DuoView B40 and M1 GPU regression fixture
         shell: pwsh
         run: |
-          cmake -S workspace/quadview/duoview_port -B duo_b40_tests -G 'Visual Studio 17 2022' -A x64 "-DJOYEY_BACKEND_DIR=$((Resolve-Path backend).Path)" *> evidence/duo-b40-config.log
+          cmake -S workspace/quadview/duoview_port -B duo_b40_tests -G 'Visual Studio 17 2022' -A x64 "-DJOYEY_BACKEND_DIR=$((Resolve-Path backend).Path)" "-DEDGE_BASELINE_PROBE_DIR=$((Resolve-Path edge_baseline_probe).Path)" *> evidence/duo-b40-config.log
           $code=$LASTEXITCODE; Get-Content evidence/duo-b40-config.log
           if ($code -ne 0) { throw 'Generated DuoView GPU fixture configuration failed' }
           cmake --build duo_b40_tests --config Release *> evidence/duo-b40-build.log
@@ -477,6 +483,15 @@ jobs:
             Copy-Item $capture.FullName -Destination evidence/
           }
           'DLSS Quality analytic test: 1024x816 per eye; raw NGX-like depth 683x544; 2048x816 doublewide BGRA8; four jitter phases; j0 includes supplied pixel-space jitter, j1 has zero metadata against identical depth; scene 3 has extra untracked depth trembling and one 49-input-pixel false-depth vote. Color is idealized stable post-SR, not genuine DLSS output. Full 4060x3228 quality and actual GPU milliseconds remain unmeasured.' | Set-Content evidence/recon_quality_README.txt
+      - name: Freeze P0 P1 P2 unchanged-stereo measurement baselines only
+        shell: pwsh
+        run: |
+          python workspace/quadview/duoview_port/run_edge_baseline.py --rgb-exe duo_b40_tests/Release/DuoViewB40ProductionWarp.exe --probe-exe duo_b40_tests/Release/DuoViewEdgeReadback.exe --corpus workspace/quadview/duoview_port/recon_corpus_generated --out evidence/edge-baseline *> evidence/edge-baseline.log
+          $code=$LASTEXITCODE; Get-Content evidence/edge-baseline.log
+          if ($code -ne 0) { throw 'Baseline-only profiles/scorer/readback failed' }
+          $hash=(Get-FileHash backend/src/mods/vr/DuoViewShaderSource.hpp -Algorithm SHA256).Hash.ToLower()
+          $identity=Get-Content evidence/edge-probe-identity.json | ConvertFrom-Json
+          if ($hash -ne $identity.shipping_header_sha256) { throw 'Shipping shader header changed during baseline measurement' }
       - name: Test QuadView contracts, asynchronous delivery, and production GPU compositor
         shell: pwsh
         run: |
