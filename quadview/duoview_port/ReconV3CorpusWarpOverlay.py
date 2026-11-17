@@ -350,8 +350,7 @@ BLOCK = r'''
         metadata.flush();
         if(edge_mode) {
             std::cout<<"EDGE_TOGGLE_ACTIVE,profile="<<requested_profile<<",k_frames="<<edge_frames
-                     <<",history_reused="<<edge_reused<<"
-";
+                     <<",history_reused="<<edge_reused<<"\n";
             if(edge_frames!=20u || edge_reused<15u)
                 throw std::runtime_error("edge toggle K frames/history reuse contract failed");
         }
