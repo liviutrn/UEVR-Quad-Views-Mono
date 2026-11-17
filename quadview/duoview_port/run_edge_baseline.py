@@ -65,5 +65,23 @@ def main():
                    check=True)
     print('SWEEP_PASS: 8 profiles, 24 probe batches, 960 captures',flush=True)
 
+    # Edge toggle K3D10TS16 / K23D10TS16: RGB only (the readback probe replaces only the Off raster).
+    for profile in ('K3','K23'):
+        dest=a.out/'edge_toggle'/profile/'rgb';dest.mkdir(parents=True)
+        env=base|{'DUOVIEW_EDGE_PROFILE':profile,'DUOVIEW_EDGE_PROBE':'rgb'}
+        with (dest/'execution.log').open('w',encoding='utf-8') as log:
+            subprocess.run([str(a.rgb_exe.resolve())],cwd=dest,env=env,stdout=log,stderr=subprocess.STDOUT,
+                           timeout=1200,check=True)
+        files=list(dest.glob('recon_v3_*.bgra'))
+        if len(files)!=40 or any(p.stat().st_size!=663552 for p in files):
+            raise RuntimeError('Missing/invalid edge toggle captures: '+profile)
+        print('EDGE_TOGGLE_CAPTURE',profile,len(files),flush=True)
+    toggle=Path(__file__).parent/'recon_v3_lab'/'edge_toggle_compare.py'
+    # Informational only: a comparison failure must not mask the Off/P-profile results above.
+    cmp=subprocess.run([sys.executable,str(toggle),'--corpus',str(a.corpus.resolve()),
+                        '--p1',str((a.out/'P1'/'rgb').resolve()),'--toggle',str((a.out/'edge_toggle').resolve()),
+                        '--out',str((a.out/'edge_toggle_summary.json').resolve())])
+    print('EDGE_TOGGLE_PASS: K3/K23 captured (40 each); comparison exit',cmp.returncode,flush=True)
+
 if __name__=='__main__':
     main()

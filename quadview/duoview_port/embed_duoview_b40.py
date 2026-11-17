@@ -61,6 +61,16 @@ def main():
             ("CSConditionM4ProbeNoOrigin","cs_5_0","m4_probe_no_origin_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
             ("CSConditionM4ProbeOriginOnly","cs_5_0","m4_probe_origin_only_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
         )
+        # Edge toggle K3D10TS16/K23D10TS16: separate variants APPENDED after every original
+        # array, so the Off DXBC is the exact baseline bytecode. Only when the overlay ran.
+        if "DUOVIEW_EDGE_K" in (args.source/"DuoViewM1Stereo.hlsl").read_text(encoding="utf-8"):
+            shaders+=(
+                ("PSNativeMain","ps_5_0","m1_raster_k_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_M1_RASTER","DUOVIEW_EDGE_K")),
+                ("CSConditionM1","cs_5_0","m1_condition_k_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION","DUOVIEW_EDGE_K")),
+                ("CSConditionM1Vertical","cs_5_0","m24_vertical_k_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION","DUOVIEW_EDGE_K")),
+                ("CSConditionM4","cs_5_0","m4_condition_k_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION","DUOVIEW_EDGE_K")),
+                ("CSConditionM4Vertical","cs_5_0","m4_vertical_k_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION","DUOVIEW_EDGE_K")),
+            )
     with tempfile.TemporaryDirectory(prefix="duoview-b40-") as temp:
         for entry,profile,name,source,define in shaders:
             output=Path(temp)/(name+".cso")

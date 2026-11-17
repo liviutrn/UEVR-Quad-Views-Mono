@@ -377,6 +377,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'DuoView stereo V2 GENERATED contracts failed' }
           python workspace/quadview/duoview_port/test_duoview_stereo_v2_envelope.py
           if ($LASTEXITCODE -ne 0) { throw 'DuoView stereo V2 NUMERIC envelope tests failed' }
+          # Edge toggle Off/K3D10TS16/K23D10TS16 (Off = unchanged DXBC; K in separate variants).
+          python workspace/quadview/duoview_port/apply_duoview_edge_toggle.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'Edge toggle overlay anchors failed' }
+          python workspace/quadview/duoview_port/test_duoview_edge_toggle.py backend workspace/duoview
+          if ($LASTEXITCODE -ne 0) { throw 'Edge toggle generated contracts failed' }
           '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
           $changes = @(
             @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),

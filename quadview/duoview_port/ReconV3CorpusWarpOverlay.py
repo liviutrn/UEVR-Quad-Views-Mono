@@ -22,7 +22,10 @@ BLOCK = r'''
         // Measurement profiles select effective post-configure settings only.
         // No saved profile or shipping source is changed by this test fixture.
         const char* profile_env=std::getenv("DUOVIEW_EDGE_PROFILE");
-        const std::string profile=profile_env ? profile_env : "P0";
+        const std::string requested_profile=profile_env ? profile_env : "P0";
+        // Edge toggle K3/K23 = exact P1 settings plus the runtime edge mode (test-only RGB profiles).
+        const uint32_t edge_mode=requested_profile=="K3" ? 1u : requested_profile=="K23" ? 2u : 0u;
+        const std::string profile=edge_mode ? std::string("P1") : requested_profile;
         struct EdgeSweepProfile {
             const char* name;
             float close_amount,far_amount,start_distance_m,end_distance_m,knee_distance_m;
@@ -61,6 +64,14 @@ BLOCK = r'''
         auto compositor=std::make_unique<uevr::duoview::dx12::Compositor>();
         if(!compositor->prewarm(g.device.Get(),RW,RH,false,0))
             throw std::runtime_error("V3 WARP compositor prewarm failed");
+        // K profiles only: queue-owned label history, attached to STEREO frames only, so the
+        // hysteresis sees consecutive stereo frames (f0->f1->f2->f3), as in the game.
+        std::shared_ptr<uevr::duoview::dx12::B40MonoHistory> edge_history;
+        if(edge_mode) {
+            edge_history=uevr::duoview::dx12::B40MonoHistory::create(g.device.Get(),g.queue.Get());
+            if(!edge_history || !edge_history->edge_history)
+                throw std::runtime_error("V3 edge toggle history allocation failed");
+        }
         const auto od=texture(2*RW,RH,DXGI_FORMAT_B8G8R8A8_UNORM,D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
         auto dest=resource(g.device.Get(),od,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_RENDER_TARGET);
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT rfp{}; UINT64 rb_bytes{};
@@ -255,6 +266,8 @@ BLOCK = r'''
                 }
                 const float sentinel[4]{0.f,1.f,0.f,1.f};
                 g.cmd->ClearRenderTargetView(v3rtv,sentinel,0,nullptr);
+                params.config.settings.stereo_edge_mode=edge_mode;
+                if(edge_mode) compositor->set_b40_history(calibrate ? nullptr : edge_history);
                 if(!compositor->record_native(g.device.Get(),g.cmd.Get(),crop.Get(),full.Get(),dest.Get(),
                    D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
                    params,replay_lease,0,&geometry,&coarse_input,&fine_input))
@@ -295,7 +308,7 @@ BLOCK = r'''
                     <<",\"width\":"<<RW<<",\"height\":"<<RH
                     <<",\"output\":\"doublewide_bgra8\",\"eye_order\":\"left_right\""
                     <<",\"fine_depth\":\"full_r32_inverse_z\",\"strength\":"<<strength
-                    <<",\"profile\":\""<<profile<<"\",\"probe\":\""<<probe<<"\""
+                    <<",\"profile\":\""<<requested_profile<<"\",\"probe\":\""<<probe<<"\""
                     <<",\"schema\":\"effective_v2\",\"legacy_curve\":false"
                     <<",\"close\":"<<params.config.settings.m8_edge_near
                     <<",\"far\":"<<params.config.settings.m8_edge_far
