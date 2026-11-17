@@ -14,9 +14,14 @@ Design (research/edge-fix/48_improveA_results.md, DECISIONS 2026-11-17 joint pic
       - D10 + T: per-eye disocclusion-side penalty x10 for wide (>= 48 colour px) runs only,
         thin runs keep the symmetric penalty (coarse M1 field and fovea M4 field);
       - S16: 16 instead of 8 bisections in the pull warp.
-  * History: one queue-owned RGBA32F 1024x1024 texture (label depth + colour) in B40MonoHistory,
-    read and rewritten in place per texel by the K fovea kernel (u6, retired M7 slot).
-Evidence level of this file: source only until FXC/CI WARP/headset.
+  * Grid: the K fovea field runs on the M4 grid, which is capped at 1024 (about 2.4 colour px per grid
+    px on the headset); thin runs are measured in colour px (#361 fix; 50_/51_ grid check).
+  * History (#361+): one queue-owned R32G32_UINT 2048x1024 texture in B40MonoHistory (16 MiB), two
+    1024-column halves used ping-pong (read previous half, write the other; never in place), keyed by
+    grid size, mode and crop (gaze crop shift compensated in whole grid px). #363: the key is staged
+    at the end of a complete K recording and published only after submission (commit_edge_history via
+    note_fine_depth_enqueued). Superseded #360 design: RGBA32F 1024x1024 rewritten in place.
+Evidence level of this file: compiled + CI WARP (Off byte-identical); not headset.
 """
 import argparse
 from pathlib import Path
@@ -513,28 +518,49 @@ def compositor_backend(src):
         '''                settings.m9_eye_near,settings.m9_eye_far,
                 settings.stereo_edge_mode,b40_history_ ? &b40_history_->edge_key : nullptr,
                 b40_history_ && b40_history_->edge_history,srgb_);
-        // Invalidate while this frame is recorded; republished only after a complete K recording.
+        // Invalidate while this frame is recorded. The new key is only STAGED at the end of a complete
+        // K recording and published by commit_edge_history(), which the caller runs only after the
+        // list was submitted (note_fine_depth_enqueued: submitted && recorded). A frame recorded but
+        // not submitted leaves the history invalid; a stale staged key is dropped here.
         if(b40_history_) b40_history_->edge_key.valid=false;
         edge_hist_recorded_=false;
+        edge_commit_=false;
         report_edge_status(settings.stereo_edge_mode,m1_active);
 ''',
         'write_constants K arguments')
     src = once(src,
         '        next_fine_depth_={};\n        return true;\n    }\n',
         '        next_fine_depth_={};\n'
-        '        if(edge_hist_recorded_ && m1_active && m1_.k_hist_pending && b40_history_)\n'
-        '            b40_history_->edge_key=m1_.k_hist_next;\n'
+        '        if(edge_hist_recorded_ && m1_active && m1_.k_hist_pending && b40_history_) {\n'
+        '            edge_next_=m1_.k_hist_next; edge_commit_=true;\n'
+        '        }\n'
         '        return true;\n    }\n',
-        'publish edge history after complete recording')
+        'stage edge history after complete recording')
+    src = once(src,
+        '    void note_fine_depth_enqueued() {\n        if (!b40_history_) return;\n',
+        '    // Edge toggle: publish the staged history key once the recorded list was submitted.\n'
+        '    void commit_edge_history() {\n'
+        '        if(edge_commit_ && b40_history_) b40_history_->edge_key=edge_next_;\n'
+        '        edge_commit_=false;\n'
+        '    }\n'
+        '    void note_fine_depth_enqueued() {\n'
+        '        commit_edge_history();\n'
+        '        if (!b40_history_) return;\n',
+        'commit edge history on submission')
     src = once(src, '    bool srgb_{};\n',
         '''    bool srgb_{};
     // Edge toggle status (menu + log). Logged on every change, and every ~600 K frames with history reuse.
-    bool edge_hist_recorded_{};
-    uint32_t edge_logged_{0xffffffffu}, edge_frames_{}, edge_reused_{}, edge_percent_{};
+    bool edge_hist_recorded_{}, edge_commit_{};
+    DuoEdgeHistoryKey edge_next_{};
+    uint32_t edge_logged_{0xffffffffu}, edge_frames_{}, edge_reused_{}, edge_percent_{}, edge_count_mode_{};
     void report_edge_status(uint32_t requested,bool m1_active) {
         const bool alloc=b40_history_ && b40_history_->edge_history;
         const uint32_t effective=m1_active ? m1_.k_mode : 0u;
         const uint32_t reason=requested ? (m1_active ? m1_.k_reason : 4u) : 0u;
+        if(effective!=edge_count_mode_) {
+            // Reuse statistics are per mode (K3 and K23 never share history).
+            edge_count_mode_=effective; edge_frames_=edge_reused_=edge_percent_=0u;
+        }
         if(effective) {
             ++edge_frames_; edge_reused_+=m1_.k_hist_valid ? 1u : 0u;
             if(edge_frames_>=600u) {
@@ -646,7 +672,7 @@ inline const char* duo_edge_status_text(uint32_t s, bool& ok) {
     if(!(s&16u)) return "Status: PARTIAL - halos only. Turn ON 'Full-resolution foveal depth (strict-paired M4...)' under 'Stereo calibration and developer diagnostics' for the leaf logic.";
     if(!(s&32u)) return "Status: PARTIAL - no history texture (calmer-leaves logic off). Test invalid, report it.";
     ok=true;
-    return "Status: ACTIVE (halos + leaves + history).";
+    return "Status: ACTIVE - K configured (halos + leaves, history texture ready).";
 }
 
 struct Settings {
@@ -679,7 +705,8 @@ def vr_cpp(src):
         '                        bool edge_ok=false;\n'
         '                        const char* edge_text=uevr::duoview::duo_edge_status_text(edge_status,edge_ok);\n'
         '                        if(edge_ok && ((edge_status>>2)&3u))\n'
-        '                            ImGui::TextWrapped("%s History reused %u%% of frames.",edge_text,(edge_status>>8)&127u);\n'
+        '                            ImGui::TextWrapped("%s Previous frame\'s history used this frame: %s. History used in %u%% of the last 600 frames in this mode (0 until 600 frames).",\n'
+        '                                edge_text,(edge_status&(1u<<21)) ? "yes" : "no",(edge_status>>8)&127u);\n'
         '                        else ImGui::TextWrapped("%s",edge_text);\n'
         '                    }\n',
         'edge mode UI')

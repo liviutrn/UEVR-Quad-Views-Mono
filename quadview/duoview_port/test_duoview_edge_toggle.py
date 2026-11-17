@@ -33,7 +33,9 @@ def main():
                               'm1_.k_m4 ? m1_.m4_condition_k.Get() : m1_.m4_condition.Get()',
                               '(b40_active || (m1_active && m1_.k_m4))',
                               'DuoEdgeHistoryKey edge_key{};', 'edge_hist_recorded_=!m4_probe_skip;',
-                              'b40_history_->edge_key=m1_.k_hist_next;', 'b40_history_->edge_key.valid=false;',
+                              'edge_next_=m1_.k_hist_next; edge_commit_=true;', 'b40_history_->edge_key.valid=false;',
+                              'if(edge_commit_ && b40_history_) b40_history_->edge_key=edge_next_;',
+                              'void note_fine_depth_enqueued() {\n        commit_edge_history();', 'edge_commit_=false;\n        report_edge_status(',
                               'DXGI_FORMAT_R32G32_UINT', 'report_edge_status(']),
         'config': (cfg, ['uint32_t stereo_edge_mode{0};', 'out.stereo_edge_mode=(std::min)(requested.stereo_edge_mode,2u);',
                    'duo_edge_status()', 'duo_edge_status_text(']),
@@ -48,6 +50,9 @@ def main():
     # Off pipelines must stay the original ones whenever K is not requested.
     if comp.count('m1_.condition.Get()') != 2 or 'm1_.vertical.Get()' not in comp:
         raise SystemExit('Off coarse pipeline selection changed')
+    # #363: history is never published directly from record(); only via commit_edge_history().
+    if comp.count('b40_history_->edge_key=') != 1:
+        raise SystemExit('edge history published outside commit_edge_history()')
     print('edge toggle generated contracts PASS')
 
 

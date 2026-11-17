@@ -289,6 +289,8 @@ BLOCK = r'''
                 g.cmd->CopyTextureRegion(&rdst,0,0,0,&rsrc,nullptr);
                 transition(g.cmd.Get(),dest.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_RENDER_TARGET);
                 g.submit_and_wait();
+                // #363: edge history is published only after submission (game path: note_fine_depth_enqueued).
+                if(edge_mode && !calibrate) compositor->commit_edge_history();
                 void* mapped{};const D3D12_RANGE read_range{0,static_cast<size_t>(rb_bytes)};
                 check(rb->Map(0,&read_range,&mapped));
                 std::vector<uint8_t> packed(size_t(2*RW)*RH*4u);
