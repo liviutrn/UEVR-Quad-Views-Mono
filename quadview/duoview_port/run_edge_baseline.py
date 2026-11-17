@@ -35,8 +35,35 @@ def main():
             print('BASELINE_CAPTURE',profile,probe,len(files),flush=True)
     sys.path.insert(0,str(Path(__file__).parent/'recon_v3_lab'))
     from edge_baseline_score import evaluate
-    evaluate(a.corpus,a.out,a.out/'scores')
+    from edge_math import PROFILES
+    sweep_profiles={name:PROFILES.pop(name) for name in tuple(PROFILES) if name.startswith('S')}
+    try:
+        evaluate(a.corpus,a.out,a.out/'scores')
+    finally:
+        PROFILES.update(sweep_profiles)
     print('BASELINE_FREEZE_PASS: 480 captures, 120 per-eye RGB rows, 90 per-eye transitions',flush=True)
+
+    for profile in (f'S{i}' for i in range(1,9)):
+        for probe in ('rgb','uv','constants'):
+            dest=a.out/'sweep'/profile/probe;dest.mkdir(parents=True)
+            env=base|{'DUOVIEW_EDGE_PROFILE':profile,'DUOVIEW_EDGE_PROBE':probe}
+            exe=a.rgb_exe if probe=='rgb' else a.probe_exe
+            with (dest/'execution.log').open('w',encoding='utf-8') as log:
+                subprocess.run([str(exe.resolve())],cwd=dest,env=env,stdout=log,stderr=subprocess.STDOUT,
+                               timeout=1200,check=True)
+            files=list(dest.glob('recon_v3_*.bgra'))
+            if len(files)!=40 or any(p.stat().st_size!=663552 for p in files):
+                raise RuntimeError('Missing/invalid sweep readbacks: '+profile+'/'+probe)
+            print('SWEEP_CAPTURE',profile,probe,len(files),flush=True)
+
+    comparer=Path(__file__).parent/'recon_v3_lab'/'sweep_compare.py'
+    subprocess.run([sys.executable,str(comparer),'--corpus',str(a.corpus.resolve()),
+                    '--sweep',str((a.out/'sweep').resolve()),
+                    '--baseline',str((a.out/'scores'/'P1.json').resolve()),
+                    '--summary-json',str((a.out/'sweep_summary.json').resolve()),
+                    '--summary-md',str((a.out/'sweep_summary.md').resolve())],
+                   check=True)
+    print('SWEEP_PASS: 8 profiles, 24 probe batches, 960 captures',flush=True)
 
 if __name__=='__main__':
     main()

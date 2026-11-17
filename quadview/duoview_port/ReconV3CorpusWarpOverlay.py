@@ -23,7 +23,27 @@ BLOCK = r'''
         // No saved profile or shipping source is changed by this test fixture.
         const char* profile_env=std::getenv("DUOVIEW_EDGE_PROFILE");
         const std::string profile=profile_env ? profile_env : "P0";
-        if(profile!="P0" && profile!="P1" && profile!="P2")
+        struct EdgeSweepProfile {
+            const char* name;
+            float close_amount,far_amount,start_distance_m,end_distance_m,knee_distance_m;
+            bool m4_fovea_grid,m2_fovea_depth;
+            uint32_t m25_fine_mode;
+        };
+        const EdgeSweepProfile sweep_profiles[]={
+            {"S1",.25f,0.f,7.869f,32.052f,.2f,true,true,1u},
+            {"S2",.5f,0.f,7.869f,32.052f,.2f,true,true,1u},
+            {"S3",0.f,.75f,7.869f,32.052f,.2f,true,true,1u},
+            {"S4",0.f,0.f,2.f,8.f,.2f,true,true,1u},
+            {"S5",0.f,0.f,7.869f,32.052f,0.f,true,true,1u},
+            {"S6",0.f,0.f,7.869f,32.052f,.1f,true,true,1u},
+            {"S7",0.f,0.f,7.869f,32.052f,.4f,true,true,1u},
+            {"S8",0.f,0.f,7.869f,32.052f,.2f,false,false,0u},
+        };
+        const EdgeSweepProfile* sweep_profile=nullptr;
+        for(const auto& candidate:sweep_profiles)
+            if(profile==candidate.name) sweep_profile=&candidate;
+        const bool baseline_profile=profile=="P0" || profile=="P1" || profile=="P2";
+        if(!baseline_profile && !sweep_profile)
             throw std::runtime_error("Unknown baseline profile");
         const char* probe_env=std::getenv("DUOVIEW_EDGE_PROBE");
         const std::string probe=probe_env ? probe_env : "rgb";
@@ -180,16 +200,40 @@ BLOCK = r'''
                     params.config.settings.m8_edge_near=0.f;
                     params.config.settings.m8_edge_far=profile=="P1" ? 0.f : .9f;
                 }
+                // S profiles start from the existing P1 assignments above,
+                // then apply exactly one preregistered effective settings row.
+                if(sweep_profile) {
+                    params.config.settings.m8_edge_near=sweep_profile->close_amount;
+                    params.config.settings.m8_edge_far=sweep_profile->far_amount;
+                    params.config.settings.m8_near_m=sweep_profile->start_distance_m;
+                    params.config.settings.m8_far_m=sweep_profile->end_distance_m;
+                    params.config.settings.stereo_near_m=sweep_profile->knee_distance_m;
+                    params.config.settings.m4_fovea_grid=sweep_profile->m4_fovea_grid;
+                    params.config.settings.m2_fovea_depth=sweep_profile->m2_fovea_depth;
+                    params.config.settings.m25_fine_mode=sweep_profile->m25_fine_mode;
+                }
                 // 18/19 retain V2 (>=10), and mark copied TEST-ONLY DXBC.
                 // The ordinary production DXBC uses 20 and is never replaced.
                 if(probe!="rgb") params.config.settings.edge_reach_px=probe=="uv" ? 19.f : probe=="depth" ? 18.f : 17.f;
                 if(!params.config.settings.m8_distance || params.config.settings.m3_edges ||
                    params.config.settings.edge_reach_px<10.f ||
-                   (profile!="P0" && (params.config.settings.stereo_softness!=.99f ||
-                    params.config.settings.stereo_near_m!=.2f ||
-                    params.config.settings.m8_edge_near!=0.f ||
-                    params.config.settings.m8_edge_far!=(profile=="P1" ? 0.f : .9f))))
+                   (profile!="P0" && !sweep_profile &&
+                    (params.config.settings.stereo_softness!=.99f ||
+                     params.config.settings.stereo_near_m!=.2f ||
+                     params.config.settings.m8_edge_near!=0.f ||
+                     params.config.settings.m8_edge_far!=(profile=="P1" ? 0.f : .9f))))
                     throw std::runtime_error("Effective V2 baseline profile not applied");
+                if(sweep_profile &&
+                   (params.config.settings.stereo_softness!=.99f ||
+                    params.config.settings.m8_edge_near!=sweep_profile->close_amount ||
+                    params.config.settings.m8_edge_far!=sweep_profile->far_amount ||
+                    params.config.settings.m8_near_m!=sweep_profile->start_distance_m ||
+                    params.config.settings.m8_far_m!=sweep_profile->end_distance_m ||
+                    params.config.settings.stereo_near_m!=sweep_profile->knee_distance_m ||
+                    params.config.settings.m4_fovea_grid!=sweep_profile->m4_fovea_grid ||
+                    params.config.settings.m2_fovea_depth!=sweep_profile->m2_fovea_depth ||
+                    params.config.settings.m25_fine_mode!=sweep_profile->m25_fine_mode))
+                    throw std::runtime_error("Effective V2 sweep profile not applied");
                 auto geometry=saved_geometry;
                 geometry.world_to_meters=1.f;
                 geometry.depth_coefficients={0.f,1.f,1.f};

@@ -17,7 +17,7 @@ env:
 jobs:
   quadview-stereo-output:
     runs-on: windows-2022
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
@@ -483,12 +483,16 @@ jobs:
             Copy-Item $capture.FullName -Destination evidence/
           }
           'DLSS Quality analytic test: 1024x816 per eye; raw NGX-like depth 683x544; 2048x816 doublewide BGRA8; four jitter phases; j0 includes supplied pixel-space jitter, j1 has zero metadata against identical depth; scene 3 has extra untracked depth trembling and one 49-input-pixel false-depth vote. Color is idealized stable post-SR, not genuine DLSS output. Full 4060x3228 quality and actual GPU milliseconds remain unmeasured.' | Set-Content evidence/recon_quality_README.txt
-      - name: Freeze P0 P1 P2 unchanged-stereo measurement baselines only
+      - name: Freeze P0 P1 P2 and run S1-S8 one-factor WARP sweep
         shell: pwsh
+        timeout-minutes: 90
         run: |
           python workspace/quadview/duoview_port/run_edge_baseline.py --rgb-exe duo_b40_tests/Release/DuoViewB40ProductionWarp.exe --probe-exe duo_b40_tests/Release/DuoViewEdgeReadback.exe --corpus workspace/quadview/duoview_port/recon_corpus_generated --out evidence/edge-baseline *> evidence/edge-baseline.log
           $code=$LASTEXITCODE; Get-Content evidence/edge-baseline.log
           if ($code -ne 0) { throw 'Baseline-only profiles/scorer/readback failed' }
+          if (!(Test-Path evidence/edge-baseline/sweep_summary.json) -or !(Test-Path evidence/edge-baseline/sweep_summary.md)) { throw 'S1-S8 sweep summaries missing from artifact evidence' }
+          $sweepProfiles=@(Get-ChildItem evidence/edge-baseline/sweep -Directory)
+          if ($sweepProfiles.Count -ne 8) { throw "Expected 8 sweep profile folders, found $($sweepProfiles.Count)" }
           $hash=(Get-FileHash backend/src/mods/vr/DuoViewShaderSource.hpp -Algorithm SHA256).Hash.ToLower()
           $identity=Get-Content evidence/edge-probe-identity.json | ConvertFrom-Json
           if ($hash -ne $identity.shipping_header_sha256) { throw 'Shipping shader header changed during baseline measurement' }
@@ -774,6 +778,7 @@ jobs:
         if: always()
         with:
           name: TriView-B1-Stereo-Evidence-${{ github.run_number }}
+          # Recursive evidence upload includes edge-baseline/sweep/** and both sweep_summary files.
           path: evidence/
           if-no-files-found: error
 
