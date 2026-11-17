@@ -1,5 +1,6 @@
 """Synthetic classification tests for the preregistered S1-S8 sweep rules."""
 import copy
+from pathlib import Path
 import unittest
 
 from sweep_compare import classify_profile
@@ -82,6 +83,16 @@ class SweepClassification(unittest.TestCase):
             profile = PROFILES[name]
             self.assertEqual((profile.close, profile.far, profile.start_m,
                               profile.end_m, profile.near_m, profile.softness), values)
+
+    def test_s8_off_columns_are_exactly_the_m4_probe_columns(self):
+        import re
+        from sweep_compare import S8_M4_OFF_COLUMNS
+        probe = (Path(__file__).resolve().parent.parent / 'prepare_edge_probe.py').read_text(encoding='utf-8')
+        mapping = {int(c): v for c, v in re.findall(r'if\(column==(\d+)u\) value=(?:float\()?([A-Za-z0-9_.\[\]]+)', probe)}
+        m4_columns = tuple(sorted(c for c, v in mapping.items() if v.startswith('M4')))
+        self.assertEqual(len(mapping), 16)
+        self.assertEqual(S8_M4_OFF_COLUMNS, m4_columns)
+        self.assertEqual([mapping[c] for c in S8_M4_OFF_COLUMNS], ['M4Grid.x', 'M4Flags.x', 'M4Flags.y'])
 
     def setUp(self):
         self.baseline = synthetic_scores()

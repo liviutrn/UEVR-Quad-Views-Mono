@@ -30,6 +30,7 @@ SCENES = (
 EYES = ('left', 'right')
 TEMPORAL_REGIONS = ('edge', 'halo', 'valid', 'fovea_core', 'periphery_outer', 'blend')
 TARGET_SCENES = ('weapon_object_motion', 'layers_object_motion')
+S8_M4_OFF_COLUMNS = (9, 10, 12)  # M4Grid.x, M4Flags.x, M4Flags.y
 
 
 def _scene_eye_index(result):
@@ -258,7 +259,11 @@ def _validate_sweep_capture(folder, profile, probe):
             for eye in (0, 1):
                 expected_values = frozen.expected_constants(p, eye, row['calibration'])
                 if profile == 'S8':
-                    expected_values[10] = 0.
+                    # M4 off: no fine-fovea grid. GPU #358 readback showed exactly
+                    # cols 9 (M4Grid.x), 10 (M4Flags.x), 12 (M4Flags.y) at 0; all
+                    # other columns equal P1.
+                    for m4_column in S8_M4_OFF_COLUMNS:
+                        expected_values[m4_column] = 0.
                 for column, expected in expected_values.items():
                     got = values[frozen.H // 2, eye * frozen.W + column]
                     if abs(float(got) - expected) > max(2e-6, abs(expected) * 2e-5):
@@ -405,7 +410,7 @@ def _markdown(summary):
     lines.extend([
         '',
         'The frozen scorer file is imported unchanged. Temporal candidate metrics use the same P1 geometric ROI masks as the P1 reference so matched counts and regions are comparable.',
-        'S8 additionally requires GPU constant readback `M4Flags.x == 0`; the fixture effective-settings guard asserts `m4_fovea_grid=false`, `m2_fovea_depth=false`, and `m25_fine_mode=0`.',
+        'S8 additionally requires GPU constant readback `M4Grid.x == M4Flags.x == M4Flags.y == 0`; the fixture effective-settings guard asserts `m4_fovea_grid=false`, `m2_fovea_depth=false`, and `m25_fine_mode=0`.',
         '',
     ])
     return '\n'.join(lines)
