@@ -11,7 +11,7 @@ def main():
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
     hlsl = (shaders / 'DuoViewM1Stereo.hlsl').read_text(encoding='utf-8')
     off = mod.strip_k(hlsl)
-    for token in ('M10Edge', 'M10History', 'M10FoveaColor', 'iteration<16u', 'M10Ramp'):
+    for token in ('M10Edge', 'M10Hist', 'M10History', 'M10FoveaColor', 'M10Encode', 'iteration<16u', 'M10Ramp'):
         if token in off:
             raise SystemExit(f'K token leaks into Off shader text: {token}')
         if token not in hlsl:
@@ -25,15 +25,21 @@ def main():
     vrh = (backend / 'src/mods/VR.hpp').read_text(encoding='utf-8')
     vrc = (backend / 'src/mods/VR.cpp').read_text(encoding='utf-8')
     need = {
-        'm1': (m1, ['sizeof(M1Constants) == 592', 'float m10_edge[4]{}', 'm1_raster_k_bytecode',
-                    'm4_condition_k_bytecode', 'k_grid=k_requested', 'k_prev_w==m4_columns']),
+        'm1': (m1, ['sizeof(M1Constants) == 608', 'float m10_edge[4]{}', 'm1_raster_k_bytecode',
+                    'm4_condition_k_bytecode', 'k_grid=k_requested', 'p.w==m4_columns && p.h==m4_rows && p.mode==edge_mode',
+                    'struct DuoEdgeHistoryKey', 'distance_edges && edge_reach_px>=10.f && k_pipelines()']),
         'compositor': (comp, ['ComPtr<ID3D12Resource> edge_history;', 'settings.stereo_edge_mode',
                               'm1_.k_coarse ? m1_.raster_k.Get() : m1_.raster.Get()',
                               'm1_.k_m4 ? m1_.m4_condition_k.Get() : m1_.m4_condition.Get()',
-                              '(b40_active || (m1_active && m1_.k_m4))']),
-        'config': (cfg, ['uint32_t stereo_edge_mode{0};', 'out.stereo_edge_mode=(std::min)(requested.stereo_edge_mode,2u);']),
+                              '(b40_active || (m1_active && m1_.k_m4))',
+                              'DuoEdgeHistoryKey edge_key{};', 'edge_hist_recorded_=!m4_probe_skip;',
+                              'b40_history_->edge_key=m1_.k_hist_next;', 'b40_history_->edge_key.valid=false;',
+                              'DXGI_FORMAT_R32G32_UINT', 'report_edge_status(']),
+        'config': (cfg, ['uint32_t stereo_edge_mode{0};', 'out.stereo_edge_mode=(std::min)(requested.stereo_edge_mode,2u);',
+                   'duo_edge_status()', 'duo_edge_status_text(']),
         'vr.hpp': (vrh, ['generate_name("DuoStereoEdgeMode")', '*m_duo_edge_mode,']),
-        'vr.cpp': (vrc, ['m_duo_edge_mode->draw(', '.stereo_edge_mode=uint32_t(', 'current.stereo_edge_mode==candidate.stereo_edge_mode']),
+        'vr.cpp': (vrc, ['m_duo_edge_mode->draw(', '.stereo_edge_mode=uint32_t(', 'current.stereo_edge_mode==candidate.stereo_edge_mode',
+                    'uevr::duoview::duo_edge_status_text(']),
     }
     for name, (text, tokens) in need.items():
         for t in tokens:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Edge toggle K3/K23 vs P1 on the frozen V3 WARP corpus: RGB-only, informational, NO gates.
+"""Edge toggle K3/K23 vs P1 on the frozen V3 WARP corpus: RGB-only, informational quality numbers;
+ONE gate: K3 and K23 must each change some pixels vs P1 (proves the K path ran; review of #360).
 
 Evidence level: CI WARP on a synthetic corpus WITHOUT DLSS jitter and without a 0.4 m weapon
 (nearest depth ~1 m), so it can show that K runs, is finite and what it changes; it cannot show
@@ -84,6 +85,9 @@ def main():
         for name in frozen.old.EXPECTED_SCENES:
             r, b = summary['spatial_mae'][arm][name], summary['spatial_mae']['P1'][name]
             print('  ', name, ' '.join('%s %.2f->%.2f' % (k, b[k]['mae'] or 0, r[k]['mae'] or 0) for k in REGIONS))
+    dead = [arm for arm in ('K3', 'K23') if summary['pixels_changed_vs_P1'][arm]['changed'] == 0]
+    if dead:
+        raise SystemExit('EDGE_TOGGLE_FAIL: no pixel changed vs P1 for ' + ', '.join(dead))
 
 
 if __name__ == '__main__':

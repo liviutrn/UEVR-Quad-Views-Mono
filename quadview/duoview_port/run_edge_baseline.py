@@ -77,11 +77,13 @@ def main():
             raise RuntimeError('Missing/invalid edge toggle captures: '+profile)
         print('EDGE_TOGGLE_CAPTURE',profile,len(files),flush=True)
     toggle=Path(__file__).parent/'recon_v3_lab'/'edge_toggle_compare.py'
-    # Informational only: a comparison failure must not mask the Off/P-profile results above.
     cmp=subprocess.run([sys.executable,str(toggle),'--corpus',str(a.corpus.resolve()),
                         '--p1',str((a.out/'P1'/'rgb').resolve()),'--toggle',str((a.out/'edge_toggle').resolve()),
                         '--out',str((a.out/'edge_toggle_summary.json').resolve())])
-    print('EDGE_TOGGLE_PASS: K3/K23 captured (40 each); comparison exit',cmp.returncode,flush=True)
+    # Off/P-profile evidence is complete above; the K activation gate fails the step only now.
+    if cmp.returncode:
+        raise SystemExit('EDGE_TOGGLE_FAIL: comparison/activation gate exit %d' % cmp.returncode)
+    print('EDGE_TOGGLE_PASS: K3/K23 captured (40 each) and both change the image vs P1',flush=True)
 
 if __name__=='__main__':
     main()

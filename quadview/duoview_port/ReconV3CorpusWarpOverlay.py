@@ -67,6 +67,7 @@ BLOCK = r'''
         // K profiles only: queue-owned label history, attached to STEREO frames only, so the
         // hysteresis sees consecutive stereo frames (f0->f1->f2->f3), as in the game.
         std::shared_ptr<uevr::duoview::dx12::B40MonoHistory> edge_history;
+        uint32_t edge_frames=0u, edge_reused=0u;
         if(edge_mode) {
             edge_history=uevr::duoview::dx12::B40MonoHistory::create(g.device.Get(),g.queue.Get());
             if(!edge_history || !edge_history->edge_history)
@@ -272,6 +273,15 @@ BLOCK = r'''
                    D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_RENDER_TARGET,
                    params,replay_lease,0,&geometry,&coarse_input,&fine_input))
                     throw std::runtime_error(std::string("V3 WARP record failed: ")+compositor->error());
+                if(edge_mode && !calibrate) {
+                    // K activation smoke test (review of #360): the requested mode must be the effective
+                    // one, with fovea K and the history texture; history must be reused after frame 0.
+                    const uint32_t st=uevr::duoview::duo_edge_status().load();
+                    if(((st>>2)&3u)!=edge_mode || !(st&16u) || !(st&32u))
+                        throw std::runtime_error("edge toggle K not active, status="+std::to_string(st));
+                    ++edge_frames;
+                    if(st&(1u<<21)) ++edge_reused;
+                }
                 transition(g.cmd.Get(),dest.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_SOURCE);
                 D3D12_TEXTURE_COPY_LOCATION rsrc{dest.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
                 D3D12_TEXTURE_COPY_LOCATION rdst{rb.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
@@ -338,6 +348,13 @@ BLOCK = r'''
             }
         }
         metadata.flush();
+        if(edge_mode) {
+            std::cout<<"EDGE_TOGGLE_ACTIVE,profile="<<requested_profile<<",k_frames="<<edge_frames
+                     <<",history_reused="<<edge_reused<<"
+";
+            if(edge_frames!=20u || edge_reused<15u)
+                throw std::runtime_error("edge toggle K frames/history reuse contract failed");
+        }
         if(!metadata || captures!=40u || (probe=="rgb" && nonidentical<16u))
             throw std::runtime_error("V3 WARP capture count/stereo contract failed");
         std::cout<<"PASS: calibrated V3 corpus production WARP, captures="<<captures
