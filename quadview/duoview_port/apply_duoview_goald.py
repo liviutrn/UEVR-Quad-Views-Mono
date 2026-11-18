@@ -555,7 +555,7 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         auto* ema=duo_stage_us()+mode*8u;
         for (uint32_t i=0; i<8; ++i) {
             sum[i]+=st[i];
-            const uint32_t us=uint32_t((std::min)<uint64_t>(st[i]/1000u,1000000u));
+            const uint32_t us=uint32_t((std::min)(st[i]/1000u,uint64_t(1000000u)));
             const uint32_t old=ema[i].load(std::memory_order_relaxed);
             ema[i].store(old ? (old*15u+us)/16u : us,std::memory_order_relaxed);
         }
