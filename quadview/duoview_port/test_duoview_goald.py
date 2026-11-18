@@ -71,7 +71,8 @@ need('{ m1_.goald_drop_frame(); error_=reason; return false; }' in comp and
      'if (!m1_active || !m1_.goald_pending.active) m1_.goald_drop_frame();' in comp and
      'm1_.goald_drop_frame(); // goal D: gather never runs the history pass' in comp,
      'history dropped on reject, gather and frames without a history pass (R2)')
-need('const bool same_mode=s.type==goald_history && s.jitter_negative==goald_jitter_negative;' in m1,
+need('const bool same_mode=s.type==hist_type && s.jitter_negative==goald_jitter_negative;' in m1 and
+     'p.type=hist_type;' in m1 and '(mv_mode ? 16u : 0u)' in m1,
      'history type / jitter sign change starts fresh (R2)')
 need('if (s.fresh_counters) return;' in comp and 's.fresh_counters=false;' in m1, 'counters valid only after a submitted pass (R7)')
 need('if(float(a+1u)<M6PreviousJitter.y) { best=h; bestAge=a; }' in hlsl and 'bestC' not in hlsl,
@@ -81,12 +82,31 @@ need('goald_halo_bg=raster_true && !goald_true_depth;' in m1, 'halo off with tru
 need('data.m8_effects[2]=data.m8_effects[3]=0.f;' in m1, 'legacy M8 fill zero in halo mode')
 need('s.commits-r.first>=16u' in m1, 'retired history textures released')
 # After #373 headset (11-18 evening): Thin removed, no camera-locked range, head-still gate.
-need('thinOnly' not in hlsl and 'GDLockedCell' not in hlsl and 'GDThinAt' not in hlsl and '64u' not in m1,
+need('thinOnly' not in hlsl and 'GDLockedCell' not in hlsl and 'GDThinAt' not in hlsl and
+     m1.count('64u')==1 and '(mv_mode ? 64u : 0u)' in m1,
      'history: All only, no screen-locked window (#373 lag with head yaw)')
 need('m_duo_goald_history->value(),0,1' in vrcpp and 'requested.goald_history,1u' in cfg, 'history menu Off/On')
 need('still=std::isfinite(shift) && shift<=goald_motion_limit;' in m1 and 'const bool use=valid && still;' in m1 and
      'goald_flags|=2u|(use ? 1u : 0u)|' in m1, 'history used only while the head is nearly still')
-need('data.m6_previous_jitter[3]=.5f;' in m1, 'accept radius .5 field texel')
+need('data.m6_previous_jitter[3]=mv_mode ? .75f : .5f;' in m1, 'accept radius .5 field texel (pose), .75 (MV own-motion test)')
+# Motion-vector history (research 62_, 2026-11-18).
+ngx = (backend / 'src/mods/vr/QuadViewNgxDepth.hpp').read_text(encoding='utf-8', errors='replace')
+need('ngx_resource(p,"MotionVectors")' in ngx and 'goald_capture_mv(cmd,p,*slot,m25_role==2u,in_w,in_h,desc,dev.Get());' in ngx,
+     'MV copied in the fine depth slot of the same Evaluate')
+need('d.Width!=depth_desc.Width || d.Height!=depth_desc.Height' in ngx, 'render-resolution MVs only (else logged, pose fallback)')
+need('goald_read_copy_time(*slot);' in ngx and 'ResolveQueryData(goald_ts_heap_.Get()' in ngx and 'GetTimestampFrequency(&goald_f)' in ngx,
+     'NGX depth/MV copy GPU timestamps, read after slot reuse')
+need('Texture2D<float2> GDMotion : register(t9);' in block and 'abs(float2(c)-s-float2(id.xy))<=radius' in block,
+     'MV history: t9 motion, own-motion acceptance test')
+need('GDHistory[uint3(id.xy,5u+2u*parity)]' in block and 'u.Texture2DArray.ArraySize=9;' in comp and 't.DepthOrArraySize=9;' in m1,
+     'history motion slices 5..8')
+need('goald_bind_motion(device);' in comp and comp.index('goald_bind_motion(device);') < comp.index('cmd->SetComputeRootDescriptorTable(7,m4_table);'),
+     't9 motion bound before the M4 tables')
+need('fine_depth->mv=focus->mv_texture.Get();' in comp_cpp if (comp_cpp := (backend / 'src/mods/vr/D3D12Component.cpp').read_text(encoding='utf-8', errors='replace')) else False,
+     'caller passes MV with the fine depth (same lease)')
+need('uint32_t goald_motion_source{1};' in cfg and 'requested.goald_motion_source,2u' in cfg, 'motion source default DLSS MVs, sanitized')
+need('if (valid && !mv_mode) {'+chr(10)+'                        const auto motion=' in m1, 'no head-still gate in MV mode')
+need('[DuoView][GoalD] motion mv_frames=' in comp_cpp, 'MV log line')
 need('m_duo_goald_motion->draw(' in vrcpp and '.goald_motion_limit=m_duo_goald_motion->value()' in vrcpp and
      'current.goald_motion_limit==candidate.goald_motion_limit' in vrcpp, 'head-still limit in the menu')
 need('moving_frames=' in log, 'log counts gated frames')

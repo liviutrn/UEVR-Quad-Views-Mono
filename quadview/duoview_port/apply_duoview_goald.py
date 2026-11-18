@@ -131,7 +131,8 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     // ---- Goal D switch 2: temporal fovea depth history. ONE history shared by
     // every XR slot (all slots record on the game's single queue, in order).
     // R32_UINT array, always in UNORDERED_ACCESS state: slices 2p/2p+1 = kept
-    // seed (float bits)/age of parity p, slice 4 = counters. Replaced textures
+    // seed (float bits)/age of parity p, slice 4 = counters, slices 5+2p/6+2p = motion
+    // (field texels, float bits) carried with the kept seed (MV mode, 62_). Replaced textures
     // stay alive for 16 committed history frames (more than the XR slots that
     // may still reference them), then are released.
     // The CPU record (parity, camera, crop, sizes, time, type, jitter sign) is
@@ -166,6 +167,7 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     bool goald_hist_active{}, goald_counter_pending{}, goald_counter_recorded{};
     uint32_t goald_hist_parity{}, goald_counter_parity{};
     uint64_t goald_counter_epoch{};
+    bool goald_counter_mv{};
     float goald_last_shift{};
     // Motion gate (#373 headset: history lagged head yaw): field-texel shift of this frame
     // vs the previous one; history is used only while it is <= the menu limit.
@@ -175,6 +177,11 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     uint32_t goald_hist_reason{};
     inline static std::atomic<uint64_t> goald_hist_frames{}, goald_hist_valid_frames{}, goald_hist_texels{}, goald_hist_used{};
     inline static std::atomic<uint32_t> goald_hist_permille{};
+    // History motion source (62_): DLSS motion vectors of the fine depth (t9) or head pose.
+    ID3D12Resource* goald_mv_resource{};
+    DXGI_FORMAT goald_mv_format{DXGI_FORMAT_UNKNOWN};
+    bool goald_mv_active{};
+    inline static std::atomic<uint64_t> goald_mv_frames{}, goald_mv_fallback_frames{}, goald_mv_abs_quarter{};
     bool goald_ensure_history(ID3D12Device* device, uint32_t fw, uint32_t fh) {
         auto& s=goald_history_state();
         const uint32_t need_w=(fw+127u)&~127u, need_h=(fh+127u)&~127u;
@@ -188,7 +195,7 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
         heap.Type=D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC t{};
         t.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        t.Width=need_w; t.Height=need_h; t.DepthOrArraySize=5; t.MipLevels=1;
+        t.Width=need_w; t.Height=need_h; t.DepthOrArraySize=9; t.MipLevels=1; // + slices 5..8: per-parity motion (MV mode)
         t.Format=DXGI_FORMAT_R32_UINT; t.SampleDesc.Count=1;
         t.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         if (FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&t,
@@ -253,11 +260,12 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
         // Caller owns a retired XR command slot; never wait on the GPU.
         if (!goald_counter_pending || !goald_counter_readback) return;
         if (goald_counter_epoch!=goald_history_state().epoch) { goald_counter_pending=false; return; } // F4
-        const D3D12_RANGE read{0,4*sizeof(uint32_t)};
+        const D3D12_RANGE read{0,6*sizeof(uint32_t)};
         void* p=nullptr;
         if (SUCCEEDED(goald_counter_readback->Map(0,&read,&p)) && p) {
             const auto* v=static_cast<const uint32_t*>(p);
             const uint32_t texels=v[2u*goald_counter_parity], used=v[2u*goald_counter_parity+1u];
+            if (goald_counter_mv) goald_mv_abs_quarter+=v[4u+goald_counter_parity]; // sum |MV| (quarter texels)
             const D3D12_RANGE written{0,0};
             goald_counter_readback->Unmap(0,&written);
             goald_hist_texels+=texels; goald_hist_used+=used;
@@ -340,7 +348,13 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                     const auto stale_limit=std::chrono::milliseconds(90);
                     #endif
                     // R2: a history type (All/Thin) or jitter sign change also starts fresh.
-                    const bool same_mode=s.type==goald_history && s.jitter_negative==goald_jitter_negative;
+                    // 62_: DLSS motion vectors of this fine depth (menu 1, or 2 = flipped sign);
+                    // without them the history falls back to head-pose mode (counted, menu note).
+                    const bool mv_mode=goald_motion_source!=0u && focus->mv && focus->mv_format!=DXGI_FORMAT_UNKNOWN &&
+                        std::isfinite(focus->mv_scale[0]) && std::isfinite(focus->mv_scale[1]);
+                    if (goald_motion_source!=0u && !mv_mode) ++goald_mv_fallback_frames;
+                    const uint32_t hist_type=goald_history|(mv_mode ? 16u : 0u)|(goald_motion_source==2u ? 32u : 0u);
+                    const bool same_mode=s.type==hist_type && s.jitter_negative==goald_jitter_negative;
                     if (s.have_previous && !same_mode) goald_hist_permille.store(0u,std::memory_order_relaxed);
                     const bool valid=s.have_previous && same_mode && s.w==m4_columns && s.h==m4_rows &&
                         s.fine_w==focus->rect[2] && s.fine_h==focus->rect[3] &&
@@ -351,7 +365,7 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                     // near depth followed the head).
                     const float search_near=data.m8_distance[0];
                     bool still=true;
-                    if (valid) {
+                    if (valid && !mv_mode) {
                         const auto motion=stereo::fine_depth_reprojection(cam,s.camera);
                         // Motion gate: largest field-texel shift of 9 crop points at infinity and
                         // at the nearest search depth (CPU copy of GDPreviousCell).
@@ -385,20 +399,31 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                     // A moving frame is still recorded and committed (its depth becomes the
                     // next frame's history) but uses none: no trail can follow the head.
                     if (valid && !still) ++goald_hist_moving_frames;
-                    if (valid) {
+                    if (mv_mode) {
+                        // MV mode: no head-still gate (MVs include camera motion). M6View row 0 =
+                        // raw MV -> field texels (x,y) and the MV texel extent (= fine depth extent).
+                        const float sign=goald_motion_source==2u ? -1.f : 1.f;
+                        data.m6_view[0][0]=sign*focus->mv_scale[0]*float(m4_columns)/float((std::max)(focus->rect[2],1u));
+                        data.m6_view[0][1]=sign*focus->mv_scale[1]*float(m4_rows)/float((std::max)(focus->rect[3],1u));
+                        data.m6_view[0][2]=float(focus->rect[2]);
+                        data.m6_view[0][3]=float(focus->rect[3]);
+                        goald_mv_active=true; goald_mv_resource=focus->mv; goald_mv_format=focus->mv_format;
+                        ++goald_mv_frames;
+                    }
+                    if (valid && !mv_mode) {
                         const uint32_t old=goald_still_permille.load(std::memory_order_relaxed);
                         goald_still_permille.store((old*31u+(still ? 1000u : 0u))/32u,std::memory_order_relaxed);
                     }
                     const bool use=valid && still;
-                    goald_flags|=2u|(use ? 1u : 0u)|((goald_confirm_texels&15u)<<8u); // bits 8-11: confirm radius
+                    goald_flags|=2u|(use ? 1u : 0u)|((goald_confirm_texels&15u)<<8u)|(mv_mode ? 64u : 0u); // bits 8-11 confirm radius, 64 MV mode
                     data.m6_previous_rect[0]=next_parity;
                     data.m6_previous_jitter[1]=4.f;           // K=4
                     data.m6_previous_jitter[2]=search_near;   // translation search range (no camera lock)
-                    data.m6_previous_jitter[3]=.5f;           // accept radius, field texels (was .75: dilation)
+                    data.m6_previous_jitter[3]=mv_mode ? .75f : .5f; // accept radius, field texels (MV: own-motion test)
                     auto& p=goald_pending;
                     p.seq=++s.record_seq; // F1
                     p.active=true; p.valid=use; p.parity=next_parity; p.camera=cam;
-                    p.type=goald_history; p.jitter_negative=goald_jitter_negative;
+                    p.type=hist_type; p.jitter_negative=goald_jitter_negative;
                     std::copy(std::begin(data.m2_crop),std::end(data.m2_crop),p.crop.begin());
                     p.coefficients=coefficients; p.w=m4_columns; p.h=m4_rows;
                     p.fine_w=focus->rect[2]; p.fine_h=focus->rect[3]; p.time=now;
@@ -428,6 +453,13 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
 
 
 def m1_backend(src):
+    src = once(src, '    float fine_weight{1.f};\n};\n',
+               '    float fine_weight{1.f};\n'
+               '    // Goal D (62_): DLSS motion vectors of the same Evaluate (fine depth only).\n'
+               '    ID3D12Resource* mv{};\n'
+               '    DXGI_FORMAT mv_format{DXGI_FORMAT_UNKNOWN};\n'
+               '    std::array<float,2> mv_scale{1.f,1.f};\n'
+               '};\n', 'goal D MV input')
     src = once(src, '#include <memory>\n', '#include <memory>\n#include <vector>\n#include <algorithm>\n', 'goal D vector include')
     src = once(src, '    ComPtr<ID3D12Resource> m4_depth;\n', M1_MEMBERS, 'goal D members')
     src = once(src,
@@ -438,7 +470,7 @@ def m1_backend(src):
                '                         uint32_t goald_history=0u,bool goald_jitter_negative=false,\n'
                '                         uint32_t goald_one_sided=0u,uint32_t goald_fill=0u,\n'
                '                         float goald_motion_limit=2.f,float goald_halo_near_m=1.f,float goald_halo_fade_m=3.f,\n'
-               '                         uint32_t goald_confirm_texels=0u) {',
+               '                         uint32_t goald_confirm_texels=0u,uint32_t goald_motion_source=0u) {',
                'goal D grid argument')
     src = once(src, '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n',
                '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n'
@@ -447,6 +479,7 @@ def m1_backend(src):
                '        m4_active=false; m4_columns=m4_rows=0;\n'
                '        m4_hi_active=false;\n'
                '        goald_hist_active=false; goald_hist_reason=goald_history ? 1u : 0u;\n'
+               '        goald_mv_active=false; goald_mv_resource=nullptr;\n'
                '        goald_grid_reason=depth_grid>=4096u ? 4u : 0u;\n',
                'goal D per-frame reset')
     src = once(src,
@@ -494,9 +527,20 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
         u.Format=DXGI_FORMAT_R32_UINT;
         u.ViewDimension=D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
-        u.Texture2DArray.ArraySize=5;
+        u.Texture2DArray.ArraySize=9;
         device->CreateUnorderedAccessView(s.texture.Get(),nullptr,&u,m7_current_uav_);
         goald_hist_bound_=s.generation;
+    }
+    // t9 (retired M6 slot, 62_): this frame's DLSS motion vectors in MV mode, else a NULL view.
+    // The resource stays alive and unchanged through the fine depth lease.
+    void goald_bind_motion(ID3D12Device* device) {
+        if (!m6_previous_srv_.ptr || !m1_.goald_hist_active) return;
+        D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+        v.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;
+        v.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        v.Texture2D.MipLevels=1;
+        v.Format=m1_.goald_mv_active ? m1_.goald_mv_format : DXGI_FORMAT_R16G16_FLOAT;
+        device->CreateShaderResourceView(m1_.goald_mv_active ? m1_.goald_mv_resource : nullptr,&v,m6_previous_srv_);
     }
     void goald_copy_counters(ID3D12GraphicsCommandList* cmd) {
         auto& s=M1Resources::goald_history_state();
@@ -514,16 +558,17 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         dst.pResource=m1_.goald_counter_readback.Get();
         dst.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
         dst.PlacedFootprint.Footprint.Format=DXGI_FORMAT_R32_UINT;
-        dst.PlacedFootprint.Footprint.Width=4;
+        dst.PlacedFootprint.Footprint.Width=6; // + per-parity sum |MV| (62_)
         dst.PlacedFootprint.Footprint.Height=1;
         dst.PlacedFootprint.Footprint.Depth=1;
         dst.PlacedFootprint.Footprint.RowPitch=256;
-        const D3D12_BOX box{0,0,0,4,1,1};
+        const D3D12_BOX box{0,0,0,6,1,1};
         cmd->CopyTextureRegion(&dst,0,0,0,&src,&box);
         transition(cmd,s.texture.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         m1_.goald_counter_recorded=true; // read back only once this list is submitted
         m1_.goald_counter_parity=m1_.goald_hist_parity;
         m1_.goald_counter_epoch=s.epoch; // F4: ignored if a drop happens before it is read
+        m1_.goald_counter_mv=m1_.goald_mv_active;
     }
     void goald_stamp(ID3D12GraphicsCommandList* cmd, bool timed, uint32_t i) {
         if (!timed || !queries_) return;
@@ -579,6 +624,7 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
             ((M1Resources::goald_hist_permille.load(std::memory_order_relaxed)&1023u)<<8),std::memory_order_relaxed);
         duo_goald_modes().store((1u<<31)|(m1_active ? m1_.goald_mode_bits : 0u),std::memory_order_relaxed);
         duo_goald_still().store(M1Resources::goald_still_permille.load(std::memory_order_relaxed),std::memory_order_relaxed);
+        duo_goald_motion().store((1u<<31)|(m1_active && m1_.goald_mv_active ? 1u : 0u),std::memory_order_relaxed);
     }
 public:
     // Test accessors (WARP fixture): read-only.
@@ -596,8 +642,8 @@ def compositor_backend(src):
                '                settings.goald_history,settings.goald_jitter_negative!=0u,\n'
                '                settings.goald_one_sided,settings.goald_fill,\n'
                '                settings.goald_motion_limit,settings.goald_halo_near_m,settings.goald_halo_fade_m,\n'
-               '                settings.goald_confirm_texels);\n'
-               '        if (m1_active) { goald_bind_m4_field(device); goald_bind_history(device); }\n'
+               '                settings.goald_confirm_texels,settings.goald_motion_source);\n'
+               '        if (m1_active) { goald_bind_m4_field(device); goald_bind_history(device); goald_bind_motion(device); }\n'
                '        goald_report_status(goald_grid(settings),m1_active,settings.goald_history!=0u);\n',
                'goal D write_constants argument')
     # M4 dispatch: field resource, PSOs and timestamps 2/3 around both passes.
@@ -776,6 +822,8 @@ inline std::atomic<uint32_t>& duo_goald_history() { static std::atomic<uint32_t>
 inline std::atomic<uint32_t>& duo_goald_modes() { static std::atomic<uint32_t> s{0u}; return s; }
 // history motion gate: smoothed permille of frames with the head nearly still (menu).
 inline std::atomic<uint32_t>& duo_goald_still() { static std::atomic<uint32_t> s{0u}; return s; }
+// history motion source in use: bit 0 DLSS motion vectors active, bit 31 written.
+inline std::atomic<uint32_t>& duo_goald_motion() { static std::atomic<uint32_t> s{0u}; return s; }
 // GPU stage timing (needs "GPU timing: DuoView"): per mode [0 Mono, 1 stereo] 8 stage
 // sums in ns + sample count (log, reset per line) and 8 smoothed stage values in us (menu).
 inline std::atomic<uint64_t>* duo_stage_ns() { static std::atomic<uint64_t> s[18]{}; return s; }
@@ -812,6 +860,7 @@ def config(src):
                '    uint32_t goald_history{0}, goald_jitter_negative{0}, goald_one_sided{0}, goald_fill{0}; // goal D switches 2-4\n'
                '    float goald_motion_limit{2.f}; // goal D history: used only while the field moves <= this many texels per frame\n'
                '    uint32_t goald_confirm_texels{2}; // goal D history: kept only with similar current depth within N texels (0 = off)\n'
+               '    uint32_t goald_motion_source{1}; // goal D history motion: 0 head pose (head still only), 1 DLSS MVs, 2 DLSS MVs flipped\n'
                '    float goald_halo_near_m{1.f}, goald_halo_fade_m{3.f}; // goal D halo at background depth: full up to / off from\n',
                'goal D settings field')
     src = once(src, '    out.m4_fovea_grid=requested.m4_fovea_grid;\n',
@@ -820,6 +869,7 @@ def config(src):
                '    out.goald_history=(std::min)(requested.goald_history,1u); // 0 off, 1 on (all fovea depth; Thin removed after #373)\n'
                '    out.goald_motion_limit=std::isfinite(requested.goald_motion_limit) ? (std::clamp)(requested.goald_motion_limit,.25f,64.f) : 2.f;\n'
                '    out.goald_confirm_texels=(std::min)(requested.goald_confirm_texels,8u);\n'
+               '    out.goald_motion_source=(std::min)(requested.goald_motion_source,2u);\n'
                '    out.goald_halo_near_m=std::isfinite(requested.goald_halo_near_m) ? (std::clamp)(requested.goald_halo_near_m,.1f,50.f) : 1.f;\n'
                '    out.goald_halo_fade_m=std::isfinite(requested.goald_halo_fade_m) ? (std::clamp)(requested.goald_halo_fade_m,out.goald_halo_near_m,100.f) : 3.f;\n'
                '    out.goald_jitter_negative=requested.goald_jitter_negative ? 1u : 0u;\n'
@@ -839,6 +889,7 @@ def vr_hpp(src):
                '    static const inline std::vector<std::string> s_duo_goald_history{ "Off (baseline)", "On (all fovea depth, head still only)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_jitter{ "+ (current)", "- (flipped)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_confirm{ "Off (trails behind moving things)", "1 texel", "2 texels", "3 texels", "4 texels", "6 texels", "8 texels" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_motion_src{ "Head pose (head still only)", "DLSS motion vectors", "DLSS motion vectors (flipped sign)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_fill{ "Off (baseline)", "Mirror, full", "Mirror, half", "Halo at background depth" };\n'
                '    static const inline std::vector<std::string> s_duo_m3_jitter_modes{',
                'goal D grid names')
@@ -852,9 +903,10 @@ def vr_hpp(src):
                '    const ModCombo::Ptr m_duo_goald_confirm{ModCombo::create(generate_name("DuoFoveaHistoryConfirm"),s_duo_goald_confirm,2)};\n'
                '    const ModSlider::Ptr m_duo_goald_halo_near{ModSlider::create(generate_name("DuoHaloBgFullMeters"),.1f,20.f,1.f)};\n'
                '    const ModSlider::Ptr m_duo_goald_halo_fade{ModSlider::create(generate_name("DuoHaloBgOffMeters"),.1f,50.f,3.f)};\n'
+               '    const ModCombo::Ptr m_duo_goald_motion_src{ModCombo::create(generate_name("DuoFoveaHistoryMotion"),s_duo_goald_motion_src,1)};\n'
                '    const ModCombo::Ptr m_duo_goald_fill{ModCombo::create(generate_name("DuoFoveaBackgroundFill"),s_duo_goald_fill,0)};\n',
                'goal D grid control')
-    src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, *m_duo_goald_history, *m_duo_goald_jitter, *m_duo_goald_fill, *m_duo_goald_motion, *m_duo_goald_confirm, *m_duo_goald_halo_near, *m_duo_goald_halo_fade, ', 'goal D grid persisted')
+    src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, *m_duo_goald_history, *m_duo_goald_jitter, *m_duo_goald_fill, *m_duo_goald_motion, *m_duo_goald_confirm, *m_duo_goald_motion_src, *m_duo_goald_halo_near, *m_duo_goald_halo_fade, ', 'goal D grid persisted')
     return src
 
 
@@ -877,13 +929,18 @@ GOALD_MENU = r'''                    m_duo_m8_far_m->draw("Depth transition ends
                         else ImGui::TextWrapped("Fovea depth grid status: %s", uevr::duoview::duo_goald_reason_text((gd>>2)&15u));
                     }
                     ImGui::TextWrapped("Goal D switches 2 and 4 (test build). Any of them turns the 4096 grid on.");
-                    m_duo_goald_history->draw("2. Fovea depth history, up to 4 frames, used only while the head is nearly still");
+                    m_duo_goald_history->draw("2. Fovea depth history, up to 4 frames");
+                    m_duo_goald_motion_src->draw("2. History motion source (DLSS motion vectors follow head, hands and objects)");
                     m_duo_goald_motion->draw("2. History head-still limit (fovea depth texels per frame; lower = stricter)");
                     m_duo_goald_confirm->draw("2. History confirm distance (kept only next to similar depth now; smaller = shorter trails behind hands/moving objects)");
                     {
                         const uint32_t gh=uevr::duoview::duo_goald_history().load(std::memory_order_relaxed);
                         if (!(gh>>31) || !(gh&1u)) ImGui::TextWrapped("Fovea depth history: off.");
-                        else if (gh&2u) ImGui::TextWrapped("Fovea depth history: ACTIVE, %.1f%% of fovea depth from history; head still in %.0f%% of frames.",
+                        else if (gh&2u && (uevr::duoview::duo_goald_motion().load(std::memory_order_relaxed)&1u))
+                            ImGui::TextWrapped("Fovea depth history: ACTIVE with DLSS motion vectors, %.1f%% of fovea depth from history.",
+                            float((gh>>8)&1023u)/10.f);
+                        else if (gh&2u) ImGui::TextWrapped("Fovea depth history: ACTIVE with head pose%s, %.1f%% of fovea depth from history; head still in %.0f%% of frames.",
+                            m_duo_goald_motion_src->value()!=0 ? " (NO motion vectors from DLSS - fallback)" : "",
                             float((gh>>8)&1023u)/10.f,
                             float(uevr::duoview::duo_goald_still().load(std::memory_order_relaxed))/10.f);
                         else ImGui::TextWrapped("Fovea depth history: %s", uevr::duoview::duo_goald_history_reason_text((gh>>2)&15u));
@@ -911,6 +968,7 @@ def vr_cpp(src):
                '        .goald_fill=uint32_t((std::clamp)(m_duo_goald_fill->value(),0,3)),\n'
                '        .goald_motion_limit=m_duo_goald_motion->value(),\n'
                '        .goald_confirm_texels=uint32_t((std::clamp)(m_duo_goald_confirm->value(),0,6)<=4 ? (std::clamp)(m_duo_goald_confirm->value(),0,6) : (m_duo_goald_confirm->value()==5 ? 6 : 8)),\n'
+               '        .goald_motion_source=uint32_t((std::clamp)(m_duo_goald_motion_src->value(),0,2)),\n'
                '        .goald_halo_near_m=m_duo_goald_halo_near->value(),\n'
                '        .goald_halo_fade_m=m_duo_goald_halo_fade->value()};',
                'goal D grid settings')
@@ -923,6 +981,7 @@ def vr_cpp(src):
                '        current.goald_fill==candidate.goald_fill &&\n'
                '        current.goald_motion_limit==candidate.goald_motion_limit &&\n'
                '        current.goald_confirm_texels==candidate.goald_confirm_texels &&\n'
+               '        current.goald_motion_source==candidate.goald_motion_source &&\n'
                '        current.goald_halo_near_m==candidate.goald_halo_near_m &&\n'
                '        current.goald_halo_fade_m==candidate.goald_halo_fade_m) return;',
                'goal D grid change detection')
@@ -945,6 +1004,20 @@ GOALD_LOG = r'''                                                    uevr::duovie
                                                         uevr::duoview::dx12::M1Resources::goald_hist_moving_frames.exchange(0),
                                                         ht ? hu*1000u/ht : 0u,
                                                         uevr::duoview::duo_goald_modes().load()&7u);
+                                                    {   // 62_: motion vector capture + NGX depth/MV copy GPU time (game list)
+                                                        using PD=uevr::quadview::ngx::PeripheryDepth;
+                                                        const uint64_t mvf=uevr::duoview::dx12::M1Resources::goald_mv_frames.exchange(0);
+                                                        const uint64_t mvq=uevr::duoview::dx12::M1Resources::goald_mv_abs_quarter.exchange(0);
+                                                        const uint64_t cns=PD::goald_copy_ns.exchange(0), cn=PD::goald_copy_samples.exchange(0);
+                                                        const uint32_t msz=PD::goald_mv_size.load();
+                                                        SPDLOG_INFO("[DuoView][GoalD] motion mv_frames={} fallback_frames={} mean_abs_mv_texels={:.3f} mv_copies={} mv_fails={} mv_reason={} mv_format={} mv_size={}x{} mv_scale={:.4f},{:.4f} ngx_copy_gpu_ms={:.3f} copy_samples={}",
+                                                            mvf, uevr::duoview::dx12::M1Resources::goald_mv_fallback_frames.exchange(0),
+                                                            ht ? double(mvq)/4.0/double(ht) : 0.0,
+                                                            PD::goald_mv_copies.exchange(0), PD::goald_mv_fails.exchange(0), PD::goald_mv_reason.load(),
+                                                            PD::goald_mv_format.load(), msz>>16, msz&0xffffu,
+                                                            PD::goald_mv_scale_x.load(), PD::goald_mv_scale_y.load(),
+                                                            cn ? double(cns)/double(cn)/1.0e6 : -1.0, cn);
+                                                    }
                                                     for (uint32_t mode=0; mode<2; ++mode) {
                                                         auto* st=uevr::duoview::duo_stage_ns()+mode*9u;
                                                         const uint64_t n=st[8].exchange(0);
@@ -972,13 +1045,198 @@ GOALD_CALLER_GUARD = r'''                            // Goal D (review #373 F2):
 '''
 
 
+GOALD_CALLER_MV = r'''                                            // Goal D (62_): ask the NGX hook for motion vectors / copy timing (next Evaluate).
+                                            uevr::quadview::ngx::PeripheryDepth::goald_mv_request.store(
+                                                config.settings.goald_history!=0u && config.settings.goald_motion_source!=0u,std::memory_order_relaxed);
+                                            uevr::quadview::ngx::PeripheryDepth::goald_copy_timing.store(config.settings.gpu_timing,std::memory_order_relaxed);
+                                            if (snapshot && m25_fine && (config.settings.m25_fine_mode==1u || pair.first==snapshot)) {
+'''
+
+
 def component(src):
+    src = once(src, '                                            if (snapshot && m25_fine && (config.settings.m25_fine_mode==1u || pair.first==snapshot)) {\n',
+               GOALD_CALLER_MV, 'goal D MV request')
+    src = once(src, '                                                    focus->jitter_uv,focus,config.settings.m25_fine_mode==1u ? 1.f : depths.m24_fine_weight()};\n',
+               '                                                    focus->jitter_uv,focus,config.settings.m25_fine_mode==1u ? 1.f : depths.m24_fine_weight()};\n'
+               '                                                if (focus->mv_valid && focus->mv_texture) { // goal D (62_): same slot, same lease\n'
+               '                                                    fine_depth->mv=focus->mv_texture.Get();\n'
+               '                                                    fine_depth->mv_format=focus->mv_srv_format;\n'
+               '                                                    fine_depth->mv_scale=focus->mv_scale;\n'
+               '                                                }\n',
+               'goal D MV into fine depth')
     src = once(src, '                                                    uevr::duoview::dx12::M1Resources::m4_fine_h.load());\n',
                GOALD_LOG, 'goal D log line')
     return once(src,
                 '                            if (compositor_fault) {\n'
                 '                                vr->duoview_abort("Validated Native Stereo Fix pair failed DuoView composition");\n',
                 GOALD_CALLER_GUARD, 'goal D caller drops history without a submitted list')
+
+
+# ---------------------------------------------------------------- NGX motion vectors (62_)
+NGX_SLOT_MEMBERS = r'''    ComPtr<ID3D12CommandQueue> duoview_producer_queue;
+    // Goal D (62_): DLSS motion vectors of the same Evaluate, copied next to the fine
+    // depth (same slot, lease and pairing). Fine output only, only while requested.
+    ComPtr<ID3D12Resource> mv_texture, mv_source_reference;
+    DXGI_FORMAT mv_srv_format{DXGI_FORMAT_UNKNOWN};
+    std::array<float,2> mv_scale{1.f,1.f};
+    bool mv_valid{};
+    // Goal D: GPU timestamps around this slot's depth (+MV) copies on the game list;
+    // read only after the slot's producer fence completed (slot reuse).
+    uint32_t goald_ts_index{~0u};
+    bool goald_ts_pending{};
+};
+'''
+
+NGX_CLASS_MEMBERS = r'''class PeripheryDepth final {
+public:
+    // ---- Goal D (62_): requested by the DuoView caller every frame (menu).
+    inline static std::atomic<bool> goald_mv_request{}, goald_copy_timing{};
+    // MV capture diagnostics (log). reason: 0 ok, 1 no MotionVectors parameter,
+    // 2 unsupported format/layout, 3 MV size differs from the depth texture, 4 allocation failed.
+    inline static std::atomic<uint32_t> goald_mv_format{}, goald_mv_size{}, goald_mv_reason{};
+    inline static std::atomic<float> goald_mv_scale_x{}, goald_mv_scale_y{};
+    inline static std::atomic<uint64_t> goald_mv_copies{}, goald_mv_fails{};
+    inline static std::atomic<uint64_t> goald_copy_ns{}, goald_copy_samples{}, goald_copy_frequency{};
+    static constexpr uint32_t goald_ts_slots = 32;
+    ComPtr<ID3D12QueryHeap> goald_ts_heap_;
+    ComPtr<ID3D12Resource> goald_ts_readback_;
+    uint32_t goald_ts_next_{};
+    bool goald_ts_ready(ID3D12Device* dev) {
+        if (goald_ts_heap_ && goald_ts_readback_) return true;
+        if (goald_ts_heap_ || goald_ts_readback_) return false; // a failed creation is not retried
+        D3D12_QUERY_HEAP_DESC q{}; q.Type=D3D12_QUERY_HEAP_TYPE_TIMESTAMP; q.Count=2u*goald_ts_slots;
+        if (FAILED(dev->CreateQueryHeap(&q,IID_PPV_ARGS(&goald_ts_heap_)))) { goald_ts_heap_.Reset(); return false; }
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type=D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC b{}; b.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER; b.Width=16u*goald_ts_slots;
+        b.Height=b.DepthOrArraySize=b.MipLevels=1; b.SampleDesc.Count=1; b.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(dev->CreateCommittedResource(&hp,D3D12_HEAP_FLAG_NONE,&b,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,
+                IID_PPV_ARGS(&goald_ts_readback_)))) { goald_ts_readback_.Reset(); return false; }
+        return true;
+    }
+    // Previous copy time of a slot about to be reused (its producer work has completed).
+    void goald_read_copy_time(DepthSnapshot& slot) {
+        if (!slot.goald_ts_pending || slot.goald_ts_index>=goald_ts_slots || !goald_ts_readback_) { slot.goald_ts_pending=false; return; }
+        slot.goald_ts_pending=false;
+        const uint64_t f=goald_copy_frequency.load(std::memory_order_relaxed);
+        if (!f || !slot.producer_fence || !slot.producer_fence_value ||
+            slot.producer_fence->GetCompletedValue()<slot.producer_fence_value) return;
+        const SIZE_T o=16u*slot.goald_ts_index;
+        const D3D12_RANGE r{o,o+16u};
+        void* m=nullptr;
+        if (FAILED(goald_ts_readback_->Map(0,&r,&m)) || !m) return;
+        uint64_t t[2]{};
+        std::memcpy(t,static_cast<const char*>(m)+o,sizeof(t));
+        const D3D12_RANGE w{0,0};
+        goald_ts_readback_->Unmap(0,&w);
+        if (t[1]>=t[0]) {
+            const double ns=double(t[1]-t[0])*1.0e9/double(f);
+            if (ns<1.0e9) { goald_copy_ns+=uint64_t(ns); ++goald_copy_samples; }
+        }
+    }
+    // Copy the DLSS motion vectors of this Evaluate into the slot (render-resolution
+    // MVs at the depth subrect only; anything else is logged and history falls back
+    // to head-pose mode).
+    void goald_capture_mv(ID3D12GraphicsCommandList* cmd, const NgxParameters* p, DepthSnapshot& slot, bool fine,
+                          uint32_t in_w, uint32_t in_h, const D3D12_RESOURCE_DESC& depth_desc, ID3D12Device* dev) {
+        slot.mv_valid=false; slot.mv_source_reference.Reset();
+        if (!fine || !goald_mv_request.load(std::memory_order_relaxed)) return;
+        const auto fail=[](uint32_t r) { goald_mv_reason.store(r,std::memory_order_relaxed); ++goald_mv_fails; };
+        auto* mv=ngx_resource(p,"MotionVectors");
+        if (!mv) { fail(1u); return; }
+        const auto d=mv->GetDesc();
+        goald_mv_format.store(uint32_t(d.Format),std::memory_order_relaxed);
+        goald_mv_size.store((uint32_t(d.Width)<<16)|(d.Height&0xffffu),std::memory_order_relaxed);
+        DXGI_FORMAT srv=DXGI_FORMAT_UNKNOWN, copy=DXGI_FORMAT_UNKNOWN;
+        switch (d.Format) {
+        case DXGI_FORMAT_R16G16_FLOAT: case DXGI_FORMAT_R16G16_TYPELESS:
+            srv=DXGI_FORMAT_R16G16_FLOAT; copy=DXGI_FORMAT_R16G16_TYPELESS; break;
+        case DXGI_FORMAT_R32G32_FLOAT: case DXGI_FORMAT_R32G32_TYPELESS:
+            srv=DXGI_FORMAT_R32G32_FLOAT; copy=DXGI_FORMAT_R32G32_TYPELESS; break;
+        case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+            srv=DXGI_FORMAT_R16G16B16A16_FLOAT; copy=DXGI_FORMAT_R16G16B16A16_TYPELESS; break;
+        case DXGI_FORMAT_R32G32B32A32_FLOAT: case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+            srv=DXGI_FORMAT_R32G32B32A32_FLOAT; copy=DXGI_FORMAT_R32G32B32A32_TYPELESS; break;
+        default: break;
+        }
+        if (d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D || d.SampleDesc.Count!=1 || d.DepthOrArraySize!=1 ||
+            srv==DXGI_FORMAT_UNKNOWN) { fail(2u); return; }
+        const auto bx=ngx_uint(p,"DLSS.Input.MV.Subrect.Base.X"), by=ngx_uint(p,"DLSS.Input.MV.Subrect.Base.Y");
+        // Render-resolution MVs (DLSS MVLowRes) share the depth texture's size; display-
+        // resolution MVs are not supported here (logged as reason 3).
+        if (d.Width!=depth_desc.Width || d.Height!=depth_desc.Height ||
+            uint64_t(bx)+in_w>d.Width || uint64_t(by)+in_h>d.Height) { fail(3u); return; }
+        constexpr auto read=D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+        const auto have=slot.mv_texture ? slot.mv_texture->GetDesc() : D3D12_RESOURCE_DESC{};
+        if (!slot.mv_texture || have.Width!=in_w || have.Height!=in_h || have.Format!=copy) {
+            slot.mv_texture.Reset(); // the slot's producer work and every lease have retired
+            D3D12_RESOURCE_DESC td{};
+            td.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            td.Width=in_w; td.Height=in_h; td.DepthOrArraySize=1; td.MipLevels=1;
+            td.Format=copy; td.SampleDesc.Count=1; td.Layout=D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            D3D12_HEAP_PROPERTIES hp{}; hp.Type=D3D12_HEAP_TYPE_DEFAULT;
+            if (FAILED(dev->CreateCommittedResource(&hp,D3D12_HEAP_FLAG_NONE,&td,read,nullptr,IID_PPV_ARGS(&slot.mv_texture)))) {
+                slot.mv_texture.Reset(); fail(4u); return;
+            }
+            slot.mv_texture->SetName(L"DuoView::GoalDMotionVectors");
+        }
+        constexpr auto ngx_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        transition(cmd,mv,ngx_state,D3D12_RESOURCE_STATE_COPY_SOURCE);
+        transition(cmd,slot.mv_texture.Get(),read,D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_TEXTURE_COPY_LOCATION from{}, to{};
+        from.pResource=mv; from.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        to.pResource=slot.mv_texture.Get(); to.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        const D3D12_BOX box{bx,by,0,bx+in_w,by+in_h,1};
+        cmd->CopyTextureRegion(&to,0,0,0,&from,&box);
+        transition(cmd,slot.mv_texture.Get(),D3D12_RESOURCE_STATE_COPY_DEST,read);
+        transition(cmd,mv,D3D12_RESOURCE_STATE_COPY_SOURCE,ngx_state);
+        float sx=1.f, sy=1.f;
+        if (!ngx_success(p->Get("MV.Scale.X",&sx)) || !std::isfinite(sx) || sx==0.f) sx=1.f;
+        if (!ngx_success(p->Get("MV.Scale.Y",&sy)) || !std::isfinite(sy) || sy==0.f) sy=1.f;
+        slot.mv_scale={sx,sy}; slot.mv_srv_format=srv; slot.mv_valid=true; slot.mv_source_reference=mv;
+        goald_mv_scale_x.store(sx,std::memory_order_relaxed); goald_mv_scale_y.store(sy,std::memory_order_relaxed);
+        goald_mv_reason.store(0u,std::memory_order_relaxed);
+        ++goald_mv_copies;
+    }
+'''
+
+NGX_COPY_BEFORE = r'''        // Goal D: time this slot's copies (previous result first; the slot has retired).
+        goald_read_copy_time(*slot);
+        const bool goald_timed=goald_copy_timing.load(std::memory_order_relaxed) &&
+            cmd->GetType()!=D3D12_COMMAND_LIST_TYPE_COPY && goald_ts_ready(dev.Get());
+        if (goald_timed && slot->goald_ts_index==~0u && goald_ts_next_<goald_ts_slots) slot->goald_ts_index=goald_ts_next_++;
+        const bool goald_stamp=goald_timed && slot->goald_ts_index<goald_ts_slots;
+        if (goald_stamp) cmd->EndQuery(goald_ts_heap_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,2u*slot->goald_ts_index);
+        // Plane 0 (depth) only; subresource 0 is the depth plane for every accepted format.
+'''
+
+NGX_COPY_AFTER = r'''        slot->source_reference = depth;
+        goald_capture_mv(cmd,p,*slot,m25_role==2u,in_w,in_h,desc,dev.Get()); // goal D (62_)
+        if (goald_stamp) {
+            cmd->EndQuery(goald_ts_heap_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,2u*slot->goald_ts_index+1u);
+            cmd->ResolveQueryData(goald_ts_heap_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,2u*slot->goald_ts_index,2,
+                                  goald_ts_readback_.Get(),16u*slot->goald_ts_index);
+        }
+        slot->goald_ts_pending=goald_stamp;
+'''
+
+
+def ngx_depth(src):
+    src = once(src, '    ComPtr<ID3D12CommandQueue> duoview_producer_queue;\n};\n', NGX_SLOT_MEMBERS, 'goal D MV slot members')
+    src = once(src, 'class PeripheryDepth final {\npublic:\n', NGX_CLASS_MEMBERS, 'goal D MV capture methods')
+    src = once(src,
+               '        // Plane 0 (depth) only; subresource 0 is the depth plane for every accepted format.\n',
+               NGX_COPY_BEFORE, 'goal D copy timestamp start')
+    src = once(src, '        slot->source_reference = depth;\n', NGX_COPY_AFTER, 'goal D MV copy + timestamp end')
+    src = once(src, '            const auto value = ++next_fence_value_;\n',
+               '            const auto value = ++next_fence_value_;\n'
+               '            if (!goald_copy_frequency.load(std::memory_order_relaxed)) { // goal D copy timing\n'
+               '                UINT64 goald_f{};\n'
+               '                if (SUCCEEDED(queue->GetTimestampFrequency(&goald_f))) goald_copy_frequency.store(goald_f,std::memory_order_relaxed);\n'
+               '            }\n',
+               'goal D copy timestamp frequency')
+    if '#include <cstring>' not in src:
+        src = once(src, '#include <atomic>\n', '#include <atomic>\n#include <cstring>\n', 'goal D cstring include')
+    return src
 
 
 def main():
@@ -999,6 +1257,7 @@ def main():
     edit(a.backend / 'src/mods/VR.hpp', vr_hpp)
     edit(a.backend / 'src/mods/VR.cpp', vr_cpp)
     edit(vr / 'D3D12Component.cpp', component)
+    edit(vr / 'QuadViewNgxDepth.hpp', ngx_depth)
     print('goal D switches 1-4: Off unchanged; 4096/history/one-sided/fill only in separate m4g_* DXBC + goal D settings')
 
 

@@ -196,7 +196,21 @@ void CSConditionM4GVertical(uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
 // the field by <= the menu limit), so pose/timing error cannot drag history.
 // Output = max(current, accepted). Re-confirmed -> age 0; else age+1; dropped at age K.
 RWTexture2DArray<uint> GDHistory : register(u6);
-groupshared uint GDCount[2];
+groupshared uint GDCount[3];
+
+// MV mode (flags 64, research 62_): DLSS motion vectors of this fine depth on t9
+// (retired M6 slot; render-resolution, same extent as the fine depth). Convention
+// (DLSS): previous position = current + MV*scale. M6View[0].xy = MV -> field texels
+// (scale and sign included), M6View[0].zw = MV texel extent. Slices 5+2p/6+2p of the
+// history hold, per texel, the motion (field texels) that went with its kept seed.
+Texture2D<float2> GDMotion : register(t9);
+float2 GDMotionField(uint2 p) {
+    const float2 local=(float2(p)+.5)/float2(M4Grid.xy);
+    const int2 ext=max(int2(M6View[0].zw),int2(1,1));
+    const int2 t=clamp(int2(local*float2(ext)),int2(0,0),ext-1);
+    const float2 m=GDMotion.Load(int3(t,0))*M6View[0].xy;
+    return all(abs(m)<512.0) ? m : float2(0.0,0.0); // also rejects NaN
+}
 
 float2 GDPreviousCell(float2 local, float inverseDepth, out bool ok) {
     const float2 fullUv=lerp(M2Crop.xy,M2Crop.zw,local);
@@ -215,13 +229,17 @@ float2 GDPreviousCell(float2 local, float inverseDepth, out bool ok) {
 void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint gi:SV_GroupIndex) {
     const uint parity=M6PreviousRect.x&1u;
     const bool valid=(GDFlags()&1u)!=0u;
-    if(gi==0u) { GDCount[0]=0u; GDCount[1]=0u; }
+    const bool mvMode=(GDFlags()&64u)!=0u;
+    if(gi==0u) { GDCount[0]=0u; GDCount[1]=0u; GDCount[2]=0u; }
     GroupMemoryBarrierWithGroupSync();
-    uint keep=0u, used=0u;
+    uint keep=0u, used=0u, mvQuarter=0u;
     [branch] if(id.x<M4Grid.x && id.y<M4Grid.y) {
         const float cur=GDSeedRaw(id.xy);
         float outDepth=cur;
         uint age=0u;
+        const float2 mvNow=mvMode ? GDMotionField(id.xy) : float2(0.0,0.0);
+        float2 mvKeep=mvNow;
+        mvQuarter=mvMode ? uint(min(length(mvNow),64.0)*4.0+.5) : 0u;
         [branch] if(valid) {
             const float2 local=(float2(id.xy)+.5)/float2(M4Grid.xy);
             const uint previous=2u*(parity^1u);
@@ -229,6 +247,32 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
             const float searchNear=M6PreviousJitter.z; // inverse depth of the nearest search window
             float best=0.0;
             uint bestAge=0u;
+            float2 bestMotion=float2(0.0,0.0);
+            [branch] if(mvMode) {
+                // 62_ step 4: search 3x3 around where this texel was last frame (x + m(x)).
+                // A candidate c is accepted only if ITS OWN stored motion s(c) carries it
+                // here (constant velocity: now at c - s(c)). A hand that moved away has
+                // the hand's motion and lands elsewhere (rejected: no trail); a thin wire
+                // missed this frame moves with its stored motion and is kept.
+                const int2 c0=int2(round(float2(id.xy)+mvNow));
+                const uint prevMotion=5u+2u*(parity^1u);
+                [unroll] for(int dy=-1;dy<=1;++dy) {
+                    [unroll] for(int dx=-1;dx<=1;++dx) {
+                        const int2 c=c0+int2(dx,dy);
+                        if(all(c>=int2(0,0)) && all(c<int2(M4Grid.xy))) {
+                            const float h=asfloat(GDHistory[uint3(uint2(c),previous)]);
+                            if(h>best && cur<h*.97) {
+                                const float2 s=float2(asfloat(GDHistory[uint3(uint2(c),prevMotion)]),
+                                                      asfloat(GDHistory[uint3(uint2(c),prevMotion+1u)]));
+                                if(all(abs(float2(c)-s-float2(id.xy))<=radius)) {
+                                    const uint a=GDHistory[uint3(uint2(c),previous+1u)];
+                                    if(float(a+1u)<M6PreviousJitter.y) { best=h; bestAge=a; bestMotion=s; }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
             // World windows at three candidate depths (infinity, 1/3 and 2/3 of the
             // search range) so camera translation parallax of nearer objects is found.
             const uint windows=searchNear>0.0 ? 3u : 1u;
@@ -254,6 +298,7 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
                     }
                 }
             }
+            } // pose mode
             // Confirm gate (#373: trails behind hands / moving objects). Flags bits 8-11 =
             // radius r in field texels (0 = off): history is kept only if the CURRENT seed
             // has similar-or-nearer depth (>= 97%) within r texels, so a near object that
@@ -274,22 +319,30 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
                 outDepth=best;
                 age=bestAge+1u;
                 used=1u;
+                mvKeep=bestMotion; // kept seed carries its own (constant) motion
             }
         }
         GDHistory[uint3(id.xy,2u*parity)]=asuint(outDepth);
         GDHistory[uint3(id.xy,2u*parity+1u)]=age;
+        [branch] if(mvMode) {
+            GDHistory[uint3(id.xy,5u+2u*parity)]=asuint(mvKeep.x);
+            GDHistory[uint3(id.xy,6u+2u*parity)]=asuint(mvKeep.y);
+        }
         M4FoveaConditioned[uint3(id.xy,0u)]=outDepth;
         keep=outDepth>0.0 ? 1u : 0u;
     }
     InterlockedAdd(GDCount[0],keep);
     InterlockedAdd(GDCount[1],used);
+    InterlockedAdd(GDCount[2],mvQuarter);
     GroupMemoryBarrierWithGroupSync();
     if(gi==0u) {
         InterlockedAdd(GDHistory[uint3(2u*parity,0u,4u)],GDCount[0]);
         InterlockedAdd(GDHistory[uint3(2u*parity+1u,0u,4u)],GDCount[1]);
+        InterlockedAdd(GDHistory[uint3(4u+parity,0u,4u)],GDCount[2]); // sum |MV| in quarter texels
         if(group.x==0u && group.y==0u) {
             GDHistory[uint3(2u*(parity^1u),0u,4u)]=0u;
             GDHistory[uint3(2u*(parity^1u)+1u,0u,4u)]=0u;
+            GDHistory[uint3(4u+(parity^1u),0u,4u)]=0u;
         }
     }
 }

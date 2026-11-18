@@ -216,6 +216,29 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
             keep.push_back(up); keep.push_back(tex);
             return tex;
         };
+        // 62_: synthetic DLSS motion vectors (R32G32_FLOAT, previous = current + mv).
+        ID3D12Resource* gj_mv=nullptr; // attached to every goal D fine depth while set
+        auto gj_upload_mv=[&](UINT w,UINT h,auto mv_at) {
+            const auto d=texture(w,h,DXGI_FORMAT_R32G32_FLOAT,D3D12_RESOURCE_FLAG_NONE);
+            auto tex=resource(g.device.Get(),d,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{}; UINT64 nb{};
+            g.device->GetCopyableFootprints(&d,0,1,0,&fp,nullptr,nullptr,&nb);
+            auto up=resource(g.device.Get(),buffer(nb),D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);
+            void* m{}; check(up->Map(0,&no_reads,&m));
+            for (UINT y=0;y<h;++y) {
+                auto* r=reinterpret_cast<float*>(static_cast<uint8_t*>(m)+y*fp.Footprint.RowPitch);
+                for (UINT x=0;x<w;++x) { const std::array<float,2> v=mv_at(x,y); r[2*x]=v[0]; r[2*x+1]=v[1]; }
+            }
+            up->Unmap(0,nullptr);
+            D3D12_TEXTURE_COPY_LOCATION from{up.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT}; from.PlacedFootprint=fp;
+            D3D12_TEXTURE_COPY_LOCATION to{tex.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
+            g.cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+            transition(g.cmd.Get(),tex.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+            g.submit_and_wait();
+            keep.push_back(up); keep.push_back(tex);
+            return tex;
+        };
+        auto gj_attach_mv=[&]{ m21_fine_depth.mv=gj_mv; m21_fine_depth.mv_format=DXGI_FORMAT_R32G32_FLOAT; m21_fine_depth.mv_scale={1.f,1.f}; };
         // Whole slice 0 of the M4 field, row-major, cols x rows active texels.
         auto gj_field=[&](UINT cols,UINT rows) {
             ID3D12Resource* field=a->goald_m4_field();
@@ -250,6 +273,7 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
             auto tex=gj_upload(W,H,[&](UINT x,UINT y){ return gj_near(float(vertical ? y : x)+.5f+jp) ? .45f : .15f; });
             const std::array<float,2> jit{vertical ? 0.f : jp/float(JL), vertical ? jp/float(JL) : 0.f};
             m21_fine_depth={tex.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,W,H},jit,lease};
+            gj_attach_mv();
             frame.config.settings.m3_jitter_mode=mode;
             run(*a,false,Route::direct,vertical ? "GoalD jitter sign, y axis" : "GoalD jitter sign, x axis");
             // The XR caller reports a submitted list; goal D history commits only there (review #372 R1).
@@ -323,6 +347,7 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
         {
             const auto gh_saved_cam=m1_geometry.fine_depth_camera;
             m1_geometry.fine_depth_camera={{1.f,0.f,1.f,0.f},{0.f,0.f,0.f,1.f},{0.f,0.f,0.f},1.f};
+            frame.config.settings.goald_motion_source=0u; // head-pose mode first (pre-#376 results unchanged)
             UINT thin=0u;
             for (UINT i=0;i<JN;++i) thin+=bar_w[i]<1.5f ? 1u : 0u;
             auto gh_kept=[&](UINT mode) { // 0 off, 1 on (all fovea depth; Thin removed after #373)
@@ -366,6 +391,11 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
                     const float x0=400.f+4.f*float(f);
                     auto tex=gj_upload(JL,JT,[&](UINT x,UINT){ const float p=float(x)+.5f; return (p>=x0 && p<x0+24.f) ? .45f : .15f; });
                     m21_fine_depth={tex.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,JL,JT},{0.f,0.f},lease};
+                    if (frame.config.settings.goald_motion_source) { // 62_: the slab's own motion
+                        gj_mv=gj_upload_mv(JL,JT,[&](UINT x,UINT){ const float p=float(x)+.5f;
+                            return (p>=x0 && p<x0+24.f) ? std::array<float,2>{-4.f,0.f} : std::array<float,2>{0.f,0.f}; }).Get();
+                        gj_attach_mv();
+                    }
                     run(*a,false,Route::direct,"GoalD history, moving wide object");
                     if (mode) a->note_fine_depth_enqueued(); // submitted (history commit, R1)
                     const auto fv=gj_field(JL,JT);
@@ -432,6 +462,68 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
             std::cout<<"GOALD_HISTORY_GATE still="<<still_valid<<" turn="<<turn_valid<<"/moving "<<turn_moving
                      <<" again="<<again_valid<<" f2="<<f2_valid<<" f1="<<f1_valid<<" f1_recovered="<<f1_recovered<<"\n";
             m1_geometry.fine_depth_camera.orientation={0.f,0.f,0.f,1.f};
+            // ---- 62_ motion-vector history (pre-registered in research/edge-fix/62_).
+            // (a) thin bars, static scene, zero MVs: kept_mv > kept_off.
+            frame.config.settings.goald_motion_source=1u;
+            gj_mv=gj_upload_mv(JL,JT,[](UINT,UINT){ return std::array<float,2>{0.f,0.f}; }).Get();
+            const uint64_t mvf0=uevr::duoview::dx12::M1Resources::goald_mv_frames.load();
+            const UINT mv_kept=gh_kept(1u);
+            const uint64_t mv_frames=uevr::duoview::dx12::M1Resources::goald_mv_frames.load()-mvf0;
+            const uint32_t mv_status=uevr::duoview::duo_goald_motion().load();
+            // (b) moving slab with its own MVs, confirm gate Off: no trail (within 1 texel of Off).
+            const UINT mv_slab=gm_near(1u,0u);
+            // (c) panning scene (camera-yaw-like): every bar moves 3.37 texels/frame, uniform MVs,
+            // no head-still gate in MV mode. Thin bars kept in more frames than Off.
+            auto pan_kept=[&](UINT mode) {
+                frame.config.settings.goald_history=mode;
+                frame.config.settings.goald_confirm_texels=0u;
+                frame.config.settings.m3_jitter_mode=0u;
+                gj_mv=gj_upload_mv(JL,JT,[](UINT,UINT){ return std::array<float,2>{-3.37f,0.f}; }).Get();
+                UINT present=0u;
+                for (UINT f=0;f<24u;++f) {
+                    const float shift=3.37f*float(f);
+                    auto tex=gj_upload(JL,JT,[&](UINT x,UINT){ return gj_near(float(x)+.5f-shift) ? .45f : .15f; });
+                    m21_fine_depth={tex.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,JL,JT},{0.f,0.f},lease};
+                    gj_attach_mv();
+                    run(*a,false,Route::direct,"GoalD MV history, panning scene");
+                    if (mode) a->note_fine_depth_enqueued();
+                    if (f<8u) continue; // warm-up
+                    const auto fv=gj_field(JL,JT);
+                    float hi=-1.e9f;
+                    for (const float v:fv) hi=(std::max)(hi,v);
+                    const float tol=1.e-5f*(std::max)(1.f,hi);
+                    for (UINT i=0;i<JN;++i) {
+                        if (!(bar_w[i]<1.5f)) continue;
+                        const int c0=int(std::floor(bar_x[i]+shift));
+                        if (c0<1 || c0+2>=int(JL)) continue;
+                        bool any=false;
+                        for (int c=c0-1;c<=c0+2;++c) if (fv[size_t(JT/2u)*JL+size_t(c)]>=hi-tol) any=true;
+                        present+=any ? 1u : 0u;
+                    }
+                }
+                return present;
+            };
+            const UINT pan_off=pan_kept(0u), pan_mv=pan_kept(1u);
+            // (d) MV requested but the fine depth has none: head-pose fallback, counted.
+            gj_mv=nullptr;
+            const uint64_t fb0=uevr::duoview::dx12::M1Resources::goald_mv_fallback_frames.load();
+            gs_frame(*a,0.f,true,"GoalD MV fallback: no motion vectors");
+            const uint64_t mv_fallback=uevr::duoview::dx12::M1Resources::goald_mv_fallback_frames.load()-fb0;
+            const bool fallback_pose=!(uevr::duoview::duo_goald_motion().load()&1u);
+            frame.config.settings.goald_motion_source=0u;
+            std::ofstream("goald_history_result.txt",std::ios::app)
+                <<"GOALD_HISTORY_MV,kept_off="<<gh_off<<",kept_mv="<<mv_kept<<",mv_frames="<<mv_frames
+                <<",near_texels_off="<<gm_off<<",near_texels_mv="<<mv_slab
+                <<",pan_kept_off="<<pan_off<<",pan_kept_mv="<<pan_mv
+                <<",fallback_frames="<<mv_fallback<<",fallback_pose="<<(fallback_pose?1:0)<<"\n";
+            std::cout<<"GOALD_HISTORY_MV kept off="<<gh_off<<" mv="<<mv_kept<<" frames="<<mv_frames
+                     <<" slab off="<<gm_off<<" mv="<<mv_slab<<" pan off="<<pan_off<<" mv="<<pan_mv
+                     <<" fallback="<<mv_fallback<<"/"<<fallback_pose<<"\n";
+            if (!mv_frames || !(mv_status&1u)) throw std::runtime_error("GoalD MV history: motion vectors never active");
+            if (!(mv_kept>gh_off)) throw std::runtime_error("GoalD MV history: does not keep more thin bars than OFF");
+            if (mv_slab>gm_off+1u) throw std::runtime_error("GoalD MV history: moving object leaves a trail");
+            if (!(pan_mv>pan_off)) throw std::runtime_error("GoalD MV history: no gain on a panning scene");
+            if (mv_fallback!=1u || !fallback_pose) throw std::runtime_error("GoalD MV history: missing MVs did not fall back to head pose");
             frame.config.settings.goald_history=0u;
             m1_geometry.fine_depth_camera=gh_saved_cam;
             if (!(gh_status&2u) || !gh_valid) throw std::runtime_error("GoalD history: not active / never valid");
@@ -443,7 +535,7 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
                 throw std::runtime_error("GoalD history: used while the head turns (#373 lag)");
             if (f2_valid!=0u) throw std::runtime_error("GoalD history: unsubmitted frame reused (review #373 F2)");
             if (f1_valid!=0u) throw std::runtime_error("GoalD history: older slot submitted last was committed (review #373 F1)");
-            std::cout<<"PASS: WARP goal D fovea depth history keeps thin bars, head-still gate, F1/F2 drops\n";
+            std::cout<<"PASS: WARP goal D fovea depth history keeps thin bars, head-still gate, F1/F2 drops, MV mode (62_)\n";
         }
         frame.config.settings=gj_saved_settings;
         m1_depth=gj_saved_depth;
