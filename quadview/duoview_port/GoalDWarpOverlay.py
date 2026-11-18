@@ -252,6 +252,8 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
             m21_fine_depth={tex.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,W,H},jit,lease};
             frame.config.settings.m3_jitter_mode=mode;
             run(*a,false,Route::direct,vertical ? "GoalD jitter sign, y axis" : "GoalD jitter sign, x axis");
+            // The XR caller reports a submitted list; goal D history commits only there (review #372 R1).
+            if (frame.config.settings.goald_history) a->note_fine_depth_enqueued();
             if (!a->goald_m4_hi_active() || a->goald_m4_columns()!=W || a->goald_m4_rows()!=H)
                 throw std::runtime_error("GoalD jitter: field not 1:1 with the fine depth");
             const auto f=gj_field(W,H);
@@ -363,6 +365,7 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
                     auto tex=gj_upload(JL,JT,[&](UINT x,UINT){ const float p=float(x)+.5f; return (p>=x0 && p<x0+24.f) ? .45f : .15f; });
                     m21_fine_depth={tex.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,JL,JT},{0.f,0.f},lease};
                     run(*a,false,Route::direct,"GoalD history, moving wide object");
+                    if (mode) a->note_fine_depth_enqueued(); // submitted (history commit, R1)
                     const auto fv=gj_field(JL,JT);
                     float hi=-1.e9f;
                     for (const float v:fv) hi=(std::max)(hi,v);

@@ -64,9 +64,19 @@ need('[DuoView][GoalD] grid requested=' in log, 'log line')
 need('q.Count = 4;' in comp and 'TIMESTAMP,2);' in comp and 'TIMESTAMP,3);' in comp, 'M4 GPU timestamps')
 # Review #368 fixes (11-18 pm).
 need('s.parity^=1u' not in m1 and 'const uint32_t next_parity=s.parity^1u;' in m1, 'history parity not advanced in write_constants')
-need(comp.count('if (m1_active) m1_.goald_commit_history();') == 1 and
-     comp.index('if (m1_active) m1_.goald_commit_history();') > comp.index('if (!copied) return reject("Direct Native blend succeeded'),
-     'history committed only after the last reject of record_native')
+need(comp.count('m1_.goald_commit_history();') == 1 and
+     comp.index('m1_.goald_commit_history();') > comp.index('void note_fine_depth_enqueued() {'),
+     'history committed only when the XR caller reports the list submitted (review #372 R1)')
+need('{ m1_.goald_drop_frame(); error_=reason; return false; }' in comp and
+     'if (!m1_active || !m1_.goald_pending.active) m1_.goald_drop_frame();' in comp and
+     'm1_.goald_drop_frame(); // goal D: gather never runs the history pass' in comp,
+     'history dropped on reject, gather and frames without a history pass (R2)')
+need('const bool same_mode=s.type==goald_history && s.jitter_negative==goald_jitter_negative;' in m1,
+     'history type / jitter sign change starts fresh (R2)')
+need('if (s.fresh_counters) return;' in comp and 's.fresh_counters=false;' in m1, 'counters valid only after a submitted pass (R7)')
+need('GDThinAt(c,h,previous)' in hlsl and 'float(a+1u)<M6PreviousJitter.y' in hlsl and 'bestC' not in hlsl,
+     'age + thin tested per candidate before max (R3)')
+need('float GDKeptAt(' in hlsl, 'out-of-crop thin neighbours count as far (R4)')
 need('if (!goald_hist_active) goald_history_state().have_previous=false;' in m1, 'history reset when Off')
 need('goald_halo_bg=raster_true && !goald_true_depth;' in m1, 'halo off with true depth')
 need('data.m8_effects[2]=data.m8_effects[3]=0.f;' in m1, 'legacy M8 fill zero in halo mode')

@@ -134,15 +134,20 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     // seed (float bits)/age of parity p, slice 4 = counters. Replaced textures
     // stay alive for 16 committed history frames (more than the XR slots that
     // may still reference them), then are released.
-    // The CPU record (parity, camera, crop, sizes, time) is committed only after
-    // record_native has recorded the frame successfully (goald_commit_history).
+    // The CPU record (parity, camera, crop, sizes, time, type, jitter sign) is
+    // committed only when the caller reports the recorded command list as
+    // submitted (note_fine_depth_enqueued -> goald_commit_history; review #372 R1).
+    // Any rejected frame, gather fallback or frame without a history pass drops
+    // it and invalidates the history (goald_drop_frame; R2).
+    // Assumption (R1/R6, documented, not fence-proven): all XR slots submit on the
+    // game's one direct queue in recording order, fewer than 16 slots in flight.
     struct GoalDHistoryShared {
         ComPtr<ID3D12Resource> texture;
         std::vector<std::pair<uint64_t,ComPtr<ID3D12Resource>>> retired;
         ID3D12Device* device{};
-        uint32_t generation{}, parity{};
+        uint32_t generation{}, parity{}, type{};
         uint64_t commits{};
-        bool have_previous{}, fresh_counters{};
+        bool have_previous{}, fresh_counters{}, jitter_negative{};
         stereo::FineDepthCamera camera{};
         std::array<float,4> crop{};
         std::array<float,3> coefficients{};
@@ -156,7 +161,7 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     bool goald_halo_bg{}; // switch 4 value 3: halo at background depth (m4g_raster)
     uint32_t goald_mode_bits{}; // 1 true depth -> tight (no PSO), 2 halo off (true depth on), 4 halo off (no PSO)
     ComPtr<ID3D12Resource> goald_counter_readback;
-    bool goald_hist_active{}, goald_counter_pending{};
+    bool goald_hist_active{}, goald_counter_pending{}, goald_counter_recorded{};
     uint32_t goald_hist_parity{}, goald_counter_parity{};
     // 0 off/active, 1 needs the 4096 field, 2 pipeline/readback missing, 3 GPU memory, 4 no camera pose
     uint32_t goald_hist_reason{};
@@ -190,23 +195,39 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     }
     // Provisional history record of this frame (committed by goald_commit_history).
     struct GoalDHistoryPending {
-        bool active{};
-        uint32_t parity{}, w{}, h{}, fine_w{}, fine_h{};
+        bool active{}, valid{}, jitter_negative{};
+        uint32_t parity{}, type{}, w{}, h{}, fine_w{}, fine_h{};
         stereo::FineDepthCamera camera{};
         std::array<float,4> crop{};
         std::array<float,3> coefficients{};
         std::chrono::steady_clock::time_point time{};
     } goald_pending{};
+    // Caller submitted this slot's recorded list (one queue, recording order).
     void goald_commit_history() {
         auto& s=goald_history_state();
         if (!goald_pending.active) return;
         const auto& p=goald_pending;
         s.parity=p.parity; s.have_previous=true; s.camera=p.camera; s.crop=p.crop;
         s.coefficients=p.coefficients; s.w=p.w; s.h=p.h; s.fine_w=p.fine_w; s.fine_h=p.fine_h; s.time=p.time;
+        s.type=p.type; s.jitter_negative=p.jitter_negative;
+        // This submitted pass cleared the other parity's counters = the next pass's own (R7).
+        s.fresh_counters=false;
+        if (p.valid) ++goald_hist_valid_frames;
+        if (goald_counter_recorded) { goald_counter_pending=true; goald_counter_recorded=false; }
         ++s.commits;
         s.retired.erase(std::remove_if(s.retired.begin(),s.retired.end(),
             [&](const auto& r){ return s.commits-r.first>=16u; }),s.retired.end());
         goald_pending.active=false;
+    }
+    // Rejected frame / gather fallback / frame without a history pass / diagnostic
+    // skip: nothing of this frame is committed and the next history frame starts
+    // fresh (stale parity, camera or counters can never be reused; R2, R7).
+    void goald_drop_frame() {
+        auto& s=goald_history_state();
+        goald_pending.active=false;
+        goald_counter_recorded=false;
+        s.have_previous=false;
+        s.fresh_counters=true;
     }
     void goald_read_counters() {
         // Caller owns a retired XR command slot; never wait on the GPU.
@@ -297,7 +318,10 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                     #else
                     const auto stale_limit=std::chrono::milliseconds(90);
                     #endif
-                    const bool valid=s.have_previous && s.w==m4_columns && s.h==m4_rows &&
+                    // R2: a history type (All/Thin) or jitter sign change also starts fresh.
+                    const bool same_mode=s.type==goald_history && s.jitter_negative==goald_jitter_negative;
+                    if (s.have_previous && !same_mode) goald_hist_permille.store(0u,std::memory_order_relaxed);
+                    const bool valid=s.have_previous && same_mode && s.w==m4_columns && s.h==m4_rows &&
                         s.fine_w==focus->rect[2] && s.fine_h==focus->rect[3] &&
                         s.coefficients==coefficients && now-s.time<=stale_limit;
                     const uint32_t next_parity=s.parity^1u; // committed only after a successful record
@@ -308,7 +332,6 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                         std::copy(motion.previous_projection.begin(),motion.previous_projection.end(),
                                   data.m6_previous_projection);
                         std::copy(s.crop.begin(),s.crop.end(),data.m6_previous_crop);
-                        ++goald_hist_valid_frames;
                     }
                     goald_flags|=2u|(valid ? 1u : 0u)|(goald_history>=2u ? 64u : 0u); // 64: thin objects only
                     data.m6_previous_rect[0]=next_parity;
@@ -316,7 +339,8 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                     data.m6_previous_jitter[2]=data.m8_distance[0]; // nearer than the M8 near distance: weapon/hands (All: camera-locked; Thin: none)
                     data.m6_previous_jitter[3]=.75f;                // accept radius, field texels
                     auto& p=goald_pending;
-                    p.active=true; p.parity=next_parity; p.camera=cam;
+                    p.active=true; p.valid=valid; p.parity=next_parity; p.camera=cam;
+                    p.type=goald_history; p.jitter_negative=goald_jitter_negative;
                     std::copy(std::begin(data.m2_crop),std::end(data.m2_crop),p.crop.begin());
                     p.coefficients=coefficients; p.w=m4_columns; p.h=m4_rows;
                     p.fine_w=focus->rect[2]; p.fine_h=focus->rect[3]; p.time=now;
@@ -410,9 +434,10 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
     void goald_copy_counters(ID3D12GraphicsCommandList* cmd) {
         auto& s=M1Resources::goald_history_state();
         if (!s.texture || !m1_.goald_counter_readback) return;
-        // First dispatch on a new texture: its own-parity counters started undefined
-        // (the kernel only clears the other parity). Skip that readback.
-        if (s.fresh_counters) { s.fresh_counters=false; return; }
+        // Own-parity counters are only known cleared when the previous history pass
+        // was submitted (goald_commit_history clears fresh_counters); after a new
+        // texture or any dropped frame skip this readback (review #372 R7).
+        if (s.fresh_counters) return;
         transition(cmd,s.texture.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION src{};
         src.pResource=s.texture.Get();
@@ -429,7 +454,7 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         const D3D12_BOX box{0,0,0,4,1,1};
         cmd->CopyTextureRegion(&dst,0,0,0,&src,&box);
         transition(cmd,s.texture.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        m1_.goald_counter_pending=true;
+        m1_.goald_counter_recorded=true; // read back only once this list is submitted
         m1_.goald_counter_parity=m1_.goald_hist_parity;
     }
     void goald_report_status(uint32_t depth_grid, bool m1_active, bool history) {
@@ -564,13 +589,38 @@ def compositor_backend(src):
                '        m7_current_uav_=desc_cpu; goald_hist_bound_=0u;\n',
                'goal D u6 descriptor')
     src = once(src, '    void update_timing(bool timed, bool direct_xr) {', COMPOSITOR_METHODS, 'goal D methods')
-    # Switch 2: commit the history record only once this frame is fully recorded.
+    # Switch 2 (review #372 R1/R2): the history record is committed only when the XR
+    # caller reports the recorded list as submitted (note_fine_depth_enqueued); every
+    # reject, gather fallback, diagnostic skip or frame without a history pass drops it.
+    src = once(src,
+               '        m1_.fovea_depth_lease.reset();\n        error_.clear();\n        last_native_direct_xr_=false;\n'
+               '        const auto reject=[this](const char* reason) { error_=reason; return false; };\n',
+               '        m1_.fovea_depth_lease.reset();\n        error_.clear();\n        last_native_direct_xr_=false;\n'
+               '        m1_.goald_pending.active=false; m1_.goald_counter_recorded=false; // goal D: nothing pending yet\n'
+               '        const auto reject=[this](const char* reason) { m1_.goald_drop_frame(); error_=reason; return false; };\n',
+               'goal D reject drops history')
     src = once(src,
                '        next_fine_depth_={};\n        return true;\n    }\n    // Fallback for capture resources',
                '        next_fine_depth_={};\n'
-               '        if (m1_active) m1_.goald_commit_history(); // goal D: history record follows recorded frames only\n'
+               '        // goal D: a frame with a history pass commits at submission; any other frame resets history\n'
+               '        if (!m1_active || !m1_.goald_pending.active) m1_.goald_drop_frame();\n'
                '        return true;\n    }\n    // Fallback for capture resources',
-               'goal D history commit')
+               'goal D history drop without pass')
+    src = once(src,
+               '        const auto reject = [this](const char* reason) { error_ = reason; return false; };\n',
+               '        m1_.goald_drop_frame(); // goal D: gather never runs the history pass\n'
+               '        const auto reject = [this](const char* reason) { error_ = reason; return false; };\n',
+               'goal D gather drops history')
+    src = once(src,
+               '    void note_fine_depth_enqueued() {\n',
+               '    void note_fine_depth_enqueued() {\n'
+               '        m1_.goald_commit_history(); // goal D: the recorded list was submitted\n',
+               'goal D history commit at submission')
+    src = once(src,
+               "                    m4_probe_skip=(stage[0]=='s');\n",
+               "                    m4_probe_skip=(stage[0]=='s');\n"
+               "                    if(m4_probe_skip) m1_.goald_drop_frame(); // goal D: no history pass this frame (R1)\n",
+               'goal D diagnostic skip drops history')
     src = once(src,
                '    D3D12_CPU_DESCRIPTOR_HANDLE m2_fovea_srv_{}, m6_previous_srv_{}, m7_current_srv_{}, m7_current_uav_{};\n',
                '    D3D12_CPU_DESCRIPTOR_HANDLE m2_fovea_srv_{}, m6_previous_srv_{}, m7_current_srv_{}, m7_current_uav_{};\n'

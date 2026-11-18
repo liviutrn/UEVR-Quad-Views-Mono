@@ -213,6 +213,19 @@ float2 GDPreviousCell(float2 local, float inverseDepth, out bool ok) {
     return uv*float2(M4Grid.xy)-.5;
 }
 
+// Kept depth at c of slice s; outside the field (= outside the fovea crop) counts as
+// far (0), so a thin object touching the crop edge is still thin (review #372 R4).
+float GDKeptAt(int2 c, uint s) {
+    return (all(c>=int2(0,0)) && all(c<int2(M4Grid.xy))) ? asfloat(GDHistory[uint3(uint2(c),s)]) : 0.0;
+}
+// THIN: kept depth h at c is narrower than ~5 texels across x or y (both neighbours
+// 3 texels away are farther by more than 3%, the same tolerance as the keep test).
+bool GDThinAt(int2 c, float h, uint s) {
+    const float lo=h*.97;
+    return (GDKeptAt(c-int2(3,0),s)<lo && GDKeptAt(c+int2(3,0),s)<lo) ||
+           (GDKeptAt(c-int2(0,3),s)<lo && GDKeptAt(c+int2(0,3),s)<lo);
+}
+
 [numthreads(8,8,1)]
 void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint gi:SV_GroupIndex) {
     const uint parity=M6PreviousRect.x&1u;
@@ -231,7 +244,6 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
             const float lockDepth=M6PreviousJitter.z;
             float best=0.0;
             uint bestAge=0u;
-            int2 bestC=int2(0,0);
             // Two history types, chosen in game (flag 64):
             //  ALL (Liviu, 56_ G): all fovea depth; weapon/hands range (>= lockDepth)
             //   follows the camera (same screen position).
@@ -256,34 +268,27 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
                         if(all(c>=int2(0,0)) && all(c<int2(M4Grid.xy))) {
                             const float h=asfloat(GDHistory[uint3(uint2(c),previous)]);
                             const bool locked=hasLock && h>=lockDepth;
-                            if(h>max(cur,best) && locked==lockedWin) {
+                            // Review #372 R3: every test (keep margin, position, age, THIN)
+                            // runs per candidate BEFORE it can become the best, so an
+                            // ineligible nearer candidate never hides an eligible farther one.
+                            if(h>best && cur<h*.97 && locked==lockedWin) {
                                 bool ok=true;
                                 const float2 q=locked ? lockedCenter : GDPreviousCell(local,h,ok);
                                 if(ok && all(abs(q-float2(c))<=radius)) {
-                                    best=h; bestC=c;
-                                    bestAge=GDHistory[uint3(uint2(c),previous+1u)];
+                                    const uint a=GDHistory[uint3(uint2(c),previous+1u)];
+                                    if(float(a+1u)<M6PreviousJitter.y && (!thinOnly || GDThinAt(c,h,previous))) {
+                                        best=h; bestAge=a;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            [branch] if(thinOnly && best>0.0) {
-                const int2 lim=int2(M4Grid.xy)-1;
-                const float lo=best*.97;
-                const bool thinX=asfloat(GDHistory[uint3(uint2(clamp(bestC-int2(3,0),int2(0,0),lim)),previous)])<lo &&
-                                 asfloat(GDHistory[uint3(uint2(clamp(bestC+int2(3,0),int2(0,0),lim)),previous)])<lo;
-                const bool thinY=asfloat(GDHistory[uint3(uint2(clamp(bestC-int2(0,3),int2(0,0),lim)),previous)])<lo &&
-                                 asfloat(GDHistory[uint3(uint2(clamp(bestC+int2(0,3),int2(0,0),lim)),previous)])<lo;
-                if(!thinX && !thinY) best=0.0;
-            }
-            [branch] if(best>0.0 && cur<best*.97) {
-                const uint nextAge=bestAge+1u;
-                if(float(nextAge)<M6PreviousJitter.y) {
-                    outDepth=best;
-                    age=nextAge;
-                    used=1u;
-                }
+            [branch] if(best>0.0) {
+                outDepth=best;
+                age=bestAge+1u;
+                used=1u;
             }
         }
         GDHistory[uint3(id.xy,2u*parity)]=asuint(outDepth);
