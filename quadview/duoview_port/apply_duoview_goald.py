@@ -54,6 +54,8 @@ def shader_raster(src):
     body = Path(__file__).with_name('DuoViewGoalDRaster.hlsl').read_text(encoding='utf-8')
     if not body.endswith('\n'):
         body += '\n'
+    helper, body = body.split('// ---- GOALD_RASTER_BODY\n')
+    src = once(src, '\nfloat2 M1PullUv(', f'\n#ifdef {TAG}\n{helper}#endif\nfloat2 M1PullUv(', 'goal D raster helper')
     anchor = '        uv.x=clamp(root,lo,hi);\n'
     return once(src, anchor, anchor + f'#ifdef {TAG}\n{body}#endif\n', 'goal D raster root choice')
 
@@ -114,7 +116,7 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
         heap.Type=D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC t{};
         t.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        t.Width=w; t.Height=h; t.DepthOrArraySize=2; t.MipLevels=1; // one slice per eye (switch 3)
+        t.Width=w; t.Height=h; t.DepthOrArraySize=3; t.MipLevels=1; // slices 0/1 per eye (switch 3), 2 raw seed (switch 4 halo at background depth)
         t.Format=DXGI_FORMAT_R32_FLOAT; t.SampleDesc.Count=1;
         t.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         if (FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&t,
@@ -147,6 +149,7 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     ComPtr<ID3D12PipelineState> m4g_history, m4g_condition_h;
     ComPtr<ID3D12PipelineState> m4g_raster; // switch 3 true depth: front-most root in the fovea
     bool goald_true_depth{};
+    bool goald_halo_bg{}; // switch 4 value 3: halo at background depth (m4g_raster)
     ComPtr<ID3D12Resource> goald_counter_readback;
     bool goald_hist_active{}, goald_counter_pending{};
     uint32_t goald_hist_parity{}, goald_counter_parity{};
@@ -241,6 +244,7 @@ M1_FIELD_CHOICE = r'''            const float fw=float(focus->rect[2]), fh=float
 M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (4096 kernels only; the M6
         // slots are unused under Stereo V2, so Off constants stay all-zero there).
         goald_true_depth=false;
+        goald_halo_bg=false;
         if (m4_active && m4_hi_active && focus) {
             const bool raster_true=bool(m4g_raster);
             data.m6_previous_jitter[0]=goald_jitter_negative ? -1.f : 1.f;
@@ -291,7 +295,10 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                 }
             }
             data.m6_previous_rect[1]=goald_flags;
-            if (goald_fill>0u) // switch 4: mirror background fill inside the fovea crop
+            if (goald_fill==3u) { // switch 4 "halo at background depth": raster PSO only, no M8 fill
+                goald_halo_bg=raster_true;
+                if (raster_true) data.m6_previous_rect[1]|=32u;
+            } else if (goald_fill>0u) // switch 4: mirror background fill inside the fovea crop
                 data.m8_effects[2]=data.m8_effects[3]=goald_fill==1u ? 1.f : .5f;
         }
 '''
@@ -494,7 +501,7 @@ def compositor_backend(src):
                '        timing_pending_ = false;\n        goald_m4_pending_ = false;\n    }\n', 'goal D timing consumed')
     src = once(src, 'q.Count = 2;', 'q.Count = 4;', 'goal D query count')
     src = once(src, 'cmd->SetPipelineState(m1_active ? m1_.raster.Get() : native_pipeline_.Get());',
-               'cmd->SetPipelineState(m1_active ? (m1_.goald_true_depth ? m1_.m4g_raster.Get() : m1_.raster.Get()) : native_pipeline_.Get());',
+               'cmd->SetPipelineState(m1_active ? ((m1_.goald_true_depth || m1_.goald_halo_bg) ? m1_.m4g_raster.Get() : m1_.raster.Get()) : native_pipeline_.Get());',
                'goal D raster PSO')
     src = once(src, 'buffer.Width = sizeof(UINT64) * 2;', 'buffer.Width = sizeof(UINT64) * 4;', 'goal D readback size')
     # Remember the setup descriptors so the field can be swapped per slot.
@@ -578,7 +585,7 @@ def config(src):
                '    out.goald_history=requested.goald_history ? 1u : 0u;\n'
                '    out.goald_jitter_negative=requested.goald_jitter_negative ? 1u : 0u;\n'
                '    out.goald_one_sided=(std::min)(requested.goald_one_sided,3u);\n'
-               '    out.goald_fill=(std::min)(requested.goald_fill,2u);\n',
+               '    out.goald_fill=(std::min)(requested.goald_fill,3u);\n',
                'goal D settings sanitize')
     if '#include <atomic>' not in src:
         src = once(src, '#include <optional>\n', '#include <optional>\n#include <atomic>\n', 'goal D atomic include')
@@ -591,7 +598,7 @@ def vr_hpp(src):
                '    static const inline std::vector<std::string> s_duo_goald_grids{ "1024 (baseline)", "4096 (goal D test)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_offon{ "Off (baseline)", "On (goal D test)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_jitter{ "+ (current)", "- (flipped)" };\n'
-               '    static const inline std::vector<std::string> s_duo_goald_fill{ "Off (baseline)", "Mirror, full", "Mirror, half" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_fill{ "Off (baseline)", "Mirror, full", "Mirror, half", "Halo at background depth (use with 3 Off)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_ramp{ "Off (baseline)", "One-sided, soft", "One-sided, tight", "True depth (no ramp)" };\n'
                '    static const inline std::vector<std::string> s_duo_m3_jitter_modes{',
                'goal D grid names')
@@ -631,7 +638,7 @@ GOALD_MENU = r'''                    m_duo_m8_far_m->draw("Depth transition ends
                     }
                     m_duo_goald_jitter->draw("Fovea depth jitter direction");
                     m_duo_goald_one_sided->draw("3. Depth ramp next to near objects (true depth = background keeps its own depth; use with 4)");
-                    m_duo_goald_fill->draw("4. Background fill in the fovea (best together with 3)");
+                    m_duo_goald_fill->draw("4. Background fill in the fovea (mirror: best with 3; halo at background depth: soft look, 3 Off)");
 '''
 
 
@@ -644,7 +651,7 @@ def vr_cpp(src):
                '        .goald_history=m_duo_goald_history->value()==1 ? 1u : 0u,\n'
                '        .goald_jitter_negative=m_duo_goald_jitter->value()==1 ? 1u : 0u,\n'
                '        .goald_one_sided=uint32_t((std::clamp)(m_duo_goald_one_sided->value(),0,3)),\n'
-               '        .goald_fill=uint32_t((std::clamp)(m_duo_goald_fill->value(),0,2))};',
+               '        .goald_fill=uint32_t((std::clamp)(m_duo_goald_fill->value(),0,3))};',
                'goal D grid settings')
     src = once(src, '        current.m2_right_sharpen==candidate.m2_right_sharpen) return;',
                '        current.m2_right_sharpen==candidate.m2_right_sharpen &&\n'

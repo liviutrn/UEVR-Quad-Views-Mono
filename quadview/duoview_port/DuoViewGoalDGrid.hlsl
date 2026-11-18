@@ -15,7 +15,8 @@
 // Goal D controls (CPU fills them only while the 4096 path is active; the M6
 // slots are otherwise unused under Stereo V2 and stay zero):
 //   M6PreviousRect.x   history parity (slice pair written this frame)
-//   M6PreviousRect.y   bits: 1 history valid, 2 history on, 4 one-sided ramp, 8 tight ramp, 16 true depth (no ramp)
+//   M6PreviousRect.y   bits: 1 history valid, 2 history on, 4 one-sided ramp, 8 tight ramp, 16 true depth (no ramp),
+//                      32 halo at background depth (slice 2 = raw knee'd seed, no envelope; read by the raster)
 //   M6PreviousJitter.x fine jitter sign (< 0 flips the fine jitter direction)
 //   M6PreviousJitter.y K: history not re-confirmed for K frames is dropped
 //   M6PreviousJitter.z camera-locked range: inverse depth >= this follows the camera
@@ -71,7 +72,9 @@ void GDHorizontal(uint row, uint lane, bool fromField) {
         const bool tight0=(GDFlags()&12u)==12u || (GDFlags()&16u)!=0u;
         if(x<w) {
             const float raw=fromField ? M4FoveaConditioned[uint3(x,row,0u)] : GDSeedRaw(uint2(x,row));
-            seed[t0]=tight0 ? GDKneeSeed(raw) : GDMapSeed(raw);
+            const float knee0=GDKneeSeed(raw);
+            seed[t0]=tight0 ? knee0 : M8V2Map(knee0);
+            if((GDFlags()&32u)!=0u) M4FoveaConditioned[uint3(x,row,2u)]=knee0; // switch 4: raw depth for the raster
         }
     }
     const bool oneSided=(GDFlags()&4u)!=0u;
