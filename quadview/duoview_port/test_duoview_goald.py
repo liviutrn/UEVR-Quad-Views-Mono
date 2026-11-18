@@ -29,7 +29,7 @@ def need(cond, what):
 off = strip_goald(hlsl)
 for token in ('CSConditionM4G', 'GDRow', 'DUOVIEW_GOALD_GRID'):
     need(token not in off, f'Off shader text contains {token}')
-need(hlsl.count('#ifdef DUOVIEW_GOALD_GRID') == 1, 'exactly one goal D shader block')
+need(hlsl.count('#ifdef DUOVIEW_GOALD_GRID') == 2, 'goal D shader blocks: conditioning + raster root choice')
 need('void CSConditionM4G(' in hlsl and 'void CSConditionM4GVertical(' in hlsl, 'goal D kernels present')
 # Groupshared budget of the new kernels: one 4096-float row only (16 KiB).
 block = hlsl.split('#ifdef DUOVIEW_GOALD_GRID', 1)[1].split('#endif', 1)[0]

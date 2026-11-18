@@ -70,6 +70,8 @@ def main():
                 # Goal D switch 2: fovea depth history pass + horizontal pass reading its seed.
                 ("CSGoalDHistory","cs_5_0","m4g_history_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION","DUOVIEW_GOALD_GRID")),
                 ("CSConditionM4GH","cs_5_0","m4g_condition_h_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION","DUOVIEW_GOALD_GRID")),
+                # Goal D switch 3 true depth: raster with front-most root choice in the fovea.
+                ("PSNativeMain","ps_5_0","m4g_raster_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_M1_RASTER","DUOVIEW_GOALD_GRID")),
             )
     with tempfile.TemporaryDirectory(prefix="duoview-b40-") as temp:
         for entry,profile,name,source,define in shaders:

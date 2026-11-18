@@ -50,6 +50,14 @@ def shader(src):
                 'end of the conditioning block')
 
 
+def shader_raster(src):
+    body = Path(__file__).with_name('DuoViewGoalDRaster.hlsl').read_text(encoding='utf-8')
+    if not body.endswith('\n'):
+        body += '\n'
+    anchor = '        uv.x=clamp(root,lo,hi);\n'
+    return once(src, anchor, anchor + f'#ifdef {TAG}\n{body}#endif\n', 'goal D raster root choice')
+
+
 def strip_goald(src):
     out, inside = [], False
     for line in src.splitlines(keepends=True):
@@ -137,6 +145,8 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     };
     static GoalDHistoryShared& goald_history_state() { static GoalDHistoryShared s; return s; }
     ComPtr<ID3D12PipelineState> m4g_history, m4g_condition_h;
+    ComPtr<ID3D12PipelineState> m4g_raster; // switch 3 true depth: front-most root in the fovea
+    bool goald_true_depth{};
     ComPtr<ID3D12Resource> goald_counter_readback;
     bool goald_hist_active{}, goald_counter_pending{};
     uint32_t goald_hist_parity{}, goald_counter_parity{};
@@ -193,6 +203,11 @@ M1_PSO = r'''        if(FAILED(device->CreateComputePipelineState(&compute,IID_P
         compute.CS={m4g_vertical_bytecode,sizeof(m4g_vertical_bytecode)};
         if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_vertical)))) m4g_vertical.Reset();
         // Goal D switch 2: optional; failure only reports "history not active".
+        {   // Goal D switch 3 true depth: raster variant (same root signature/state)
+            auto gd_graphics=graphics;
+            gd_graphics.PS={m4g_raster_bytecode,sizeof(m4g_raster_bytecode)};
+            if(FAILED(device->CreateGraphicsPipelineState(&gd_graphics,IID_PPV_ARGS(&m4g_raster)))) m4g_raster.Reset();
+        }
         compute.CS={m4g_history_bytecode,sizeof(m4g_history_bytecode)};
         if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_history)))) m4g_history.Reset();
         compute.CS={m4g_condition_h_bytecode,sizeof(m4g_condition_h_bytecode)};
@@ -225,9 +240,12 @@ M1_FIELD_CHOICE = r'''            const float fw=float(focus->rect[2]), fh=float
 
 M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (4096 kernels only; the M6
         // slots are unused under Stereo V2, so Off constants stay all-zero there).
+        goald_true_depth=false;
         if (m4_active && m4_hi_active && focus) {
+            const bool raster_true=bool(m4g_raster);
             data.m6_previous_jitter[0]=goald_jitter_negative ? -1.f : 1.f;
-            uint32_t goald_flags=goald_one_sided ? 4u : 0u;
+            uint32_t goald_flags=goald_one_sided==1u ? 4u : goald_one_sided==2u ? 12u : goald_one_sided>=3u ? (raster_true ? 16u : 12u) : 0u;
+            goald_true_depth=goald_one_sided>=3u && raster_true;
             if (goald_history) {
                 auto& s=goald_history_state();
                 const auto& cam=geometry.fine_depth_camera;
@@ -288,7 +306,7 @@ def m1_backend(src):
     src = once(src, '                         float eye_near,float eye_far) {',
                '                         float eye_near,float eye_far,uint32_t depth_grid=1024u,\n'
                '                         bool goald_history=false,bool goald_jitter_negative=false,\n'
-               '                         bool goald_one_sided=false,uint32_t goald_fill=0u) {',
+               '                         uint32_t goald_one_sided=0u,uint32_t goald_fill=0u) {',
                'goal D grid argument')
     src = once(src, '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n',
                '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n'
@@ -401,7 +419,7 @@ def compositor_backend(src):
     src = once(src, '                settings.m9_eye_near,settings.m9_eye_far);\n',
                '                settings.m9_eye_near,settings.m9_eye_far,goald_grid(settings),\n'
                '                settings.goald_history!=0u,settings.goald_jitter_negative!=0u,\n'
-               '                settings.goald_one_sided!=0u,settings.goald_fill);\n'
+               '                settings.goald_one_sided,settings.goald_fill);\n'
                '        if (m1_active) { goald_bind_m4_field(device); goald_bind_history(device); }\n'
                '        goald_report_status(goald_grid(settings),m1_active,settings.goald_history!=0u);\n',
                'goal D write_constants argument')
@@ -475,6 +493,9 @@ def compositor_backend(src):
     src = once(src, '        timing_pending_ = false;\n    }\n',
                '        timing_pending_ = false;\n        goald_m4_pending_ = false;\n    }\n', 'goal D timing consumed')
     src = once(src, 'q.Count = 2;', 'q.Count = 4;', 'goal D query count')
+    src = once(src, 'cmd->SetPipelineState(m1_active ? m1_.raster.Get() : native_pipeline_.Get());',
+               'cmd->SetPipelineState(m1_active ? (m1_.goald_true_depth ? m1_.m4g_raster.Get() : m1_.raster.Get()) : native_pipeline_.Get());',
+               'goal D raster PSO')
     src = once(src, 'buffer.Width = sizeof(UINT64) * 2;', 'buffer.Width = sizeof(UINT64) * 4;', 'goal D readback size')
     # Remember the setup descriptors so the field can be swapped per slot.
     src = once(src,
@@ -556,7 +577,7 @@ def config(src):
                '    out.goald_depth_grid=requested.goald_depth_grid>=4096u ? 4096u : 1024u;\n'
                '    out.goald_history=requested.goald_history ? 1u : 0u;\n'
                '    out.goald_jitter_negative=requested.goald_jitter_negative ? 1u : 0u;\n'
-               '    out.goald_one_sided=requested.goald_one_sided ? 1u : 0u;\n'
+               '    out.goald_one_sided=(std::min)(requested.goald_one_sided,3u);\n'
                '    out.goald_fill=(std::min)(requested.goald_fill,2u);\n',
                'goal D settings sanitize')
     if '#include <atomic>' not in src:
@@ -571,6 +592,7 @@ def vr_hpp(src):
                '    static const inline std::vector<std::string> s_duo_goald_offon{ "Off (baseline)", "On (goal D test)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_jitter{ "+ (current)", "- (flipped)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_fill{ "Off (baseline)", "Mirror, full", "Mirror, half" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_ramp{ "Off (baseline)", "One-sided, soft", "One-sided, tight", "True depth (no ramp)" };\n'
                '    static const inline std::vector<std::string> s_duo_m3_jitter_modes{',
                'goal D grid names')
     src = once(src,
@@ -579,7 +601,7 @@ def vr_hpp(src):
                '    const ModCombo::Ptr m_duo_goald_grid{ModCombo::create(generate_name("DuoFoveaDepthGridSize"),s_duo_goald_grids,0)};\n'
                '    const ModCombo::Ptr m_duo_goald_history{ModCombo::create(generate_name("DuoFoveaDepthHistory"),s_duo_goald_offon,0)};\n'
                '    const ModCombo::Ptr m_duo_goald_jitter{ModCombo::create(generate_name("DuoFoveaJitterDirection"),s_duo_goald_jitter,0)};\n'
-               '    const ModCombo::Ptr m_duo_goald_one_sided{ModCombo::create(generate_name("DuoOneSidedRamp"),s_duo_goald_offon,0)};\n'
+               '    const ModCombo::Ptr m_duo_goald_one_sided{ModCombo::create(generate_name("DuoOneSidedRamp"),s_duo_goald_ramp,0)};\n'
                '    const ModCombo::Ptr m_duo_goald_fill{ModCombo::create(generate_name("DuoFoveaBackgroundFill"),s_duo_goald_fill,0)};\n',
                'goal D grid control')
     src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, *m_duo_goald_history, *m_duo_goald_jitter, *m_duo_goald_one_sided, *m_duo_goald_fill, ', 'goal D grid persisted')
@@ -608,7 +630,7 @@ GOALD_MENU = r'''                    m_duo_m8_far_m->draw("Depth transition ends
                         else ImGui::TextWrapped("Fovea depth history: %s", uevr::duoview::duo_goald_history_reason_text((gh>>2)&15u));
                     }
                     m_duo_goald_jitter->draw("Fovea depth jitter direction");
-                    m_duo_goald_one_sided->draw("3. One-sided ramp (ramp only on the side each eye needs)");
+                    m_duo_goald_one_sided->draw("3. Depth ramp next to near objects (true depth = background keeps its own depth; use with 4)");
                     m_duo_goald_fill->draw("4. Background fill in the fovea (best together with 3)");
 '''
 
@@ -621,7 +643,7 @@ def vr_cpp(src):
                '        .goald_depth_grid=m_duo_goald_grid->value()==1 ? 4096u : 1024u,\n'
                '        .goald_history=m_duo_goald_history->value()==1 ? 1u : 0u,\n'
                '        .goald_jitter_negative=m_duo_goald_jitter->value()==1 ? 1u : 0u,\n'
-               '        .goald_one_sided=m_duo_goald_one_sided->value()==1 ? 1u : 0u,\n'
+               '        .goald_one_sided=uint32_t((std::clamp)(m_duo_goald_one_sided->value(),0,3)),\n'
                '        .goald_fill=uint32_t((std::clamp)(m_duo_goald_fill->value(),0,2))};',
                'goal D grid settings')
     src = once(src, '        current.m2_right_sharpen==candidate.m2_right_sharpen) return;',
@@ -672,6 +694,7 @@ def main():
     hlsl = a.shaders / 'DuoViewM1Stereo.hlsl'
     original = hlsl.read_bytes().decode('utf-8')
     edit(hlsl, shader)
+    edit(hlsl, shader_raster)
     if strip_goald(hlsl.read_bytes().decode('utf-8')) != original:  # exact, line endings included
         raise RuntimeError('Off shader text changed outside DUOVIEW_GOALD_GRID blocks')
     edit(vr / 'DuoViewM1D3D12.hpp', m1_backend)

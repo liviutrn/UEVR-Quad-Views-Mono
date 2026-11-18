@@ -15,7 +15,7 @@
 // Goal D controls (CPU fills them only while the 4096 path is active; the M6
 // slots are otherwise unused under Stereo V2 and stay zero):
 //   M6PreviousRect.x   history parity (slice pair written this frame)
-//   M6PreviousRect.y   bits: 1 history valid, 2 history on, 4 one-sided ramp
+//   M6PreviousRect.y   bits: 1 history valid, 2 history on, 4 one-sided ramp, 8 tight ramp, 16 true depth (no ramp)
 //   M6PreviousJitter.x fine jitter sign (< 0 flips the fine jitter direction)
 //   M6PreviousJitter.y K: history not re-confirmed for K frames is dropped
 //   M6PreviousJitter.z camera-locked range: inverse depth >= this follows the camera
@@ -42,20 +42,24 @@ float GDSeedRaw(uint2 p) {
     return fine;
 }
 
-float GDMapSeed(float fine) {
+float GDKneeSeed(float fine) {
     const float knee=M1Depth.w;
     float nearDepth=fine;
     if(knee>0.0 && nearDepth>knee) {
         const float excess=nearDepth-knee;
         nearDepth=knee+excess/(1.0+excess/knee);
     }
-    return M8V2Map(knee>0.0 ? nearDepth : min(nearDepth,M1Filter.y));
+    return knee>0.0 ? nearDepth : min(nearDepth,M1Filter.y);
 }
+float GDMapSeed(float fine) { return M8V2Map(GDKneeSeed(fine)); }
 
 // Horizontal envelope of one field row. fromField: the seed was already
 // written to slice 0 by the history pass (switch 2). Switch 3 (one-sided):
 // per eye, keep the ramp only on the side the pull warp needs for a unique
 // root (k*d' > 0, the M3 fold side) and keep the raw step on the other side.
+// Tight (flag 8, with one-sided): that ramp is the narrowest the warp allows
+// without folding (96% of the fold limit, on true inverse depth, no V2 map),
+// so background next to near objects keeps (almost) its own depth.
 void GDHorizontal(uint row, uint lane, bool fromField) {
     const uint w=M4Grid.x;
     // Uniform early-outs (constant-buffer or group values only).
@@ -64,13 +68,19 @@ void GDHorizontal(uint row, uint lane, bool fromField) {
     [unroll] for(uint t0=0u;t0<GD_TILES;++t0) {
         const uint x=GD_LANES*t0+lane;
         seed[t0]=0.0;
-        if(x<w) seed[t0]=GDMapSeed(fromField ? M4FoveaConditioned[uint3(x,row,0u)] : GDSeedRaw(uint2(x,row)));
+        const bool tight0=(GDFlags()&12u)==12u || (GDFlags()&16u)!=0u;
+        if(x<w) {
+            const float raw=fromField ? M4FoveaConditioned[uint3(x,row,0u)] : GDSeedRaw(uint2(x,row));
+            seed[t0]=tight0 ? GDKneeSeed(raw) : GDMapSeed(raw);
+        }
     }
     const bool oneSided=(GDFlags()&4u)!=0u;
+    const bool tight=(GDFlags()&12u)==12u;
+    const bool trueDepth=(GDFlags()&16u)!=0u; // switch 3 "true depth": no ramp at all (raster takes the front-most root)
     const uint eyes=oneSided ? 2u : 1u;
     const float limit=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
-    const float pen=min(M1Filter.x*M4Flags.y,M8SafeLimit());
-    const float mappedLimit=M8V2Map(limit);
+    const float pen=tight ? .96*M8SafeLimit() : min(M1Filter.x*M4Flags.y,M8SafeLimit());
+    const float mappedLimit=tight ? limit : M8V2Map(limit);
     [loop] for(uint eye=0u;eye<eyes;++eye) {
         GroupMemoryBarrierWithGroupSync();
         [unroll] for(uint t1=0u;t1<GD_TILES;++t1) {
@@ -79,7 +89,7 @@ void GDHorizontal(uint row, uint lane, bool fromField) {
         }
         GroupMemoryBarrierWithGroupSync();
         const int fold=M1Eye[eye]>=0.0 ? 1 : -1;
-        for(uint step=1u;step<w && float(step-1u)*pen<mappedLimit;step*=2u) {
+        for(uint step=1u;!trueDepth && step<w && float(step-1u)*pen<mappedLimit;step*=2u) {
             float next[GD_TILES];
             [unroll] for(uint t=0u;t<GD_TILES;++t) {
                 const uint x=GD_LANES*t+lane;
@@ -106,7 +116,7 @@ void GDHorizontal(uint row, uint lane, bool fromField) {
         [unroll] for(uint t3=0u;t3<GD_TILES;++t3) {
             const uint x=GD_LANES*t3+lane;
             if(x<w) {
-                const float v=M8V2Unmap(GDRow[x]);
+                const float v=(tight || trueDepth) ? GDRow[x] : M8V2Unmap(GDRow[x]);
                 M4FoveaConditioned[uint3(x,row,eye)]=v;
                 if(!oneSided) M4FoveaConditioned[uint3(x,row,1u)]=v;
             }
@@ -131,7 +141,8 @@ void CSConditionM4GH(uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
 void CSConditionM4GVertical(uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
     const uint h=M4Grid.y, col=group.x;
     if(col>=M4Grid.x || h==0u || h>4096u) return;
-    const float pv=M1Filter.z*M4Flags.z;
+    // Tight one-sided ramp: no vertical spreading (the warp is horizontal only).
+    const float pv=((GDFlags()&12u)==12u || (GDFlags()&16u)!=0u) ? 0.0 : M1Filter.z*M4Flags.z;
     const float limit=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
     const uint slices=(GDFlags()&4u)!=0u ? 2u : 1u;
     [loop] for(uint slice=0u;slice<slices;++slice) {
