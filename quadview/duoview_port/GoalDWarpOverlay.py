@@ -327,6 +327,7 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
             for (UINT i=0;i<JN;++i) thin+=bar_w[i]<1.5f ? 1u : 0u;
             auto gh_kept=[&](UINT mode) { // 0 off, 1 on (all fovea depth; Thin removed after #373)
                 frame.config.settings.goald_history=mode;
+                frame.config.settings.goald_confirm_texels=0u; // confirm gate measured separately below
                 UINT present=0u;
                 for (UINT round=0;round<3u;++round) for (UINT p=0;p<JP;++p) {
                     const auto m=gj_frame(false,0u,phase[p]);
@@ -356,8 +357,9 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
             // Moving WIDE object, static camera (review #368: trails). A 24-texel slab
             // moves 4 texels per frame; ON must not keep it where it was (near texels
             // on the middle row must equal OFF after 6 frames).
-            auto gm_near=[&](UINT mode) {
+            auto gm_near=[&](UINT mode,UINT confirm) {
                 frame.config.settings.goald_history=mode;
+                frame.config.settings.goald_confirm_texels=confirm;
                 frame.config.settings.m3_jitter_mode=0u;
                 UINT count=0u;
                 for (UINT f=0;f<6u;++f) {
@@ -375,10 +377,13 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
                 }
                 return count;
             };
-            const UINT gm_off=gm_near(0u), gm_on=gm_near(1u);
+            const UINT gm_off=gm_near(0u,0u), gm_on=gm_near(1u,0u), gm_c2=gm_near(1u,2u);
             std::ofstream("goald_history_result.txt",std::ios::app)
-                <<"GOALD_HISTORY_MOVING,near_texels_off="<<gm_off<<",near_texels_all="<<gm_on<<"\n";
-            std::cout<<"GOALD_HISTORY_MOVING near texels off="<<gm_off<<" all="<<gm_on<<"\n";
+                <<"GOALD_HISTORY_MOVING,near_texels_off="<<gm_off<<",near_texels_all="<<gm_on<<",near_texels_confirm2="<<gm_c2<<"\n";
+            std::cout<<"GOALD_HISTORY_MOVING near texels off="<<gm_off<<" all="<<gm_on<<" confirm2="<<gm_c2<<"\n";
+            // Confirm gate (#373 trails behind hands / moving objects): at most ~2 texels of trail.
+            if (gm_c2>gm_off+3u) throw std::runtime_error("GoalD history confirm gate: moving object still leaves a trail");
+            frame.config.settings.goald_confirm_texels=2u; // production default for the gate/F1/F2 checks
             // ---- #373 head-still gate + review #373 F1/F2. Observable: valid history frames
             // (committed frames that USED history). Static bars, production jitter mode 0.
             frame.config.settings.goald_history=1u;

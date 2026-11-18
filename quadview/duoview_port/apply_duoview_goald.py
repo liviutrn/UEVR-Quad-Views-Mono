@@ -390,7 +390,7 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                         goald_still_permille.store((old*31u+(still ? 1000u : 0u))/32u,std::memory_order_relaxed);
                     }
                     const bool use=valid && still;
-                    goald_flags|=2u|(use ? 1u : 0u);
+                    goald_flags|=2u|(use ? 1u : 0u)|((goald_confirm_texels&15u)<<8u); // bits 8-11: confirm radius
                     data.m6_previous_rect[0]=next_parity;
                     data.m6_previous_jitter[1]=4.f;           // K=4
                     data.m6_previous_jitter[2]=search_near;   // translation search range (no camera lock)
@@ -437,7 +437,8 @@ def m1_backend(src):
                '                         float eye_near,float eye_far,uint32_t depth_grid=1024u,\n'
                '                         uint32_t goald_history=0u,bool goald_jitter_negative=false,\n'
                '                         uint32_t goald_one_sided=0u,uint32_t goald_fill=0u,\n'
-               '                         float goald_motion_limit=2.f,float goald_halo_near_m=1.f,float goald_halo_fade_m=3.f) {',
+               '                         float goald_motion_limit=2.f,float goald_halo_near_m=1.f,float goald_halo_fade_m=3.f,\n'
+               '                         uint32_t goald_confirm_texels=0u) {',
                'goal D grid argument')
     src = once(src, '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n',
                '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n'
@@ -524,6 +525,42 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         m1_.goald_counter_parity=m1_.goald_hist_parity;
         m1_.goald_counter_epoch=s.epoch; // F4: ignored if a drop happens before it is read
     }
+    void goald_stamp(ID3D12GraphicsCommandList* cmd, bool timed, uint32_t i) {
+        if (!timed || !queries_) return;
+        cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,i);
+        goald_stage_mask_|=1u<<i;
+    }
+    // Stage durations (ns) of one completed frame -> per-mode sums (log) and EMA (menu).
+    // 0 B40 Mono composite, 1 coarse depth conditioning, 2 history pass, 3 M4 fovea
+    // conditioning, 4 other compute (stats copies, transitions), 5 raster (warp / Mono
+    // draw), 6 output copy + transitions, 7 total of this DuoView list.
+    void goald_note_stages(const UINT64* t) {
+        const uint32_t m=goald_stage_pending_;
+        const auto d=[&](uint32_t a, uint32_t b)->uint64_t {
+            return t[b]>=t[a] ? uint64_t(double(t[b]-t[a])*1.0e9/double(frequency_)) : 0u; };
+        const bool m4=(m&4u) && (m&8u), hist=m4 && (m&128u);
+        uint64_t st[8]{};
+        st[0]=(m&16u) ? d(0,4) : 0u;
+        const uint32_t after_b40=(m&16u) ? 4u : 0u;
+        st[1]=m4 ? d(after_b40,2) : ((m&32u) ? d(after_b40,5) : 0u);
+        st[2]=hist ? d(2,7) : 0u;
+        st[3]=m4 ? d(hist ? 7u : 2u,3) : 0u;
+        st[4]=(m4 && (m&32u)) ? d(3,5) : 0u;
+        st[5]=((m&32u) && (m&64u)) ? d(5,6) : 0u;
+        st[6]=(m&64u) ? d(6,1) : 0u;
+        st[7]=d(0,1);
+        if (st[7]>1000000000ull) return; // bad sample
+        const uint32_t mode=(m&0x100u) ? 1u : 0u; // 1 stereo synthesis, 0 Mono
+        auto* sum=duo_stage_ns()+mode*9u;
+        auto* ema=duo_stage_us()+mode*8u;
+        for (uint32_t i=0; i<8; ++i) {
+            sum[i]+=st[i];
+            const uint32_t us=uint32_t((std::min)<uint64_t>(st[i]/1000u,1000000u));
+            const uint32_t old=ema[i].load(std::memory_order_relaxed);
+            ema[i].store(old ? (old*15u+us)/16u : us,std::memory_order_relaxed);
+        }
+        ++sum[8];
+    }
     void goald_report_status(uint32_t depth_grid, bool m1_active, bool history) {
         const bool requested=depth_grid>=4096u;
         const bool effective=m1_active && m1_.m4_active && m1_.m4_hi_active;
@@ -558,7 +595,8 @@ def compositor_backend(src):
                '                settings.m9_eye_near,settings.m9_eye_far,goald_grid(settings),\n'
                '                settings.goald_history,settings.goald_jitter_negative!=0u,\n'
                '                settings.goald_one_sided,settings.goald_fill,\n'
-               '                settings.goald_motion_limit,settings.goald_halo_near_m,settings.goald_halo_fade_m);\n'
+               '                settings.goald_motion_limit,settings.goald_halo_near_m,settings.goald_halo_fade_m,\n'
+               '                settings.goald_confirm_texels);\n'
                '        if (m1_active) { goald_bind_m4_field(device); goald_bind_history(device); }\n'
                '        goald_report_status(goald_grid(settings),m1_active,settings.goald_history!=0u);\n',
                'goal D write_constants argument')
@@ -568,7 +606,7 @@ def compositor_backend(src):
                '                transition(cmd,m1_.m4_depth.Get(),D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,\n',
                '            if(m1_.m4_active) {\n'
                '                goald_m4_timed_=timed;\n'
-               '                if(timed) cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,2);\n'
+               '                goald_stamp(cmd,timed,2u); // stage: M4 start\n'
                '                transition(cmd,m1_.m4_field(),D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,\n',
                'goal D M4 field before')
     src = once(src, '                ID3D12PipelineState* m4_gpu_pso=m1_.m4_condition.Get();\n',
@@ -585,6 +623,7 @@ def compositor_backend(src):
                '                        D3D12_RESOURCE_BARRIER goald_uav{};\n'
                '                        goald_uav.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV; // every UAV: field + history\n'
                '                        cmd->ResourceBarrier(1,&goald_uav);\n'
+               '                        goald_stamp(cmd,timed,7u); // stage: history pass end\n'
                '                    }\n'
                '                    cmd->SetPipelineState(m4_gpu_pso);\n',
                'goal D history dispatch')
@@ -600,42 +639,57 @@ def compositor_backend(src):
                '                transition(cmd,m1_.m4_field(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,\n'
                '                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);\n'
                '                if(m1_.goald_hist_active) goald_copy_counters(cmd);\n'
-               '                if(timed) cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,3);\n'
+               '                goald_stamp(cmd,timed,3u); // stage: M4 end\n'
                '                M1Resources::m4_count_frame();\n',
                'goal D M4 field after')
     if src.count('m1_.m4_depth.Get()') != 2:  # only the setup descriptors (t8, u5) remain
         raise RuntimeError(f'goal D: unexpected m4_depth uses {src.count("m1_.m4_depth.Get()")}')
     src = once(src,
                '        recorded_commands_=true;\n        if (timed) cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);\n',
-               '        recorded_commands_=true;\n        goald_m4_timed_=false;\n'
+               '        recorded_commands_=true;\n        goald_m4_timed_=false; goald_stage_mask_=0u;\n'
                '        if (timed) cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);\n',
                'goal D timing reset')
     src = once(src,
                '            cmd->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,2,timestamps_.Get(),0);\n'
                '            timing_pending_=true; pending_direct_xr_=direct_xr;\n',
                '            cmd->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,2,timestamps_.Get(),0);\n'
-               '            if (goald_m4_timed_)\n'
-               '                cmd->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,2,2,timestamps_.Get(),2*sizeof(UINT64));\n'
-               '            timing_pending_=true; pending_direct_xr_=direct_xr; goald_m4_pending_=goald_m4_timed_;\n',
+               '            // Stages not run this frame get a (meaningless) stamp here so the whole 0..7\n'
+               '            // range is resolvable; the mask says which ones are real.\n'
+               '            for (UINT gi=2; gi<8; ++gi) if (!(goald_stage_mask_&(1u<<gi))) cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,gi);\n'
+               '            cmd->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,2,6,timestamps_.Get(),2*sizeof(UINT64));\n'
+               '            timing_pending_=true; pending_direct_xr_=direct_xr; goald_m4_pending_=goald_m4_timed_;\n'
+               '            goald_stage_pending_=goald_stage_mask_|3u|(last_stereo_output_ ? 0x100u : 0u);\n',
                'goal D resolve')
     src = once(src, '            timing_pending_=false;\n            gpu_ms_=-1.f;\n',
-               '            timing_pending_=false;\n            goald_m4_pending_=false;\n            gpu_ms_=-1.f;\n',
+               '            timing_pending_=false;\n            goald_m4_pending_=false; goald_stage_pending_=0u;\n            gpu_ms_=-1.f;\n',
                'goal D timing invalidation')
     src = once(src, '        D3D12_RANGE range{0, sizeof(UINT64) * 2};\n',
-               '        D3D12_RANGE range{0, sizeof(UINT64) * 4};\n', 'goal D map range')
+               '        D3D12_RANGE range{0, sizeof(UINT64) * 8};\n', 'goal D map range')
     src = once(src,
                '            if (data[1] >= data[0]) gpu_ms_ = static_cast<float>((data[1] - data[0]) * 1000.0 / frequency_);\n',
                '            if (data[1] >= data[0]) gpu_ms_ = static_cast<float>((data[1] - data[0]) * 1000.0 / frequency_);\n'
                '            if (goald_m4_pending_ && data[3] >= data[2])\n'
-               '                M1Resources::goald_note_m4_gpu(double(data[3] - data[2]) * 1.0e9 / double(frequency_));\n',
+               '                M1Resources::goald_note_m4_gpu(double(data[3] - data[2]) * 1.0e9 / double(frequency_));\n'
+               '            if (goald_stage_pending_) goald_note_stages(data);\n',
                'goal D read M4 timing')
     src = once(src, '        timing_pending_ = false;\n    }\n',
-               '        timing_pending_ = false;\n        goald_m4_pending_ = false;\n    }\n', 'goal D timing consumed')
-    src = once(src, 'q.Count = 2;', 'q.Count = 4;', 'goal D query count')
+               '        timing_pending_ = false;\n        goald_m4_pending_ = false; goald_stage_pending_ = 0u;\n    }\n', 'goal D timing consumed')
+    src = once(src, 'q.Count = 2;', 'q.Count = 8;', 'goal D query count')
     src = once(src, 'cmd->SetPipelineState(m1_active ? m1_.raster.Get() : native_pipeline_.Get());',
                'cmd->SetPipelineState(m1_active ? ((m1_.goald_true_depth || m1_.goald_halo_bg) ? m1_.m4g_raster.Get() : m1_.raster.Get()) : native_pipeline_.Get());',
                'goal D raster PSO')
-    src = once(src, 'buffer.Width = sizeof(UINT64) * 2;', 'buffer.Width = sizeof(UINT64) * 4;', 'goal D readback size')
+    src = once(src, 'buffer.Width = sizeof(UINT64) * 2;', 'buffer.Width = sizeof(UINT64) * 8;', 'goal D readback size')
+    # Stage stamps: 4 after the B40 Mono composite, 5 compute end / raster start, 6 raster end.
+    src = once(src, '        if (b40_active) dispatch_b40(cmd,constants,true);\n        if (m1_active && m1_.rows) {\n',
+               '        if (b40_active) dispatch_b40(cmd,constants,true);\n        goald_stamp(cmd,timed,4u); // stage: B40 end\n'
+               '        if (m1_active && m1_.rows) {\n', 'goal D stage stamp 4')
+    src = once(src, '        cmd->SetGraphicsRootSignature(root_.Get());\n        cmd->SetPipelineState(m1_active ? ((m1_.goald_true_depth',
+               '        goald_stamp(cmd,timed,5u); // stage: compute end, raster start\n'
+               '        cmd->SetGraphicsRootSignature(root_.Get());\n        cmd->SetPipelineState(m1_active ? ((m1_.goald_true_depth',
+               'goal D stage stamp 5')
+    src = once(src, '        transition(cmd,fovea,fovea_sample_state,fovea_state);\n',
+               '        goald_stamp(cmd,timed,6u); // stage: raster end\n'
+               '        transition(cmd,fovea,fovea_sample_state,fovea_state);\n', 'goal D stage stamp 6')
     # Remember the setup descriptors so the field can be swapped per slot.
     src = once(src,
                '        desc_cpu.ptr+=srv_descriptor_increment_; // [12] t8 M4 fovea field\n'
@@ -681,6 +735,7 @@ def compositor_backend(src):
     src = once(src,
                '        const auto reject = [this](const char* reason) { error_ = reason; return false; };\n',
                '        m1_.goald_drop_frame(); // goal D: gather never runs the history pass\n'
+               '        goald_stage_mask_=0u;\n'
                '        const auto reject = [this](const char* reason) { error_ = reason; return false; };\n',
                'goal D gather drops history')
     src = once(src,
@@ -700,7 +755,8 @@ def compositor_backend(src):
                '    D3D12_SHADER_RESOURCE_VIEW_DESC goald_srv_desc_{};\n'
                '    D3D12_UNORDERED_ACCESS_VIEW_DESC goald_uav_desc_{};\n'
                '    uint32_t goald_bound_key_{}, goald_hist_bound_{};\n'
-               '    bool goald_m4_timed_{}, goald_m4_pending_{};\n',
+               '    bool goald_m4_timed_{}, goald_m4_pending_{};\n'
+               '    uint32_t goald_stage_mask_{}, goald_stage_pending_{}; // stamped indices; 0x100 = stereo frame\n',
                'goal D compositor state')
     return src
 
@@ -720,6 +776,10 @@ inline std::atomic<uint32_t>& duo_goald_history() { static std::atomic<uint32_t>
 inline std::atomic<uint32_t>& duo_goald_modes() { static std::atomic<uint32_t> s{0u}; return s; }
 // history motion gate: smoothed permille of frames with the head nearly still (menu).
 inline std::atomic<uint32_t>& duo_goald_still() { static std::atomic<uint32_t> s{0u}; return s; }
+// GPU stage timing (needs "GPU timing: DuoView"): per mode [0 Mono, 1 stereo] 8 stage
+// sums in ns + sample count (log, reset per line) and 8 smoothed stage values in us (menu).
+inline std::atomic<uint64_t>* duo_stage_ns() { static std::atomic<uint64_t> s[18]{}; return s; }
+inline std::atomic<uint32_t>* duo_stage_us() { static std::atomic<uint32_t> s[16]{}; return s; }
 inline const char* duo_goald_history_reason_text(uint32_t reason) {
     switch (reason) {
     case 1u: return "NOT ACTIVE - needs the 4096 fovea depth grid running (see the grid status above).";
@@ -751,6 +811,7 @@ def config(src):
                '    uint32_t goald_depth_grid{1024}; // goal D: fovea depth grid 1024 (baseline) or 4096\n'
                '    uint32_t goald_history{0}, goald_jitter_negative{0}, goald_one_sided{0}, goald_fill{0}; // goal D switches 2-4\n'
                '    float goald_motion_limit{2.f}; // goal D history: used only while the field moves <= this many texels per frame\n'
+               '    uint32_t goald_confirm_texels{2}; // goal D history: kept only with similar current depth within N texels (0 = off)\n'
                '    float goald_halo_near_m{1.f}, goald_halo_fade_m{3.f}; // goal D halo at background depth: full up to / off from\n',
                'goal D settings field')
     src = once(src, '    out.m4_fovea_grid=requested.m4_fovea_grid;\n',
@@ -758,6 +819,7 @@ def config(src):
                '    out.goald_depth_grid=requested.goald_depth_grid>=4096u ? 4096u : 1024u;\n'
                '    out.goald_history=(std::min)(requested.goald_history,1u); // 0 off, 1 on (all fovea depth; Thin removed after #373)\n'
                '    out.goald_motion_limit=std::isfinite(requested.goald_motion_limit) ? (std::clamp)(requested.goald_motion_limit,.25f,64.f) : 2.f;\n'
+               '    out.goald_confirm_texels=(std::min)(requested.goald_confirm_texels,8u);\n'
                '    out.goald_halo_near_m=std::isfinite(requested.goald_halo_near_m) ? (std::clamp)(requested.goald_halo_near_m,.1f,50.f) : 1.f;\n'
                '    out.goald_halo_fade_m=std::isfinite(requested.goald_halo_fade_m) ? (std::clamp)(requested.goald_halo_fade_m,out.goald_halo_near_m,100.f) : 3.f;\n'
                '    out.goald_jitter_negative=requested.goald_jitter_negative ? 1u : 0u;\n'
@@ -776,6 +838,7 @@ def vr_hpp(src):
                '    static const inline std::vector<std::string> s_duo_goald_offon{ "Off (baseline)", "On (goal D test)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_history{ "Off (baseline)", "On (all fovea depth, head still only)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_jitter{ "+ (current)", "- (flipped)" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_confirm{ "Off (trails behind moving things)", "1 texel", "2 texels", "3 texels", "4 texels", "6 texels", "8 texels" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_fill{ "Off (baseline)", "Mirror, full", "Mirror, half", "Halo at background depth" };\n'
                '    static const inline std::vector<std::string> s_duo_m3_jitter_modes{',
                'goal D grid names')
@@ -786,16 +849,23 @@ def vr_hpp(src):
                '    const ModCombo::Ptr m_duo_goald_history{ModCombo::create(generate_name("DuoFoveaDepthHistory"),s_duo_goald_history,0)};\n'
                '    const ModCombo::Ptr m_duo_goald_jitter{ModCombo::create(generate_name("DuoFoveaJitterDirection"),s_duo_goald_jitter,0)};\n'
                '    const ModSlider::Ptr m_duo_goald_motion{ModSlider::create(generate_name("DuoFoveaHistoryStillLimit"),.25f,16.f,2.f)};\n'
+               '    const ModCombo::Ptr m_duo_goald_confirm{ModCombo::create(generate_name("DuoFoveaHistoryConfirm"),s_duo_goald_confirm,2)};\n'
                '    const ModSlider::Ptr m_duo_goald_halo_near{ModSlider::create(generate_name("DuoHaloBgFullMeters"),.1f,20.f,1.f)};\n'
                '    const ModSlider::Ptr m_duo_goald_halo_fade{ModSlider::create(generate_name("DuoHaloBgOffMeters"),.1f,50.f,3.f)};\n'
                '    const ModCombo::Ptr m_duo_goald_fill{ModCombo::create(generate_name("DuoFoveaBackgroundFill"),s_duo_goald_fill,0)};\n',
                'goal D grid control')
-    src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, *m_duo_goald_history, *m_duo_goald_jitter, *m_duo_goald_fill, *m_duo_goald_motion, *m_duo_goald_halo_near, *m_duo_goald_halo_fade, ', 'goal D grid persisted')
+    src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, *m_duo_goald_history, *m_duo_goald_jitter, *m_duo_goald_fill, *m_duo_goald_motion, *m_duo_goald_confirm, *m_duo_goald_halo_near, *m_duo_goald_halo_fade, ', 'goal D grid persisted')
     return src
 
 
 GOALD_MENU = r'''                    m_duo_m8_far_m->draw("Depth transition ends (metres)");
                     m_duo_goald_grid->draw("Fovea depth grid (test build: 1024 = baseline, 4096 = goal D)");
+                    for (uint32_t mode=0; mode<2; ++mode) {
+                        const auto* u=uevr::duoview::duo_stage_us()+mode*8u;
+                        const auto v=[&](uint32_t i){ return float(u[i].load(std::memory_order_relaxed))/1000.f; };
+                        if (v(7)>0.f) ImGui::TextWrapped("GPU stages %s (ms, needs GPU timing ON): B40 %.2f | coarse depth %.2f | history %.2f | M4 fovea %.2f | other %.2f | raster %.2f | output %.2f | TOTAL %.2f",
+                            mode ? "STEREO" : "MONO", v(0), v(1), v(2), v(3), v(4), v(5), v(6), v(7));
+                    }
                     {
                         const uint32_t gd=uevr::duoview::duo_goald_status().load(std::memory_order_relaxed);
                         const uint32_t gf=uevr::duoview::duo_goald_field().load(std::memory_order_relaxed);
@@ -809,6 +879,7 @@ GOALD_MENU = r'''                    m_duo_m8_far_m->draw("Depth transition ends
                     ImGui::TextWrapped("Goal D switches 2 and 4 (test build). Any of them turns the 4096 grid on.");
                     m_duo_goald_history->draw("2. Fovea depth history, up to 4 frames, used only while the head is nearly still");
                     m_duo_goald_motion->draw("2. History head-still limit (fovea depth texels per frame; lower = stricter)");
+                    m_duo_goald_confirm->draw("2. History confirm distance (kept only next to similar depth now; smaller = shorter trails behind hands/moving objects)");
                     {
                         const uint32_t gh=uevr::duoview::duo_goald_history().load(std::memory_order_relaxed);
                         if (!(gh>>31) || !(gh&1u)) ImGui::TextWrapped("Fovea depth history: off.");
@@ -839,6 +910,7 @@ def vr_cpp(src):
                '        .goald_one_sided=0u,\n'
                '        .goald_fill=uint32_t((std::clamp)(m_duo_goald_fill->value(),0,3)),\n'
                '        .goald_motion_limit=m_duo_goald_motion->value(),\n'
+               '        .goald_confirm_texels=uint32_t((std::clamp)(m_duo_goald_confirm->value(),0,6)<=4 ? (std::clamp)(m_duo_goald_confirm->value(),0,6) : (m_duo_goald_confirm->value()==5 ? 6 : 8)),\n'
                '        .goald_halo_near_m=m_duo_goald_halo_near->value(),\n'
                '        .goald_halo_fade_m=m_duo_goald_halo_fade->value()};',
                'goal D grid settings')
@@ -850,6 +922,7 @@ def vr_cpp(src):
                '        current.goald_one_sided==candidate.goald_one_sided &&\n'
                '        current.goald_fill==candidate.goald_fill &&\n'
                '        current.goald_motion_limit==candidate.goald_motion_limit &&\n'
+               '        current.goald_confirm_texels==candidate.goald_confirm_texels &&\n'
                '        current.goald_halo_near_m==candidate.goald_halo_near_m &&\n'
                '        current.goald_halo_fade_m==candidate.goald_halo_fade_m) return;',
                'goal D grid change detection')
@@ -872,6 +945,14 @@ GOALD_LOG = r'''                                                    uevr::duovie
                                                         uevr::duoview::dx12::M1Resources::goald_hist_moving_frames.exchange(0),
                                                         ht ? hu*1000u/ht : 0u,
                                                         uevr::duoview::duo_goald_modes().load()&7u);
+                                                    for (uint32_t mode=0; mode<2; ++mode) {
+                                                        auto* st=uevr::duoview::duo_stage_ns()+mode*9u;
+                                                        const uint64_t n=st[8].exchange(0);
+                                                        double ms[8]{};
+                                                        for (uint32_t i=0; i<8; ++i) ms[i]=n ? double(st[i].exchange(0))/double(n)/1.0e6 : (st[i].exchange(0),0.0);
+                                                        if (n) SPDLOG_INFO("[DuoView][Timing] mode={} frames={} gpu_ms: b40_mono={:.3f} coarse_depth={:.3f} history={:.3f} m4_fovea={:.3f} other_compute={:.3f} raster={:.3f} output_copy={:.3f} total={:.3f}",
+                                                            mode ? "stereo" : "mono", n, ms[0], ms[1], ms[2], ms[3], ms[4], ms[5], ms[6], ms[7]);
+                                                    }
                                                     SPDLOG_INFO("[DuoView][GoalD] grid requested={} effective={} reason={} field={}x{} hi_frames={} m4_gpu_ms={:.3f} gpu_samples={}",
                                                         (gd&1u) ? 4096 : 1024, (gd&2u) ? 4096 : 1024, (gd>>2)&15u,
                                                         gf>>16, gf&0xffffu,

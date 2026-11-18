@@ -61,7 +61,7 @@ need('uint32_t goald_depth_grid{1024};' in cfg, 'settings default 1024')
 need('m_duo_goald_grid->value()==1 ? 4096u : 1024u' in vrcpp, 'menu maps to grid')
 need('current.goald_depth_grid==candidate.goald_depth_grid' in vrcpp, 'menu change detection')
 need('[DuoView][GoalD] grid requested=' in log, 'log line')
-need('q.Count = 4;' in comp and 'TIMESTAMP,2);' in comp and 'TIMESTAMP,3);' in comp, 'M4 GPU timestamps')
+need('q.Count = 8;' in comp and 'goald_stamp(cmd,timed,2u);' in comp and 'goald_stamp(cmd,timed,3u);' in comp, 'M4 GPU timestamps')
 # Review #368 fixes (11-18 pm).
 need('s.parity^=1u' not in m1 and 'const uint32_t next_parity=s.parity^1u;' in m1, 'history parity not advanced in write_constants')
 need(comp.count('m1_.goald_commit_history();') == 1 and
@@ -85,7 +85,7 @@ need('thinOnly' not in hlsl and 'GDLockedCell' not in hlsl and 'GDThinAt' not in
      'history: All only, no screen-locked window (#373 lag with head yaw)')
 need('m_duo_goald_history->value(),0,1' in vrcpp and 'requested.goald_history,1u' in cfg, 'history menu Off/On')
 need('still=std::isfinite(shift) && shift<=goald_motion_limit;' in m1 and 'const bool use=valid && still;' in m1 and
-     'goald_flags|=2u|(use ? 1u : 0u);' in m1, 'history used only while the head is nearly still')
+     'goald_flags|=2u|(use ? 1u : 0u)|' in m1, 'history used only while the head is nearly still')
 need('data.m6_previous_jitter[3]=.5f;' in m1, 'accept radius .5 field texel')
 need('m_duo_goald_motion->draw(' in vrcpp and '.goald_motion_limit=m_duo_goald_motion->value()' in vrcpp and
      'current.goald_motion_limit==candidate.goald_motion_limit' in vrcpp, 'head-still limit in the menu')
@@ -95,6 +95,13 @@ need('m_duo_goald_one_sided' not in vrcpp and 'out.goald_one_sided=0u;' in cfg, 
 need('m_duo_goald_halo_near->draw(' in vrcpp and 'm_duo_goald_halo_fade->draw(' in vrcpp and
      'std::memcpy(&data.m6_previous_rect[2],&hn,sizeof(float));' in m1 and
      '(1.0-smoothstep(hbNear,hbFar,hbDist))' in hlsl, 'switch 4 halo near/fade distances')
+# Confirm gate + per-stage GPU timing (after #373, Liviu).
+need('const int confirmR=int((GDFlags()>>8)&15u);' in hlsl and '((goald_confirm_texels&15u)<<8u)' in m1 and
+     'm_duo_goald_confirm->draw(' in vrcpp and 'current.goald_confirm_texels==candidate.goald_confirm_texels' in vrcpp,
+     'history confirm distance in the menu')
+need('q.Count = 8;' in comp and 'goald_stamp(cmd,timed,4u);' in comp and 'goald_stamp(cmd,timed,5u);' in comp and
+     'goald_stamp(cmd,timed,6u);' in comp and 'goald_note_stages(data);' in comp and '[DuoView][Timing] mode=' in log,
+     'per-stage GPU timing')
 # Review #373 F1/F2/F4.
 need('p.seq=++s.record_seq;' in m1 and 'if (p.seq!=s.record_seq) { goald_drop_frame(); return; }' in m1,
      'F1: only the latest recorded history pass is committed')

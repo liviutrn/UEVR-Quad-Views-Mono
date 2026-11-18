@@ -254,6 +254,22 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
                     }
                 }
             }
+            // Confirm gate (#373: trails behind hands / moving objects). Flags bits 8-11 =
+            // radius r in field texels (0 = off): history is kept only if the CURRENT seed
+            // has similar-or-nearer depth (>= 97%) within r texels, so a near object that
+            // moved away leaves at most an r-texel trail; flicker along a thin object that
+            // is still partly sampled now is kept.
+            const int confirmR=int((GDFlags()>>8)&15u);
+            [branch] if(best>0.0 && confirmR>0) {
+                bool confirmed=false;
+                [loop] for(int cy=-confirmR;cy<=confirmR && !confirmed;++cy)
+                    [loop] for(int cx=-confirmR;cx<=confirmR && !confirmed;++cx) {
+                        const int2 n=int2(id.xy)+int2(cx,cy);
+                        if((cx!=0 || cy!=0) && all(n>=int2(0,0)) && all(n<int2(M4Grid.xy)) &&
+                           GDSeedRaw(uint2(n))>=best*.97) confirmed=true;
+                    }
+                if(!confirmed) best=0.0;
+            }
             [branch] if(best>0.0) {
                 outDepth=best;
                 age=bestAge+1u;
