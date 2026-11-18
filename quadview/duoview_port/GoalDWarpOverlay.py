@@ -110,7 +110,7 @@ BLOCK = r'''    // ---- Goal D switch 1: fovea depth grid 1024 / 4096 (WARP acti
         const uint64_t hi_frames=uevr::duoview::dx12::M1Resources::goald_hi_frames.load()-hi_before;
         if (!hi_frames) throw std::runtime_error("GoalD: activation counter did not move");
         const auto fd=a->goald_m4_field()->GetDesc();
-        if (fd.Width<GW || fd.Height<GH || fd.DepthOrArraySize!=2)
+        if (fd.Width<GW || fd.Height<GH || fd.DepthOrArraySize!=3)
             throw std::runtime_error("GoalD: unexpected 4096 field allocation");
         const auto on_row=gd_field_row(GH/2u,GW);
 
