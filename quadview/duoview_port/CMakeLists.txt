@@ -65,14 +65,23 @@ add_custom_command(
   DEPENDS "${GENERATED_M3_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/M4ProductionWarpOverlay.py"
   VERBATIM)
 
+# Goal D switch 1 (2026-11-18): fovea depth grid 4096 activation on the real compositor.
+set(GENERATED_GOALD_WARP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/V208SharedEyeWarpGoalD.cpp")
+add_custom_command(
+  OUTPUT "${GENERATED_GOALD_WARP_SOURCE}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/GoalDWarpOverlay.py"
+          --source "${GENERATED_M4_WARP_SOURCE}" --output "${GENERATED_GOALD_WARP_SOURCE}"
+  DEPENDS "${GENERATED_M4_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/GoalDWarpOverlay.py"
+  VERBATIM)
+
 # Research-only: derive fixture from the EXACT generated production source.
 # The augmentation executes only with DUOVIEW_RECON_REPLAY=1; it changes no UEVR shader.
 set(GENERATED_RECON_WARP_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/V208SharedEyeWarpRecon.cpp")
 add_custom_command(
   OUTPUT "${GENERATED_RECON_WARP_SOURCE}"
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/ReconProductionWarpOverlay.py"
-          --source "${GENERATED_M4_WARP_SOURCE}" --output "${GENERATED_RECON_WARP_SOURCE}"
-  DEPENDS "${GENERATED_M4_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/ReconProductionWarpOverlay.py"
+          --source "${GENERATED_GOALD_WARP_SOURCE}" --output "${GENERATED_RECON_WARP_SOURCE}"
+  DEPENDS "${GENERATED_GOALD_WARP_SOURCE}" "${CMAKE_CURRENT_LIST_DIR}/ReconProductionWarpOverlay.py"
   VERBATIM)
 
 # Second gated replay extends the original 32x32 GPU fixture to 384x216

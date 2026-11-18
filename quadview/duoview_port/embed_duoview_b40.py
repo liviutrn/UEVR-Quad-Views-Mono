@@ -61,6 +61,13 @@ def main():
             ("CSConditionM4ProbeNoOrigin","cs_5_0","m4_probe_no_origin_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
             ("CSConditionM4ProbeOriginOnly","cs_5_0","m4_probe_origin_only_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION",)),
         )
+        # Goal D switch 1 (fovea depth grid 4096): new entry points APPENDED after every
+        # original array, so the Off DXBC is the exact baseline bytecode. Only when the overlay ran.
+        if "DUOVIEW_GOALD_GRID" in (args.source/"DuoViewM1Stereo.hlsl").read_text(encoding="utf-8"):
+            shaders+=(
+                ("CSConditionM4G","cs_5_0","m4g_condition_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION","DUOVIEW_GOALD_GRID")),
+                ("CSConditionM4GVertical","cs_5_0","m4g_vertical_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION","DUOVIEW_GOALD_GRID")),
+            )
     with tempfile.TemporaryDirectory(prefix="duoview-b40-") as temp:
         for entry,profile,name,source,define in shaders:
             output=Path(temp)/(name+".cso")
