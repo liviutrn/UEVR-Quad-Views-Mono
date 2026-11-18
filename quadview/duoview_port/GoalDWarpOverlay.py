@@ -323,8 +323,8 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
             m1_geometry.fine_depth_camera={{1.f,0.f,1.f,0.f},{0.f,0.f,0.f,1.f},{0.f,0.f,0.f},1.f};
             UINT thin=0u;
             for (UINT i=0;i<JN;++i) thin+=bar_w[i]<1.5f ? 1u : 0u;
-            auto gh_kept=[&](bool history) {
-                frame.config.settings.goald_history=history ? 1u : 0u;
+            auto gh_kept=[&](UINT mode) { // 0 off, 1 all fovea depth, 2 thin objects only
+                frame.config.settings.goald_history=mode;
                 UINT present=0u;
                 for (UINT round=0;round<3u;++round) for (UINT p=0;p<JP;++p) {
                     const auto m=gj_frame(false,0u,phase[p]);
@@ -340,8 +340,8 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
                 return present;
             };
             const uint64_t gh_valid0=uevr::duoview::dx12::M1Resources::goald_hist_valid_frames.load();
-            const UINT gh_off=gh_kept(false);
-            const UINT gh_on=gh_kept(true);
+            const UINT gh_off=gh_kept(0u);
+            const UINT gh_on=gh_kept(1u);
             const uint64_t gh_valid=uevr::duoview::dx12::M1Resources::goald_hist_valid_frames.load()-gh_valid0;
             const uint32_t gh_status=uevr::duoview::duo_goald_history().load();
             const UINT gh_total=thin*2u*JP;
@@ -354,8 +354,8 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
             // Moving WIDE object, static camera (review #368: trails). A 24-texel slab
             // moves 4 texels per frame; ON must not keep it where it was (near texels
             // on the middle row must equal OFF after 6 frames).
-            auto gm_near=[&](bool history) {
-                frame.config.settings.goald_history=history ? 1u : 0u;
+            auto gm_near=[&](UINT mode) {
+                frame.config.settings.goald_history=mode;
                 frame.config.settings.m3_jitter_mode=0u;
                 UINT count=0u;
                 for (UINT f=0;f<6u;++f) {
@@ -372,15 +372,20 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
                 }
                 return count;
             };
-            const UINT gm_off=gm_near(false), gm_on=gm_near(true);
+            const UINT gh_thin=gh_kept(2u);
+            const UINT gm_off=gm_near(0u), gm_on=gm_near(1u), gm_thin=gm_near(2u);
             std::ofstream("goald_history_result.txt",std::ios::app)
-                <<"GOALD_HISTORY_MOVING,near_texels_off="<<gm_off<<",near_texels_on="<<gm_on<<"\n";
-            std::cout<<"GOALD_HISTORY_MOVING near texels off="<<gm_off<<" on="<<gm_on<<"\n";
+                <<"GOALD_HISTORY_THIN_ONLY,kept_thin="<<gh_thin<<"\n"
+                <<"GOALD_HISTORY_MOVING,near_texels_off="<<gm_off<<",near_texels_all="<<gm_on<<",near_texels_thin="<<gm_thin<<"\n";
+            std::cout<<"GOALD_HISTORY_MOVING near texels off="<<gm_off<<" all="<<gm_on<<" thin="<<gm_thin
+                     <<" kept_thin="<<gh_thin<<"\n";
             frame.config.settings.goald_history=0u;
             m1_geometry.fine_depth_camera=gh_saved_cam;
             if (!(gh_status&2u) || !gh_valid) throw std::runtime_error("GoalD history: not active / never valid");
-            if (!(gh_on>gh_off)) throw std::runtime_error("GoalD history: does not keep more thin bars than OFF");
-            if (gm_on>gm_off) throw std::runtime_error("GoalD history: moving wide object leaves a trail");
+            if (!(gh_on>gh_off)) throw std::runtime_error("GoalD history (all): does not keep more thin bars than OFF");
+            if (!(gh_thin>gh_off)) throw std::runtime_error("GoalD history (thin only): does not keep more thin bars than OFF");
+            // All-depth trail is expected by design (recorded only); thin-only must leave none.
+            if (gm_thin>gm_off) throw std::runtime_error("GoalD history (thin only): moving wide object leaves a trail");
             std::cout<<"PASS: WARP goal D fovea depth history keeps thin bars, no trail behind a moving object\n";
         }
         frame.config.settings=gj_saved_settings;

@@ -310,10 +310,10 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                         std::copy(s.crop.begin(),s.crop.end(),data.m6_previous_crop);
                         ++goald_hist_valid_frames;
                     }
-                    goald_flags|=2u|(valid ? 1u : 0u);
+                    goald_flags|=2u|(valid ? 1u : 0u)|(goald_history>=2u ? 64u : 0u); // 64: thin objects only
                     data.m6_previous_rect[0]=next_parity;
                     data.m6_previous_jitter[1]=4.f;                 // K=4
-                    data.m6_previous_jitter[2]=data.m8_distance[0]; // nearer than the M8 near distance: weapon/hands, no history
+                    data.m6_previous_jitter[2]=data.m8_distance[0]; // nearer than the M8 near distance: weapon/hands (All: camera-locked; Thin: none)
                     data.m6_previous_jitter[3]=.75f;                // accept radius, field texels
                     auto& p=goald_pending;
                     p.active=true; p.parity=next_parity; p.camera=cam;
@@ -346,7 +346,7 @@ def m1_backend(src):
                M1_PSO, 'goal D pipelines')
     src = once(src, '                         float eye_near,float eye_far) {',
                '                         float eye_near,float eye_far,uint32_t depth_grid=1024u,\n'
-               '                         bool goald_history=false,bool goald_jitter_negative=false,\n'
+               '                         uint32_t goald_history=0u,bool goald_jitter_negative=false,\n'
                '                         uint32_t goald_one_sided=0u,uint32_t goald_fill=0u) {',
                'goal D grid argument')
     src = once(src, '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n',
@@ -463,7 +463,7 @@ private:
 def compositor_backend(src):
     src = once(src, '                settings.m9_eye_near,settings.m9_eye_far);\n',
                '                settings.m9_eye_near,settings.m9_eye_far,goald_grid(settings),\n'
-               '                settings.goald_history!=0u,settings.goald_jitter_negative!=0u,\n'
+               '                settings.goald_history,settings.goald_jitter_negative!=0u,\n'
                '                settings.goald_one_sided,settings.goald_fill);\n'
                '        if (m1_active) { goald_bind_m4_field(device); goald_bind_history(device); }\n'
                '        goald_report_status(goald_grid(settings),m1_active,settings.goald_history!=0u);\n',
@@ -630,7 +630,7 @@ def config(src):
     src = once(src, '    out.m4_fovea_grid=requested.m4_fovea_grid;\n',
                '    out.m4_fovea_grid=requested.m4_fovea_grid;\n'
                '    out.goald_depth_grid=requested.goald_depth_grid>=4096u ? 4096u : 1024u;\n'
-               '    out.goald_history=requested.goald_history ? 1u : 0u;\n'
+               '    out.goald_history=(std::min)(requested.goald_history,2u); // 0 off, 1 all fovea depth, 2 thin objects only\n'
                '    out.goald_jitter_negative=requested.goald_jitter_negative ? 1u : 0u;\n'
                '    out.goald_one_sided=(std::min)(requested.goald_one_sided,3u);\n'
                '    out.goald_fill=(std::min)(requested.goald_fill,3u);\n',
@@ -645,6 +645,7 @@ def vr_hpp(src):
     src = once(src, '    static const inline std::vector<std::string> s_duo_m3_jitter_modes{',
                '    static const inline std::vector<std::string> s_duo_goald_grids{ "1024 (baseline)", "4096 (goal D test)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_offon{ "Off (baseline)", "On (goal D test)" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_history{ "Off (baseline)", "All fovea depth (Liviu)", "Thin objects only (reviews)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_jitter{ "+ (current)", "- (flipped)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_fill{ "Off (baseline)", "Mirror, full", "Mirror, half", "Halo at background depth (use with 3 Off)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_ramp{ "Off (baseline)", "One-sided, soft", "One-sided, tight", "True depth (no ramp)" };\n'
@@ -654,7 +655,7 @@ def vr_hpp(src):
                '    const ModToggle::Ptr m_duo_m4_fovea_grid{ModToggle::create(generate_name("DuoM4FoveaDepthGrid"),false)};\n',
                '    const ModToggle::Ptr m_duo_m4_fovea_grid{ModToggle::create(generate_name("DuoM4FoveaDepthGrid"),false)};\n'
                '    const ModCombo::Ptr m_duo_goald_grid{ModCombo::create(generate_name("DuoFoveaDepthGridSize"),s_duo_goald_grids,0)};\n'
-               '    const ModCombo::Ptr m_duo_goald_history{ModCombo::create(generate_name("DuoFoveaDepthHistory"),s_duo_goald_offon,0)};\n'
+               '    const ModCombo::Ptr m_duo_goald_history{ModCombo::create(generate_name("DuoFoveaDepthHistory"),s_duo_goald_history,0)};\n'
                '    const ModCombo::Ptr m_duo_goald_jitter{ModCombo::create(generate_name("DuoFoveaJitterDirection"),s_duo_goald_jitter,0)};\n'
                '    const ModCombo::Ptr m_duo_goald_one_sided{ModCombo::create(generate_name("DuoOneSidedRamp"),s_duo_goald_ramp,0)};\n'
                '    const ModCombo::Ptr m_duo_goald_fill{ModCombo::create(generate_name("DuoFoveaBackgroundFill"),s_duo_goald_fill,0)};\n',
@@ -676,7 +677,7 @@ GOALD_MENU = r'''                    m_duo_m8_far_m->draw("Depth transition ends
                         else ImGui::TextWrapped("Fovea depth grid status: %s", uevr::duoview::duo_goald_reason_text((gd>>2)&15u));
                     }
                     ImGui::TextWrapped("Goal D switches 2-4 (test build). Any of them turns the 4096 grid on.");
-                    m_duo_goald_history->draw("2. Fovea depth history (keeps thin objects for up to 4 frames)");
+                    m_duo_goald_history->draw("2. Fovea depth history, up to 4 frames (All = all depth, weapon follows camera; Thin only = no weapon, no wide objects)");
                     {
                         const uint32_t gh=uevr::duoview::duo_goald_history().load(std::memory_order_relaxed);
                         if (!(gh>>31) || !(gh&1u)) ImGui::TextWrapped("Fovea depth history: off.");
@@ -702,7 +703,7 @@ def vr_cpp(src):
     src = once(src, '        .m2_right_sharpen=m_duo_m2_right->value()};',
                '        .m2_right_sharpen=m_duo_m2_right->value(),\n'
                '        .goald_depth_grid=m_duo_goald_grid->value()==1 ? 4096u : 1024u,\n'
-               '        .goald_history=m_duo_goald_history->value()==1 ? 1u : 0u,\n'
+               '        .goald_history=uint32_t((std::clamp)(m_duo_goald_history->value(),0,2)),\n'
                '        .goald_jitter_negative=m_duo_goald_jitter->value()==1 ? 1u : 0u,\n'
                '        .goald_one_sided=uint32_t((std::clamp)(m_duo_goald_one_sided->value(),0,3)),\n'
                '        .goald_fill=uint32_t((std::clamp)(m_duo_goald_fill->value(),0,3))};',

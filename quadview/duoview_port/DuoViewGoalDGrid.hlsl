@@ -188,11 +188,17 @@ void CSConditionM4GVertical(uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
 // Per texel: current seed; previous kept seeds in 3x3 windows around the
 // world-reprojected position at three candidate depths (rotation + translation;
 // a candidate is accepted only if its own-depth reprojection lands within the
-// radius), never in weapon/hands range, and only for thin kept depth.
-// Output = max(current, accepted history).
+// radius). Type ALL: plus weapon/hands range camera-locked; type THIN (flag 64):
+// no weapon/hands range, thin kept depth only. Output = max(current, accepted).
 // Re-confirmed by the current frame -> age 0; else age+1; dropped at age K.
 RWTexture2DArray<uint> GDHistory : register(u6);
 groupshared uint GDCount[2];
+
+float2 GDLockedCell(float2 local) {
+    const float2 fullUv=lerp(M2Crop.xy,M2Crop.zw,local);
+    const float2 uv=(fullUv-M6PreviousCrop.xy)/max(M6PreviousCrop.zw-M6PreviousCrop.xy,1.e-6);
+    return uv*float2(M4Grid.xy)-.5;
+}
 
 float2 GDPreviousCell(float2 local, float inverseDepth, out bool ok) {
     const float2 fullUv=lerp(M2Crop.xy,M2Crop.zw,local);
@@ -226,24 +232,33 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
             float best=0.0;
             uint bestAge=0u;
             int2 bestC=int2(0,0);
-            // Review fixes (11-18 pm): (a) no history in weapon/hands range (those move
-            // on their own: trails); (b) search windows at three candidate depths
-            // (infinity, 1/3 and 2/3 of the near range), so camera translation parallax
-            // of nearer objects is found, not only rotation; (c) only THIN kept depth
-            // (narrower than 5 texels across x or y in the previous frame) may come from
-            // history - edges of wide objects that moved away are not held (no trails).
-            const uint windows=lockDepth>0.0 ? 3u : 1u;
+            // Two history types, chosen in game (flag 64):
+            //  ALL (Liviu, 56_ G): all fovea depth; weapon/hands range (>= lockDepth)
+            //   follows the camera (same screen position).
+            //  THIN (reviews #368): no history in weapon/hands range (independent
+            //   motion -> trails) and only THIN kept depth (narrower than 5 texels across
+            //   x or y in the previous frame), so wide objects that moved leave no trail.
+            // Both: world windows at three candidate depths (infinity, 1/3 and 2/3 of the
+            // near range) so camera translation parallax of nearer objects is found.
+            const bool thinOnly=(GDFlags()&64u)!=0u;
+            const bool hasLock=lockDepth>0.0;
+            const uint worldWindows=hasLock ? 3u : 1u;
+            const uint windows=worldWindows+((hasLock && !thinOnly) ? 1u : 0u);
+            const float2 lockedCenter=GDLockedCell(local);
             [loop] for(uint win=0u;win<windows;++win) {
+                const bool lockedWin=win>=worldWindows;
                 bool okCenter;
-                const int2 c0=int2(round(GDPreviousCell(local,lockDepth*float(win)/3.0,okCenter)));
+                const int2 c0=int2(round(lockedWin ? lockedCenter :
+                                         GDPreviousCell(local,lockDepth*float(win)/3.0,okCenter)));
                 [unroll] for(int dy=-1;dy<=1;++dy) {
                     [unroll] for(int dx=-1;dx<=1;++dx) {
                         const int2 c=c0+int2(dx,dy);
                         if(all(c>=int2(0,0)) && all(c<int2(M4Grid.xy))) {
                             const float h=asfloat(GDHistory[uint3(uint2(c),previous)]);
-                            if(h>max(cur,best) && !(lockDepth>0.0 && h>=lockDepth)) {
+                            const bool locked=hasLock && h>=lockDepth;
+                            if(h>max(cur,best) && locked==lockedWin) {
                                 bool ok=true;
-                                const float2 q=GDPreviousCell(local,h,ok);
+                                const float2 q=locked ? lockedCenter : GDPreviousCell(local,h,ok);
                                 if(ok && all(abs(q-float2(c))<=radius)) {
                                     best=h; bestC=c;
                                     bestAge=GDHistory[uint3(uint2(c),previous+1u)];
@@ -253,7 +268,7 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
                     }
                 }
             }
-            [branch] if(best>0.0) {
+            [branch] if(thinOnly && best>0.0) {
                 const int2 lim=int2(M4Grid.xy)-1;
                 const float lo=best*.97;
                 const bool thinX=asfloat(GDHistory[uint3(uint2(clamp(bestC-int2(3,0),int2(0,0),lim)),previous)])<lo &&

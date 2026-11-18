@@ -71,7 +71,8 @@ need('if (!goald_hist_active) goald_history_state().have_previous=false;' in m1,
 need('goald_halo_bg=raster_true && !goald_true_depth;' in m1, 'halo off with true depth')
 need('data.m8_effects[2]=data.m8_effects[3]=0.f;' in m1, 'legacy M8 fill zero in halo mode')
 need('s.commits-r.first>=16u' in m1, 'retired history textures released')
-need('GDLockedCell' not in hlsl and 'h>=lockDepth' in hlsl, 'no history in weapon range')
+need('const bool thinOnly=(GDFlags()&64u)!=0u;' in hlsl and 'GDLockedCell' in hlsl, 'history types all / thin only')
+need('(goald_history>=2u ? 64u : 0u)' in m1 and 'm_duo_goald_history->value(),0,2' in vrcpp, 'history type from the menu')
 need('hbBlend*smoothstep' in hlsl and 'GDReadFineEye(' in hlsl, 'K1: fine vs fine, crop blend weight')
 need('duo_goald_modes()' in vrcpp, 'menu shows mode fallbacks')
 
