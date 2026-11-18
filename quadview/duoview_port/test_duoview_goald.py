@@ -62,6 +62,18 @@ need('m_duo_goald_grid->value()==1 ? 4096u : 1024u' in vrcpp, 'menu maps to grid
 need('current.goald_depth_grid==candidate.goald_depth_grid' in vrcpp, 'menu change detection')
 need('[DuoView][GoalD] grid requested=' in log, 'log line')
 need('q.Count = 4;' in comp and 'TIMESTAMP,2);' in comp and 'TIMESTAMP,3);' in comp, 'M4 GPU timestamps')
+# Review #368 fixes (11-18 pm).
+need('s.parity^=1u' not in m1 and 'const uint32_t next_parity=s.parity^1u;' in m1, 'history parity not advanced in write_constants')
+need(comp.count('if (m1_active) m1_.goald_commit_history();') == 1 and
+     comp.index('if (m1_active) m1_.goald_commit_history();') > comp.index('if (!copied) return reject("Direct Native blend succeeded'),
+     'history committed only after the last reject of record_native')
+need('if (!goald_hist_active) goald_history_state().have_previous=false;' in m1, 'history reset when Off')
+need('goald_halo_bg=raster_true && !goald_true_depth;' in m1, 'halo off with true depth')
+need('data.m8_effects[2]=data.m8_effects[3]=0.f;' in m1, 'legacy M8 fill zero in halo mode')
+need('s.commits-r.first>=16u' in m1, 'retired history textures released')
+need('GDLockedCell' not in hlsl and 'h>=lockDepth' in hlsl, 'no history in weapon range')
+need('hbBlend*smoothstep' in hlsl and 'GDReadFineEye(' in hlsl, 'K1: fine vs fine, crop blend weight')
+need('duo_goald_modes()' in vrcpp, 'menu shows mode fallbacks')
 
 if fails:
     print('GOALD CONTRACT FAIL:', *fails, sep='\n  ')

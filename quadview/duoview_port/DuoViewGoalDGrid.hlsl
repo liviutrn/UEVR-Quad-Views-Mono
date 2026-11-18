@@ -185,10 +185,11 @@ void CSConditionM4GVertical(uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
 // History (u6, R32_UINT array, shared by every XR slot on the one queue):
 // slices 2p / 2p+1 = kept raw seed (float bits) / age for parity p;
 // slice 4 texels (0..3,0) = per-parity counters {texels, texels from history}.
-// Per texel: current seed; previous kept seeds in a 3x3 window around the
-// world-reprojected position (rotation + translation, candidate's own depth,
-// accepted within the radius) and, for camera-locked range (weapon/hands),
-// around the same screen position. Output = max(current, accepted history).
+// Per texel: current seed; previous kept seeds in 3x3 windows around the
+// world-reprojected position at three candidate depths (rotation + translation;
+// a candidate is accepted only if its own-depth reprojection lands within the
+// radius), never in weapon/hands range, and only for thin kept depth.
+// Output = max(current, accepted history).
 // Re-confirmed by the current frame -> age 0; else age+1; dropped at age K.
 RWTexture2DArray<uint> GDHistory : register(u6);
 groupshared uint GDCount[2];
@@ -203,12 +204,6 @@ float2 GDPreviousCell(float2 local, float inverseDepth, out bool ok) {
     const float4 pp=M6PreviousProjection;
     const float2 previousUv=float2(.5+.5*(pp.x*prev.x/z+pp.y),.5-.5*(pp.z*prev.y/z+pp.w));
     const float2 uv=(previousUv-M6PreviousCrop.xy)/max(M6PreviousCrop.zw-M6PreviousCrop.xy,1.e-6);
-    return uv*float2(M4Grid.xy)-.5;
-}
-
-float2 GDLockedCell(float2 local) {
-    const float2 fullUv=lerp(M2Crop.xy,M2Crop.zw,local);
-    const float2 uv=(fullUv-M6PreviousCrop.xy)/max(M6PreviousCrop.zw-M6PreviousCrop.xy,1.e-6);
     return uv*float2(M4Grid.xy)-.5;
 }
 
@@ -230,28 +225,42 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
             const float lockDepth=M6PreviousJitter.z;
             float best=0.0;
             uint bestAge=0u;
-            bool okInfinity;
-            const float2 worldCenter=GDPreviousCell(local,0.0,okInfinity);
-            const float2 lockedCenter=GDLockedCell(local);
-            [unroll] for(uint win=0u;win<2u;++win) {
-                const int2 c0=int2(round(win==0u ? worldCenter : lockedCenter));
+            int2 bestC=int2(0,0);
+            // Review fixes (11-18 pm): (a) no history in weapon/hands range (those move
+            // on their own: trails); (b) search windows at three candidate depths
+            // (infinity, 1/3 and 2/3 of the near range), so camera translation parallax
+            // of nearer objects is found, not only rotation; (c) only THIN kept depth
+            // (narrower than 5 texels across x or y in the previous frame) may come from
+            // history - edges of wide objects that moved away are not held (no trails).
+            const uint windows=lockDepth>0.0 ? 3u : 1u;
+            [loop] for(uint win=0u;win<windows;++win) {
+                bool okCenter;
+                const int2 c0=int2(round(GDPreviousCell(local,lockDepth*float(win)/3.0,okCenter)));
                 [unroll] for(int dy=-1;dy<=1;++dy) {
                     [unroll] for(int dx=-1;dx<=1;++dx) {
                         const int2 c=c0+int2(dx,dy);
                         if(all(c>=int2(0,0)) && all(c<int2(M4Grid.xy))) {
                             const float h=asfloat(GDHistory[uint3(uint2(c),previous)]);
-                            const bool locked=lockDepth>0.0 && h>=lockDepth;
-                            if(h>max(cur,best) && locked==(win==1u)) {
+                            if(h>max(cur,best) && !(lockDepth>0.0 && h>=lockDepth)) {
                                 bool ok=true;
-                                const float2 q=locked ? lockedCenter : GDPreviousCell(local,h,ok);
+                                const float2 q=GDPreviousCell(local,h,ok);
                                 if(ok && all(abs(q-float2(c))<=radius)) {
-                                    best=h;
+                                    best=h; bestC=c;
                                     bestAge=GDHistory[uint3(uint2(c),previous+1u)];
                                 }
                             }
                         }
                     }
                 }
+            }
+            [branch] if(best>0.0) {
+                const int2 lim=int2(M4Grid.xy)-1;
+                const float lo=best*.97;
+                const bool thinX=asfloat(GDHistory[uint3(uint2(clamp(bestC-int2(3,0),int2(0,0),lim)),previous)])<lo &&
+                                 asfloat(GDHistory[uint3(uint2(clamp(bestC+int2(3,0),int2(0,0),lim)),previous)])<lo;
+                const bool thinY=asfloat(GDHistory[uint3(uint2(clamp(bestC-int2(0,3),int2(0,0),lim)),previous)])<lo &&
+                                 asfloat(GDHistory[uint3(uint2(clamp(bestC+int2(0,3),int2(0,0),lim)),previous)])<lo;
+                if(!thinX && !thinY) best=0.0;
             }
             [branch] if(best>0.0 && cur<best*.97) {
                 const uint nextAge=bestAge+1u;

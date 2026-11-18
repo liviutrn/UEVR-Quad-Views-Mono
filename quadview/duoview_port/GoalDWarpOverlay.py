@@ -290,9 +290,15 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
                 }
             }
         }
+        UINT neg_vs_m1=0u, neg_vs_m2=0u;
         {   // Same phase: production default (mode 0) vs mode 1, and mode 1 vs mode 2.
             const auto m0=gj_frame(false,0u,phase[1]), m1=gj_frame(false,1u,phase[1]), m2=gj_frame(false,2u,phase[1]);
             for (UINT t=0;t<JL;++t) { mode0_diff+=m0[t]!=m1[t] ? 1u : 0u; mode12_diff+=m1[t]!=m2[t] ? 1u : 0u; }
+            // The NEW menu switch (goald_jitter_negative) itself: mode 1 + flipped must equal mode 2.
+            frame.config.settings.goald_jitter_negative=1u;
+            const auto mn=gj_frame(false,1u,phase[1]);
+            frame.config.settings.goald_jitter_negative=0u;
+            for (UINT t=0;t<JL;++t) { neg_vs_m1+=mn[t]!=m1[t] ? 1u : 0u; neg_vs_m2+=mn[t]!=m2[t] ? 1u : 0u; }
         }
         const UINT total=JL*JP;
         std::ofstream("goald_jitter_result.txt")
@@ -300,12 +306,13 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
             <<",flicker_x_mode2="<<flick[0][2]<<",flicker_y_mode1="<<flick[1][1]<<",flicker_y_mode2="<<flick[1][2]
             <<",cpu_match_x="<<cpu_match[0][1]<<"/"<<cpu_match[0][2]<<",cpu_match_y="<<cpu_match[1][1]<<"/"<<cpu_match[1][2]
             <<",of="<<total<<",mode0_vs_mode1_diff="<<mode0_diff<<",mode1_vs_mode2_diff="<<mode12_diff
-            <<",predicted_x=952/430\n";
+            <<",predicted_x=952/430,switch_neg_vs_mode1="<<neg_vs_m1<<",switch_neg_vs_mode2="<<neg_vs_m2<<"\n";
         std::cout<<"GOALD_JITTER_RESULT x: mode0="<<flick[0][0]<<" mode1="<<flick[0][1]<<" mode2="<<flick[0][2]
                  <<" y: mode1="<<flick[1][1]<<" mode2="<<flick[1][2]<<" cpu_match_x="<<cpu_match[0][1]<<"/"<<cpu_match[0][2]
                  <<" of "<<total<<" mode0_vs_mode1_diff="<<mode0_diff<<" mode1_vs_mode2_diff="<<mode12_diff<<"\n";
         if (!mode12_diff) throw std::runtime_error("GoalD jitter: sign does not reach the fovea depth field");
         if (mode0_diff) throw std::runtime_error("GoalD jitter: production default differs from the + offset");
+        if (!neg_vs_m1 || neg_vs_m2) throw std::runtime_error("GoalD jitter: the jitter direction menu switch does not flip the sign");
         if (!(flick[0][2]*3u<flick[0][1]*2u) || !(flick[1][2]*3u<flick[1][1]*2u))
             throw std::runtime_error("GoalD jitter: aligned mode not clearly more stable (fixture insensitive)");
         // ---- Goal D switch 2: fovea depth history, static camera, production jitter mode 0.
@@ -344,11 +351,37 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
                 <<",from_history_permille="<<((gh_status>>8)&1023u)<<"\n";
             std::cout<<"GOALD_HISTORY_RESULT thin bar-frames="<<gh_total<<" kept off="<<gh_off<<" on="<<gh_on
                      <<" valid_frames="<<gh_valid<<" reason="<<((gh_status>>2)&15u)<<"\n";
+            // Moving WIDE object, static camera (review #368: trails). A 24-texel slab
+            // moves 4 texels per frame; ON must not keep it where it was (near texels
+            // on the middle row must equal OFF after 6 frames).
+            auto gm_near=[&](bool history) {
+                frame.config.settings.goald_history=history ? 1u : 0u;
+                frame.config.settings.m3_jitter_mode=0u;
+                UINT count=0u;
+                for (UINT f=0;f<6u;++f) {
+                    const float x0=400.f+4.f*float(f);
+                    auto tex=gj_upload(JL,JT,[&](UINT x,UINT){ const float p=float(x)+.5f; return (p>=x0 && p<x0+24.f) ? .45f : .15f; });
+                    m21_fine_depth={tex.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,JL,JT},{0.f,0.f},lease};
+                    run(*a,false,Route::direct,"GoalD history, moving wide object");
+                    const auto fv=gj_field(JL,JT);
+                    float hi=-1.e9f;
+                    for (const float v:fv) hi=(std::max)(hi,v);
+                    const float tol=1.e-5f*(std::max)(1.f,hi);
+                    count=0u;
+                    for (UINT t=0;t<JL;++t) count+=fv[size_t(JT/2u)*JL+t]>=hi-tol ? 1u : 0u;
+                }
+                return count;
+            };
+            const UINT gm_off=gm_near(false), gm_on=gm_near(true);
+            std::ofstream("goald_history_result.txt",std::ios::app)
+                <<"GOALD_HISTORY_MOVING,near_texels_off="<<gm_off<<",near_texels_on="<<gm_on<<"\n";
+            std::cout<<"GOALD_HISTORY_MOVING near texels off="<<gm_off<<" on="<<gm_on<<"\n";
             frame.config.settings.goald_history=0u;
             m1_geometry.fine_depth_camera=gh_saved_cam;
             if (!(gh_status&2u) || !gh_valid) throw std::runtime_error("GoalD history: not active / never valid");
             if (!(gh_on>gh_off)) throw std::runtime_error("GoalD history: does not keep more thin bars than OFF");
-            std::cout<<"PASS: WARP goal D fovea depth history keeps thin bars\n";
+            if (gm_on>gm_off) throw std::runtime_error("GoalD history: moving wide object leaves a trail");
+            std::cout<<"PASS: WARP goal D fovea depth history keeps thin bars, no trail behind a moving object\n";
         }
         frame.config.settings=gj_saved_settings;
         m1_depth=gj_saved_depth;

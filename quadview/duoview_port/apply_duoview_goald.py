@@ -132,13 +132,17 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     // every XR slot (all slots record on the game's single queue, in order).
     // R32_UINT array, always in UNORDERED_ACCESS state: slices 2p/2p+1 = kept
     // seed (float bits)/age of parity p, slice 4 = counters. Replaced textures
-    // are kept alive (in-flight slots may still reference them).
+    // stay alive for 16 committed history frames (more than the XR slots that
+    // may still reference them), then are released.
+    // The CPU record (parity, camera, crop, sizes, time) is committed only after
+    // record_native has recorded the frame successfully (goald_commit_history).
     struct GoalDHistoryShared {
         ComPtr<ID3D12Resource> texture;
-        std::vector<ComPtr<ID3D12Resource>> retired;
+        std::vector<std::pair<uint64_t,ComPtr<ID3D12Resource>>> retired;
         ID3D12Device* device{};
         uint32_t generation{}, parity{};
-        bool have_previous{};
+        uint64_t commits{};
+        bool have_previous{}, fresh_counters{};
         stereo::FineDepthCamera camera{};
         std::array<float,4> crop{};
         std::array<float,3> coefficients{};
@@ -150,6 +154,7 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     ComPtr<ID3D12PipelineState> m4g_raster; // switch 3 true depth: front-most root in the fovea
     bool goald_true_depth{};
     bool goald_halo_bg{}; // switch 4 value 3: halo at background depth (m4g_raster)
+    uint32_t goald_mode_bits{}; // 1 true depth -> tight (no PSO), 2 halo off (true depth on), 4 halo off (no PSO)
     ComPtr<ID3D12Resource> goald_counter_readback;
     bool goald_hist_active{}, goald_counter_pending{};
     uint32_t goald_hist_parity{}, goald_counter_parity{};
@@ -164,7 +169,7 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
             const auto d=s.texture->GetDesc();
             if (d.Width>=need_w && d.Height>=need_h) return true;
         }
-        if (s.texture) s.retired.push_back(std::move(s.texture));
+        if (s.texture) s.retired.emplace_back(s.commits,std::move(s.texture));
         D3D12_HEAP_PROPERTIES heap{};
         heap.CreationNodeMask=heap.VisibleNodeMask=1;
         heap.Type=D3D12_HEAP_TYPE_DEFAULT;
@@ -180,7 +185,28 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
         }
         s.texture->SetName(L"DuoView::GoalDFoveaDepthHistory");
         s.device=device; ++s.generation; s.have_previous=false;
+        s.fresh_counters=true; // new texture: the first dispatch's counters are undefined
         return true;
+    }
+    // Provisional history record of this frame (committed by goald_commit_history).
+    struct GoalDHistoryPending {
+        bool active{};
+        uint32_t parity{}, w{}, h{}, fine_w{}, fine_h{};
+        stereo::FineDepthCamera camera{};
+        std::array<float,4> crop{};
+        std::array<float,3> coefficients{};
+        std::chrono::steady_clock::time_point time{};
+    } goald_pending{};
+    void goald_commit_history() {
+        auto& s=goald_history_state();
+        if (!goald_pending.active) return;
+        const auto& p=goald_pending;
+        s.parity=p.parity; s.have_previous=true; s.camera=p.camera; s.crop=p.crop;
+        s.coefficients=p.coefficients; s.w=p.w; s.h=p.h; s.fine_w=p.fine_w; s.fine_h=p.fine_h; s.time=p.time;
+        ++s.commits;
+        s.retired.erase(std::remove_if(s.retired.begin(),s.retired.end(),
+            [&](const auto& r){ return s.commits-r.first>=16u; }),s.retired.end());
+        goald_pending.active=false;
     }
     void goald_read_counters() {
         // Caller owns a retired XR command slot; never wait on the GPU.
@@ -245,11 +271,14 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
         // slots are unused under Stereo V2, so Off constants stay all-zero there).
         goald_true_depth=false;
         goald_halo_bg=false;
+        goald_pending.active=false;
+        goald_mode_bits=0u;
         if (m4_active && m4_hi_active && focus) {
             const bool raster_true=bool(m4g_raster);
             data.m6_previous_jitter[0]=goald_jitter_negative ? -1.f : 1.f;
             uint32_t goald_flags=goald_one_sided==1u ? 4u : goald_one_sided==2u ? 12u : goald_one_sided>=3u ? (raster_true ? 16u : 12u) : 0u;
             goald_true_depth=goald_one_sided>=3u && raster_true;
+            if (goald_one_sided>=3u && !raster_true) goald_mode_bits|=1u; // true depth fell back to tight
             if (goald_history) {
                 auto& s=goald_history_state();
                 const auto& cam=geometry.fine_depth_camera;
@@ -271,7 +300,7 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                     const bool valid=s.have_previous && s.w==m4_columns && s.h==m4_rows &&
                         s.fine_w==focus->rect[2] && s.fine_h==focus->rect[3] &&
                         s.coefficients==coefficients && now-s.time<=stale_limit;
-                    s.parity^=1u;
+                    const uint32_t next_parity=s.parity^1u; // committed only after a successful record
                     if (valid) {
                         const auto motion=stereo::fine_depth_reprojection(cam,s.camera);
                         std::memcpy(data.m6_view,motion.rows.data(),sizeof(data.m6_view));
@@ -282,30 +311,35 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                         ++goald_hist_valid_frames;
                     }
                     goald_flags|=2u|(valid ? 1u : 0u);
-                    data.m6_previous_rect[0]=s.parity;
+                    data.m6_previous_rect[0]=next_parity;
                     data.m6_previous_jitter[1]=4.f;                 // K=4
-                    data.m6_previous_jitter[2]=data.m8_distance[0]; // nearer than the M8 near distance: camera-locked
+                    data.m6_previous_jitter[2]=data.m8_distance[0]; // nearer than the M8 near distance: weapon/hands, no history
                     data.m6_previous_jitter[3]=.75f;                // accept radius, field texels
-                    s.have_previous=true; s.camera=cam;
-                    std::copy(std::begin(data.m2_crop),std::end(data.m2_crop),s.crop.begin());
-                    s.coefficients=coefficients; s.w=m4_columns; s.h=m4_rows;
-                    s.fine_w=focus->rect[2]; s.fine_h=focus->rect[3]; s.time=now;
-                    goald_hist_active=true; goald_hist_reason=0u; goald_hist_parity=s.parity;
+                    auto& p=goald_pending;
+                    p.active=true; p.parity=next_parity; p.camera=cam;
+                    std::copy(std::begin(data.m2_crop),std::end(data.m2_crop),p.crop.begin());
+                    p.coefficients=coefficients; p.w=m4_columns; p.h=m4_rows;
+                    p.fine_w=focus->rect[2]; p.fine_h=focus->rect[3]; p.time=now;
+                    goald_hist_active=true; goald_hist_reason=0u; goald_hist_parity=next_parity;
                     ++goald_hist_frames;
                 }
             }
             data.m6_previous_rect[1]=goald_flags;
             if (goald_fill==3u) { // switch 4 "halo at background depth": raster PSO only, no M8 fill
-                goald_halo_bg=raster_true;
-                if (raster_true) data.m6_previous_rect[1]|=32u;
+                data.m8_effects[2]=data.m8_effects[3]=0.f; // the legacy M8 fill must not move the source again
+                goald_halo_bg=raster_true && !goald_true_depth; // with true depth there is no lift: halo off
+                if (goald_halo_bg) data.m6_previous_rect[1]|=32u;
+                else goald_mode_bits|=raster_true ? 2u : 4u;  // 2: off because of true depth, 4: no raster PSO
             } else if (goald_fill>0u) // switch 4: mirror background fill inside the fovea crop
                 data.m8_effects[2]=data.m8_effects[3]=goald_fill==1u ? 1.f : .5f;
         }
+        // Safety reset: history Off / not running this frame -> the next On starts fresh.
+        if (!goald_hist_active) goald_history_state().have_previous=false;
 '''
 
 
 def m1_backend(src):
-    src = once(src, '#include <memory>\n', '#include <memory>\n#include <vector>\n', 'goal D vector include')
+    src = once(src, '#include <memory>\n', '#include <memory>\n#include <vector>\n#include <algorithm>\n', 'goal D vector include')
     src = once(src, '    ComPtr<ID3D12Resource> m4_depth;\n', M1_MEMBERS, 'goal D members')
     src = once(src,
                '        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_vertical)))) m4_vertical.Reset();\n',
@@ -376,6 +410,9 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
     void goald_copy_counters(ID3D12GraphicsCommandList* cmd) {
         auto& s=M1Resources::goald_history_state();
         if (!s.texture || !m1_.goald_counter_readback) return;
+        // First dispatch on a new texture: its own-parity counters started undefined
+        // (the kernel only clears the other parity). Skip that readback.
+        if (s.fresh_counters) { s.fresh_counters=false; return; }
         transition(cmd,s.texture.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION src{};
         src.pResource=s.texture.Get();
@@ -411,6 +448,7 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         const uint32_t hreason=!history ? 0u : (m1_active ? m1_.goald_hist_reason : 5u);
         duo_goald_history().store((1u<<31)|(history?1u:0u)|(m1_active && m1_.goald_hist_active?2u:0u)|((hreason&15u)<<2)|
             ((M1Resources::goald_hist_permille.load(std::memory_order_relaxed)&1023u)<<8),std::memory_order_relaxed);
+        duo_goald_modes().store((1u<<31)|(m1_active ? m1_.goald_mode_bits : 0u),std::memory_order_relaxed);
     }
 public:
     // Test accessors (WARP fixture): read-only.
@@ -526,6 +564,13 @@ def compositor_backend(src):
                '        m7_current_uav_=desc_cpu; goald_hist_bound_=0u;\n',
                'goal D u6 descriptor')
     src = once(src, '    void update_timing(bool timed, bool direct_xr) {', COMPOSITOR_METHODS, 'goal D methods')
+    # Switch 2: commit the history record only once this frame is fully recorded.
+    src = once(src,
+               '        next_fine_depth_={};\n        return true;\n    }\n    // Fallback for capture resources',
+               '        next_fine_depth_={};\n'
+               '        if (m1_active) m1_.goald_commit_history(); // goal D: history record follows recorded frames only\n'
+               '        return true;\n    }\n    // Fallback for capture resources',
+               'goal D history commit')
     src = once(src,
                '    D3D12_CPU_DESCRIPTOR_HANDLE m2_fovea_srv_{}, m6_previous_srv_{}, m7_current_srv_{}, m7_current_uav_{};\n',
                '    D3D12_CPU_DESCRIPTOR_HANDLE m2_fovea_srv_{}, m6_previous_srv_{}, m7_current_srv_{}, m7_current_uav_{};\n'
@@ -548,6 +593,9 @@ inline std::atomic<uint32_t>& duo_goald_field() { static std::atomic<uint32_t> s
 inline std::atomic<uint32_t>& duo_goald_grid() { static std::atomic<uint32_t> s{0u}; return s; }
 // history: bit 0 requested, bit 1 active, bits 2-5 reason, bits 8-17 permille from history, bit 31 written.
 inline std::atomic<uint32_t>& duo_goald_history() { static std::atomic<uint32_t> s{0u}; return s; }
+// modes (effective vs requested): bit 0 true depth fell back to tight (no raster PSO),
+// bit 1 halo at background depth off because true depth is on, bit 2 halo off (no raster PSO).
+inline std::atomic<uint32_t>& duo_goald_modes() { static std::atomic<uint32_t> s{0u}; return s; }
 inline const char* duo_goald_history_reason_text(uint32_t reason) {
     switch (reason) {
     case 1u: return "NOT ACTIVE - needs the 4096 fovea depth grid running (see the grid status above).";
@@ -638,7 +686,13 @@ GOALD_MENU = r'''                    m_duo_m8_far_m->draw("Depth transition ends
                     }
                     m_duo_goald_jitter->draw("Fovea depth jitter direction");
                     m_duo_goald_one_sided->draw("3. Depth ramp next to near objects (true depth = background keeps its own depth; use with 4)");
-                    m_duo_goald_fill->draw("4. Background fill in the fovea (mirror: best with 3; halo at background depth: soft look, 3 Off)");
+                    m_duo_goald_fill->draw("4. Background fill in the fovea (mirror: best with 3; halo at background depth: EXPERIMENTAL, 3 Off)");
+                    {
+                        const uint32_t gm=uevr::duoview::duo_goald_modes().load(std::memory_order_relaxed);
+                        if ((gm>>31) && (gm&1u)) ImGui::TextWrapped("NOTE: True depth is NOT running (raster shader missing) - you see One-sided, tight.");
+                        if ((gm>>31) && (gm&2u)) ImGui::TextWrapped("NOTE: Halo at background depth is OFF while 3 = True depth.");
+                        if ((gm>>31) && (gm&4u)) ImGui::TextWrapped("NOTE: Halo at background depth is NOT running (raster shader missing).");
+                    }
 '''
 
 
@@ -673,11 +727,12 @@ GOALD_LOG = r'''                                                    uevr::duovie
                                                     const uint32_t gh=uevr::duoview::duo_goald_history().load();
                                                     const uint64_t ht=uevr::duoview::dx12::M1Resources::goald_hist_texels.exchange(0);
                                                     const uint64_t hu=uevr::duoview::dx12::M1Resources::goald_hist_used.exchange(0);
-                                                    SPDLOG_INFO("[DuoView][GoalD] history requested={} active={} reason={} frames={} valid_frames={} from_history_permille={}",
+                                                    SPDLOG_INFO("[DuoView][GoalD] history requested={} active={} reason={} frames={} valid_frames={} from_history_permille={} mode_fallback_bits={}",
                                                         gh&1u, (gh>>1)&1u, (gh>>2)&15u,
                                                         uevr::duoview::dx12::M1Resources::goald_hist_frames.exchange(0),
                                                         uevr::duoview::dx12::M1Resources::goald_hist_valid_frames.exchange(0),
-                                                        ht ? hu*1000u/ht : 0u);
+                                                        ht ? hu*1000u/ht : 0u,
+                                                        uevr::duoview::duo_goald_modes().load()&7u);
                                                     SPDLOG_INFO("[DuoView][GoalD] grid requested={} effective={} reason={} field={}x{} hi_frames={} m4_gpu_ms={:.3f} gpu_samples={}",
                                                         (gd&1u) ? 4096 : 1024, (gd&2u) ? 4096 : 1024, (gd>>2)&15u,
                                                         gf>>16, gf&0xffffu,
