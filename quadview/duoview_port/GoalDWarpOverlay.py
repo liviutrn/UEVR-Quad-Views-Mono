@@ -158,6 +158,165 @@ BLOCK = r'''    // ---- Goal D switch 1: fovea depth grid 1024 / 4096 (WARP acti
 '''
 
 
+JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sign (WARP, 55_ F5) ----
+    // Synthetic jittered fine depth, render convention R=+1 (fine texel k holds the scene at
+    // k+.5+jitter). Field 1:1 (4096 setting). Mode 1 = shader offset +jitter (mode 0, the
+    // production default, must equal it), mode 2 = -jitter. Under R=+1 mode 2 is aligned, so
+    // its near mask must flicker less over 8 phases. Pre-registered CPU prediction
+    // (workspace research/edge-fix/56_jitter/predict_fixture.py): x flicker mode1=952, mode2=430.
+    // The y axis repeats the scene transposed. Proves what each mode does in the real
+    // compositor; which R the game's NGX jitter uses is measured separately on real frames.
+    if (!gd_capture_run) {
+        const auto gj_saved_depth=m1_depth;
+        const auto gj_saved_fine=m21_fine_depth;
+        const auto gj_saved_settings=frame.config.settings;
+        const auto gj_saved_k=m1_geometry.k;
+        m1_geometry.k={.25f,-.25f};
+        // Same Stereo V2 depth policy as the grid block (it restored the settings on exit).
+        frame.config.settings.synthetic_stereo=true;
+        frame.config.settings.m2_fovea_depth=true;
+        frame.config.settings.m25_fine_mode=1u;
+        frame.config.settings.m3_edges=false;
+        frame.config.settings.m4_fovea_grid=true;
+        frame.config.settings.m8_distance=true;
+        frame.config.settings.m8_edge_near=.5f;
+        frame.config.settings.m8_edge_far=.5f;
+        frame.config.settings.m8_fill_near=0.f;
+        frame.config.settings.m8_fill_far=0.f;
+        frame.config.settings.edge_reach_px=20.f;
+        frame.config.settings.m21_depth_debug=4u;
+        constexpr UINT JL=1600u, JT=40u, JN=50u, JP=8u;
+        float bar_x[JN], bar_w[JN];
+        for (UINT i=0;i<JN;++i) {
+            double ip=0.; const double fr=std::modf(double(i)*0.618034,&ip);
+            bar_x[i]=float(20.0+31.0*double(i)+fr);
+            bar_w[i]=(i%8u)==7u ? 12.f : .25f+.25f*float(i%6u);
+        }
+        float phase[JP];
+        for (UINT i=0;i<JP;++i) { UINT n=i+1u; float f=1.f, r=0.f; while (n) { f*=.5f; r+=f*float(n%2u); n/=2u; } phase[i]=r-.5f; }
+        auto gj_near=[&](float pos) { for (UINT i=0;i<JN;++i) if (pos>=bar_x[i] && pos<bar_x[i]+bar_w[i]) return true; return false; };
+        auto gj_upload=[&](UINT w,UINT h,auto value_at) {
+            const auto d=texture(w,h,DXGI_FORMAT_R32_TYPELESS,D3D12_RESOURCE_FLAG_NONE);
+            auto tex=resource(g.device.Get(),d,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{}; UINT64 nb{};
+            g.device->GetCopyableFootprints(&d,0,1,0,&fp,nullptr,nullptr,&nb);
+            fp.Footprint.Format=DXGI_FORMAT_R32_FLOAT;
+            auto up=resource(g.device.Get(),buffer(nb),D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);
+            void* m{}; check(up->Map(0,&no_reads,&m));
+            for (UINT y=0;y<h;++y) {
+                auto* r=reinterpret_cast<float*>(static_cast<uint8_t*>(m)+y*fp.Footprint.RowPitch);
+                for (UINT x=0;x<w;++x) r[x]=value_at(x,y);
+            }
+            up->Unmap(0,nullptr);
+            D3D12_TEXTURE_COPY_LOCATION from{up.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT}; from.PlacedFootprint=fp;
+            D3D12_TEXTURE_COPY_LOCATION to{tex.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
+            g.cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+            transition(g.cmd.Get(),tex.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+            g.submit_and_wait();
+            keep.push_back(up); keep.push_back(tex);
+            return tex;
+        };
+        // Whole slice 0 of the M4 field, row-major, cols x rows active texels.
+        auto gj_field=[&](UINT cols,UINT rows) {
+            ID3D12Resource* field=a->goald_m4_field();
+            if (!field) throw std::runtime_error("GoalD jitter: no M4 field");
+            const auto fd=field->GetDesc();
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT ffp{}; UINT64 fbytes{};
+            g.device->GetCopyableFootprints(&fd,0,1,0,&ffp,nullptr,nullptr,&fbytes);
+            auto rb=resource(g.device.Get(),buffer(fbytes),D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
+            transition(g.cmd.Get(),field,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE);
+            D3D12_TEXTURE_COPY_LOCATION src{field,D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
+            D3D12_TEXTURE_COPY_LOCATION dst{rb.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT}; dst.PlacedFootprint=ffp;
+            g.cmd->CopyTextureRegion(&dst,0,0,0,&src,nullptr);
+            transition(g.cmd.Get(),field,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            g.submit_and_wait();
+            keep.push_back(rb);
+            std::vector<float> out(size_t(cols)*rows);
+            void* fm{}; const D3D12_RANGE all{0,SIZE_T(fbytes)};
+            check(rb->Map(0,&all,&fm));
+            for (UINT y=0;y<rows;++y) {
+                const auto* r=reinterpret_cast<const float*>(static_cast<const uint8_t*>(fm)+ffp.Offset+UINT64(y)*ffp.Footprint.RowPitch);
+                for (UINT x=0;x<cols;++x) out[size_t(y)*cols+x]=r[x];
+            }
+            const D3D12_RANGE none{0,0}; rb->Unmap(0,&none);
+            return out;
+        };
+        frame.config.settings.goald_depth_grid=4096u;
+        auto gj_flat=upload_depth([](UINT){ return .15f; });
+        m1_depth={gj_flat.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,32,32},{},lease};
+        // Near mask along the test axis (middle line) for one phase.
+        auto gj_frame=[&](bool vertical,UINT mode,float jp) {
+            const UINT W=vertical ? JT : JL, H=vertical ? JL : JT;
+            auto tex=gj_upload(W,H,[&](UINT x,UINT y){ return gj_near(float(vertical ? y : x)+.5f+jp) ? .45f : .15f; });
+            const std::array<float,2> jit{vertical ? 0.f : jp/float(JL), vertical ? jp/float(JL) : 0.f};
+            m21_fine_depth={tex.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,W,H},jit,lease};
+            frame.config.settings.m3_jitter_mode=mode;
+            run(*a,false,Route::direct,vertical ? "GoalD jitter sign, y axis" : "GoalD jitter sign, x axis");
+            if (!a->goald_m4_hi_active() || a->goald_m4_columns()!=W || a->goald_m4_rows()!=H)
+                throw std::runtime_error("GoalD jitter: field not 1:1 with the fine depth");
+            const auto f=gj_field(W,H);
+            float hi=-1.e9f;
+            for (const float v:f) {
+                if (!std::isfinite(v) || v<0.f) throw std::runtime_error("GoalD jitter: NaN or negative depth");
+                hi=(std::max)(hi,v);
+            }
+            const float tol=1.e-5f*(std::max)(1.f,hi);
+            std::vector<uint8_t> mask(JL);
+            for (UINT t=0;t<JL;++t) mask[t]=(vertical ? f[size_t(t)*W+W/2u] : f[size_t(H/2u)*W+t])>=hi-tol;
+            return mask;
+        };
+        // CPU model of the seed: 2x2 near-max at floor(c+.5+s*jp-.5), clamped.
+        auto gj_cpu=[&](int s,float jp) {
+            std::vector<uint8_t> fine(JL), mask(JL);
+            for (UINT k=0;k<JL;++k) fine[k]=gj_near(float(k)+.5f+jp);
+            for (UINT c=0;c<JL;++c) {
+                const int i0=(std::min)((std::max)(int(std::floor(float(c)+float(s)*jp)),0),int(JL)-2);
+                mask[c]=fine[size_t(i0)]|fine[size_t(i0)+1u];
+            }
+            return mask;
+        };
+        UINT flick[2][3]{}, cpu_match[2][3]{}, mode0_diff=0u, mode12_diff=0u;
+        for (UINT axis=0;axis<2u;++axis) {
+            for (UINT mode=0;mode<3u;++mode) {
+                if (axis==1u && mode==0u) continue;
+                std::vector<std::vector<uint8_t>> m;
+                for (UINT p=0;p<JP;++p) m.push_back(gj_frame(axis==1u,mode,phase[p]));
+                for (UINT p=0;p<JP;++p) {
+                    const auto ref=gj_cpu(mode==2u ? -1 : 1,phase[p]);
+                    for (UINT t=0;t<JL;++t) {
+                        flick[axis][mode]+=m[p][t]!=m[(p+1u)%JP][t] ? 1u : 0u;
+                        cpu_match[axis][mode]+=m[p][t]==ref[t] ? 1u : 0u;
+                    }
+                }
+            }
+        }
+        {   // Same phase: production default (mode 0) vs mode 1, and mode 1 vs mode 2.
+            const auto m0=gj_frame(false,0u,phase[1]), m1=gj_frame(false,1u,phase[1]), m2=gj_frame(false,2u,phase[1]);
+            for (UINT t=0;t<JL;++t) { mode0_diff+=m0[t]!=m1[t] ? 1u : 0u; mode12_diff+=m1[t]!=m2[t] ? 1u : 0u; }
+        }
+        const UINT total=JL*JP;
+        std::ofstream("goald_jitter_result.txt")
+            <<"GOALD_JITTER_RESULT,R=+1,flicker_x_mode0="<<flick[0][0]<<",flicker_x_mode1="<<flick[0][1]
+            <<",flicker_x_mode2="<<flick[0][2]<<",flicker_y_mode1="<<flick[1][1]<<",flicker_y_mode2="<<flick[1][2]
+            <<",cpu_match_x="<<cpu_match[0][1]<<"/"<<cpu_match[0][2]<<",cpu_match_y="<<cpu_match[1][1]<<"/"<<cpu_match[1][2]
+            <<",of="<<total<<",mode0_vs_mode1_diff="<<mode0_diff<<",mode1_vs_mode2_diff="<<mode12_diff
+            <<",predicted_x=952/430\n";
+        std::cout<<"GOALD_JITTER_RESULT x: mode0="<<flick[0][0]<<" mode1="<<flick[0][1]<<" mode2="<<flick[0][2]
+                 <<" y: mode1="<<flick[1][1]<<" mode2="<<flick[1][2]<<" cpu_match_x="<<cpu_match[0][1]<<"/"<<cpu_match[0][2]
+                 <<" of "<<total<<" mode0_vs_mode1_diff="<<mode0_diff<<" mode1_vs_mode2_diff="<<mode12_diff<<"\n";
+        if (!mode12_diff) throw std::runtime_error("GoalD jitter: sign does not reach the fovea depth field");
+        if (mode0_diff) throw std::runtime_error("GoalD jitter: production default differs from the + offset");
+        if (!(flick[0][2]*3u<flick[0][1]*2u) || !(flick[1][2]*3u<flick[1][1]*2u))
+            throw std::runtime_error("GoalD jitter: aligned mode not clearly more stable (fixture insensitive)");
+        frame.config.settings=gj_saved_settings;
+        m1_depth=gj_saved_depth;
+        m21_fine_depth=gj_saved_fine;
+        m1_geometry.k=gj_saved_k;
+        std::cout<<"PASS: WARP goal D jitter sign (mode 2 aligned under R=+1; default = mode 1)\n";
+    }
+'''
+
+
 def main():
     a = argparse.ArgumentParser()
     a.add_argument("--source", type=Path, required=True)
@@ -168,7 +327,7 @@ def main():
     assert s.count(marker) == 1, "goal D WARP insertion drifted"
     assert s.count("auto upload_depth=[&](auto value_at)") == 1, "goal D WARP needs the M3 depth uploader"
     assert s.count("PASS: WARP M4 fovea-native depth field") == 1, "goal D WARP must follow the M4 block"
-    s = s.replace(marker, BLOCK + marker)
+    s = s.replace(marker, BLOCK + JITTER_BLOCK + marker)
     if "#include <fstream>" not in s:
         s = "#include <fstream>\n#include <cmath>\n#include <vector>\n" + s
     args.output.write_text(s, encoding="utf-8", newline="\n")

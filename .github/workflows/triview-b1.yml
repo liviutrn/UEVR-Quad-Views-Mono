@@ -450,6 +450,11 @@ jobs:
           Copy-Item $goald[0].FullName evidence/goald_grid_result.txt
           Get-Content evidence/goald_grid_result.txt
           if (-not (Select-String -Path evidence/goald_grid_result.txt -Pattern 'kept_4096=50,exact_4096=50' -Quiet)) { throw 'Goal D 4096 grid activation result missing' }
+          # Goal D switch 2 groundwork: jitter sign (the fixture throws on failure; this keeps the numbers).
+          $goalj=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'goald_jitter_result.txt')
+          if ($goalj.Count -ne 1) { throw "Expected one goal D jitter result, found $($goalj.Count)" }
+          Copy-Item $goalj[0].FullName evidence/goald_jitter_result.txt
+          Get-Content evidence/goald_jitter_result.txt
           # Independent V3: 20 production signed-eye captures plus 5 zero-stereo
           # source-registration controls; no reference colors passed to WARP.
           $v3=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_v3_*.bgra')
