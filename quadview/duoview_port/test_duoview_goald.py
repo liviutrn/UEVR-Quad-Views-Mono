@@ -74,15 +74,35 @@ need('{ m1_.goald_drop_frame(); error_=reason; return false; }' in comp and
 need('const bool same_mode=s.type==goald_history && s.jitter_negative==goald_jitter_negative;' in m1,
      'history type / jitter sign change starts fresh (R2)')
 need('if (s.fresh_counters) return;' in comp and 's.fresh_counters=false;' in m1, 'counters valid only after a submitted pass (R7)')
-need('GDThinAt(c,h,previous)' in hlsl and 'float(a+1u)<M6PreviousJitter.y' in hlsl and 'bestC' not in hlsl,
-     'age + thin tested per candidate before max (R3)')
-need('float GDKeptAt(' in hlsl, 'out-of-crop thin neighbours count as far (R4)')
-need('if (!goald_hist_active) goald_history_state().have_previous=false;' in m1, 'history reset when Off')
+need('if(float(a+1u)<M6PreviousJitter.y) { best=h; bestAge=a; }' in hlsl and 'bestC' not in hlsl,
+     'age tested per candidate before max (R3)')
+need('if (!goald_hist_active && goald_history_state().have_previous) goald_drop_shared();' in m1, 'history reset when Off')
 need('goald_halo_bg=raster_true && !goald_true_depth;' in m1, 'halo off with true depth')
 need('data.m8_effects[2]=data.m8_effects[3]=0.f;' in m1, 'legacy M8 fill zero in halo mode')
 need('s.commits-r.first>=16u' in m1, 'retired history textures released')
-need('const bool thinOnly=(GDFlags()&64u)!=0u;' in hlsl and 'GDLockedCell' in hlsl, 'history types all / thin only')
-need('(goald_history>=2u ? 64u : 0u)' in m1 and 'm_duo_goald_history->value(),0,2' in vrcpp, 'history type from the menu')
+# After #373 headset (11-18 evening): Thin removed, no camera-locked range, head-still gate.
+need('thinOnly' not in hlsl and 'GDLockedCell' not in hlsl and 'GDThinAt' not in hlsl and '64u' not in m1,
+     'history: All only, no screen-locked window (#373 lag with head yaw)')
+need('m_duo_goald_history->value(),0,1' in vrcpp and 'requested.goald_history,1u' in cfg, 'history menu Off/On')
+need('still=std::isfinite(shift) && shift<=goald_motion_limit;' in m1 and 'const bool use=valid && still;' in m1 and
+     'goald_flags|=2u|(use ? 1u : 0u);' in m1, 'history used only while the head is nearly still')
+need('data.m6_previous_jitter[3]=.5f;' in m1, 'accept radius .5 field texel')
+need('m_duo_goald_motion->draw(' in vrcpp and '.goald_motion_limit=m_duo_goald_motion->value()' in vrcpp and
+     'current.goald_motion_limit==candidate.goald_motion_limit' in vrcpp, 'head-still limit in the menu')
+need('moving_frames=' in log, 'log counts gated frames')
+# Switch 3 removed from the menu; switch 4 distances.
+need('m_duo_goald_one_sided' not in vrcpp and 'out.goald_one_sided=0u;' in cfg, 'switch 3 removed')
+need('m_duo_goald_halo_near->draw(' in vrcpp and 'm_duo_goald_halo_fade->draw(' in vrcpp and
+     'std::memcpy(&data.m6_previous_rect[2],&hn,sizeof(float));' in m1 and
+     '(1.0-smoothstep(hbNear,hbFar,hbDist))' in hlsl, 'switch 4 halo near/fade distances')
+# Review #373 F1/F2/F4.
+need('p.seq=++s.record_seq;' in m1 and 'if (p.seq!=s.record_seq) { goald_drop_frame(); return; }' in m1,
+     'F1: only the latest recorded history pass is committed')
+need('if (m1_.goald_pending.active) m1_.goald_drop_frame();' in comp and
+     'uevr::duoview::dx12::M1Resources::goald_drop_shared();' in log, 'F2: unsubmitted / skipped frames drop history')
+need('goald_hist_permille.store(0u,std::memory_order_relaxed);' in m1 and
+     'if (goald_counter_epoch!=goald_history_state().epoch)' in m1 and 'm1_.goald_counter_epoch=s.epoch;' in comp,
+     'F4: % reset on drop, stale readbacks ignored')
 need('hbBlend*smoothstep' in hlsl and 'GDReadFineEye(' in hlsl, 'K1: fine vs fine, crop blend weight')
 need('duo_goald_modes()' in vrcpp, 'menu shows mode fallbacks')
 

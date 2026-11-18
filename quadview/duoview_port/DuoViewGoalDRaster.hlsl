@@ -70,7 +70,13 @@ float GDReadFineEye(float2 uv, uint eye, out float blend) {
             float hbBlend;
             const float hbF=GDReadFineEye(float2(hbRoot,base.y),eye,hbBlend);
             const float hbR=GDReadRawField(float2(hbRoot,base.y));
-            const float hbW=hbBlend*smoothstep(.02,.15,(hbF-hbR)/max(hbF,1.e-6));
+            // In-game distances (Liviu #373: good on the weapon, shimmer on far objects):
+            // full strength while the lifted (near-object) depth is nearer than .z, fading
+            // to the normal soft halo (no move) at .w; both in engine units.
+            const float hbNear=asfloat(M6PreviousRect.z), hbFar=max(asfloat(M6PreviousRect.w),hbNear*1.0001+1.e-3);
+            const float hbDist=1.0/max(hbF,1.e-9);
+            const float hbW=hbBlend*smoothstep(.02,.15,(hbF-hbR)/max(hbF,1.e-6))*
+                (1.0-smoothstep(hbNear,hbFar,hbDist));
             [branch] if(hbW>0.0) {
                 const float hbDu=(M2Crop.z-M2Crop.x)/float(max(M4Grid.x,1u));
                 float hbU=hbRoot, hbPrev=hbRoot;

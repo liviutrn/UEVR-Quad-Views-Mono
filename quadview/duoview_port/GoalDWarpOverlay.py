@@ -325,7 +325,7 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
             m1_geometry.fine_depth_camera={{1.f,0.f,1.f,0.f},{0.f,0.f,0.f,1.f},{0.f,0.f,0.f},1.f};
             UINT thin=0u;
             for (UINT i=0;i<JN;++i) thin+=bar_w[i]<1.5f ? 1u : 0u;
-            auto gh_kept=[&](UINT mode) { // 0 off, 1 all fovea depth, 2 thin objects only
+            auto gh_kept=[&](UINT mode) { // 0 off, 1 on (all fovea depth; Thin removed after #373)
                 frame.config.settings.goald_history=mode;
                 UINT present=0u;
                 for (UINT round=0;round<3u;++round) for (UINT p=0;p<JP;++p) {
@@ -375,21 +375,70 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
                 }
                 return count;
             };
-            const UINT gh_thin=gh_kept(2u);
-            const UINT gm_off=gm_near(0u), gm_on=gm_near(1u), gm_thin=gm_near(2u);
+            const UINT gm_off=gm_near(0u), gm_on=gm_near(1u);
             std::ofstream("goald_history_result.txt",std::ios::app)
-                <<"GOALD_HISTORY_THIN_ONLY,kept_thin="<<gh_thin<<"\n"
-                <<"GOALD_HISTORY_MOVING,near_texels_off="<<gm_off<<",near_texels_all="<<gm_on<<",near_texels_thin="<<gm_thin<<"\n";
-            std::cout<<"GOALD_HISTORY_MOVING near texels off="<<gm_off<<" all="<<gm_on<<" thin="<<gm_thin
-                     <<" kept_thin="<<gh_thin<<"\n";
+                <<"GOALD_HISTORY_MOVING,near_texels_off="<<gm_off<<",near_texels_all="<<gm_on<<"\n";
+            std::cout<<"GOALD_HISTORY_MOVING near texels off="<<gm_off<<" all="<<gm_on<<"\n";
+            // ---- #373 head-still gate + review #373 F1/F2. Observable: valid history frames
+            // (committed frames that USED history). Static bars, production jitter mode 0.
+            frame.config.settings.goald_history=1u;
+            frame.config.settings.m3_jitter_mode=0u;
+            auto gs_frame=[&](uevr::duoview::dx12::Compositor& c,float yaw,bool submit,const char* name) {
+                auto tex=gj_upload(JL,JT,[&](UINT x,UINT){ return gj_near(float(x)+.5f) ? .45f : .15f; });
+                m21_fine_depth={tex.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,JL,JT},{0.f,0.f},lease};
+                m1_geometry.fine_depth_camera.orientation={0.f,std::sin(.5f*yaw),0.f,std::cos(.5f*yaw)};
+                run(c,false,Route::direct,name);
+                if (submit) c.note_fine_depth_enqueued();
+            };
+            auto gs_valid=[]{ return uevr::duoview::dx12::M1Resources::goald_hist_valid_frames.load(); };
+            auto gs_moving=[]{ return uevr::duoview::dx12::M1Resources::goald_hist_moving_frames.load(); };
+            gs_frame(*a,0.f,true,"GoalD gate warm-up 1");
+            gs_frame(*a,0.f,true,"GoalD gate warm-up 2");
+            uint64_t v=gs_valid(), mv=gs_moving();
+            gs_frame(*a,1.e-5f,true,"GoalD gate: head still (tiny yaw)");
+            const uint64_t still_valid=gs_valid()-v;
+            v=gs_valid(); mv=gs_moving();
+            gs_frame(*a,.05f,true,"GoalD gate: head turning (yaw .05 rad in one frame)");
+            const uint64_t turn_valid=gs_valid()-v, turn_moving=gs_moving()-mv;
+            v=gs_valid();
+            gs_frame(*a,.05f,true,"GoalD gate: still again");
+            const uint64_t again_valid=gs_valid()-v;
+            // F2 (M1 side): a recorded list that was never submitted must not leave reusable history.
+            gs_frame(*a,.05f,false,"GoalD F2: recorded, not submitted");
+            v=gs_valid();
+            gs_frame(*a,.05f,true,"GoalD F2: next frame");
+            const uint64_t f2_valid=gs_valid()-v;
+            gs_frame(*a,.05f,true,"GoalD F2: recovered");
+            // F1: slot A records, slot B records, B submitted, then the OLDER A submitted -> drop.
+            gs_frame(*a,.05f,false,"GoalD F1: record slot A");
+            gs_frame(*b,.05f,false,"GoalD F1: record slot B");
+            b->note_fine_depth_enqueued();
+            a->note_fine_depth_enqueued();
+            v=gs_valid();
+            gs_frame(*a,.05f,true,"GoalD F1: next frame");
+            const uint64_t f1_valid=gs_valid()-v;
+            v=gs_valid();
+            gs_frame(*a,.05f,true,"GoalD F1: recovered");
+            const uint64_t f1_recovered=gs_valid()-v;
+            std::ofstream("goald_history_result.txt",std::ios::app)
+                <<"GOALD_HISTORY_GATE,still_valid="<<still_valid<<",turn_valid="<<turn_valid<<",turn_moving="<<turn_moving
+                <<",again_valid="<<again_valid<<",f2_valid="<<f2_valid<<",f1_valid="<<f1_valid<<",f1_recovered="<<f1_recovered
+                <<",expected=1/0/1/1/0/0/1\n";
+            std::cout<<"GOALD_HISTORY_GATE still="<<still_valid<<" turn="<<turn_valid<<"/moving "<<turn_moving
+                     <<" again="<<again_valid<<" f2="<<f2_valid<<" f1="<<f1_valid<<" f1_recovered="<<f1_recovered<<"\n";
+            m1_geometry.fine_depth_camera.orientation={0.f,0.f,0.f,1.f};
             frame.config.settings.goald_history=0u;
             m1_geometry.fine_depth_camera=gh_saved_cam;
             if (!(gh_status&2u) || !gh_valid) throw std::runtime_error("GoalD history: not active / never valid");
             if (!(gh_on>gh_off)) throw std::runtime_error("GoalD history (all): does not keep more thin bars than OFF");
-            if (!(gh_thin>gh_off)) throw std::runtime_error("GoalD history (thin only): does not keep more thin bars than OFF");
-            // All-depth trail is expected by design (recorded only); thin-only must leave none.
-            if (gm_thin>gm_off) throw std::runtime_error("GoalD history (thin only): moving wide object leaves a trail");
-            std::cout<<"PASS: WARP goal D fovea depth history keeps thin bars, no trail behind a moving object\n";
+            // All-depth trail behind an object moving on its own is expected by design (recorded only).
+            if (still_valid!=1u || again_valid!=1u || f1_recovered!=1u)
+                throw std::runtime_error("GoalD history: not used while the head is still");
+            if (turn_valid!=0u || turn_moving!=1u)
+                throw std::runtime_error("GoalD history: used while the head turns (#373 lag)");
+            if (f2_valid!=0u) throw std::runtime_error("GoalD history: unsubmitted frame reused (review #373 F2)");
+            if (f1_valid!=0u) throw std::runtime_error("GoalD history: older slot submitted last was committed (review #373 F1)");
+            std::cout<<"PASS: WARP goal D fovea depth history keeps thin bars, head-still gate, F1/F2 drops\n";
         }
         frame.config.settings=gj_saved_settings;
         m1_depth=gj_saved_depth;

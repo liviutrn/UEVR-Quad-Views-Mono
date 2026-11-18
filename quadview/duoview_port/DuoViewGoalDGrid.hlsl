@@ -15,11 +15,13 @@
 // Goal D controls (CPU fills them only while the 4096 path is active; the M6
 // slots are otherwise unused under Stereo V2 and stay zero):
 //   M6PreviousRect.x   history parity (slice pair written this frame)
-//   M6PreviousRect.y   bits: 1 history valid, 2 history on, 4 one-sided ramp, 8 tight ramp, 16 true depth (no ramp),
+//   M6PreviousRect.y   bits: 1 history valid (head nearly still), 2 history on, 4 one-sided ramp, 8 tight ramp, 16 true depth (no ramp),
 //                      32 halo at background depth (slice 2 = raw knee'd seed, no envelope; read by the raster)
+//   M6PreviousRect.z/w halo at background depth: full strength up to / off from this distance
+//                      (float bits, engine units; switch 4 near/fade settings)
 //   M6PreviousJitter.x fine jitter sign (< 0 flips the fine jitter direction)
 //   M6PreviousJitter.y K: history not re-confirmed for K frames is dropped
-//   M6PreviousJitter.z camera-locked range: inverse depth >= this follows the camera
+//   M6PreviousJitter.z history search range: inverse depth of the nearest translation window
 //   M6PreviousJitter.w accept radius in field texels
 //   M6View/M6CurrentProjection/M6PreviousProjection/M6PreviousCrop: reprojection
 groupshared float GDRow[4096];
@@ -188,17 +190,13 @@ void CSConditionM4GVertical(uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
 // Per texel: current seed; previous kept seeds in 3x3 windows around the
 // world-reprojected position at three candidate depths (rotation + translation;
 // a candidate is accepted only if its own-depth reprojection lands within the
-// radius). Type ALL: plus weapon/hands range camera-locked; type THIN (flag 64):
-// no weapon/hands range, thin kept depth only. Output = max(current, accepted).
-// Re-confirmed by the current frame -> age 0; else age+1; dropped at age K.
+// radius). No camera-locked range (#373 headset: with M8 "transition starts"
+// at ~1 m everything nearer was screen-locked and lagged head yaw). The CPU
+// marks a frame valid only while the head is nearly still (reprojection moves
+// the field by <= the menu limit), so pose/timing error cannot drag history.
+// Output = max(current, accepted). Re-confirmed -> age 0; else age+1; dropped at age K.
 RWTexture2DArray<uint> GDHistory : register(u6);
 groupshared uint GDCount[2];
-
-float2 GDLockedCell(float2 local) {
-    const float2 fullUv=lerp(M2Crop.xy,M2Crop.zw,local);
-    const float2 uv=(fullUv-M6PreviousCrop.xy)/max(M6PreviousCrop.zw-M6PreviousCrop.xy,1.e-6);
-    return uv*float2(M4Grid.xy)-.5;
-}
 
 float2 GDPreviousCell(float2 local, float inverseDepth, out bool ok) {
     const float2 fullUv=lerp(M2Crop.xy,M2Crop.zw,local);
@@ -211,19 +209,6 @@ float2 GDPreviousCell(float2 local, float inverseDepth, out bool ok) {
     const float2 previousUv=float2(.5+.5*(pp.x*prev.x/z+pp.y),.5-.5*(pp.z*prev.y/z+pp.w));
     const float2 uv=(previousUv-M6PreviousCrop.xy)/max(M6PreviousCrop.zw-M6PreviousCrop.xy,1.e-6);
     return uv*float2(M4Grid.xy)-.5;
-}
-
-// Kept depth at c of slice s; outside the field (= outside the fovea crop) counts as
-// far (0), so a thin object touching the crop edge is still thin (review #372 R4).
-float GDKeptAt(int2 c, uint s) {
-    return (all(c>=int2(0,0)) && all(c<int2(M4Grid.xy))) ? asfloat(GDHistory[uint3(uint2(c),s)]) : 0.0;
-}
-// THIN: kept depth h at c is narrower than ~5 texels across x or y (both neighbours
-// 3 texels away are farther by more than 3%, the same tolerance as the keep test).
-bool GDThinAt(int2 c, float h, uint s) {
-    const float lo=h*.97;
-    return (GDKeptAt(c-int2(3,0),s)<lo && GDKeptAt(c+int2(3,0),s)<lo) ||
-           (GDKeptAt(c-int2(0,3),s)<lo && GDKeptAt(c+int2(0,3),s)<lo);
 }
 
 [numthreads(8,8,1)]
@@ -241,44 +226,28 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
             const float2 local=(float2(id.xy)+.5)/float2(M4Grid.xy);
             const uint previous=2u*(parity^1u);
             const float radius=M6PreviousJitter.w;
-            const float lockDepth=M6PreviousJitter.z;
+            const float searchNear=M6PreviousJitter.z; // inverse depth of the nearest search window
             float best=0.0;
             uint bestAge=0u;
-            // Two history types, chosen in game (flag 64):
-            //  ALL (Liviu, 56_ G): all fovea depth; weapon/hands range (>= lockDepth)
-            //   follows the camera (same screen position).
-            //  THIN (reviews #368): no history in weapon/hands range (independent
-            //   motion -> trails) and only THIN kept depth (narrower than 5 texels across
-            //   x or y in the previous frame), so wide objects that moved leave no trail.
-            // Both: world windows at three candidate depths (infinity, 1/3 and 2/3 of the
-            // near range) so camera translation parallax of nearer objects is found.
-            const bool thinOnly=(GDFlags()&64u)!=0u;
-            const bool hasLock=lockDepth>0.0;
-            const uint worldWindows=hasLock ? 3u : 1u;
-            const uint windows=worldWindows+((hasLock && !thinOnly) ? 1u : 0u);
-            const float2 lockedCenter=GDLockedCell(local);
+            // World windows at three candidate depths (infinity, 1/3 and 2/3 of the
+            // search range) so camera translation parallax of nearer objects is found.
+            const uint windows=searchNear>0.0 ? 3u : 1u;
             [loop] for(uint win=0u;win<windows;++win) {
-                const bool lockedWin=win>=worldWindows;
                 bool okCenter;
-                const int2 c0=int2(round(lockedWin ? lockedCenter :
-                                         GDPreviousCell(local,lockDepth*float(win)/3.0,okCenter)));
+                const int2 c0=int2(round(GDPreviousCell(local,searchNear*float(win)/3.0,okCenter)));
                 [unroll] for(int dy=-1;dy<=1;++dy) {
                     [unroll] for(int dx=-1;dx<=1;++dx) {
                         const int2 c=c0+int2(dx,dy);
                         if(all(c>=int2(0,0)) && all(c<int2(M4Grid.xy))) {
                             const float h=asfloat(GDHistory[uint3(uint2(c),previous)]);
-                            const bool locked=hasLock && h>=lockDepth;
-                            // Review #372 R3: every test (keep margin, position, age, THIN)
-                            // runs per candidate BEFORE it can become the best, so an
-                            // ineligible nearer candidate never hides an eligible farther one.
-                            if(h>best && cur<h*.97 && locked==lockedWin) {
+                            // Review #372 R3: every test (keep margin, position, age) runs per
+                            // candidate BEFORE it can become the best.
+                            if(h>best && cur<h*.97) {
                                 bool ok=true;
-                                const float2 q=locked ? lockedCenter : GDPreviousCell(local,h,ok);
+                                const float2 q=GDPreviousCell(local,h,ok);
                                 if(ok && all(abs(q-float2(c))<=radius)) {
                                     const uint a=GDHistory[uint3(uint2(c),previous+1u)];
-                                    if(float(a+1u)<M6PreviousJitter.y && (!thinOnly || GDThinAt(c,h,previous))) {
-                                        best=h; bestAge=a;
-                                    }
+                                    if(float(a+1u)<M6PreviousJitter.y) { best=h; bestAge=a; }
                                 }
                             }
                         }
