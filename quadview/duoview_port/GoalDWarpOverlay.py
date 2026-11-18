@@ -110,7 +110,7 @@ BLOCK = r'''    // ---- Goal D switch 1: fovea depth grid 1024 / 4096 (WARP acti
         const uint64_t hi_frames=uevr::duoview::dx12::M1Resources::goald_hi_frames.load()-hi_before;
         if (!hi_frames) throw std::runtime_error("GoalD: activation counter did not move");
         const auto fd=a->goald_m4_field()->GetDesc();
-        if (fd.Width<GW || fd.Height<GH || fd.DepthOrArraySize!=1)
+        if (fd.Width<GW || fd.Height<GH || fd.DepthOrArraySize!=2)
             throw std::runtime_error("GoalD: unexpected 4096 field allocation");
         const auto on_row=gd_field_row(GH/2u,GW);
 
@@ -308,6 +308,48 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
         if (mode0_diff) throw std::runtime_error("GoalD jitter: production default differs from the + offset");
         if (!(flick[0][2]*3u<flick[0][1]*2u) || !(flick[1][2]*3u<flick[1][1]*2u))
             throw std::runtime_error("GoalD jitter: aligned mode not clearly more stable (fixture insensitive)");
+        // ---- Goal D switch 2: fovea depth history, static camera, production jitter mode 0.
+        // 3 rounds x 8 phases (round 0 = warm-up). ON must activate (valid frames, counters)
+        // and keep thin bars (< 1.5 texel) in more frames than OFF.
+        {
+            const auto gh_saved_cam=m1_geometry.fine_depth_camera;
+            m1_geometry.fine_depth_camera={{1.f,0.f,1.f,0.f},{0.f,0.f,0.f,1.f},{0.f,0.f,0.f},1.f};
+            UINT thin=0u;
+            for (UINT i=0;i<JN;++i) thin+=bar_w[i]<1.5f ? 1u : 0u;
+            auto gh_kept=[&](bool history) {
+                frame.config.settings.goald_history=history ? 1u : 0u;
+                UINT present=0u;
+                for (UINT round=0;round<3u;++round) for (UINT p=0;p<JP;++p) {
+                    const auto m=gj_frame(false,0u,phase[p]);
+                    if (round==0u) continue;
+                    for (UINT i=0;i<JN;++i) {
+                        if (!(bar_w[i]<1.5f)) continue;
+                        const int c0=int(std::floor(bar_x[i]));
+                        bool any=false;
+                        for (int c=c0-1;c<=c0+2;++c) if (c>=0 && c<int(JL) && m[size_t(c)]) any=true;
+                        present+=any ? 1u : 0u;
+                    }
+                }
+                return present;
+            };
+            const uint64_t gh_valid0=uevr::duoview::dx12::M1Resources::goald_hist_valid_frames.load();
+            const UINT gh_off=gh_kept(false);
+            const UINT gh_on=gh_kept(true);
+            const uint64_t gh_valid=uevr::duoview::dx12::M1Resources::goald_hist_valid_frames.load()-gh_valid0;
+            const uint32_t gh_status=uevr::duoview::duo_goald_history().load();
+            const UINT gh_total=thin*2u*JP;
+            std::ofstream("goald_history_result.txt")
+                <<"GOALD_HISTORY_RESULT,thin_bar_frames="<<gh_total<<",kept_off="<<gh_off<<",kept_on="<<gh_on
+                <<",valid_frames="<<gh_valid<<",status=0x"<<std::hex<<gh_status<<std::dec
+                <<",from_history_permille="<<((gh_status>>8)&1023u)<<"\n";
+            std::cout<<"GOALD_HISTORY_RESULT thin bar-frames="<<gh_total<<" kept off="<<gh_off<<" on="<<gh_on
+                     <<" valid_frames="<<gh_valid<<" reason="<<((gh_status>>2)&15u)<<"\n";
+            frame.config.settings.goald_history=0u;
+            m1_geometry.fine_depth_camera=gh_saved_cam;
+            if (!(gh_status&2u) || !gh_valid) throw std::runtime_error("GoalD history: not active / never valid");
+            if (!(gh_on>gh_off)) throw std::runtime_error("GoalD history: does not keep more thin bars than OFF");
+            std::cout<<"PASS: WARP goal D fovea depth history keeps thin bars\n";
+        }
         frame.config.settings=gj_saved_settings;
         m1_depth=gj_saved_depth;
         m21_fine_depth=gj_saved_fine;

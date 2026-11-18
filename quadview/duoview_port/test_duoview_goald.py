@@ -35,14 +35,19 @@ need('void CSConditionM4G(' in hlsl and 'void CSConditionM4GVertical(' in hlsl, 
 block = hlsl.split('#ifdef DUOVIEW_GOALD_GRID', 1)[1].split('#endif', 1)[0]
 shared = re.findall(r'groupshared\s+float\s+(\w+)\[(\d+)\]', block)
 need(shared == [('GDRow', '4096')], f'goal D groupshared {shared}')
-need(block.count('M4FoveaConditioned[uint3(') == 3 and ',1u)]' not in block, 'goal D writes slice 0 only')
+need('void CSGoalDHistory(' in block and 'void CSConditionM4GH(' in block, 'switch 2 kernels present')
+need('RWTexture2DArray<uint> GDHistory : register(u6);' in block, 'history on the reserved u6 slot')
+need('M4FoveaConditioned[uint3(x,row,eye)]' in block, 'switch 3 per-eye slices')
 # Constant buffer unchanged: no new cbuffer members.
 cb = hlsl.split('cbuffer DuoViewM1', 1)[1].split('};', 1)[0]
 need('Goal' not in cb and 'GD' not in cb, 'cbuffer DuoViewM1 unchanged')
 need('sizeof(M1Constants) == ' in m1 and 'goald' not in m1.split('struct M1Constants', 1)[1].split('};', 1)[0],
      'M1Constants unchanged')
 # Off path: baseline PSOs and field whenever the 4096 field is not active.
-need('m4_gpu_pso=m1_.m4_hi_active ? m1_.m4g_condition.Get() : m1_.m4_condition.Get();' in comp, 'condition PSO select')
+need('(m1_.goald_hist_active ? m1_.m4g_condition_h.Get() : m1_.m4g_condition.Get()) : m1_.m4_condition.Get();' in comp, 'condition PSO select')
+need(comp.index('goald_bind_history(device);') < comp.index('cmd->SetComputeRootDescriptorTable(8,m4_table);'), 'u6 bound before tables')
+need('if (m4_active && m4_hi_active && focus) {' in m1, 'switches 2-4 constants only on the 4096 path')
+need('bool goald_history{0}' not in cfg and 'goald_history{0}' in cfg, 'switch 2 default off')
 need('m1_.m4_hi_active ? m1_.m4g_vertical.Get() : m1_.m4_vertical.Get()' in comp, 'vertical PSO select')
 need('return m4_hi_active && m4_depth_hi ? m4_depth_hi.Get() : m4_depth.Get();' in m1, 'field select')
 need(m1.count('m4_hi_active=true;') == 1, 'single activation site')
@@ -61,4 +66,4 @@ need('q.Count = 4;' in comp and 'TIMESTAMP,2);' in comp and 'TIMESTAMP,3);' in c
 if fails:
     print('GOALD CONTRACT FAIL:', *fails, sep='\n  ')
     sys.exit(1)
-print('GOALD CONTRACTS PASS: Off text/PSOs/field/cbuffer unchanged; 4096 isolated in m4g_* kernels')
+print('GOALD CONTRACTS PASS: Off text/PSOs/field/cbuffer unchanged; switches 1-4 isolated in m4g_* kernels + 4096 path')

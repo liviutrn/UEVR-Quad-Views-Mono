@@ -455,6 +455,11 @@ jobs:
           if ($goalj.Count -ne 1) { throw "Expected one goal D jitter result, found $($goalj.Count)" }
           Copy-Item $goalj[0].FullName evidence/goald_jitter_result.txt
           Get-Content evidence/goald_jitter_result.txt
+          # Goal D switch 2: fovea depth history (the fixture throws on inactive / no gain; this keeps the numbers).
+          $goalh=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'goald_history_result.txt')
+          if ($goalh.Count -ne 1) { throw "Expected one goal D history result, found $($goalh.Count)" }
+          Copy-Item $goalh[0].FullName evidence/goald_history_result.txt
+          Get-Content evidence/goald_history_result.txt
           # Independent V3: 20 production signed-eye captures plus 5 zero-stereo
           # source-registration controls; no reference colors passed to WARP.
           $v3=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_v3_*.bgra')

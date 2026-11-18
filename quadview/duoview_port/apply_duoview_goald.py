@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Goal D (2026-11-18): improve Off. Switch 1 = fovea depth grid 1024 / 4096.
+"""Goal D (2026-11-18): improve Off. Four runtime switches, all default OFF (= baseline):
+ 1 fovea depth grid 1024 / 4096;  2 temporal fovea depth history (all fovea depth, K=4);
+ 3 one-sided ramp per eye (raw step on the side the warp does not need a ramp);
+ 4 background fill in the fovea (mirror, full/half) + fine jitter direction switch.
+Switches 2-4 and the jitter direction run on the 4096 kernels (they turn the 4096 grid on).
 
 Plan + pre-registered criteria: workspace research/edge-fix/54_goalD_plan.md; diagnosis 55_.
 Default 1024 = the unchanged baseline path: same PSOs, same descriptors, same DXBC.
@@ -102,7 +106,7 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
         heap.Type=D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC t{};
         t.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        t.Width=w; t.Height=h; t.DepthOrArraySize=1; t.MipLevels=1;
+        t.Width=w; t.Height=h; t.DepthOrArraySize=2; t.MipLevels=1; // one slice per eye (switch 3)
         t.Format=DXGI_FORMAT_R32_FLOAT; t.SampleDesc.Count=1;
         t.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         if (FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&t,
@@ -114,6 +118,72 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
         ++m4_hi_generation;
         return true;
     }
+    // ---- Goal D switch 2: temporal fovea depth history. ONE history shared by
+    // every XR slot (all slots record on the game's single queue, in order).
+    // R32_UINT array, always in UNORDERED_ACCESS state: slices 2p/2p+1 = kept
+    // seed (float bits)/age of parity p, slice 4 = counters. Replaced textures
+    // are kept alive (in-flight slots may still reference them).
+    struct GoalDHistoryShared {
+        ComPtr<ID3D12Resource> texture;
+        std::vector<ComPtr<ID3D12Resource>> retired;
+        ID3D12Device* device{};
+        uint32_t generation{}, parity{};
+        bool have_previous{};
+        stereo::FineDepthCamera camera{};
+        std::array<float,4> crop{};
+        std::array<float,3> coefficients{};
+        uint32_t w{}, h{}, fine_w{}, fine_h{};
+        std::chrono::steady_clock::time_point time{};
+    };
+    static GoalDHistoryShared& goald_history_state() { static GoalDHistoryShared s; return s; }
+    ComPtr<ID3D12PipelineState> m4g_history, m4g_condition_h;
+    ComPtr<ID3D12Resource> goald_counter_readback;
+    bool goald_hist_active{}, goald_counter_pending{};
+    uint32_t goald_hist_parity{}, goald_counter_parity{};
+    // 0 off/active, 1 needs the 4096 field, 2 pipeline/readback missing, 3 GPU memory, 4 no camera pose
+    uint32_t goald_hist_reason{};
+    inline static std::atomic<uint64_t> goald_hist_frames{}, goald_hist_valid_frames{}, goald_hist_texels{}, goald_hist_used{};
+    inline static std::atomic<uint32_t> goald_hist_permille{};
+    bool goald_ensure_history(ID3D12Device* device, uint32_t fw, uint32_t fh) {
+        auto& s=goald_history_state();
+        const uint32_t need_w=(fw+127u)&~127u, need_h=(fh+127u)&~127u;
+        if (s.texture && s.device==device) {
+            const auto d=s.texture->GetDesc();
+            if (d.Width>=need_w && d.Height>=need_h) return true;
+        }
+        if (s.texture) s.retired.push_back(std::move(s.texture));
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.CreationNodeMask=heap.VisibleNodeMask=1;
+        heap.Type=D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC t{};
+        t.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        t.Width=need_w; t.Height=need_h; t.DepthOrArraySize=5; t.MipLevels=1;
+        t.Format=DXGI_FORMAT_R32_UINT; t.SampleDesc.Count=1;
+        t.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if (FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&t,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,nullptr,IID_PPV_ARGS(&s.texture)))) {
+            s.texture.Reset();
+            return false;
+        }
+        s.texture->SetName(L"DuoView::GoalDFoveaDepthHistory");
+        s.device=device; ++s.generation; s.have_previous=false;
+        return true;
+    }
+    void goald_read_counters() {
+        // Caller owns a retired XR command slot; never wait on the GPU.
+        if (!goald_counter_pending || !goald_counter_readback) return;
+        const D3D12_RANGE read{0,4*sizeof(uint32_t)};
+        void* p=nullptr;
+        if (SUCCEEDED(goald_counter_readback->Map(0,&read,&p)) && p) {
+            const auto* v=static_cast<const uint32_t*>(p);
+            const uint32_t texels=v[2u*goald_counter_parity], used=v[2u*goald_counter_parity+1u];
+            const D3D12_RANGE written{0,0};
+            goald_counter_readback->Unmap(0,&written);
+            goald_hist_texels+=texels; goald_hist_used+=used;
+            if (texels) goald_hist_permille.store(uint32_t(uint64_t(used)*1000u/texels),std::memory_order_relaxed);
+        }
+        goald_counter_pending=false;
+    }
 '''
 
 M1_PSO = r'''        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_vertical)))) m4_vertical.Reset();
@@ -122,6 +192,22 @@ M1_PSO = r'''        if(FAILED(device->CreateComputePipelineState(&compute,IID_P
         if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_condition)))) m4g_condition.Reset();
         compute.CS={m4g_vertical_bytecode,sizeof(m4g_vertical_bytecode)};
         if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_vertical)))) m4g_vertical.Reset();
+        // Goal D switch 2: optional; failure only reports "history not active".
+        compute.CS={m4g_history_bytecode,sizeof(m4g_history_bytecode)};
+        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_history)))) m4g_history.Reset();
+        compute.CS={m4g_condition_h_bytecode,sizeof(m4g_condition_h_bytecode)};
+        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_condition_h)))) m4g_condition_h.Reset();
+        {
+            D3D12_HEAP_PROPERTIES rb{};
+            rb.CreationNodeMask=rb.VisibleNodeMask=1;
+            rb.Type=D3D12_HEAP_TYPE_READBACK;
+            D3D12_RESOURCE_DESC b{};
+            b.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER; b.Width=256;
+            b.Height=b.DepthOrArraySize=b.MipLevels=1; b.SampleDesc.Count=1;
+            b.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            if(FAILED(device->CreateCommittedResource(&rb,D3D12_HEAP_FLAG_NONE,&b,
+                D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&goald_counter_readback)))) goald_counter_readback.Reset();
+        }
 '''
 
 M1_FIELD_CHOICE = r'''            const float fw=float(focus->rect[2]), fh=float(focus->rect[3]);
@@ -137,17 +223,80 @@ M1_FIELD_CHOICE = r'''            const float fw=float(focus->rect[2]), fh=float
 '''
 
 
+M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (4096 kernels only; the M6
+        // slots are unused under Stereo V2, so Off constants stay all-zero there).
+        if (m4_active && m4_hi_active && focus) {
+            data.m6_previous_jitter[0]=goald_jitter_negative ? -1.f : 1.f;
+            uint32_t goald_flags=goald_one_sided ? 4u : 0u;
+            if (goald_history) {
+                auto& s=goald_history_state();
+                const auto& cam=geometry.fine_depth_camera;
+                const bool camera_ok=cam.projection[0]!=0.f && cam.projection[2]!=0.f &&
+                    cam.world_to_meters>0.f && std::isfinite(cam.position[0]);
+                if (!m4g_history || !m4g_condition_h || !goald_counter_readback) goald_hist_reason=2u;
+                else if (!camera_ok) goald_hist_reason=4u;
+                else if (!goald_ensure_history(device,m4_columns,m4_rows)) goald_hist_reason=3u;
+                else {
+                    const auto now=std::chrono::steady_clock::now();
+                    std::array<float,3> coefficients{};
+                    std::copy_n(geometry.depth_coefficients.begin(),3,coefficients.begin());
+                    // Safety resets only: field/fine size change, stale record, depth coefficient change.
+                    #if defined(DUOVIEW_M4_WARP_PROBE)
+                    const auto stale_limit=std::chrono::milliseconds(60000); // WARP frames are slow
+                    #else
+                    const auto stale_limit=std::chrono::milliseconds(90);
+                    #endif
+                    const bool valid=s.have_previous && s.w==m4_columns && s.h==m4_rows &&
+                        s.fine_w==focus->rect[2] && s.fine_h==focus->rect[3] &&
+                        s.coefficients==coefficients && now-s.time<=stale_limit;
+                    s.parity^=1u;
+                    if (valid) {
+                        const auto motion=stereo::fine_depth_reprojection(cam,s.camera);
+                        std::memcpy(data.m6_view,motion.rows.data(),sizeof(data.m6_view));
+                        std::copy(cam.projection.begin(),cam.projection.end(),data.m6_current_projection);
+                        std::copy(motion.previous_projection.begin(),motion.previous_projection.end(),
+                                  data.m6_previous_projection);
+                        std::copy(s.crop.begin(),s.crop.end(),data.m6_previous_crop);
+                        ++goald_hist_valid_frames;
+                    }
+                    goald_flags|=2u|(valid ? 1u : 0u);
+                    data.m6_previous_rect[0]=s.parity;
+                    data.m6_previous_jitter[1]=4.f;                 // K=4
+                    data.m6_previous_jitter[2]=data.m8_distance[0]; // nearer than the M8 near distance: camera-locked
+                    data.m6_previous_jitter[3]=.75f;                // accept radius, field texels
+                    s.have_previous=true; s.camera=cam;
+                    std::copy(std::begin(data.m2_crop),std::end(data.m2_crop),s.crop.begin());
+                    s.coefficients=coefficients; s.w=m4_columns; s.h=m4_rows;
+                    s.fine_w=focus->rect[2]; s.fine_h=focus->rect[3]; s.time=now;
+                    goald_hist_active=true; goald_hist_reason=0u; goald_hist_parity=s.parity;
+                    ++goald_hist_frames;
+                }
+            }
+            data.m6_previous_rect[1]=goald_flags;
+            if (goald_fill>0u) // switch 4: mirror background fill inside the fovea crop
+                data.m8_effects[2]=data.m8_effects[3]=goald_fill==1u ? 1.f : .5f;
+        }
+'''
+
+
 def m1_backend(src):
+    src = once(src, '#include <memory>\n', '#include <memory>\n#include <vector>\n', 'goal D vector include')
     src = once(src, '    ComPtr<ID3D12Resource> m4_depth;\n', M1_MEMBERS, 'goal D members')
     src = once(src,
                '        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4_vertical)))) m4_vertical.Reset();\n',
                M1_PSO, 'goal D pipelines')
     src = once(src, '                         float eye_near,float eye_far) {',
-               '                         float eye_near,float eye_far,uint32_t depth_grid=1024u) {',
+               '                         float eye_near,float eye_far,uint32_t depth_grid=1024u,\n'
+               '                         bool goald_history=false,bool goald_jitter_negative=false,\n'
+               '                         bool goald_one_sided=false,uint32_t goald_fill=0u) {',
                'goal D grid argument')
+    src = once(src, '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n',
+               '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n'
+               '        goald_read_counters();\n', 'goal D counter readback')
     src = once(src, '        m4_active=false; m4_columns=m4_rows=0;\n',
                '        m4_active=false; m4_columns=m4_rows=0;\n'
                '        m4_hi_active=false;\n'
+               '        goald_hist_active=false; goald_hist_reason=goald_history ? 1u : 0u;\n'
                '        goald_grid_reason=depth_grid>=4096u ? 4u : 0u;\n',
                'goal D per-frame reset')
     src = once(src,
@@ -159,6 +308,9 @@ def m1_backend(src):
                '            m4_last_w=w4; m4_last_h=h4; m4_fine_w=focus->rect[2]; m4_fine_h=focus->rect[3];\n'
                '            if(m4_hi_active) ++goald_hi_frames;\n',
                'goal D frame counter')
+    src = once(src, '        void* address{};\n        const D3D12_RANGE no_read{0,0};\n',
+               M1_GOALD_FRAME + '        void* address{};\n        const D3D12_RANGE no_read{0,0};\n',
+               'goal D switches 2-4 constants')
     return src
 
 
@@ -179,7 +331,46 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         device->CreateUnorderedAccessView(field,nullptr,&uav,goald_m4_uav_cpu_);
         goald_bound_key_=key;
     }
-    void goald_report_status(uint32_t depth_grid, bool m1_active) {
+    // Switches 2-4 and the jitter direction run on the 4096 kernels: they turn it on.
+    template<class S> static uint32_t goald_grid(const S& s) {
+        return (s.goald_history || s.goald_jitter_negative || s.goald_one_sided || s.goald_fill) ?
+            4096u : s.goald_depth_grid;
+    }
+    // u6 follows the shared history texture (slot's previous GPU work has retired).
+    void goald_bind_history(ID3D12Device* device) {
+        if (!m1_.goald_hist_active || !m7_current_uav_.ptr) return;
+        auto& s=M1Resources::goald_history_state();
+        if (!s.texture || s.generation==goald_hist_bound_) return;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+        u.Format=DXGI_FORMAT_R32_UINT;
+        u.ViewDimension=D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+        u.Texture2DArray.ArraySize=5;
+        device->CreateUnorderedAccessView(s.texture.Get(),nullptr,&u,m7_current_uav_);
+        goald_hist_bound_=s.generation;
+    }
+    void goald_copy_counters(ID3D12GraphicsCommandList* cmd) {
+        auto& s=M1Resources::goald_history_state();
+        if (!s.texture || !m1_.goald_counter_readback) return;
+        transition(cmd,s.texture.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource=s.texture.Get();
+        src.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.SubresourceIndex=4; // counters slice
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource=m1_.goald_counter_readback.Get();
+        dst.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint.Footprint.Format=DXGI_FORMAT_R32_UINT;
+        dst.PlacedFootprint.Footprint.Width=4;
+        dst.PlacedFootprint.Footprint.Height=1;
+        dst.PlacedFootprint.Footprint.Depth=1;
+        dst.PlacedFootprint.Footprint.RowPitch=256;
+        const D3D12_BOX box{0,0,0,4,1,1};
+        cmd->CopyTextureRegion(&dst,0,0,0,&src,&box);
+        transition(cmd,s.texture.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        m1_.goald_counter_pending=true;
+        m1_.goald_counter_parity=m1_.goald_hist_parity;
+    }
+    void goald_report_status(uint32_t depth_grid, bool m1_active, bool history) {
         const bool requested=depth_grid>=4096u;
         const bool effective=m1_active && m1_.m4_active && m1_.m4_hi_active;
         uint32_t reason=m1_active ? m1_.goald_grid_reason : 5u;
@@ -192,6 +383,9 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         }
         if (m1_active && m1_.m4_active)
             duo_goald_grid().store((m1_.m4_columns<<16)|(m1_.m4_rows&0xffffu),std::memory_order_relaxed);
+        const uint32_t hreason=!history ? 0u : (m1_active ? m1_.goald_hist_reason : 5u);
+        duo_goald_history().store((1u<<31)|(history?1u:0u)|(m1_active && m1_.goald_hist_active?2u:0u)|((hreason&15u)<<2)|
+            ((M1Resources::goald_hist_permille.load(std::memory_order_relaxed)&1023u)<<8),std::memory_order_relaxed);
     }
 public:
     // Test accessors (WARP fixture): read-only.
@@ -205,9 +399,11 @@ private:
 
 def compositor_backend(src):
     src = once(src, '                settings.m9_eye_near,settings.m9_eye_far);\n',
-               '                settings.m9_eye_near,settings.m9_eye_far,settings.goald_depth_grid);\n'
-               '        if (m1_active) goald_bind_m4_field(device);\n'
-               '        goald_report_status(settings.goald_depth_grid,m1_active);\n',
+               '                settings.m9_eye_near,settings.m9_eye_far,goald_grid(settings),\n'
+               '                settings.goald_history!=0u,settings.goald_jitter_negative!=0u,\n'
+               '                settings.goald_one_sided!=0u,settings.goald_fill);\n'
+               '        if (m1_active) { goald_bind_m4_field(device); goald_bind_history(device); }\n'
+               '        goald_report_status(goald_grid(settings),m1_active,settings.goald_history!=0u);\n',
                'goal D write_constants argument')
     # M4 dispatch: field resource, PSOs and timestamps 2/3 around both passes.
     src = once(src,
@@ -219,8 +415,22 @@ def compositor_backend(src):
                '                transition(cmd,m1_.m4_field(),D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,\n',
                'goal D M4 field before')
     src = once(src, '                ID3D12PipelineState* m4_gpu_pso=m1_.m4_condition.Get();\n',
-               '                ID3D12PipelineState* m4_gpu_pso=m1_.m4_hi_active ? m1_.m4g_condition.Get() : m1_.m4_condition.Get();\n',
+               '                ID3D12PipelineState* m4_gpu_pso=m1_.m4_hi_active ?\n'
+               '                    (m1_.goald_hist_active ? m1_.m4g_condition_h.Get() : m1_.m4g_condition.Get()) : m1_.m4_condition.Get();\n',
                'goal D condition PSO')
+    src = once(src,
+               '                    cmd->SetComputeRootDescriptorTable(0,srv_gpu_start_);\n'
+               '                    cmd->SetPipelineState(m4_gpu_pso);\n',
+               '                    cmd->SetComputeRootDescriptorTable(0,srv_gpu_start_);\n'
+               '                    if(m1_.goald_hist_active) { // goal D switch 2: history pass writes the seed\n'
+               '                        cmd->SetPipelineState(m1_.m4g_history.Get());\n'
+               '                        cmd->Dispatch((m1_.m4_columns+7u)/8u,(m1_.m4_rows+7u)/8u,1);\n'
+               '                        D3D12_RESOURCE_BARRIER goald_uav{};\n'
+               '                        goald_uav.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV; // every UAV: field + history\n'
+               '                        cmd->ResourceBarrier(1,&goald_uav);\n'
+               '                    }\n'
+               '                    cmd->SetPipelineState(m4_gpu_pso);\n',
+               'goal D history dispatch')
     src = once(src, '                    m4_uav.UAV.pResource=m1_.m4_depth.Get();\n',
                '                    m4_uav.UAV.pResource=m1_.m4_field();\n', 'goal D UAV barrier')
     src = once(src, '                    cmd->SetPipelineState(m1_.m4_vertical.Get());\n',
@@ -232,6 +442,7 @@ def compositor_backend(src):
                '                M1Resources::m4_count_frame();\n',
                '                transition(cmd,m1_.m4_field(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,\n'
                '                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);\n'
+               '                if(m1_.goald_hist_active) goald_copy_counters(cmd);\n'
                '                if(timed) cmd->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,3);\n'
                '                M1Resources::m4_count_frame();\n',
                'goal D M4 field after')
@@ -280,6 +491,12 @@ def compositor_backend(src):
                '        device->CreateUnorderedAccessView(m1_.m4_depth.Get(),nullptr,&soft_uav,desc_cpu);\n'
                '        goald_m4_uav_cpu_=desc_cpu; goald_uav_desc_=soft_uav; goald_bound_key_=0u;\n',
                'goal D u5 descriptor')
+    src = once(src,
+               '        desc_cpu.ptr+=srv_descriptor_increment_; // [16] u6 new history\n'
+               '        m7_current_uav_=desc_cpu;\n',
+               '        desc_cpu.ptr+=srv_descriptor_increment_; // [16] u6 new history\n'
+               '        m7_current_uav_=desc_cpu; goald_hist_bound_=0u;\n',
+               'goal D u6 descriptor')
     src = once(src, '    void update_timing(bool timed, bool direct_xr) {', COMPOSITOR_METHODS, 'goal D methods')
     src = once(src,
                '    D3D12_CPU_DESCRIPTOR_HANDLE m2_fovea_srv_{}, m6_previous_srv_{}, m7_current_srv_{}, m7_current_uav_{};\n',
@@ -287,7 +504,7 @@ def compositor_backend(src):
                '    D3D12_CPU_DESCRIPTOR_HANDLE goald_m4_srv_cpu_{}, goald_m4_uav_cpu_{};\n'
                '    D3D12_SHADER_RESOURCE_VIEW_DESC goald_srv_desc_{};\n'
                '    D3D12_UNORDERED_ACCESS_VIEW_DESC goald_uav_desc_{};\n'
-               '    uint32_t goald_bound_key_{};\n'
+               '    uint32_t goald_bound_key_{}, goald_hist_bound_{};\n'
                '    bool goald_m4_timed_{}, goald_m4_pending_{};\n',
                'goal D compositor state')
     return src
@@ -301,6 +518,18 @@ GOALD_STATUS = r'''
 inline std::atomic<uint32_t>& duo_goald_status() { static std::atomic<uint32_t> s{0u}; return s; }
 inline std::atomic<uint32_t>& duo_goald_field() { static std::atomic<uint32_t> s{0u}; return s; }
 inline std::atomic<uint32_t>& duo_goald_grid() { static std::atomic<uint32_t> s{0u}; return s; }
+// history: bit 0 requested, bit 1 active, bits 2-5 reason, bits 8-17 permille from history, bit 31 written.
+inline std::atomic<uint32_t>& duo_goald_history() { static std::atomic<uint32_t> s{0u}; return s; }
+inline const char* duo_goald_history_reason_text(uint32_t reason) {
+    switch (reason) {
+    case 1u: return "NOT ACTIVE - needs the 4096 fovea depth grid running (see the grid status above).";
+    case 2u: return "NOT ACTIVE - history shader pipeline could not be created.";
+    case 3u: return "NOT ACTIVE - GPU memory for the history could not be allocated.";
+    case 4u: return "NOT ACTIVE - no camera pose for the fine depth yet.";
+    case 5u: return "NOT ACTIVE - no synthetic stereo frame yet.";
+    default: return "NOT ACTIVE.";
+    }
+}
 inline const char* duo_goald_reason_text(uint32_t reason) {
     switch (reason) {
     case 1u: return "NOT ACTIVE - needs the Stereo V2 depth policy (edge reach >= 10 px, per-eye edges off).";
@@ -319,11 +548,16 @@ struct Settings {
 def config(src):
     src = once(src, '    float m2_left_sharpen{1.f}, m2_right_sharpen{1.f};\n',
                '    float m2_left_sharpen{1.f}, m2_right_sharpen{1.f};\n'
-               '    uint32_t goald_depth_grid{1024}; // goal D: fovea depth grid 1024 (baseline) or 4096\n',
+               '    uint32_t goald_depth_grid{1024}; // goal D: fovea depth grid 1024 (baseline) or 4096\n'
+               '    uint32_t goald_history{0}, goald_jitter_negative{0}, goald_one_sided{0}, goald_fill{0}; // goal D switches 2-4\n',
                'goal D settings field')
     src = once(src, '    out.m4_fovea_grid=requested.m4_fovea_grid;\n',
                '    out.m4_fovea_grid=requested.m4_fovea_grid;\n'
-               '    out.goald_depth_grid=requested.goald_depth_grid>=4096u ? 4096u : 1024u;\n',
+               '    out.goald_depth_grid=requested.goald_depth_grid>=4096u ? 4096u : 1024u;\n'
+               '    out.goald_history=requested.goald_history ? 1u : 0u;\n'
+               '    out.goald_jitter_negative=requested.goald_jitter_negative ? 1u : 0u;\n'
+               '    out.goald_one_sided=requested.goald_one_sided ? 1u : 0u;\n'
+               '    out.goald_fill=(std::min)(requested.goald_fill,2u);\n',
                'goal D settings sanitize')
     if '#include <atomic>' not in src:
         src = once(src, '#include <optional>\n', '#include <optional>\n#include <atomic>\n', 'goal D atomic include')
@@ -334,14 +568,21 @@ def config(src):
 def vr_hpp(src):
     src = once(src, '    static const inline std::vector<std::string> s_duo_m3_jitter_modes{',
                '    static const inline std::vector<std::string> s_duo_goald_grids{ "1024 (baseline)", "4096 (goal D test)" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_offon{ "Off (baseline)", "On (goal D test)" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_jitter{ "+ (current)", "- (flipped)" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_fill{ "Off (baseline)", "Mirror, full", "Mirror, half" };\n'
                '    static const inline std::vector<std::string> s_duo_m3_jitter_modes{',
                'goal D grid names')
     src = once(src,
                '    const ModToggle::Ptr m_duo_m4_fovea_grid{ModToggle::create(generate_name("DuoM4FoveaDepthGrid"),false)};\n',
                '    const ModToggle::Ptr m_duo_m4_fovea_grid{ModToggle::create(generate_name("DuoM4FoveaDepthGrid"),false)};\n'
-               '    const ModCombo::Ptr m_duo_goald_grid{ModCombo::create(generate_name("DuoFoveaDepthGridSize"),s_duo_goald_grids,0)};\n',
+               '    const ModCombo::Ptr m_duo_goald_grid{ModCombo::create(generate_name("DuoFoveaDepthGridSize"),s_duo_goald_grids,0)};\n'
+               '    const ModCombo::Ptr m_duo_goald_history{ModCombo::create(generate_name("DuoFoveaDepthHistory"),s_duo_goald_offon,0)};\n'
+               '    const ModCombo::Ptr m_duo_goald_jitter{ModCombo::create(generate_name("DuoFoveaJitterDirection"),s_duo_goald_jitter,0)};\n'
+               '    const ModCombo::Ptr m_duo_goald_one_sided{ModCombo::create(generate_name("DuoOneSidedRamp"),s_duo_goald_offon,0)};\n'
+               '    const ModCombo::Ptr m_duo_goald_fill{ModCombo::create(generate_name("DuoFoveaBackgroundFill"),s_duo_goald_fill,0)};\n',
                'goal D grid control')
-    src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, ', 'goal D grid persisted')
+    src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, *m_duo_goald_history, *m_duo_goald_jitter, *m_duo_goald_one_sided, *m_duo_goald_fill, ', 'goal D grid persisted')
     return src
 
 
@@ -357,6 +598,18 @@ GOALD_MENU = r'''                    m_duo_m8_far_m->draw("Depth transition ends
                             gg>>16, gg&0xffffu, gf>>16, gf&0xffffu);
                         else ImGui::TextWrapped("Fovea depth grid status: %s", uevr::duoview::duo_goald_reason_text((gd>>2)&15u));
                     }
+                    ImGui::TextWrapped("Goal D switches 2-4 (test build). Any of them turns the 4096 grid on.");
+                    m_duo_goald_history->draw("2. Fovea depth history (keeps thin objects for up to 4 frames)");
+                    {
+                        const uint32_t gh=uevr::duoview::duo_goald_history().load(std::memory_order_relaxed);
+                        if (!(gh>>31) || !(gh&1u)) ImGui::TextWrapped("Fovea depth history: off.");
+                        else if (gh&2u) ImGui::TextWrapped("Fovea depth history: ACTIVE, %.1f%% of fovea depth from history.",
+                            float((gh>>8)&1023u)/10.f);
+                        else ImGui::TextWrapped("Fovea depth history: %s", uevr::duoview::duo_goald_history_reason_text((gh>>2)&15u));
+                    }
+                    m_duo_goald_jitter->draw("Fovea depth jitter direction");
+                    m_duo_goald_one_sided->draw("3. One-sided ramp (ramp only on the side each eye needs)");
+                    m_duo_goald_fill->draw("4. Background fill in the fovea (best together with 3)");
 '''
 
 
@@ -365,11 +618,19 @@ def vr_cpp(src):
                GOALD_MENU, 'goal D grid UI')
     src = once(src, '        .m2_right_sharpen=m_duo_m2_right->value()};',
                '        .m2_right_sharpen=m_duo_m2_right->value(),\n'
-               '        .goald_depth_grid=m_duo_goald_grid->value()==1 ? 4096u : 1024u};',
+               '        .goald_depth_grid=m_duo_goald_grid->value()==1 ? 4096u : 1024u,\n'
+               '        .goald_history=m_duo_goald_history->value()==1 ? 1u : 0u,\n'
+               '        .goald_jitter_negative=m_duo_goald_jitter->value()==1 ? 1u : 0u,\n'
+               '        .goald_one_sided=m_duo_goald_one_sided->value()==1 ? 1u : 0u,\n'
+               '        .goald_fill=uint32_t((std::clamp)(m_duo_goald_fill->value(),0,2))};',
                'goal D grid settings')
     src = once(src, '        current.m2_right_sharpen==candidate.m2_right_sharpen) return;',
                '        current.m2_right_sharpen==candidate.m2_right_sharpen &&\n'
-               '        current.goald_depth_grid==candidate.goald_depth_grid) return;',
+               '        current.goald_depth_grid==candidate.goald_depth_grid &&\n'
+               '        current.goald_history==candidate.goald_history &&\n'
+               '        current.goald_jitter_negative==candidate.goald_jitter_negative &&\n'
+               '        current.goald_one_sided==candidate.goald_one_sided &&\n'
+               '        current.goald_fill==candidate.goald_fill) return;',
                'goal D grid change detection')
     return src
 
@@ -380,6 +641,14 @@ GOALD_LOG = r'''                                                    uevr::duovie
                                                     const uint32_t gf=uevr::duoview::duo_goald_field().load();
                                                     const uint64_t gpu_ns=uevr::duoview::dx12::M1Resources::goald_m4_gpu_ns.exchange(0);
                                                     const uint64_t gpu_n=uevr::duoview::dx12::M1Resources::goald_m4_gpu_samples.exchange(0);
+                                                    const uint32_t gh=uevr::duoview::duo_goald_history().load();
+                                                    const uint64_t ht=uevr::duoview::dx12::M1Resources::goald_hist_texels.exchange(0);
+                                                    const uint64_t hu=uevr::duoview::dx12::M1Resources::goald_hist_used.exchange(0);
+                                                    SPDLOG_INFO("[DuoView][GoalD] history requested={} active={} reason={} frames={} valid_frames={} from_history_permille={}",
+                                                        gh&1u, (gh>>1)&1u, (gh>>2)&15u,
+                                                        uevr::duoview::dx12::M1Resources::goald_hist_frames.exchange(0),
+                                                        uevr::duoview::dx12::M1Resources::goald_hist_valid_frames.exchange(0),
+                                                        ht ? hu*1000u/ht : 0u);
                                                     SPDLOG_INFO("[DuoView][GoalD] grid requested={} effective={} reason={} field={}x{} hi_frames={} m4_gpu_ms={:.3f} gpu_samples={}",
                                                         (gd&1u) ? 4096 : 1024, (gd&2u) ? 4096 : 1024, (gd>>2)&15u,
                                                         gf>>16, gf&0xffffu,
@@ -411,7 +680,7 @@ def main():
     edit(a.backend / 'src/mods/VR.hpp', vr_hpp)
     edit(a.backend / 'src/mods/VR.cpp', vr_cpp)
     edit(vr / 'D3D12Component.cpp', component)
-    print('goal D switch 1: grid 1024 unchanged (Off); 4096 in separate m4g_* DXBC, single-slice field')
+    print('goal D switches 1-4: Off unchanged; 4096/history/one-sided/fill only in separate m4g_* DXBC + goal D settings')
 
 
 if __name__ == '__main__':
