@@ -96,19 +96,49 @@ def shader_raster(src):
                 'goal D search step limit')
 
 
+# Colour path speed-up (2026-11-19, 67_ follow-up), m4g_raster only, same image:
+# HLSL `c ? a : b` evaluates BOTH sides; FXC flattened the periphery choice to a movc,
+# so every stereo pixel fetched the 9 Catmull-Rom taps AND the bilinear tap and kept one
+# (verified in the m4g_raster disassembly: 10 unconditional t1 samples). A real [branch]
+# fetches 1 tap (Sharper periphery OFF, or fovea weight 1) or 9 (ON, periphery visible).
+PERIPHERY_TERNARY = (
+    '    float4 periphery = (SharpenFlags & 8u) != 0u && weight < 1.0\n'
+    '        ? SamplePeripheryCatmullRom(DuoLogicalToSourceUv(fullUv), PeripheralRect.zw, NativePeripheryDimensions)\n'
+    '        : PeripheralNativeSource.SampleLevel(LinearClamp, peripherySample, 0.0);\n')
+PERIPHERY_BRANCH = (
+    '    float4 periphery;\n'
+    '    [branch] if ((SharpenFlags & 8u) != 0u && weight < 1.0)\n'
+    '        periphery = SamplePeripheryCatmullRom(DuoLogicalToSourceUv(fullUv), PeripheralRect.zw, NativePeripheryDimensions);\n'
+    '    else\n'
+    '        periphery = PeripheralNativeSource.SampleLevel(LinearClamp, peripherySample, 0.0);\n')
+
+
+def native_raster(src):
+    return once(src, PERIPHERY_TERNARY,
+                f'#ifdef {TAG}\n{PERIPHERY_BRANCH}#else\n{PERIPHERY_TERNARY}#endif\n',
+                'goal D periphery branch')
+
+
 def strip_goald(src):
-    out, inside = [], False
+    # A goal D block is insert-only (#ifdef TAG ... #endif), or a replacement
+    # (#ifdef TAG <goal D> #else <original, kept verbatim for Off> #endif).
+    out, inside, keep = [], False, False
     for line in src.splitlines(keepends=True):
         tag = line.strip()
         if tag == f'#ifdef {TAG}':
             if inside:
                 raise RuntimeError('nested goal D block')
-            inside = True
+            inside, keep = True, False
+            continue
+        if inside and tag == '#else':
+            if keep:
+                raise RuntimeError('second #else in goal D block')
+            keep = True
             continue
         if inside and tag == '#endif':
-            inside = False
+            inside, keep = False, False
             continue
-        if not inside:
+        if not inside or keep:
             out.append(line)
     if inside:
         raise RuntimeError('unterminated goal D block')
@@ -1511,6 +1541,11 @@ def main():
     edit(hlsl, shader_raster)
     if strip_goald(hlsl.read_bytes().decode('utf-8')) != original:  # exact, line endings included
         raise RuntimeError('Off shader text changed outside DUOVIEW_GOALD_GRID blocks')
+    native = a.shaders / 'DuoViewNativeCompositeRaster.hlsl'
+    native_original = native.read_bytes().decode('utf-8')
+    edit(native, native_raster)
+    if strip_goald(native.read_bytes().decode('utf-8')) != native_original:
+        raise RuntimeError('Off native raster text changed outside DUOVIEW_GOALD_GRID blocks')
     edit(vr / 'DuoViewM1D3D12.hpp', m1_backend)
     edit(vr / 'DuoViewD3D12.hpp', compositor_backend)
     edit(vr / 'DuoViewConfig.hpp', config)

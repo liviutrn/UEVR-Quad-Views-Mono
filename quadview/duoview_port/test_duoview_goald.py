@@ -135,6 +135,13 @@ need('goald_hist_permille.store(0u,std::memory_order_relaxed);' in m1 and
 need('hbBlend*smoothstep' in hlsl and 'GDReadFineEye(' in hlsl, 'K1: fine vs fine, crop blend weight')
 need('duo_goald_modes()' in vrcpp, 'menu shows mode fallbacks')
 
+# Colour path speed-up (2026-11-19): periphery choice is a real branch in m4g_raster only.
+native = (shaders / 'DuoViewNativeCompositeRaster.hlsl').read_text(encoding='utf-8')
+native_off = strip_goald(native)
+need('[branch] if ((SharpenFlags & 8u) != 0u && weight < 1.0)' in native and
+     '[branch] if ((SharpenFlags & 8u) != 0u && weight < 1.0)' not in native_off and
+     '? SamplePeripheryCatmullRom(' in native_off, 'periphery branch only in goal D; Off keeps the original ternary')
+
 # Raster cost test (65_, 2026-11-19).
 need('[branch] if((M6PreviousRect.y&0x100000u)!=0u) return saturate(base); // warp bypass' in hlsl, 'warp bypass returns the homography base (m4g_raster)')
 need('const uint gsSteps=8u-((M6PreviousRect.y>>(gsFovea ? 12u : 16u))&7u);' in hlsl and 'if(iteration>=gsSteps) break;' in hlsl,
