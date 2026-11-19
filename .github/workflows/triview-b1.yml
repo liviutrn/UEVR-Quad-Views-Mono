@@ -385,6 +385,9 @@ jobs:
           # Liviu's DuoView tab defaults (19 Nov 2026); after all DuoView overlays + their contract tests.
           python workspace/quadview/apply_liviu_duoview_defaults.py backend
           if ($LASTEXITCODE -ne 0) { throw 'Liviu DuoView defaults failed' }
+          # FOV load recovery (#380 headset): clear the foreground MPC cache on an SDK fault.
+          python workspace/quadview/duoview_port/apply_fov_load_recovery.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'FOV load recovery overlay failed' }
           '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
           $changes = @(
             @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),
