@@ -29,7 +29,8 @@ def need(cond, what):
 off = strip_goald(hlsl)
 for token in ('CSConditionM4G', 'GDRow', 'DUOVIEW_GOALD_GRID'):
     need(token not in off, f'Off shader text contains {token}')
-need(hlsl.count('#ifdef DUOVIEW_GOALD_GRID') == 3, 'goal D shader blocks: conditioning + raster helper + raster root choice')
+need(hlsl.count('#ifdef DUOVIEW_GOALD_GRID') == 4, 'goal D shader blocks: conditioning + raster helper + raster root choice + fast raster read')
+need('(M6PreviousRect.y&128u)!=0u' in hlsl and 'gfEdge>=max(M4Flags.w,.0001)' in hlsl, 'fast raster: fovea-only read only where the crop blend is 1')
 need('void CSConditionM4G(' in hlsl and 'void CSConditionM4GVertical(' in hlsl, 'goal D kernels present')
 # Groupshared budget of the new kernels: one 4096-float row only (16 KiB).
 block = hlsl.split('#ifdef DUOVIEW_GOALD_GRID', 1)[1].split('#endif', 1)[0]
@@ -86,14 +87,14 @@ need('thinOnly' not in hlsl and 'GDLockedCell' not in hlsl and 'GDThinAt' not in
      m1.count('64u')==1 and '(mv_mode ? 64u : 0u)' in m1,
      'history: All only, no screen-locked window (#373 lag with head yaw)')
 need('m_duo_goald_history->value(),0,1' in vrcpp and 'requested.goald_history,1u' in cfg, 'history menu Off/On')
-need('still=std::isfinite(shift) && shift<=goald_motion_limit;' in m1 and 'const bool use=valid && still;' in m1 and
-     'goald_flags|=2u|(use ? 1u : 0u)|' in m1, 'history used only while the head is nearly still')
+need('still=mv_mode || (std::isfinite(shift) && (goald_motion_limit>=32.f || shift<=goald_motion_limit));' in m1 and 'const bool use=valid && still;' in m1 and
+     'goald_flags|=2u|(use ? 1u : 0u)|' in m1, 'history used only while the head moves <= the limit (32 = no limit); MV mode ungated')
 need('data.m6_previous_jitter[3]=mv_mode ? .75f : .5f;' in m1, 'accept radius .5 field texel (pose), .75 (MV own-motion test)')
 # Motion-vector history (research 62_, 2026-11-18).
 ngx = (backend / 'src/mods/vr/QuadViewNgxDepth.hpp').read_text(encoding='utf-8', errors='replace')
 need('ngx_resource(p,"MotionVectors")' in ngx and 'goald_capture_mv(cmd,p,*slot,m25_role==2u,in_w,in_h,desc,dev.Get());' in ngx,
      'MV copied in the fine depth slot of the same Evaluate')
-need('d.Width!=depth_desc.Width || d.Height!=depth_desc.Height' in ngx, 'render-resolution MVs only (else logged, pose fallback)')
+need('if (uint64_t(bx)+in_w>d.Width || uint64_t(by)+in_h>d.Height) { fail(3u); return; }' in ngx and 'd.Width!=depth_desc.Width' not in ngx, 'render-res MV subrect in any MV texture size (#377: 2436x2150 pooled texture)')
 need('goald_read_copy_time(*slot);' in ngx and 'ResolveQueryData(goald_ts_heap_.Get()' in ngx and 'GetTimestampFrequency(&goald_f)' in ngx,
      'NGX depth/MV copy GPU timestamps, read after slot reuse')
 need('Texture2D<float2> GDMotion : register(t9);' in block and 'abs(float2(c)-s-float2(id.xy))<=radius' in block,
@@ -105,7 +106,8 @@ need('goald_bind_motion(device);' in comp and comp.index('goald_bind_motion(devi
 need('fine_depth->mv=focus->mv_texture.Get();' in comp_cpp if (comp_cpp := (backend / 'src/mods/vr/D3D12Component.cpp').read_text(encoding='utf-8', errors='replace')) else False,
      'caller passes MV with the fine depth (same lease)')
 need('uint32_t goald_motion_source{1};' in cfg and 'requested.goald_motion_source,2u' in cfg, 'motion source default DLSS MVs, sanitized')
-need('if (valid && !mv_mode) {'+chr(10)+'                        const auto motion=' in m1, 'no head-still gate in MV mode')
+need('if (!mv_mode) {'+chr(10)+'                            std::memcpy(data.m6_view' in m1, 'MV mode keeps its own M6View row 0 (head pose rows only without MVs)')
+need('(m1_.goald_true_depth || m1_.goald_halo_bg || m1_.goald_fast_raster_on) ? m1_.m4g_raster.Get()' in (backend / 'src/mods/vr/DuoViewD3D12.hpp').read_text(encoding='utf-8', errors='replace'), 'fast raster selects the separate m4g_raster PSO (m1_raster DXBC unchanged)')
 need('[DuoView][GoalD] motion mv_frames=' in comp_cpp, 'MV log line')
 need('m_duo_goald_motion->draw(' in vrcpp and '.goald_motion_limit=m_duo_goald_motion->value()' in vrcpp and
      'current.goald_motion_limit==candidate.goald_motion_limit' in vrcpp, 'head-still limit in the menu')
