@@ -121,7 +121,7 @@ need('m_duo_goald_halo_near->draw(' in vrcpp and 'm_duo_goald_halo_fade->draw(' 
      'std::memcpy(&data.m6_previous_rect[2],&hn,sizeof(float));' in m1 and
      '(1.0-smoothstep(hbNear,hbFar,hbDist))' in hlsl, 'switch 4 halo near/fade distances')
 # Confirm gate + per-stage GPU timing (after #373, Liviu).
-need('const int confirmR=int((GDFlags()>>8)&15u);' in hlsl and '((goald_confirm_texels&15u)<<8u)' in m1 and
+need('const int confirmR=valid ? int((GDFlags()>>8)&15u) : 0;' in hlsl and '((goald_confirm_texels&15u)<<8u)' in m1 and
      'm_duo_goald_confirm->draw(' in vrcpp and 'current.goald_confirm_texels==candidate.goald_confirm_texels' in vrcpp,
      'history confirm distance in the menu')
 need('q.Count = 8;' in comp and 'goald_stamp(cmd,timed,4u);' in comp and 'goald_stamp(cmd,timed,5u);' in comp and
