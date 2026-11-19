@@ -382,6 +382,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Goal D overlay anchors failed' }
           python workspace/quadview/duoview_port/test_duoview_goald.py backend workspace/duoview
           if ($LASTEXITCODE -ne 0) { throw 'Goal D generated contracts failed' }
+          # Liviu's DuoView tab defaults (19 Nov 2026); after all DuoView overlays + their contract tests.
+          python workspace/quadview/apply_liviu_duoview_defaults.py backend
+          if ($LASTEXITCODE -ne 0) { throw 'Liviu DuoView defaults failed' }
           '# Generated backend/HLSL diff: M2.5a versus approved #235' | Set-Content evidence/M25a-generated-source.patch
           $changes = @(
             @('QuadViewNgxDepth.hpp','backend/src/mods/vr/QuadViewNgxDepth.hpp'),
