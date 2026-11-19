@@ -258,12 +258,15 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     DXGI_FORMAT goald_mv_format{DXGI_FORMAT_UNKNOWN};
     bool goald_mv_active{};
     inline static std::atomic<uint64_t> goald_mv_frames{}, goald_mv_fallback_frames{}, goald_mv_abs_quarter{};
-    bool goald_ensure_history(ID3D12Device* device, uint32_t fw, uint32_t fh) {
+    // 68_ VRAM: slices 5..8 (per-parity motion) only exist once MV mode is wanted
+    // (5 slices otherwise, ~4 x 10 MB saved at 1664x1536); grows to 9, never shrinks.
+    bool goald_ensure_history(ID3D12Device* device, uint32_t fw, uint32_t fh, bool mv_slices) {
         auto& s=goald_history_state();
         const uint32_t need_w=(fw+127u)&~127u, need_h=(fh+127u)&~127u;
+        const uint32_t need_slices=mv_slices ? 9u : 5u;
         if (s.texture && s.device==device) {
             const auto d=s.texture->GetDesc();
-            if (d.Width>=need_w && d.Height>=need_h) return true;
+            if (d.Width>=need_w && d.Height>=need_h && d.DepthOrArraySize>=need_slices) return true;
         }
         if (s.texture) s.retired.emplace_back(s.commits,std::move(s.texture));
         D3D12_HEAP_PROPERTIES heap{};
@@ -271,7 +274,7 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
         heap.Type=D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC t{};
         t.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        t.Width=need_w; t.Height=need_h; t.DepthOrArraySize=9; t.MipLevels=1; // + slices 5..8: per-parity motion (MV mode)
+        t.Width=need_w; t.Height=need_h; t.DepthOrArraySize=UINT16(need_slices); t.MipLevels=1; // + slices 5..8: per-parity motion (MV mode only)
         t.Format=DXGI_FORMAT_R32_UINT; t.SampleDesc.Count=1;
         t.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         if (FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&t,
@@ -451,7 +454,8 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                     cam.world_to_meters>0.f && std::isfinite(cam.position[0]);
                 if (!m4g_history || !m4g_condition_h || !goald_counter_readback) goald_hist_reason=2u;
                 else if (!camera_ok) goald_hist_reason=4u;
-                else if (!goald_ensure_history(device,m4_columns,m4_rows)) goald_hist_reason=3u;
+                else if (!goald_ensure_history(device,m4_columns,m4_rows,
+                    goald_motion_source!=0u && focus->mv && focus->mv_format!=DXGI_FORMAT_UNKNOWN)) goald_hist_reason=3u;
                 else {
                     const auto now=std::chrono::steady_clock::now();
                     std::array<float,3> coefficients{};
@@ -663,7 +667,7 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
         u.Format=DXGI_FORMAT_R32_UINT;
         u.ViewDimension=D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
-        u.Texture2DArray.ArraySize=9;
+        u.Texture2DArray.ArraySize=s.texture->GetDesc().DepthOrArraySize; // 5, or 9 with MV slices (68_)
         device->CreateUnorderedAccessView(s.texture.Get(),nullptr,&u,m7_current_uav_);
         goald_hist_bound_=s.generation;
     }
@@ -875,7 +879,7 @@ def compositor_backend(src):
                '                    cmd->SetComputeRootDescriptorTable(0,srv_gpu_start_);\n'
                '                    if(m1_.goald_hist_active) { // goal D switch 2: history pass writes the seed\n'
                '                        cmd->SetPipelineState(m1_.m4g_history.Get());\n'
-               '                        cmd->Dispatch((m1_.m4_columns+7u)/8u,(m1_.m4_rows+7u)/8u,1);\n'
+               '                        cmd->Dispatch((m1_.m4_columns+15u)/16u,(m1_.m4_rows+15u)/16u,1); // 68_: 16x16 groups\n'
                '                        D3D12_RESOURCE_BARRIER goald_uav{};\n'
                '                        goald_uav.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV; // every UAV: field + history\n'
                '                        cmd->ResourceBarrier(1,&goald_uav);\n'

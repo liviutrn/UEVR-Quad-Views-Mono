@@ -197,6 +197,16 @@ void CSConditionM4GVertical(uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
 // Output = max(current, accepted). Re-confirmed -> age 0; else age+1; dropped at age K.
 RWTexture2DArray<uint> GDHistory : register(u6);
 groupshared uint GDCount[3];
+// 68_ (lossless speed-up): confirm gate as a window max. "Some texel within r has
+// seed >= 0.97*best" == "max seed over the (2r+1)^2 window >= 0.97*best"; the centre
+// can be included because it is tested only when cur < 0.97*best. Out-of-grid = 0
+// (never passes, best > 0). Computed once per 16x16 group (separable max in
+// groupshared), and only for groups where some texel has a history candidate.
+#define GD_HTILE 16u
+#define GD_HAPRON (GD_HTILE+30u) // confirm radius <= 15
+groupshared float GDConfirmTile[GD_HAPRON*GD_HAPRON];
+groupshared float GDConfirmRow[GD_HAPRON*GD_HTILE];
+groupshared uint GDConfirmNeed;
 
 // MV mode (flags 64, research 62_): DLSS motion vectors of this fine depth on t9
 // (retired M6 slot; render-resolution, same extent as the fine depth). Convention
@@ -225,29 +235,30 @@ float2 GDPreviousCell(float2 local, float inverseDepth, out bool ok) {
     return uv*float2(M4Grid.xy)-.5;
 }
 
-[numthreads(8,8,1)]
-void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint gi:SV_GroupIndex) {
+[numthreads(16,16,1)]
+void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint3 lt:SV_GroupThreadID, uint gi:SV_GroupIndex) {
     const uint parity=M6PreviousRect.x&1u;
     const bool valid=(GDFlags()&1u)!=0u;
     const bool mvMode=(GDFlags()&64u)!=0u;
-    if(gi==0u) { GDCount[0]=0u; GDCount[1]=0u; GDCount[2]=0u; }
+    const int confirmR=valid ? int((GDFlags()>>8)&15u) : 0; // cbuffer: uniform per dispatch
+    if(gi==0u) { GDCount[0]=0u; GDCount[1]=0u; GDCount[2]=0u; GDConfirmNeed=0u; }
     GroupMemoryBarrierWithGroupSync();
     uint keep=0u, used=0u, mvQuarter=0u;
-    [branch] if(id.x<M4Grid.x && id.y<M4Grid.y) {
-        const float cur=GDSeedRaw(id.xy);
-        float outDepth=cur;
-        uint age=0u;
-        const float2 mvNow=mvMode ? GDMotionField(id.xy) : float2(0.0,0.0);
-        float2 mvKeep=mvNow;
+    const bool inside=id.x<M4Grid.x && id.y<M4Grid.y;
+    float cur=0.0;
+    float best=0.0;
+    uint bestAge=0u;
+    float2 bestMotion=float2(0.0,0.0);
+    float2 mvNow=float2(0.0,0.0);
+    [branch] if(inside) {
+        cur=GDSeedRaw(id.xy);
+        mvNow=mvMode ? GDMotionField(id.xy) : float2(0.0,0.0);
         mvQuarter=mvMode ? uint(min(length(mvNow),64.0)*4.0+.5) : 0u;
         [branch] if(valid) {
             const float2 local=(float2(id.xy)+.5)/float2(M4Grid.xy);
             const uint previous=2u*(parity^1u);
             const float radius=M6PreviousJitter.w;
             const float searchNear=M6PreviousJitter.z; // inverse depth of the nearest search window
-            float best=0.0;
-            uint bestAge=0u;
-            float2 bestMotion=float2(0.0,0.0);
             [branch] if(mvMode) {
                 // 62_ step 4: search 3x3 around where this texel was last frame (x + m(x)).
                 // A candidate c is accepted only if ITS OWN stored motion s(c) carries it
@@ -299,28 +310,48 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint g
                 }
             }
             } // pose mode
-            // Confirm gate (#373: trails behind hands / moving objects). Flags bits 8-11 =
-            // radius r in field texels (0 = off): history is kept only if the CURRENT seed
-            // has similar-or-nearer depth (>= 97%) within r texels, so a near object that
-            // moved away leaves at most an r-texel trail; flicker along a thin object that
-            // is still partly sampled now is kept.
-            const int confirmR=int((GDFlags()>>8)&15u);
-            [branch] if(best>0.0 && confirmR>0) {
-                bool confirmed=false;
-                [loop] for(int cy=-confirmR;cy<=confirmR && !confirmed;++cy)
-                    [loop] for(int cx=-confirmR;cx<=confirmR && !confirmed;++cx) {
-                        const int2 n=int2(id.xy)+int2(cx,cy);
-                        if((cx!=0 || cy!=0) && all(n>=int2(0,0)) && all(n<int2(M4Grid.xy)) &&
-                           GDSeedRaw(uint2(n))>=best*.97) confirmed=true;
-                    }
-                if(!confirmed) best=0.0;
-            }
-            [branch] if(best>0.0) {
-                outDepth=best;
-                age=bestAge+1u;
-                used=1u;
-                mvKeep=bestMotion; // kept seed carries its own (constant) motion
-            }
+            if(best>0.0 && confirmR>0) InterlockedOr(GDConfirmNeed,1u);
+        }
+    }
+    // Confirm gate (#373: trails behind hands / moving objects). Flags bits 8-11 =
+    // radius r in field texels (0 = off): history is kept only if the CURRENT seed
+    // has similar-or-nearer depth (>= 97%) within r texels, so a near object that
+    // moved away leaves at most an r-texel trail; flicker along a thin object that
+    // is still partly sampled now is kept. 68_: same test as a window max (see above).
+    [branch] if(confirmR>0) {
+        GroupMemoryBarrierWithGroupSync();
+        const bool need=GDConfirmNeed!=0u;
+        const uint T=GD_HTILE+2u*uint(confirmR);
+        const int2 origin=int2(group.xy*GD_HTILE)-int2(confirmR,confirmR);
+        const uint fillCount=need ? T*T : 0u;
+        [loop] for(uint i=gi;i<fillCount;i+=GD_HTILE*GD_HTILE) {
+            const int2 n=origin+int2(i%T,i/T);
+            GDConfirmTile[i]=(all(n>=int2(0,0)) && all(n<int2(M4Grid.xy))) ? GDSeedRaw(uint2(n)) : 0.0;
+        }
+        GroupMemoryBarrierWithGroupSync();
+        const uint rowCount=need ? T*GD_HTILE : 0u;
+        [loop] for(uint j=gi;j<rowCount;j+=GD_HTILE*GD_HTILE) {
+            const uint base=(j/GD_HTILE)*T+(j%GD_HTILE);
+            float m=0.0;
+            [loop] for(uint k=0u;k<=2u*uint(confirmR);++k) m=max(m,GDConfirmTile[base+k]);
+            GDConfirmRow[j]=m;
+        }
+        GroupMemoryBarrierWithGroupSync();
+        [branch] if(need && inside && best>0.0) {
+            float m=0.0;
+            [loop] for(uint k=0u;k<=2u*uint(confirmR);++k) m=max(m,GDConfirmRow[(lt.y+k)*GD_HTILE+lt.x]);
+            if(!(m>=best*.97)) best=0.0;
+        }
+    }
+    [branch] if(inside) {
+        float outDepth=cur;
+        uint age=0u;
+        float2 mvKeep=mvNow;
+        [branch] if(best>0.0) {
+            outDepth=best;
+            age=bestAge+1u;
+            used=1u;
+            mvKeep=bestMotion; // kept seed carries its own (constant) motion
         }
         GDHistory[uint3(id.xy,2u*parity)]=asuint(outDepth);
         GDHistory[uint3(id.xy,2u*parity+1u)]=age;

@@ -99,8 +99,11 @@ need('goald_read_copy_time(*slot);' in ngx and 'ResolveQueryData(goald_ts_heap_.
      'NGX depth/MV copy GPU timestamps, read after slot reuse')
 need('Texture2D<float2> GDMotion : register(t9);' in block and 'abs(float2(c)-s-float2(id.xy))<=radius' in block,
      'MV history: t9 motion, own-motion acceptance test')
-need('GDHistory[uint3(id.xy,5u+2u*parity)]' in block and 'u.Texture2DArray.ArraySize=9;' in comp and 't.DepthOrArraySize=9;' in m1,
-     'history motion slices 5..8')
+need('GDHistory[uint3(id.xy,5u+2u*parity)]' in block and 'u.Texture2DArray.ArraySize=s.texture->GetDesc().DepthOrArraySize;' in comp
+     and 'need_slices=mv_slices ? 9u : 5u;' in m1 and 't.DepthOrArraySize=UINT16(need_slices);' in m1,
+     'history motion slices 5..8 (allocated only for MV mode, 68_)')
+need('[numthreads(16,16,1)]' in block and '(m1_.m4_columns+15u)/16u,(m1_.m4_rows+15u)/16u' in comp
+     and 'GDConfirmRow[(lt.y+k)*GD_HTILE+lt.x]' in block, 'history 16x16 groups + window-max confirm gate (68_)')
 need('goald_bind_motion(device);' in comp and comp.index('goald_bind_motion(device);') < comp.index('cmd->SetComputeRootDescriptorTable(7,m4_table);'),
      't9 motion bound before the M4 tables')
 need('fine_depth->mv=focus->mv_texture.Get();' in comp_cpp if (comp_cpp := (backend / 'src/mods/vr/D3D12Component.cpp').read_text(encoding='utf-8', errors='replace')) else False,
