@@ -29,7 +29,7 @@ def need(cond, what):
 off = strip_goald(hlsl)
 for token in ('CSConditionM4G', 'GDRow', 'DUOVIEW_GOALD_GRID'):
     need(token not in off, f'Off shader text contains {token}')
-need(hlsl.count('#ifdef DUOVIEW_GOALD_GRID') == 4, 'goal D shader blocks: conditioning + raster helper + raster root choice + fast raster read')
+need(hlsl.count('#ifdef DUOVIEW_GOALD_GRID') == 7, 'goal D shader blocks: conditioning + raster helper + raster root choice + fast raster read + warp bypass + search steps (2)')
 need('(M6PreviousRect.y&128u)!=0u' in hlsl and 'gfEdge>=max(M4Flags.w,.0001)' in hlsl, 'fast raster: fovea-only read only where the crop blend is 1')
 need('void CSConditionM4G(' in hlsl and 'void CSConditionM4GVertical(' in hlsl, 'goal D kernels present')
 # Groupshared budget of the new kernels: one 4096-float row only (16 KiB).
@@ -107,7 +107,7 @@ need('fine_depth->mv=focus->mv_texture.Get();' in comp_cpp if (comp_cpp := (back
      'caller passes MV with the fine depth (same lease)')
 need('uint32_t goald_motion_source{1};' in cfg and 'requested.goald_motion_source,2u' in cfg, 'motion source default DLSS MVs, sanitized')
 need('if (!mv_mode) {'+chr(10)+'                            std::memcpy(data.m6_view' in m1, 'MV mode keeps its own M6View row 0 (head pose rows only without MVs)')
-need('(m1_.goald_true_depth || m1_.goald_halo_bg || m1_.goald_fast_raster_on) ? m1_.m4g_raster.Get()' in (backend / 'src/mods/vr/DuoViewD3D12.hpp').read_text(encoding='utf-8', errors='replace'), 'fast raster selects the separate m4g_raster PSO (m1_raster DXBC unchanged)')
+need('(m1_.goald_true_depth || m1_.goald_halo_bg || m1_.goald_fast_raster_on || m1_.goald_raster_variant_on) ? m1_.m4g_raster.Get()' in (backend / 'src/mods/vr/DuoViewD3D12.hpp').read_text(encoding='utf-8', errors='replace'), 'fast raster selects the separate m4g_raster PSO (m1_raster DXBC unchanged)')
 need('[DuoView][GoalD] motion mv_frames=' in comp_cpp, 'MV log line')
 need('m_duo_goald_motion->draw(' in vrcpp and '.goald_motion_limit=m_duo_goald_motion->value()' in vrcpp and
      'current.goald_motion_limit==candidate.goald_motion_limit' in vrcpp, 'head-still limit in the menu')
@@ -134,6 +134,23 @@ need('goald_hist_permille.store(0u,std::memory_order_relaxed);' in m1 and
      'F4: % reset on drop, stale readbacks ignored')
 need('hbBlend*smoothstep' in hlsl and 'GDReadFineEye(' in hlsl, 'K1: fine vs fine, crop blend weight')
 need('duo_goald_modes()' in vrcpp, 'menu shows mode fallbacks')
+
+# Raster cost test (65_, 2026-11-19).
+need('[branch] if((M6PreviousRect.y&0x100000u)!=0u) return saturate(base); // warp bypass' in hlsl, 'warp bypass returns the homography base (m4g_raster)')
+need('const uint gsSteps=8u-((M6PreviousRect.y>>(gsFovea ? 12u : 16u))&7u);' in hlsl and 'if(iteration>=gsSteps) break;' in hlsl,
+     'fovea / periphery search steps (0 bits = 8 = today)')
+need('const bool gsFovea=all(base>M2Crop.xy) && all(base<M2Crop.zw);' in hlsl, 'fovea test on the homography base')
+need('((8u-gs_fovea)<<12u)|((8u-gs_periphery)<<16u)|(goald_warp_bypass ? 0x100000u : 0u)' in m1 and
+     '(std::clamp)(goald_fovea_steps,2u,8u)' in m1, 'step bits only on the 4096 path, steps 2..8')
+need('uint32_t goald_fovea_steps{8}, goald_periphery_steps{8};' in cfg and 'uint32_t goald_vrs_rate{};' in cfg and
+     'uint32_t goald_warp_bypass{};' in cfg, 'raster test defaults = today')
+need('if (!goald_vrs_draw(device,cmd,settings.goald_vrs_rate,m1_active && settings.synthetic_stereo,direct_width))' in comp and
+     'if (!rate_index) { report(); return false; }' in comp and comp.count('cl5->RSSetShadingRate(D3D12_SHADING_RATE_1X1,nullptr); // restore')==1,
+     'VRS Off = the single baseline draw; rate restored after the VRS draws')
+need('effective=rate_index>=4u && !goald_vrs_additional_ ? 3u : rate_index;' in comp, 'rates above 2x2 only with AdditionalShadingRatesSupported')
+need('[DuoView][GoalD] vrs requested=' in log and 'warp_bypass={} fovea_steps={} periphery_steps={}' in log, 'raster test log lines')
+need('m_duo_goald_vrs->draw(' in vrcpp and 'current.goald_vrs_rate==candidate.goald_vrs_rate' in vrcpp and
+     'current.goald_fovea_steps==candidate.goald_fovea_steps' in vrcpp, 'raster test menu + change detection')
 
 if fails:
     print('GOALD CONTRACT FAIL:', *fails, sep='\n  ')

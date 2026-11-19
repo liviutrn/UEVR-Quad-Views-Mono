@@ -72,8 +72,28 @@ def shader_raster(src):
             '    }\n'
             '#endif\n')
     head = 'float M1ReadConditionedEye(float2 uv, uint eye) {\n'
-    return once(src, head + '    const float coarse=M1ReadCoarseEye(uv,eye);\n',
-                head + fast + '    const float coarse=M1ReadCoarseEye(uv,eye);\n', 'goal D fast raster read')
+    src = once(src, head + '    const float coarse=M1ReadCoarseEye(uv,eye);\n',
+               head + fast + '    const float coarse=M1ReadCoarseEye(uv,eye);\n', 'goal D fast raster read')
+    # Raster cost test (65_, 2026-11-19), m4g_raster only:
+    #  bit 20 warp bypass: no warp solve (source = homography base), same colour path, two
+    #         eyes -> GPU stages "raster" = colour floor of the stereo raster (diagnostic).
+    #  bits 12-15 / 16-19: 8 - bisection steps for pixels whose base uv lies inside / outside
+    #         the fovea crop (0 = 8 = today). Fewer steps = wider final bracket (secant kept).
+    bypass = ('#ifdef ' + TAG + '\n'
+              '    [branch] if((M6PreviousRect.y&0x100000u)!=0u) return saturate(base); // warp bypass\n'
+              '#endif\n')
+    solve = '    [branch] if(M1Grid.x>0 && abs(k)>1.e-6) {\n'
+    src = once(src, '    const float k=M1Eye[eye];\n' + solve,
+               '    const float k=M1Eye[eye];\n' + bypass + solve, 'goal D warp bypass')
+    steps = ('#ifdef ' + TAG + '\n'
+             '        const bool gsFovea=all(base>M2Crop.xy) && all(base<M2Crop.zw);\n'
+             '        const uint gsSteps=8u-((M6PreviousRect.y>>(gsFovea ? 12u : 16u))&7u);\n'
+             '#endif\n')
+    src = once(src, '        bool haveLo=false, haveHi=false;\n',
+               '        bool haveLo=false, haveHi=false;\n' + steps, 'goal D search steps')
+    loop = '        [unroll] for(uint iteration=0u;iteration<8u;++iteration) {\n'
+    return once(src, loop, loop + '#ifdef ' + TAG + '\n            if(iteration>=gsSteps) break;\n#endif\n',
+                'goal D search step limit')
 
 
 def strip_goald(src):
@@ -179,6 +199,11 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     bool goald_true_depth{};
     bool goald_halo_bg{}; // switch 4 value 3: halo at background depth (m4g_raster)
     bool goald_fast_raster_on{}; // fast raster (flag 128, m4g_raster): skip the discarded coarse read in the fovea
+    bool goald_raster_variant_on{}; // 65_: warp bypass / fewer search steps (m4g_raster, 4096 path)
+    // 65_ VRS: fovea rect in output-eye uv per eye (x0,y0,x1,y1), from the M2 crop widened by the warp
+    // bracket and mapped by the inverse output->source homography; valid only when goald_vrs_fovea_ok.
+    std::array<float,8> goald_vrs_fovea{};
+    bool goald_vrs_fovea_ok{};
     uint32_t goald_mode_bits{}; // 1 true depth -> tight (no PSO), 2 halo off (true depth on), 4 halo off (no PSO)
     ComPtr<ID3D12Resource> goald_counter_readback;
     bool goald_hist_active{}, goald_counter_pending{}, goald_counter_recorded{};
@@ -190,7 +215,8 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     // vs the previous one; history is used only while it is <= the menu limit.
     inline static std::atomic<uint64_t> goald_hist_moving_frames{};
     inline static std::atomic<uint64_t> goald_shift_centi{}, goald_shift_samples{}, goald_shift_max_centi{}; // log: head shift (field texels x100)
-    inline static std::atomic<uint32_t> goald_log_settings{}; // log: bit0 history, 1-2 motion source, 4-7 confirm texels, 8 jitter negative, 9 fast raster
+    inline static std::atomic<uint32_t> goald_log_settings{}; // log: bit0 history, 1-2 motion source, 4-7 confirm texels, 8 jitter negative, 9 fast raster,
+                                                              // 10 warp bypass, 12-15 fovea steps, 16-19 periphery steps
     inline static std::atomic<float> goald_log_limit{};
     inline static std::atomic<uint32_t> goald_still_permille{}; // smoothed, for the menu
     // 0 off/active, 1 needs the 4096 field, 2 pipeline/readback missing, 3 GPU memory, 4 no camera pose
@@ -342,9 +368,44 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
         goald_true_depth=false;
         goald_halo_bg=false;
         goald_fast_raster_on=false;
+        goald_raster_variant_on=false;
         goald_pending.active=false;
+        const uint32_t gs_fovea=(std::clamp)(goald_fovea_steps,2u,8u), gs_periphery=(std::clamp)(goald_periphery_steps,2u,8u);
         goald_log_settings.store((goald_history&1u)|((goald_motion_source&3u)<<1u)|((goald_confirm_texels&15u)<<4u)|
-                                 ((goald_jitter_negative ? 1u : 0u)<<8u)|((goald_fast_raster ? 1u : 0u)<<9u),std::memory_order_relaxed);
+                                 ((goald_jitter_negative ? 1u : 0u)<<8u)|((goald_fast_raster ? 1u : 0u)<<9u)|
+                                 ((goald_warp_bypass ? 1u : 0u)<<10u)|(gs_fovea<<12u)|(gs_periphery<<16u),std::memory_order_relaxed);
+        // 65_ VRS fovea rect (any grid size): output-eye uv whose warp source can lie in the M2 crop.
+        goald_vrs_fovea_ok=false;
+        if (goald_vrs && data.m2_crop[2]>data.m2_crop[0] && data.m2_crop[3]>data.m2_crop[1]) {
+            const float cap=data.depth[3]>0.f ? 2.f*data.depth[3] : data.filter[1];
+            bool ok=std::isfinite(cap);
+            for (int e=0; e<2 && ok; ++e) {
+                const float reach=std::abs(data.eye[e]*cap); // farthest root from its homography base (uv)
+                const auto& H=data.homography;
+                const int r=3*e;
+                const double a=H[r][0], b=H[r][1], c=H[r][2], d=H[r+1][0], f=H[r+1][1], g=H[r+1][2],
+                             h=H[r+2][0], i=H[r+2][1], j=H[r+2][2];
+                const double det=a*(f*j-g*i)-b*(d*j-g*h)+c*(d*i-f*h);
+                if (!(std::abs(det)>1.e-12) || !std::isfinite(det)) { ok=false; break; }
+                const double inv[3][3]{{(f*j-g*i)/det,(c*i-b*j)/det,(b*g-c*f)/det},
+                                       {(g*h-d*j)/det,(a*j-c*h)/det,(c*d-a*g)/det},
+                                       {(d*i-f*h)/det,(b*h-a*i)/det,(a*f-b*d)/det}};
+                float x0=1.e9f, y0=1.e9f, x1=-1.e9f, y1=-1.e9f;
+                for (int cx=0; cx<2; ++cx) for (int cy=0; cy<2; ++cy) {
+                    const double sx=cx ? double(data.m2_crop[2])+reach : double(data.m2_crop[0])-reach;
+                    const double sy=cy ? double(data.m2_crop[3]) : double(data.m2_crop[1]);
+                    const double W=inv[2][0]*sx+inv[2][1]*sy+inv[2][2];
+                    if (!(W>1.e-6)) { ok=false; continue; }
+                    const float ux=float((inv[0][0]*sx+inv[0][1]*sy+inv[0][2])/W);
+                    const float uy=float((inv[1][0]*sx+inv[1][1]*sy+inv[1][2])/W);
+                    x0=(std::min)(x0,ux); x1=(std::max)(x1,ux); y0=(std::min)(y0,uy); y1=(std::max)(y1,uy);
+                }
+                ok=ok && std::isfinite(x0) && std::isfinite(x1) && std::isfinite(y0) && std::isfinite(y1);
+                goald_vrs_fovea[4*e+0]=(std::clamp)(x0,0.f,1.f); goald_vrs_fovea[4*e+1]=(std::clamp)(y0,0.f,1.f);
+                goald_vrs_fovea[4*e+2]=(std::clamp)(x1,0.f,1.f); goald_vrs_fovea[4*e+3]=(std::clamp)(y1,0.f,1.f);
+            }
+            goald_vrs_fovea_ok=ok;
+        }
         goald_log_limit.store(goald_motion_limit,std::memory_order_relaxed);
         goald_mode_bits=0u;
         if (m4_active && m4_hi_active && focus) {
@@ -469,6 +530,12 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
             data.m6_previous_rect[1]=goald_flags;
             if (goald_fast_raster && raster_true) { data.m6_previous_rect[1]|=128u; goald_fast_raster_on=true; } // fast raster (m4g_raster)
             else if (goald_fast_raster) goald_mode_bits|=8u; // 8: fast raster requested but no m4g_raster PSO
+            if (goald_warp_bypass || gs_fovea<8u || gs_periphery<8u) { // 65_: raster cost test (m4g_raster)
+                if (raster_true) {
+                    data.m6_previous_rect[1]|=((8u-gs_fovea)<<12u)|((8u-gs_periphery)<<16u)|(goald_warp_bypass ? 0x100000u : 0u);
+                    goald_raster_variant_on=true;
+                } else goald_mode_bits|=16u; // 16: bypass / steps requested but no m4g_raster PSO
+            }
             if (goald_fill==3u) { // switch 4 "halo at background depth": raster PSO only, no M8 fill
                 data.m8_effects[2]=data.m8_effects[3]=0.f; // the legacy M8 fill must not move the source again
                 goald_halo_bg=raster_true && !goald_true_depth; // with true depth there is no lift: halo off
@@ -507,7 +574,9 @@ def m1_backend(src):
                '                         uint32_t goald_history=0u,bool goald_jitter_negative=false,\n'
                '                         uint32_t goald_one_sided=0u,uint32_t goald_fill=0u,\n'
                '                         float goald_motion_limit=8.f,float goald_halo_near_m=1.f,float goald_halo_fade_m=3.f,uint32_t goald_fast_raster=0u,\n'
-               '                         uint32_t goald_confirm_texels=0u,uint32_t goald_motion_source=0u) {',
+               '                         uint32_t goald_confirm_texels=0u,uint32_t goald_motion_source=0u,\n'
+               '                         bool goald_warp_bypass=false,uint32_t goald_fovea_steps=8u,uint32_t goald_periphery_steps=8u,\n'
+               '                         bool goald_vrs=false) {',
                'goal D grid argument')
     src = once(src, '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n',
                '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n'
@@ -643,6 +712,78 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         }
         ++sum[8];
     }
+    // 65_ VRS (2026-11-19): periphery shading rate for the stereo raster. Tier 1 per-draw rates +
+    // scissors (no rate image, nothing to upload or keep alive): the fovea rect of each eye and a
+    // band at the eye split (the pixel shader picks the eye by x) at 1x1, the rest of each eye at
+    // the menu rate, as disjoint scissored draws of the same full-screen triangle. Rates above 2x2
+    // need AdditionalShadingRatesSupported, else 2x2 (logged). Returns false = draw normally.
+    bool goald_vrs_draw(ID3D12Device* device, ID3D12GraphicsCommandList* cmd, uint32_t rate_index,
+                        bool stereo, UINT direct_width) {
+        static constexpr D3D12_SHADING_RATE rates[7]{D3D12_SHADING_RATE_1X1,D3D12_SHADING_RATE_1X2,
+            D3D12_SHADING_RATE_2X1,D3D12_SHADING_RATE_2X2,D3D12_SHADING_RATE_2X4,D3D12_SHADING_RATE_4X2,
+            D3D12_SHADING_RATE_4X4};
+        rate_index=(std::min)(rate_index,6u);
+        if (!goald_vrs_caps_ && device) {
+            goald_vrs_caps_=1u;
+            D3D12_FEATURE_DATA_D3D12_OPTIONS6 o6{};
+            if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6,&o6,sizeof(o6)))) {
+                goald_vrs_tier_=uint32_t(o6.VariableShadingRateTier)&3u;
+                goald_vrs_additional_=o6.AdditionalShadingRatesSupported!=FALSE;
+            }
+        }
+        uint32_t effective=0u, reason=0u, draws=0u;
+        uint64_t eye0=0u;
+        const auto report=[&]{
+            duo_goald_vrs().store((1u<<31)|rate_index|(effective<<4)|(goald_vrs_tier_<<8)|
+                (goald_vrs_additional_ ? 1u<<10 : 0u)|(reason<<12)|(draws<<16),std::memory_order_relaxed);
+            duo_goald_vrs_rect().store(eye0,std::memory_order_relaxed);
+        };
+        if (!rate_index) { report(); return false; }
+        ComPtr<ID3D12GraphicsCommandList5> cl5;
+        const UINT W=direct_width/2u, H=height_;
+        constexpr LONG band=16, margin=32;
+        if (goald_vrs_tier_<1u) reason=1u;                                  // no VRS on this GPU/driver
+        else if (!stereo || W<=UINT(4*band) || direct_width!=width_*2u) reason=2u; // Mono / not double-wide
+        else if (!m1_.goald_vrs_fovea_ok) reason=3u;                        // no fovea crop this frame
+        else if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&cl5)))) reason=4u;
+        if (reason) { report(); return false; }
+        effective=rate_index>=4u && !goald_vrs_additional_ ? 3u : rate_index;
+        struct Part { D3D12_RECT r; bool fine; };
+        Part parts[11]{};
+        uint32_t n=0u;
+        const auto add=[&](LONG x0, LONG y0, LONG x1, LONG y1, bool fine) {
+            if (x1>x0 && y1>y0 && n<11u) parts[n++]=Part{D3D12_RECT{x0,y0,x1,y1},fine};
+        };
+        const LONG w=LONG(W), h=LONG(H);
+        add(w-band,0,w+band,h,true); // eye split band
+        for (int e=0; e<2; ++e) {
+            const LONG ex0=e ? w+band : 0, ex1=e ? 2*w : w-band, off=e ? w : 0;
+            const float* f=m1_.goald_vrs_fovea.data()+4*e;
+            const auto lo=[](float v, LONG size, LONG m) { return (LONG(std::floor(v*float(size)))-m)&~LONG(3); };
+            const auto hi=[](float v, LONG size, LONG m) { return (LONG(std::ceil(v*float(size)))+m+3)&~LONG(3); };
+            const LONG fx0=(std::clamp)(off+lo(f[0],w,margin),ex0,ex1), fx1=(std::clamp)(off+hi(f[2],w,margin),ex0,ex1);
+            const LONG fy0=(std::clamp)(lo(f[1],h,margin),LONG(0),h), fy1=(std::clamp)(hi(f[3],h,margin),LONG(0),h);
+            if (fx1<=fx0 || fy1<=fy0) { add(ex0,0,ex1,h,false); continue; }
+            if (!e) eye0=(uint64_t(fx0)&0xffffu)|((uint64_t(fy0)&0xffffu)<<16)|((uint64_t(fx1)&0xffffu)<<32)|((uint64_t(fy1)&0xffffu)<<48);
+            add(fx0,fy0,fx1,fy1,true);
+            add(ex0,0,ex1,fy0,false); add(ex0,fy1,ex1,h,false);
+            add(ex0,fy0,fx0,fy1,false); add(fx1,fy0,ex1,fy1,false);
+        }
+        for (int pass=0; pass<2; ++pass) {
+            cl5->RSSetShadingRate(pass ? rates[effective] : D3D12_SHADING_RATE_1X1,nullptr);
+            for (uint32_t i=0; i<n; ++i) {
+                if (parts[i].fine!=(pass==0)) continue;
+                cmd->RSSetScissorRects(1,&parts[i].r);
+                cmd->DrawInstanced(3,1,0,0);
+                ++draws;
+            }
+        }
+        cl5->RSSetShadingRate(D3D12_SHADING_RATE_1X1,nullptr); // restore
+        const D3D12_RECT full{0,0,LONG(direct_width),h};
+        cmd->RSSetScissorRects(1,&full);
+        report();
+        return true;
+    }
     void goald_report_status(uint32_t depth_grid, bool m1_active, bool history) {
         const bool requested=depth_grid>=4096u;
         const bool effective=m1_active && m1_.m4_active && m1_.m4_hi_active;
@@ -679,7 +820,9 @@ def compositor_backend(src):
                '                settings.goald_history,settings.goald_jitter_negative!=0u,\n'
                '                settings.goald_one_sided,settings.goald_fill,\n'
                '                settings.goald_motion_limit,settings.goald_halo_near_m,settings.goald_halo_fade_m,settings.goald_fast_raster,\n'
-               '                settings.goald_confirm_texels,settings.goald_motion_source);\n'
+               '                settings.goald_confirm_texels,settings.goald_motion_source,\n'
+               '                settings.goald_warp_bypass!=0u,settings.goald_fovea_steps,settings.goald_periphery_steps,\n'
+               '                settings.goald_vrs_rate!=0u);\n'
                '        if (m1_active) { goald_bind_m4_field(device); goald_bind_history(device); goald_bind_motion(device); }\n'
                '        goald_report_status(goald_grid(settings),m1_active,settings.goald_history!=0u);\n',
                'goal D write_constants argument')
@@ -759,7 +902,7 @@ def compositor_backend(src):
                '        timing_pending_ = false;\n        goald_m4_pending_ = false; goald_stage_pending_ = 0u;\n    }\n', 'goal D timing consumed')
     src = once(src, 'q.Count = 2;', 'q.Count = 8;', 'goal D query count')
     src = once(src, 'cmd->SetPipelineState(m1_active ? m1_.raster.Get() : native_pipeline_.Get());',
-               'cmd->SetPipelineState(m1_active ? ((m1_.goald_true_depth || m1_.goald_halo_bg || m1_.goald_fast_raster_on) ? m1_.m4g_raster.Get() : m1_.raster.Get()) : native_pipeline_.Get());',
+               'cmd->SetPipelineState(m1_active ? ((m1_.goald_true_depth || m1_.goald_halo_bg || m1_.goald_fast_raster_on || m1_.goald_raster_variant_on) ? m1_.m4g_raster.Get() : m1_.raster.Get()) : native_pipeline_.Get());',
                'goal D raster PSO')
     src = once(src, 'buffer.Width = sizeof(UINT64) * 2;', 'buffer.Width = sizeof(UINT64) * 8;', 'goal D readback size')
     # Stage stamps: 4 after the B40 Mono composite, 5 compute end / raster start, 6 raster end.
@@ -770,6 +913,17 @@ def compositor_backend(src):
                '        goald_stamp(cmd,timed,5u); // stage: compute end, raster start\n'
                '        cmd->SetGraphicsRootSignature(root_.Get());\n        cmd->SetPipelineState(m1_active ? ((m1_.goald_true_depth',
                'goal D stage stamp 5')
+    src = once(src,
+               '            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);\n'
+               '            cmd->DrawInstanced(3,1,0,0);\n'
+               '        } else {\n',
+               '            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);\n'
+               '            // 65_ VRS periphery rate (stereo double-wide raster only; Off = the single draw)\n'
+               '            if (!goald_vrs_draw(device,cmd,settings.goald_vrs_rate,m1_active && settings.synthetic_stereo,direct_width))\n'
+               '                cmd->DrawInstanced(3,1,0,0);\n'
+               '        } else {\n'
+               '            if (settings.goald_vrs_rate) goald_vrs_draw(device,cmd,settings.goald_vrs_rate,false,0u); // status: not applied\n',
+               'goal D VRS draw')
     src = once(src, '        transition(cmd,fovea,fovea_sample_state,fovea_state);\n',
                '        goald_stamp(cmd,timed,6u); // stage: raster end\n'
                '        transition(cmd,fovea,fovea_sample_state,fovea_state);\n', 'goal D stage stamp 6')
@@ -839,7 +993,8 @@ def compositor_backend(src):
                '    D3D12_UNORDERED_ACCESS_VIEW_DESC goald_uav_desc_{};\n'
                '    uint32_t goald_bound_key_{}, goald_hist_bound_{};\n'
                '    bool goald_m4_timed_{}, goald_m4_pending_{};\n'
-               '    uint32_t goald_stage_mask_{}, goald_stage_pending_{}; // stamped indices; 0x100 = stereo frame\n',
+               '    uint32_t goald_stage_mask_{}, goald_stage_pending_{}; // stamped indices; 0x100 = stereo frame\n'
+               '    uint32_t goald_vrs_caps_{}, goald_vrs_tier_{}; bool goald_vrs_additional_{}; // 65_ VRS caps (queried once)\n',
                'goal D compositor state')
     return src
 
@@ -861,6 +1016,11 @@ inline std::atomic<uint32_t>& duo_goald_modes() { static std::atomic<uint32_t> s
 inline std::atomic<uint32_t>& duo_goald_still() { static std::atomic<uint32_t> s{0u}; return s; }
 // history motion source in use: bit 0 DLSS motion vectors active, bit 31 written.
 inline std::atomic<uint32_t>& duo_goald_motion() { static std::atomic<uint32_t> s{0u}; return s; }
+// 65_ VRS: bits 0-3 requested rate, 4-7 effective rate (0 Off,1 1x2,2 2x1,3 2x2,4 2x4,5 4x2,6 4x4),
+// 8-9 tier, 10 additional rates, 12-15 reason (1 no VRS, 2 Mono/not double-wide, 3 no fovea rect,
+// 4 no CommandList5), 16-23 draws, 31 written. rect: eye 0 fovea px x0|y0<<16|x1<<32|y1<<48.
+inline std::atomic<uint32_t>& duo_goald_vrs() { static std::atomic<uint32_t> s{0u}; return s; }
+inline std::atomic<uint64_t>& duo_goald_vrs_rect() { static std::atomic<uint64_t> s{0u}; return s; }
 // GPU stage timing (needs "GPU timing: DuoView"): per mode [0 Mono, 1 stereo] 8 stage
 // sums in ns + sample count (log, reset per line) and 8 smoothed stage values in us (menu).
 inline std::atomic<uint64_t>* duo_stage_ns() { static std::atomic<uint64_t> s[18]{}; return s; }
@@ -899,7 +1059,10 @@ def config(src):
                '    uint32_t goald_confirm_texels{2}; // goal D history: kept only with similar current depth within N texels (0 = off)\n'
                '    uint32_t goald_motion_source{1}; // goal D history motion: 0 head pose (head still only), 1 DLSS MVs, 2 DLSS MVs flipped\n'
                '    float goald_halo_near_m{1.f}, goald_halo_fade_m{3.f}; // goal D halo at background depth: full up to / off from\n'
-               '    uint32_t goald_fast_raster{}; // goal D fast stereo raster (1 = skip the discarded coarse depth read inside the fovea)\n',
+               '    uint32_t goald_fast_raster{}; // goal D fast stereo raster (1 = skip the discarded coarse depth read inside the fovea)\n'
+               '    uint32_t goald_warp_bypass{}; // 65_: 1 = no warp solve (colour floor diagnostic, 4096 path)\n'
+               '    uint32_t goald_fovea_steps{8}, goald_periphery_steps{8}; // 65_: warp search steps 2..8 (8 = today)\n'
+               '    uint32_t goald_vrs_rate{}; // 65_: periphery VRS 0 Off, 1 1x2, 2 2x1, 3 2x2, 4 2x4, 5 4x2, 6 4x4\n',
                'goal D settings field')
     src = once(src, '    out.m4_fovea_grid=requested.m4_fovea_grid;\n',
                '    out.m4_fovea_grid=requested.m4_fovea_grid;\n'
@@ -911,6 +1074,10 @@ def config(src):
                '    out.goald_halo_near_m=std::isfinite(requested.goald_halo_near_m) ? (std::clamp)(requested.goald_halo_near_m,.1f,50.f) : 1.f;\n'
                '    out.goald_halo_fade_m=std::isfinite(requested.goald_halo_fade_m) ? (std::clamp)(requested.goald_halo_fade_m,out.goald_halo_near_m,100.f) : 3.f;\n'
                '    out.goald_fast_raster=requested.goald_fast_raster ? 1u : 0u;\n'
+               '    out.goald_warp_bypass=requested.goald_warp_bypass ? 1u : 0u;\n'
+               '    out.goald_fovea_steps=(std::clamp)(requested.goald_fovea_steps,2u,8u);\n'
+               '    out.goald_periphery_steps=(std::clamp)(requested.goald_periphery_steps,2u,8u);\n'
+               '    out.goald_vrs_rate=(std::min)(requested.goald_vrs_rate,6u);\n'
                '    out.goald_jitter_negative=requested.goald_jitter_negative ? 1u : 0u;\n'
                '    out.goald_one_sided=0u; // switch 3 removed after #373 (ramp NO-GO); code kept, unreachable\n'
                '    out.goald_fill=(std::min)(requested.goald_fill,3u);\n',
@@ -929,6 +1096,8 @@ def vr_hpp(src):
                '    static const inline std::vector<std::string> s_duo_goald_jitter{ "+ (current)", "- (flipped)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_confirm{ "Off (trails behind moving things)", "1 texel", "2 texels", "3 texels", "4 texels", "6 texels", "8 texels" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_motion_src{ "Head pose (head still only)", "DLSS motion vectors", "DLSS motion vectors (flipped sign)" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_steps{ "8 (today)", "7", "6", "5", "4", "3", "2" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_vrs{ "Off (baseline)", "1x2", "2x1", "2x2", "2x4", "4x2", "4x4" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_fill{ "Off (baseline)", "Mirror, full", "Mirror, half", "Halo at background depth" };\n'
                '    static const inline std::vector<std::string> s_duo_m3_jitter_modes{',
                'goal D grid names')
@@ -943,10 +1112,14 @@ def vr_hpp(src):
                '    const ModSlider::Ptr m_duo_goald_halo_near{ModSlider::create(generate_name("DuoHaloBgFullMeters"),.1f,20.f,1.f)};\n'
                '    const ModSlider::Ptr m_duo_goald_halo_fade{ModSlider::create(generate_name("DuoHaloBgOffMeters"),.1f,50.f,3.f)};\n'
                '    const ModToggle::Ptr m_duo_goald_fast_raster{ModToggle::create(generate_name("DuoFastStereoRaster"),false)};\n'
+               '    const ModToggle::Ptr m_duo_goald_warp_bypass{ModToggle::create(generate_name("DuoWarpBypassDiag"),false)};\n'
+               '    const ModCombo::Ptr m_duo_goald_fovea_steps{ModCombo::create(generate_name("DuoFoveaSearchSteps"),s_duo_goald_steps,0)};\n'
+               '    const ModCombo::Ptr m_duo_goald_periphery_steps{ModCombo::create(generate_name("DuoPeripherySearchSteps"),s_duo_goald_steps,0)};\n'
+               '    const ModCombo::Ptr m_duo_goald_vrs{ModCombo::create(generate_name("DuoPeripheryVrsRate"),s_duo_goald_vrs,0)};\n'
                '    const ModCombo::Ptr m_duo_goald_motion_src{ModCombo::create(generate_name("DuoFoveaHistoryMotion"),s_duo_goald_motion_src,1)};\n'
                '    const ModCombo::Ptr m_duo_goald_fill{ModCombo::create(generate_name("DuoFoveaBackgroundFill"),s_duo_goald_fill,0)};\n',
                'goal D grid control')
-    src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, *m_duo_goald_history, *m_duo_goald_jitter, *m_duo_goald_fill, *m_duo_goald_motion, *m_duo_goald_confirm, *m_duo_goald_motion_src, *m_duo_goald_halo_near, *m_duo_goald_halo_fade, *m_duo_goald_fast_raster, ', 'goal D grid persisted')
+    src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, *m_duo_goald_history, *m_duo_goald_jitter, *m_duo_goald_fill, *m_duo_goald_motion, *m_duo_goald_confirm, *m_duo_goald_motion_src, *m_duo_goald_halo_near, *m_duo_goald_halo_fade, *m_duo_goald_fast_raster, *m_duo_goald_warp_bypass, *m_duo_goald_fovea_steps, *m_duo_goald_periphery_steps, *m_duo_goald_vrs, ', 'goal D grid persisted')
     return src
 
 
@@ -990,9 +1163,25 @@ GOALD_MENU = r'''                    m_duo_m8_far_m->draw("Depth transition ends
                     m_duo_goald_halo_near->draw("4. Halo at background depth: full strength up to (metres)");
                     m_duo_goald_halo_fade->draw("4. Halo at background depth: fades to normal halo by (metres)");
                     m_duo_goald_fast_raster->draw("5. Fast stereo raster (skips a depth read that is discarded inside the fovea; needs the 4096 grid; compare GPU stages raster ms)");
+                    ImGui::TextWrapped("6. Raster cost test (compare GPU stages raster ms; edges on weapon / fences):");
+                    m_duo_goald_warp_bypass->draw("6. DIAGNOSTIC warp bypass (no stereo warp: eyes are WRONG; shows the colour-only raster cost; needs the 4096 grid)");
+                    m_duo_goald_fovea_steps->draw("6. Fovea warp search steps (fewer = faster, edges may wobble; needs the 4096 grid)");
+                    m_duo_goald_periphery_steps->draw("6. Periphery warp search steps (fewer = faster; needs the 4096 grid)");
+                    m_duo_goald_vrs->draw("6. Periphery shading rate VRS (fovea + eye split stay 1x1; coarser = faster, blockier)");
+                    {
+                        const uint32_t gv=uevr::duoview::duo_goald_vrs().load(std::memory_order_relaxed);
+                        static const char* vrs_names[7]{"Off","1x2","2x1","2x2","2x4","4x2","4x4"};
+                        static const char* vrs_reasons[5]{"","this GPU/driver has no VRS","Mono frame / not a double-wide stereo target","no fovea crop this frame","command list without VRS"};
+                        if ((gv>>31) && (gv&15u)) {
+                            if ((gv>>12)&15u) ImGui::TextWrapped("VRS: NOT ACTIVE - %s.", vrs_reasons[(std::min)((gv>>12)&15u,4u)]);
+                            else ImGui::TextWrapped("VRS: ACTIVE %s (tier %u, rates above 2x2 %s), %u draws.", vrs_names[(std::min)((gv>>4)&15u,6u)],
+                                (gv>>8)&3u, (gv&1024u) ? "supported" : "NOT supported -> 2x2", (gv>>16)&255u);
+                        }
+                    }
                     {
                         const uint32_t gm=uevr::duoview::duo_goald_modes().load(std::memory_order_relaxed);
                         if ((gm>>31) && (gm&4u)) ImGui::TextWrapped("NOTE: Halo at background depth is NOT running (raster shader missing).");
+                        if ((gm>>31) && (gm&16u)) ImGui::TextWrapped("NOTE: warp bypass / search steps NOT running (raster shader missing).");
                     }
 '''
 
@@ -1012,7 +1201,11 @@ def vr_cpp(src):
                '        .goald_motion_source=uint32_t((std::clamp)(m_duo_goald_motion_src->value(),0,2)),\n'
                '        .goald_halo_near_m=m_duo_goald_halo_near->value(),\n'
                '        .goald_halo_fade_m=m_duo_goald_halo_fade->value(),\n'
-               '        .goald_fast_raster=m_duo_goald_fast_raster->value() ? 1u : 0u};',
+               '        .goald_fast_raster=m_duo_goald_fast_raster->value() ? 1u : 0u,\n'
+               '        .goald_warp_bypass=m_duo_goald_warp_bypass->value() ? 1u : 0u,\n'
+               '        .goald_fovea_steps=8u-uint32_t((std::clamp)(m_duo_goald_fovea_steps->value(),0,6)),\n'
+               '        .goald_periphery_steps=8u-uint32_t((std::clamp)(m_duo_goald_periphery_steps->value(),0,6)),\n'
+               '        .goald_vrs_rate=uint32_t((std::clamp)(m_duo_goald_vrs->value(),0,6))};',
                'goal D grid settings')
     src = once(src, '        current.m2_right_sharpen==candidate.m2_right_sharpen) return;',
                '        current.m2_right_sharpen==candidate.m2_right_sharpen &&\n'
@@ -1026,7 +1219,11 @@ def vr_cpp(src):
                '        current.goald_motion_source==candidate.goald_motion_source &&\n'
                '        current.goald_halo_near_m==candidate.goald_halo_near_m &&\n'
                '        current.goald_halo_fade_m==candidate.goald_halo_fade_m &&\n'
-               '        current.goald_fast_raster==candidate.goald_fast_raster) return;',
+               '        current.goald_fast_raster==candidate.goald_fast_raster &&\n'
+               '        current.goald_warp_bypass==candidate.goald_warp_bypass &&\n'
+               '        current.goald_fovea_steps==candidate.goald_fovea_steps &&\n'
+               '        current.goald_periphery_steps==candidate.goald_periphery_steps &&\n'
+               '        current.goald_vrs_rate==candidate.goald_vrs_rate) return;',
                'goal D grid change detection')
     return src
 
@@ -1044,10 +1241,18 @@ GOALD_LOG = r'''                                                    uevr::duovie
                                                     const uint64_t hsc=uevr::duoview::dx12::M1Resources::goald_shift_centi.exchange(0);
                                                     const uint64_t hsm=uevr::duoview::dx12::M1Resources::goald_shift_max_centi.exchange(0);
                                                     const uint32_t gls=uevr::duoview::dx12::M1Resources::goald_log_settings.load();
-                                                    SPDLOG_INFO("[DuoView][GoalD] settings history={} motion_source={} motion_limit={:.2f} confirm_texels={} jitter_negative={} fast_raster={} head_shift_mean={:.2f} head_shift_max={:.2f}",
+                                                    SPDLOG_INFO("[DuoView][GoalD] settings history={} motion_source={} motion_limit={:.2f} confirm_texels={} jitter_negative={} fast_raster={} warp_bypass={} fovea_steps={} periphery_steps={} head_shift_mean={:.2f} head_shift_max={:.2f}",
                                                         gls&1u, (gls>>1)&3u, double(uevr::duoview::dx12::M1Resources::goald_log_limit.load()),
-                                                        (gls>>4)&15u, (gls>>8)&1u, (gls>>9)&1u,
+                                                        (gls>>4)&15u, (gls>>8)&1u, (gls>>9)&1u, (gls>>10)&1u, (gls>>12)&15u, (gls>>16)&15u,
                                                         hsn ? double(hsc)/100.0/double(hsn) : -1.0, double(hsm)/100.0);
+                                                    {   // 65_ VRS state (last frame)
+                                                        const uint32_t gv=uevr::duoview::duo_goald_vrs().load();
+                                                        const uint64_t gr=uevr::duoview::duo_goald_vrs_rect().load();
+                                                        SPDLOG_INFO("[DuoView][GoalD] vrs requested={} effective={} tier={} additional_rates={} reason={} draws={} eye0_fovea_px={},{}-{},{} raster_variant_missing={}",
+                                                            gv&15u, (gv>>4)&15u, (gv>>8)&3u, (gv>>10)&1u, (gv>>12)&15u, (gv>>16)&255u,
+                                                            gr&0xffffu, (gr>>16)&0xffffu, (gr>>32)&0xffffu, (gr>>48)&0xffffu,
+                                                            (uevr::duoview::duo_goald_modes().load()>>4)&1u);
+                                                    }
                                                     SPDLOG_INFO("[DuoView][GoalD] history requested={} active={} reason={} frames={} valid_frames={} moving_frames={} from_history_permille={} mode_fallback_bits={}",
                                                         gh&1u, (gh>>1)&1u, (gh>>2)&15u,
                                                         uevr::duoview::dx12::M1Resources::goald_hist_frames.exchange(0),
