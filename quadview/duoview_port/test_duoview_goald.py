@@ -163,7 +163,7 @@ need('m_duo_goald_vrs->draw(' in vrcpp and 'current.goald_vrs_rate==candidate.go
      'current.goald_fovea_steps==candidate.goald_fovea_steps' in vrcpp, 'raster test menu + change detection')
 
 # Study 93 Fill=4 (Tight B+C2+3 hybrid): isolated inside DUOVIEW_GOALD_GRID + 4096 path.
-need('float GDSeedTight(uint2 p)' in hlsl and 'GDSeedTight' not in hlsl_off, 'Fill=4 tight coverage seed only in goal D')
+need('float GDSeedTight(uint2 p)' in hlsl and 'GDSeedTight' not in off, 'Fill=4 tight coverage seed only in goal D')
 need('CSGoalDPPInit' in native and 'CSGoalDPPDown' in native and 'CSGoalDPPPull' in native and
      'GDHybridFoveaColor(' in native and 'CSGoalDPPInit' not in native_off and 'GDHybridFoveaColor' not in native_off,
      'Fill=4 push-pull compute + hybrid raster only in goal D; Off native untouched')
