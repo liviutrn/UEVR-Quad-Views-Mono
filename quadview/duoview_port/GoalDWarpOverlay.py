@@ -545,6 +545,123 @@ JITTER_BLOCK = r'''    // ---- Goal D switch 2 groundwork: fine-depth jitter sig
     }
 '''
 
+HYBRID_BLOCK = r'''    // ---- Goal D Fill=4 (Study 93 #6 Tight B+C2+3): WARP activation & push-pull check ----
+    if (!gd_capture_run) {
+        const auto ghb_saved_depth=m1_depth;
+        const auto ghb_saved_fine=m21_fine_depth;
+        const auto ghb_saved_settings=frame.config.settings;
+        const auto ghb_saved_k=m1_geometry.k;
+        m1_geometry.k={.06f,-.06f};
+        constexpr UINT HW=256u, HH=144u;
+        auto ghb_upload=[&](auto value_at) {
+            const auto d=texture(HW,HH,DXGI_FORMAT_R32_TYPELESS,D3D12_RESOURCE_FLAG_NONE);
+            auto tex=resource(g.device.Get(),d,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{}; UINT64 nb{};
+            g.device->GetCopyableFootprints(&d,0,1,0,&fp,nullptr,nullptr,&nb);
+            fp.Footprint.Format=DXGI_FORMAT_R32_FLOAT;
+            auto up=resource(g.device.Get(),buffer(nb),D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);
+            void* m{}; check(up->Map(0,&no_reads,&m));
+            for (UINT y=0;y<HH;++y) {
+                auto* r=reinterpret_cast<float*>(static_cast<uint8_t*>(m)+y*fp.Footprint.RowPitch);
+                for (UINT x=0;x<HW;++x) r[x]=value_at(x,y);
+            }
+            up->Unmap(0,nullptr);
+            D3D12_TEXTURE_COPY_LOCATION from{up.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT}; from.PlacedFootprint=fp;
+            D3D12_TEXTURE_COPY_LOCATION to{tex.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{0}};
+            g.cmd->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+            transition(g.cmd.Get(),tex.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+            g.submit_and_wait();
+            keep.push_back(up); keep.push_back(tex);
+            return tex;
+        };
+        // Slanted 3D-like near foreground (0.35 m -> d=2.85, tapering to 0.70 m -> d=1.43) over 6 m wall (d=0.167).
+        auto ghb_near=ghb_upload([](UINT x,UINT y){
+            const UINT edge=110u+y/3u;
+            if (x>=edge && x<edge+48u && y>=24u && y<HH-20u)
+                return 1.43f+1.42f*(float(y)/float(HH));
+            return 1.f/6.f;
+        });
+        auto ghb_far=ghb_upload([](UINT,UINT){ return 1.f/12.f; });
+        frame.config.settings.synthetic_stereo=true;
+        frame.config.settings.m2_fovea_depth=true;
+        frame.config.settings.m25_fine_mode=1u;
+        frame.config.settings.m3_edges=false;
+        frame.config.settings.m3_jitter_mode=0u;
+        frame.config.settings.m4_fovea_grid=true;
+        frame.config.settings.m8_distance=true;
+        frame.config.settings.m8_edge_near=0.f;
+        frame.config.settings.m8_edge_far=.5f;
+        frame.config.settings.m8_fill_near=0.f;
+        frame.config.settings.m8_fill_far=0.f;
+        frame.config.settings.edge_reach_px=20.f;
+        frame.config.settings.stereo_near_m=.512f; // #379 near knee -> CAP=3.91 so 0.35..0.70 m weapon isn't clipped
+        frame.config.settings.m21_depth_debug=0u; // real stereo colour output!
+        frame.config.settings.goald_history=0u;
+        frame.config.settings.goald_depth_grid=4096u;
+        frame.config.settings.goald_halo_near_m=4.f;
+        frame.config.settings.goald_halo_fade_m=8.f;
+        frame.config.settings.goald_hybrid_detail=.70f;
+        frame.config.settings.goald_hybrid_gate=.11f;
+        frame.config.settings.goald_hybrid_outline=.50f;
+        frame.config.settings.goald_hybrid_shift=1.f;
+
+        m1_depth={ghb_near.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,HW,HH},{},lease};
+        m21_fine_depth={ghb_near.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,HW,HH},{},lease};
+        frame.config.settings.goald_fill=0u;
+        run(*a,false,Route::direct,"GoalD Fill=4 WARP: Off baseline colour");
+        const auto ghb_off_hash=m21_image_hash;
+
+        frame.config.settings.goald_fill=4u;
+        frame.config.settings.goald_hybrid_tap_mode=0u; // #6 Best-Match Hybrid
+        run(*a,false,Route::direct,"GoalD Fill=4 WARP: #6 Tight B+C2+3 hybrid");
+        const bool hyb_on=a->goald_hybrid_active();
+        const uint32_t pp_w=a->goald_pp_w(), pp_mips=a->goald_pp_mips();
+        const auto ghb_m0_hash=m21_image_hash;
+
+        frame.config.settings.goald_hybrid_tap_mode=1u; // #5 Vertical-First
+        run(*a,false,Route::direct,"GoalD Fill=4 WARP: #5 Vertical-First");
+        const auto ghb_m1_hash=m21_image_hash;
+
+        frame.config.settings.goald_hybrid_tap_mode=2u; // #4 Horizontal-Only
+        run(*a,false,Route::direct,"GoalD Fill=4 WARP: #4 Horizontal-Only");
+        const auto ghb_m2_hash=m21_image_hash;
+
+        frame.config.settings.goald_hybrid_tap_mode=3u; // Smooth Blur Only (Cand C)
+        run(*a,false,Route::direct,"GoalD Fill=4 WARP: Cand C Smooth Blur");
+        const auto ghb_m3_hash=m21_image_hash;
+
+        // Distant >OFF_M (12 m > 8 m) flat scene must match Off bit-for-bit.
+        m1_depth={ghb_far.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,HW,HH},{},lease};
+        m21_fine_depth={ghb_far.Get(),DXGI_FORMAT_R32_FLOAT,{0,0,HW,HH},{},lease};
+        frame.config.settings.goald_fill=0u;
+        run(*a,false,Route::direct,"GoalD Fill=4 WARP: distant >8m Off");
+        const auto ghb_far_off=m21_image_hash;
+        frame.config.settings.goald_fill=4u;
+        frame.config.settings.goald_hybrid_tap_mode=0u;
+        run(*a,false,Route::direct,"GoalD Fill=4 WARP: distant >8m Fill=4");
+        const auto ghb_far_hyb=m21_image_hash;
+
+        std::ofstream("goald_hybrid_result.txt")
+            <<"GOALD_HYBRID,active="<<(hyb_on?1:0)<<",pp_w="<<pp_w<<",pp_mips="<<pp_mips
+            <<",off_hash="<<ghb_off_hash<<",m0_hash="<<ghb_m0_hash<<",m1_hash="<<ghb_m1_hash
+            <<",m2_hash="<<ghb_m2_hash<<",m3_hash="<<ghb_m3_hash
+            <<",far_match="<<(ghb_far_off==ghb_far_hyb?1:0)<<"\n";
+        std::cout<<"GOALD_HYBRID active="<<(hyb_on?1:0)<<" pp="<<pp_w<<" mips="<<pp_mips
+                 <<" m0!=off:"<<(ghb_m0_hash!=ghb_off_hash)<<" far_match:"<<(ghb_far_off==ghb_far_hyb)<<"\n";
+        if (!hyb_on || pp_w==0u || pp_mips<2u)
+            throw std::runtime_error("GoalD Fill=4 hybrid did not activate push-pull pyramid");
+        if (ghb_m0_hash==ghb_off_hash || ghb_m3_hash==ghb_off_hash)
+            throw std::runtime_error("GoalD Fill=4 hybrid output identical to Off on near foreground");
+        if (ghb_far_off!=ghb_far_hyb)
+            throw std::runtime_error("GoalD Fill=4 hybrid altered distant >OFF_M background");
+        frame.config.settings=ghb_saved_settings;
+        m1_depth=ghb_saved_depth;
+        m21_fine_depth=ghb_saved_fine;
+        m1_geometry.k=ghb_saved_k;
+        std::cout<<"PASS: WARP goal D Fill=4 Tight B+C2+3 hybrid active, tap modes valid, >8m untouched\n";
+    }
+'''
+
 
 def main():
     a = argparse.ArgumentParser()
@@ -556,7 +673,7 @@ def main():
     assert s.count(marker) == 1, "goal D WARP insertion drifted"
     assert s.count("auto upload_depth=[&](auto value_at)") == 1, "goal D WARP needs the M3 depth uploader"
     assert s.count("PASS: WARP M4 fovea-native depth field") == 1, "goal D WARP must follow the M4 block"
-    s = s.replace(marker, BLOCK + JITTER_BLOCK + marker)
+    s = s.replace(marker, BLOCK + JITTER_BLOCK + HYBRID_BLOCK + marker)
     if "#include <fstream>" not in s:
         s = "#include <fstream>\n#include <cmath>\n#include <vector>\n" + s
     args.output.write_text(s, encoding="utf-8", newline="\n")

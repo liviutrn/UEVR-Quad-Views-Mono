@@ -466,6 +466,12 @@ jobs:
           if ($goalh.Count -ne 1) { throw "Expected one goal D history result, found $($goalh.Count)" }
           Copy-Item $goalh[0].FullName evidence/goald_history_result.txt
           Get-Content evidence/goald_history_result.txt
+          # Goal D Fill=4 (Study 93 #6 Tight B+C2+3): push-pull pyramid + hybrid raster WARP check.
+          $goalhyb=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'goald_hybrid_result.txt')
+          if ($goalhyb.Count -ne 1) { throw "Expected one goal D Fill=4 hybrid result, found $($goalhyb.Count)" }
+          Copy-Item $goalhyb[0].FullName evidence/goald_hybrid_result.txt
+          Get-Content evidence/goald_hybrid_result.txt
+          if (-not (Select-String -Path evidence/goald_hybrid_result.txt -Pattern 'active=1' -Quiet)) { throw 'Goal D Fill=4 hybrid did not activate on WARP' }
           # Independent V3: 20 production signed-eye captures plus 5 zero-stereo
           # source-registration controls; no reference colors passed to WARP.
           $v3=@(Get-ChildItem duo_b40_tests -Recurse -File -Filter 'recon_v3_*.bgra')

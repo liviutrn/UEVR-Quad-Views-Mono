@@ -72,6 +72,10 @@ def main():
                 ("CSConditionM4GH","cs_5_0","m4g_condition_h_bytecode","DuoViewM1Stereo.hlsl",("DUOVIEW_M1_CONDITION","DUOVIEW_GOALD_GRID")),
                 # Goal D switch 3 true depth: raster with front-most root choice in the fovea.
                 ("PSNativeMain","ps_5_0","m4g_raster_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_M1_RASTER","DUOVIEW_GOALD_GRID")),
+                # Goal D Fill=4 (Study 93 Tight B+C2+3): background-only push-pull pyramid compute kernels.
+                ("CSGoalDPPInit","cs_5_0","m4g_pp_init_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_M1_RASTER","DUOVIEW_GOALD_GRID")),
+                ("CSGoalDPPDown","cs_5_0","m4g_pp_down_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_M1_RASTER","DUOVIEW_GOALD_GRID")),
+                ("CSGoalDPPPull","cs_5_0","m4g_pp_pull_bytecode","DuoViewNativeCompositeRaster.hlsl",("DUOVIEW_M1_RASTER","DUOVIEW_GOALD_GRID")),
             )
     with tempfile.TemporaryDirectory(prefix="duoview-b40-") as temp:
         for entry,profile,name,source,define in shaders:

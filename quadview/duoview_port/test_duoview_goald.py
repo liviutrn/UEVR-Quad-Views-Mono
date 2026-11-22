@@ -162,6 +162,21 @@ need('[DuoView][GoalD] vrs requested=' in log and 'warp_bypass={} fovea_steps={}
 need('m_duo_goald_vrs->draw(' in vrcpp and 'current.goald_vrs_rate==candidate.goald_vrs_rate' in vrcpp and
      'current.goald_fovea_steps==candidate.goald_fovea_steps' in vrcpp, 'raster test menu + change detection')
 
+# Study 93 Fill=4 (Tight B+C2+3 hybrid): isolated inside DUOVIEW_GOALD_GRID + 4096 path.
+need('float GDSeedTight(uint2 p)' in hlsl and 'GDSeedTight' not in hlsl_off, 'Fill=4 tight coverage seed only in goal D')
+need('CSGoalDPPInit' in native and 'CSGoalDPPDown' in native and 'CSGoalDPPPull' in native and
+     'GDHybridFoveaColor(' in native and 'CSGoalDPPInit' not in native_off and 'GDHybridFoveaColor' not in native_off,
+     'Fill=4 push-pull compute + hybrid raster only in goal D; Off native untouched')
+need('if (goald_fill==4u)' in m1 and 'goald_ensure_pp(' in m1 and 'm4g_pp_init' in m1 and 'm4g_pp_pull' in m1,
+     'Fill=4 push-pull PSOs and resources')
+need('hd.NumDescriptors = 87;' in comp and 'goald_bind_pp(device);' in comp and 'goald_dispatch_pp(cmd,constants);' in comp and
+     comp.index('goald_bind_pp(device);') < comp.index('cmd->SetComputeRootDescriptorTable(7,m4_table);'),
+     'Fill=4 heap descriptors and dispatch wiring')
+need('m_duo_goald_hyb_detail->draw(' in vrcpp and 'm_duo_goald_hyb_gate->draw(' in vrcpp and
+     'm_duo_goald_hyb_outline->draw(' in vrcpp and 'm_duo_goald_hyb_tap->draw(' in vrcpp and
+     'out.goald_fill=(std::min)(requested.goald_fill,4u);' in cfg and
+     '[DuoView][GoalD] hybrid active=1' in log, 'Fill=4 menu controls, sanitize and log')
+
 if fails:
     print('GOALD CONTRACT FAIL:', *fails, sep='\n  ')
     sys.exit(1)

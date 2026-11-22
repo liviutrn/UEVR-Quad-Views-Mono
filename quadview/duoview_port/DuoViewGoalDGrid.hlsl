@@ -45,6 +45,36 @@ float GDSeedRaw(uint2 p) {
     return fine;
 }
 
+// Tight bilinear-coverage-preserving 2x2 seed (Study 93, Fill=4, bit 21): same 4 NGX loads as GDSeedRaw.
+// Smooth 3D weapon slopes use exact bilinear depth; cliffs snap purely to dMax iff foreground bilinear
+// coverage >= threshold, else dMin (zero outward silhouette inflation, zero intermediate depth shelves).
+float GDSeedTight(uint2 p) {
+    const float2 dimension=float2(M2FoveaRect.zw);
+    const float2 local=(float2(p)+.5)/float2(M4Grid.xy);
+    const float2 jit=clamp(local+GDFineJitter(),.5/dimension,1.0-.5/dimension);
+    const float2 pf=jit*dimension-.5;
+    const int2 f0=int2(floor(pf));
+    const float2 w=saturate(pf-float2(f0));
+    const float d00=DecodeM2Depth(f0);
+    const float d10=DecodeM2Depth(f0+int2(1,0));
+    const float d01=DecodeM2Depth(f0+int2(0,1));
+    const float d11=DecodeM2Depth(f0+int2(1,1));
+    const float w00=(1.0-w.y)*(1.0-w.x), w10=(1.0-w.y)*w.x;
+    const float w01=w.y*(1.0-w.x),       w11=w.y*w.x;
+    const float dMax=max(max(d00,d10),max(d01,d11));
+    const float dMin=min(min(d00,d10),min(d01,d11));
+    const float dLin=w00*d00+w10*d10+w01*d01+w11*d11;
+    const float wu=max(asfloat(M7ColorExtent.z),1.0);
+    if(dMax-dMin<.08/wu) return dLin;
+    const float mid=.5*(dMax+dMin);
+    const float fgCov=w00*(d00>mid ? 1.0 : 0.0)+w10*(d10>mid ? 1.0 : 0.0)+
+                      w01*(d01>mid ? 1.0 : 0.0)+w11*(d11>mid ? 1.0 : 0.0);
+    const float bgMaskWU=max(asfloat(M7ColorExtent.x),1.e-4);
+    const float nearTh=clamp(M7Controls.z,.20,.80);
+    const float th=(dMax>1.0/bgMaskWU) ? nearTh : .35;
+    return fgCov>=th ? dMax : dMin;
+}
+
 float GDKneeSeed(float fine) {
     const float knee=M1Depth.w;
     float nearDepth=fine;
@@ -67,15 +97,21 @@ void GDHorizontal(uint row, uint lane, bool fromField) {
     const uint w=M4Grid.x;
     // Uniform early-outs (constant-buffer or group values only).
     if(row>=M4Grid.y || w==0u || w>4096u) return;
+    const bool hybrid=(GDFlags()&0x200000u)!=0u;
+    const bool tight0=(GDFlags()&12u)==12u || (GDFlags()&16u)!=0u;
+    const float farCap=1.0/max(asfloat(M6PreviousRect.w),1.e-4);
     float seed[GD_TILES];
+    float farOut[GD_TILES];
     [unroll] for(uint t0=0u;t0<GD_TILES;++t0) {
         const uint x=GD_LANES*t0+lane;
         seed[t0]=0.0;
-        const bool tight0=(GDFlags()&12u)==12u || (GDFlags()&16u)!=0u;
+        farOut[t0]=0.0;
         if(x<w) {
-            const float raw=fromField ? M4FoveaConditioned[uint3(x,row,0u)] : GDSeedRaw(uint2(x,row));
+            const float raw=fromField ? M4FoveaConditioned[uint3(x,row,0u)] :
+                            (hybrid ? GDSeedTight(uint2(x,row)) : GDSeedRaw(uint2(x,row)));
             const float knee0=GDKneeSeed(raw);
             seed[t0]=tight0 ? knee0 : M8V2Map(knee0);
+            if(hybrid) farOut[t0]=M8V2Map(min(knee0,farCap));
             if((GDFlags()&32u)!=0u) M4FoveaConditioned[uint3(x,row,2u)]=knee0; // switch 4: raw depth for the raster
         }
     }
@@ -86,6 +122,37 @@ void GDHorizontal(uint row, uint lane, bool fromField) {
     const float limit=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
     const float pen=tight ? .96*M8SafeLimit() : min(M1Filter.x*M4Flags.y,M8SafeLimit());
     const float mappedLimit=tight ? limit : M8V2Map(limit);
+    // Fill=4 (Study 93): symmetric far-only envelope (<= 1/OFF_M) so distant >OFF_M objects stay identical to Off.
+    [branch] if(hybrid) {
+        GroupMemoryBarrierWithGroupSync();
+        [unroll] for(uint tf0=0u;tf0<GD_TILES;++tf0) {
+            const uint x=GD_LANES*tf0+lane;
+            if(x<w) GDRow[x]=farOut[tf0];
+        }
+        GroupMemoryBarrierWithGroupSync();
+        for(uint step=1u;step<w && float(step-1u)*pen<mappedLimit;step*=2u) {
+            float nextF[GD_TILES];
+            [unroll] for(uint tf1=0u;tf1<GD_TILES;++tf1) {
+                const uint x=GD_LANES*tf1+lane;
+                nextF[tf1]=0.0;
+                if(x<w) {
+                    const float left=x>=step ? GDRow[x-step]-float(step)*pen : 0.0;
+                    const float right=x+step<w ? GDRow[x+step]-float(step)*pen : 0.0;
+                    nextF[tf1]=max(GDRow[x],max(left,right));
+                }
+            }
+            GroupMemoryBarrierWithGroupSync();
+            [unroll] for(uint tf2=0u;tf2<GD_TILES;++tf2) {
+                const uint x=GD_LANES*tf2+lane;
+                if(x<w) GDRow[x]=nextF[tf2];
+            }
+            GroupMemoryBarrierWithGroupSync();
+        }
+        [unroll] for(uint tf3=0u;tf3<GD_TILES;++tf3) {
+            const uint x=GD_LANES*tf3+lane;
+            if(x<w) farOut[tf3]=GDRow[x];
+        }
+    }
     [loop] for(uint eye=0u;eye<eyes;++eye) {
         GroupMemoryBarrierWithGroupSync();
         [unroll] for(uint t1=0u;t1<GD_TILES;++t1) {
@@ -121,7 +188,7 @@ void GDHorizontal(uint row, uint lane, bool fromField) {
         [unroll] for(uint t3=0u;t3<GD_TILES;++t3) {
             const uint x=GD_LANES*t3+lane;
             if(x<w) {
-                const float v=(tight || trueDepth) ? GDRow[x] : M8V2Unmap(GDRow[x]);
+                const float v=(tight || trueDepth) ? GDRow[x] : M8V2Unmap(hybrid ? max(GDRow[x],farOut[t3]) : GDRow[x]);
                 M4FoveaConditioned[uint3(x,row,eye)]=v;
                 if(!oneSided) M4FoveaConditioned[uint3(x,row,1u)]=v;
             }
@@ -146,8 +213,8 @@ void CSConditionM4GH(uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
 void CSConditionM4GVertical(uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
     const uint h=M4Grid.y, col=group.x;
     if(col>=M4Grid.x || h==0u || h>4096u) return;
-    // Tight one-sided ramp: no vertical spreading (the warp is horizontal only).
-    const float pv=((GDFlags()&12u)==12u || (GDFlags()&16u)!=0u) ? 0.0 : M1Filter.z*M4Flags.z;
+    // Tight one-sided ramp & Fill=4 hybrid: no vertical spreading (the warp is horizontal only).
+    const float pv=((GDFlags()&12u)==12u || (GDFlags()&16u)!=0u || (GDFlags()&0x200000u)!=0u) ? 0.0 : M1Filter.z*M4Flags.z;
     const float limit=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
     const uint slices=(GDFlags()&4u)!=0u ? 2u : 1u;
     [loop] for(uint slice=0u;slice<slices;++slice) {
@@ -251,7 +318,7 @@ void CSGoalDHistory(uint3 id:SV_DispatchThreadID, uint3 group:SV_GroupID, uint3 
     float2 bestMotion=float2(0.0,0.0);
     float2 mvNow=float2(0.0,0.0);
     [branch] if(inside) {
-        cur=GDSeedRaw(id.xy);
+        cur=((GDFlags()&0x200000u)!=0u) ? GDSeedTight(id.xy) : GDSeedRaw(id.xy);
         mvNow=mvMode ? GDMotionField(id.xy) : float2(0.0,0.0);
         mvQuarter=mvMode ? uint(min(length(mvNow),64.0)*4.0+.5) : 0u;
         [branch] if(valid) {

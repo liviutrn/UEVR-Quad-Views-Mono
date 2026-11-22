@@ -114,9 +114,22 @@ PERIPHERY_BRANCH = (
 
 
 def native_raster(src):
-    return once(src, PERIPHERY_TERNARY,
-                f'#ifdef {TAG}\n{PERIPHERY_BRANCH}#else\n{PERIPHERY_TERNARY}#endif\n',
-                'goal D periphery branch')
+    src = once(src, PERIPHERY_TERNARY,
+               f'#ifdef {TAG}\n{PERIPHERY_BRANCH}#else\n{PERIPHERY_TERNARY}#endif\n',
+               'goal D periphery branch')
+    hybrid_hlsl = Path(__file__).with_name('DuoViewGoalDHybrid.hlsl').read_text(encoding='utf-8')
+    if not hybrid_hlsl.endswith('\n'):
+        hybrid_hlsl += '\n'
+    src = once(src, '\nfloat4 PSNativeMain(',
+               f'\n#ifdef {TAG}\n{hybrid_hlsl}#endif\nfloat4 PSNativeMain(',
+               'goal D Fill=4 hybrid helpers + push-pull compute')
+    fovea_sample = '        float4 fovea = SourceAtlas.SampleLevel(LinearClamp, foveaSample, 0.0);\n'
+    hybrid_call = (
+        f'#ifdef {TAG}\n'
+        '        [branch] if (DebugViewMode == 0 && M2Sharpen.z <= .5)\n'
+        '            fovea.rgb = GDHybridFoveaColor(outputUv, i.pos.x >= OutputSize.x ? 1u : 0u, sourceUv, fovea.rgb);\n'
+        '#endif\n')
+    return once(src, fovea_sample, fovea_sample + hybrid_call, 'goal D Fill=4 hybrid fovea call')
 
 
 def strip_goald(src):
@@ -226,8 +239,42 @@ M1_MEMBERS = r'''    ComPtr<ID3D12Resource> m4_depth;
     static GoalDHistoryShared& goald_history_state() { static GoalDHistoryShared s; return s; }
     ComPtr<ID3D12PipelineState> m4g_history, m4g_condition_h;
     ComPtr<ID3D12PipelineState> m4g_raster; // switch 3 true depth: front-most root in the fovea
+    ComPtr<ID3D12PipelineState> m4g_pp_init, m4g_pp_down, m4g_pp_pull; // Fill=4 (Study 93) push-pull pyramid
+    static constexpr uint32_t goald_pp_max_mips = 7u;
+    ComPtr<ID3D12Resource> m4g_pp_down_tex, m4g_pp_pull_tex;
+    bool goald_hybrid_active{};
+    uint32_t goald_pp_w{}, goald_pp_h{}, goald_pp_mips{}, goald_pp_generation{};
+    bool goald_ensure_pp(ID3D12Device* device, uint32_t gw, uint32_t gh) {
+        const uint32_t pw=(std::clamp)(gw>1024u ? (gw+1u)/2u : gw,16u,1024u);
+        const uint32_t ph=(std::clamp)(gh>1024u ? (gh+1u)/2u : gh,16u,1024u);
+        uint32_t mips=1u;
+        while (mips<goald_pp_max_mips && (std::min)(pw>>mips,ph>>mips)>=4u) ++mips;
+        mips=(std::max)(mips,2u);
+        if (m4g_pp_down_tex && m4g_pp_pull_tex && goald_pp_w==pw && goald_pp_h==ph && goald_pp_mips==mips) return true;
+        m4g_pp_down_tex.Reset(); m4g_pp_pull_tex.Reset();
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.CreationNodeMask=heap.VisibleNodeMask=1;
+        heap.Type=D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC t{};
+        t.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        t.Width=pw; t.Height=ph; t.DepthOrArraySize=1; t.MipLevels=UINT16(mips);
+        t.Format=DXGI_FORMAT_R16G16B16A16_FLOAT; t.SampleDesc.Count=1;
+        t.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if (FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&t,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,nullptr,IID_PPV_ARGS(&m4g_pp_down_tex))) ||
+            FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&t,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,nullptr,IID_PPV_ARGS(&m4g_pp_pull_tex)))) {
+            m4g_pp_down_tex.Reset(); m4g_pp_pull_tex.Reset();
+            goald_pp_w=goald_pp_h=goald_pp_mips=0u;
+            return false;
+        }
+        m4g_pp_down_tex->SetName(L"DuoView::GoalDPushPullDown");
+        m4g_pp_pull_tex->SetName(L"DuoView::GoalDPushPullOut");
+        goald_pp_w=pw; goald_pp_h=ph; goald_pp_mips=mips; ++goald_pp_generation;
+        return true;
+    }
     bool goald_true_depth{};
-    bool goald_halo_bg{}; // switch 4 value 3: halo at background depth (m4g_raster)
+    bool goald_halo_bg{}; // switch 4 value 3/4: halo at background depth or Fill=4 hybrid (m4g_raster)
     bool goald_fast_raster_on{}; // fast raster (flag 128, m4g_raster): skip the discarded coarse read in the fovea
     bool goald_raster_variant_on{}; // 65_: warp bypass / fewer search steps (m4g_raster, 4096 path)
     // 65_ VRS: fovea rect in output-eye uv per eye (x0,y0,x1,y1), from the M2 crop widened by the warp
@@ -370,6 +417,13 @@ M1_PSO = r'''        if(FAILED(device->CreateComputePipelineState(&compute,IID_P
         if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_history)))) m4g_history.Reset();
         compute.CS={m4g_condition_h_bytecode,sizeof(m4g_condition_h_bytecode)};
         if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_condition_h)))) m4g_condition_h.Reset();
+        // Goal D Fill=4 (Study 93 Tight B+C2+3): background-only push-pull pyramid compute PSOs.
+        compute.CS={m4g_pp_init_bytecode,sizeof(m4g_pp_init_bytecode)};
+        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_pp_init)))) m4g_pp_init.Reset();
+        compute.CS={m4g_pp_down_bytecode,sizeof(m4g_pp_down_bytecode)};
+        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_pp_down)))) m4g_pp_down.Reset();
+        compute.CS={m4g_pp_pull_bytecode,sizeof(m4g_pp_pull_bytecode)};
+        if(FAILED(device->CreateComputePipelineState(&compute,IID_PPV_ARGS(&m4g_pp_pull)))) m4g_pp_pull.Reset();
         {
             D3D12_HEAP_PROPERTIES rb{};
             rb.CreationNodeMask=rb.VisibleNodeMask=1;
@@ -400,6 +454,7 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
         // slots are unused under Stereo V2, so Off constants stay all-zero there).
         goald_true_depth=false;
         goald_halo_bg=false;
+        goald_hybrid_active=false;
         goald_fast_raster_on=false;
         goald_raster_variant_on=false;
         goald_pending.active=false;
@@ -570,7 +625,30 @@ M1_GOALD_FRAME = r'''        // ---- Goal D switches 2-4 + jitter direction (409
                     goald_raster_variant_on=true;
                 } else goald_mode_bits|=16u; // 16: bypass / steps requested but no m4g_raster PSO
             }
-            if (goald_fill==3u) { // switch 4 "halo at background depth": raster PSO only, no M8 fill
+            if (goald_fill==4u) { // Study 93 winner (#6 Tight B+C2+3): tight seed + one-sided + push-pull + multi-tap
+                data.m8_effects[2]=data.m8_effects[3]=0.f;
+                const bool pp_psos=m4g_pp_init && m4g_pp_down && m4g_pp_pull;
+                const bool ok_hyb=raster_true && !goald_true_depth && pp_psos && goald_ensure_pp(device,m4_columns,m4_rows);
+                goald_halo_bg=ok_hyb;
+                goald_hybrid_active=ok_hyb;
+                if (ok_hyb) {
+                    data.m6_previous_rect[1]|=(4u|32u|0x200000u); // one-sided + raw slice 2 + Fill=4 hybrid
+                    const float wu=(std::max)(geometry.world_to_meters,1.f);
+                    const float hn=(std::max)(goald_halo_near_m,.1f)*wu;
+                    const float hf=(std::max)(goald_halo_fade_m*wu,hn);
+                    std::memcpy(&data.m6_previous_rect[2],&hn,sizeof(float));
+                    std::memcpy(&data.m6_previous_rect[3],&hf,sizeof(float));
+                    data.m7_controls[0]=(std::clamp)(goald_hybrid_detail,0.f,1.f);
+                    data.m7_controls[1]=(std::clamp)(goald_hybrid_gate,.04f,.30f);
+                    data.m7_controls[2]=(std::clamp)(goald_hybrid_outline,.20f,.80f);
+                    data.m7_controls[3]=(std::clamp)(goald_hybrid_shift,.50f,1.50f);
+                    const float bg_wu=1.5f*wu, mid_wu=3.5f*wu;
+                    std::memcpy(&data.m7_color_extent[0],&bg_wu,sizeof(float));
+                    std::memcpy(&data.m7_color_extent[1],&mid_wu,sizeof(float));
+                    std::memcpy(&data.m7_color_extent[2],&wu,sizeof(float));
+                    data.m7_color_extent[3]=(std::min)(goald_hybrid_tap_mode,3u);
+                } else goald_mode_bits|=raster_true ? 2u : 4u;
+            } else if (goald_fill==3u) { // switch 4 "halo at background depth": raster PSO only, no M8 fill
                 data.m8_effects[2]=data.m8_effects[3]=0.f; // the legacy M8 fill must not move the source again
                 goald_halo_bg=raster_true && !goald_true_depth; // with true depth there is no lift: halo off
                 if (goald_halo_bg) {
@@ -610,7 +688,9 @@ def m1_backend(src):
                '                         float goald_motion_limit=8.f,float goald_halo_near_m=1.f,float goald_halo_fade_m=3.f,uint32_t goald_fast_raster=0u,\n'
                '                         uint32_t goald_confirm_texels=0u,uint32_t goald_motion_source=0u,\n'
                '                         bool goald_warp_bypass=false,uint32_t goald_fovea_steps=8u,uint32_t goald_periphery_steps=8u,\n'
-               '                         bool goald_vrs=false) {',
+               '                         bool goald_vrs=false,\n'
+               '                         float goald_hybrid_detail=.70f,float goald_hybrid_gate=.11f,float goald_hybrid_outline=.50f,\n'
+               '                         float goald_hybrid_shift=1.f,uint32_t goald_hybrid_tap_mode=0u) {',
                'goal D grid argument')
     src = once(src, '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n',
                '        m25_read_retired_stats(); // The owning XR command slot has retired before reuse.\n'
@@ -681,6 +761,114 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         v.Texture2D.MipLevels=1;
         v.Format=m1_.goald_mv_active ? m1_.goald_mv_format : DXGI_FORMAT_R16G16_FLOAT;
         device->CreateShaderResourceView(m1_.goald_mv_active ? m1_.goald_mv_resource : nullptr,&v,m6_previous_srv_);
+    }
+    // Fill=4 (Study 93 Tight B+C2+3): bind full-mip pp_pull SRV at t10 ([14]) + per-mip pyramid tables at [17..86].
+    void goald_bind_pp(ID3D12Device* device) {
+        if (!m7_current_srv_.ptr || !goald_pp_desc_cpu_.ptr) return;
+        const uint32_t key=(m1_.goald_hybrid_active && m1_.m4g_pp_down_tex && m1_.m4g_pp_pull_tex)
+            ? ((m1_.goald_pp_generation<<1u)|1u) : 0u;
+        if (key==goald_pp_bound_key_) return;
+        D3D12_SHADER_RESOURCE_VIEW_DESC ns{};
+        ns.Format=DXGI_FORMAT_R16G16B16A16_FLOAT;
+        ns.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;
+        ns.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        ns.Texture2D.MipLevels=1;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC nu{};
+        nu.Format=DXGI_FORMAT_R16G16B16A16_FLOAT;
+        nu.ViewDimension=D3D12_UAV_DIMENSION_TEXTURE2D;
+        if (!key) {
+            device->CreateShaderResourceView(nullptr,&ns,m7_current_srv_);
+            goald_pp_bound_key_=0u;
+            return;
+        }
+        const uint32_t mips=(std::min)(m1_.goald_pp_mips,M1Resources::goald_pp_max_mips);
+        auto full_srv=ns; full_srv.Texture2D.MipLevels=mips;
+        device->CreateShaderResourceView(m1_.m4g_pp_pull_tex.Get(),&full_srv,m7_current_srv_);
+        auto slot=[&](uint32_t off) {
+            D3D12_CPU_DESCRIPTOR_HANDLE h=goald_pp_desc_cpu_;
+            h.ptr+=SIZE_T(off)*srv_descriptor_increment_;
+            return h;
+        };
+        for (uint32_t k=0u; k<mips; ++k) {
+            auto ds=ns; ds.Texture2D.MostDetailedMip=k; ds.Texture2D.MipLevels=1;
+            auto du=nu; du.Texture2D.MipSlice=k;
+            // Down SRV table k ([17 + 3*k]): t8=null, t9=null, t10=pp_down[k]
+            device->CreateShaderResourceView(nullptr,&ns,slot(3u*k));
+            device->CreateShaderResourceView(nullptr,&ns,slot(3u*k+1u));
+            device->CreateShaderResourceView(m1_.m4g_pp_down_tex.Get(),&ds,slot(3u*k+2u));
+            // Down UAV table k ([38 + 2*k]): u5=null, u6=pp_down[k]
+            device->CreateUnorderedAccessView(nullptr,nullptr,&nu,slot(21u+2u*k));
+            device->CreateUnorderedAccessView(m1_.m4g_pp_down_tex.Get(),nullptr,&du,slot(21u+2u*k+1u));
+            // Pull SRV table k ([52 + 3*k]): t8=null, t9=pp_down[k], t10=(k+1<mips ? pp_pull[k+1] : pp_down[k])
+            device->CreateShaderResourceView(nullptr,&ns,slot(35u+3u*k));
+            device->CreateShaderResourceView(m1_.m4g_pp_down_tex.Get(),&ds,slot(35u+3u*k+1u));
+            auto cs=ns; cs.Texture2D.MostDetailedMip=(k+1u<mips) ? (k+1u) : k; cs.Texture2D.MipLevels=1;
+            ID3D12Resource* c_res=(k+1u<mips) ? m1_.m4g_pp_pull_tex.Get() : m1_.m4g_pp_down_tex.Get();
+            device->CreateShaderResourceView(c_res,&cs,slot(35u+3u*k+2u));
+            // Pull UAV table k ([73 + 2*k]): u5=null, u6=pp_pull[k]
+            device->CreateUnorderedAccessView(nullptr,nullptr,&nu,slot(56u+2u*k));
+            device->CreateUnorderedAccessView(m1_.m4g_pp_pull_tex.Get(),nullptr,&du,slot(56u+2u*k+1u));
+        }
+        goald_pp_bound_key_=key;
+    }
+    // Fill=4 (Study 93): run Init + (mips-1) Down + mips Pull passes; leaves m4_field & pp_pull in PIXEL_SHADER_RESOURCE.
+    void goald_dispatch_pp(ID3D12GraphicsCommandList* cmd, const ShaderConstants& constants) {
+        auto sub_bar=[&](ID3D12Resource* res, UINT sub, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+            D3D12_RESOURCE_BARRIER b{};
+            b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Transition={res,sub,before,after};
+            cmd->ResourceBarrier(1,&b);
+        };
+        auto gpu_slot=[&](uint32_t idx) {
+            D3D12_GPU_DESCRIPTOR_HANDLE h=srv_gpu_start_;
+            h.ptr+=UINT64(idx)*srv_descriptor_increment_;
+            return h;
+        };
+        const uint32_t pw=m1_.goald_pp_w, ph=m1_.goald_pp_h, mips=m1_.goald_pp_mips;
+        ID3D12Resource* pdown=m1_.m4g_pp_down_tex.Get();
+        ID3D12Resource* ppull=m1_.m4g_pp_pull_tex.Get();
+        sub_bar(m1_.m4_field(),D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        sub_bar(pdown,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        sub_bar(ppull,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+        cmd->SetComputeRoot32BitConstants(1,sizeof(constants)/4u,&constants,0);
+        cmd->SetComputeRootDescriptorTable(0,srv_gpu_start_);
+        cmd->SetComputeRootConstantBufferView(4,m1_.constants->GetGPUVirtualAddress());
+        // 1. Init: SourceAtlas (t0) + M4FoveaSoft slice 2 (t8 at [12]) -> pp_down mip 0 (u6 at [38])
+        cmd->SetPipelineState(m1_.m4g_pp_init.Get());
+        cmd->SetComputeRootDescriptorTable(7,gpu_slot(12u));
+        cmd->SetComputeRootDescriptorTable(8,gpu_slot(38u));
+        cmd->Dispatch((pw+15u)/16u,(ph+15u)/16u,1);
+        sub_bar(pdown,0u,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        // 2. Downsample: pp_down[k] -> pp_down[k+1]
+        cmd->SetPipelineState(m1_.m4g_pp_down.Get());
+        for (uint32_t k=0u; k+1u<mips; ++k) {
+            const uint32_t dw=(std::max)(pw>>(k+1u),1u), dh=(std::max)(ph>>(k+1u),1u);
+            cmd->SetComputeRootDescriptorTable(7,gpu_slot(17u+3u*k));
+            cmd->SetComputeRootDescriptorTable(8,gpu_slot(38u+2u*(k+1u)));
+            cmd->Dispatch((dw+15u)/16u,(dh+15u)/16u,1);
+            sub_bar(pdown,k+1u,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+
+        // 3. Pull: pp_down[k] + pp_pull[k+1] -> pp_pull[k]
+        cmd->SetPipelineState(m1_.m4g_pp_pull.Get());
+        for (int k=int(mips)-1; k>=0; --k) {
+            const uint32_t uk=uint32_t(k);
+            const uint32_t dw=(std::max)(pw>>uk,1u), dh=(std::max)(ph>>uk,1u);
+            cmd->SetComputeRootDescriptorTable(7,gpu_slot(52u+3u*uk));
+            cmd->SetComputeRootDescriptorTable(8,gpu_slot(73u+2u*uk));
+            cmd->Dispatch((dw+15u)/16u,(dh+15u)/16u,1);
+            sub_bar(ppull,uk,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+
+        sub_bar(ppull,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        sub_bar(m1_.m4_field(),D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
     void goald_copy_counters(ID3D12GraphicsCommandList* cmd) {
         auto& s=M1Resources::goald_history_state();
@@ -837,6 +1025,8 @@ COMPOSITOR_METHODS = r'''    // ---- Goal D switch 1: this slot's t8/u5 descript
         duo_goald_modes().store((1u<<31)|(m1_active ? m1_.goald_mode_bits : 0u),std::memory_order_relaxed);
         duo_goald_still().store(M1Resources::goald_still_permille.load(std::memory_order_relaxed),std::memory_order_relaxed);
         duo_goald_motion().store((1u<<31)|(m1_active && m1_.goald_mv_active ? 1u : 0u),std::memory_order_relaxed);
+        duo_goald_hybrid().store((1u<<31)|(m1_active && m1_.goald_hybrid_active ? 1u : 0u)|
+            ((m1_.goald_pp_w&0xfffu)<<4)|((m1_.goald_pp_h&0xfffu)<<16)|((m1_.goald_pp_mips&7u)<<28),std::memory_order_relaxed);
     }
 public:
     // Test accessors (WARP fixture): read-only.
@@ -844,11 +1034,19 @@ public:
     uint32_t goald_m4_columns() const { return m1_.m4_columns; }
     uint32_t goald_m4_rows() const { return m1_.m4_rows; }
     ID3D12Resource* goald_m4_field() const { return m1_.m4_field(); }
+    bool goald_hybrid_active() const { return m1_.goald_hybrid_active; }
+    uint32_t goald_pp_w() const { return m1_.goald_pp_w; }
+    uint32_t goald_pp_mips() const { return m1_.goald_pp_mips; }
 private:
     void update_timing(bool timed, bool direct_xr) {'''
 
 
 def compositor_backend(src):
+    src = once(src, 'hd.NumDescriptors = 17;', 'hd.NumDescriptors = 87;', 'goal D Fill=4 pyramid heap size')
+    src = once(src, '        const auto fovea_sample_state=sample_state;\n',
+               '        const auto fovea_sample_state=(m1_active && m1_.goald_hybrid_active)\n'
+               '            ? D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE : sample_state;\n',
+               'goal D Fill=4 fovea compute SRV state')
     src = once(src, '                settings.m9_eye_near,settings.m9_eye_far);\n',
                '                settings.m9_eye_near,settings.m9_eye_far,goald_grid(settings),\n'
                '                settings.goald_history,settings.goald_jitter_negative!=0u,\n'
@@ -856,8 +1054,10 @@ def compositor_backend(src):
                '                settings.goald_motion_limit,settings.goald_halo_near_m,settings.goald_halo_fade_m,settings.goald_fast_raster,\n'
                '                settings.goald_confirm_texels,settings.goald_motion_source,\n'
                '                settings.goald_warp_bypass!=0u,settings.goald_fovea_steps,settings.goald_periphery_steps,\n'
-               '                settings.goald_vrs_rate!=0u);\n'
-               '        if (m1_active) { goald_bind_m4_field(device); goald_bind_history(device); goald_bind_motion(device); }\n'
+               '                settings.goald_vrs_rate!=0u,\n'
+               '                settings.goald_hybrid_detail,settings.goald_hybrid_gate,settings.goald_hybrid_outline,\n'
+               '                settings.goald_hybrid_shift,settings.goald_hybrid_tap_mode);\n'
+               '        if (m1_active) { goald_bind_m4_field(device); goald_bind_history(device); goald_bind_motion(device); goald_bind_pp(device); }\n'
                '        goald_report_status(goald_grid(settings),m1_active,settings.goald_history!=0u);\n',
                'goal D write_constants argument')
     # M4 dispatch: field resource, PSOs and timestamps 2/3 around both passes.
@@ -896,7 +1096,8 @@ def compositor_backend(src):
                '                transition(cmd,m1_.m4_depth.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,\n'
                '                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);\n'
                '                M1Resources::m4_count_frame();\n',
-               '                transition(cmd,m1_.m4_field(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,\n'
+               '                if(m1_.goald_hybrid_active) goald_dispatch_pp(cmd,constants);\n'
+               '                else transition(cmd,m1_.m4_field(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,\n'
                '                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);\n'
                '                if(m1_.goald_hist_active) goald_copy_counters(cmd);\n'
                '                goald_stamp(cmd,timed,3u); // stage: M4 end\n'
@@ -980,7 +1181,10 @@ def compositor_backend(src):
                '        desc_cpu.ptr+=srv_descriptor_increment_; // [16] u6 new history\n'
                '        m7_current_uav_=desc_cpu;\n',
                '        desc_cpu.ptr+=srv_descriptor_increment_; // [16] u6 new history\n'
-               '        m7_current_uav_=desc_cpu; goald_hist_bound_=0u;\n',
+               '        m7_current_uav_=desc_cpu; goald_hist_bound_=0u;\n'
+               '        goald_pp_desc_cpu_=desc_cpu;\n'
+               '        goald_pp_desc_cpu_.ptr+=srv_descriptor_increment_; // [17..86] Fill=4 push-pull tables\n'
+               '        goald_pp_bound_key_=0u;\n',
                'goal D u6 descriptor')
     src = once(src, '    void update_timing(bool timed, bool direct_xr) {', COMPOSITOR_METHODS, 'goal D methods')
     # Switch 2 (review #372 R1/R2): the history record is committed only when the XR
@@ -1022,10 +1226,10 @@ def compositor_backend(src):
     src = once(src,
                '    D3D12_CPU_DESCRIPTOR_HANDLE m2_fovea_srv_{}, m6_previous_srv_{}, m7_current_srv_{}, m7_current_uav_{};\n',
                '    D3D12_CPU_DESCRIPTOR_HANDLE m2_fovea_srv_{}, m6_previous_srv_{}, m7_current_srv_{}, m7_current_uav_{};\n'
-               '    D3D12_CPU_DESCRIPTOR_HANDLE goald_m4_srv_cpu_{}, goald_m4_uav_cpu_{};\n'
+               '    D3D12_CPU_DESCRIPTOR_HANDLE goald_m4_srv_cpu_{}, goald_m4_uav_cpu_{}, goald_pp_desc_cpu_{};\n'
                '    D3D12_SHADER_RESOURCE_VIEW_DESC goald_srv_desc_{};\n'
                '    D3D12_UNORDERED_ACCESS_VIEW_DESC goald_uav_desc_{};\n'
-               '    uint32_t goald_bound_key_{}, goald_hist_bound_{};\n'
+               '    uint32_t goald_bound_key_{}, goald_hist_bound_{}, goald_pp_bound_key_{};\n'
                '    bool goald_m4_timed_{}, goald_m4_pending_{};\n'
                '    uint32_t goald_stage_mask_{}, goald_stage_pending_{}; // stamped indices; 0x100 = stereo frame\n'
                '    uint32_t goald_vrs_caps_{}, goald_vrs_tier_{}; bool goald_vrs_additional_{}; // 65_ VRS caps (queried once)\n',
@@ -1041,6 +1245,8 @@ GOALD_STATUS = r'''
 inline std::atomic<uint32_t>& duo_goald_status() { static std::atomic<uint32_t> s{0u}; return s; }
 inline std::atomic<uint32_t>& duo_goald_field() { static std::atomic<uint32_t> s{0u}; return s; }
 inline std::atomic<uint32_t>& duo_goald_grid() { static std::atomic<uint32_t> s{0u}; return s; }
+// Fill=4 hybrid: bit 0 active, bits 4-15 pp_w, bits 16-27 pp_h, bits 28-30 pp_mips, bit 31 written.
+inline std::atomic<uint32_t>& duo_goald_hybrid() { static std::atomic<uint32_t> s{0u}; return s; }
 // history: bit 0 requested, bit 1 active, bits 2-5 reason, bits 8-17 permille from history, bit 31 written.
 inline std::atomic<uint32_t>& duo_goald_history() { static std::atomic<uint32_t> s{0u}; return s; }
 // modes (effective vs requested): bit 0 true depth fell back to tight (no raster PSO),
@@ -1096,7 +1302,9 @@ def config(src):
                '    uint32_t goald_fast_raster{}; // goal D fast stereo raster (1 = skip the discarded coarse depth read inside the fovea)\n'
                '    uint32_t goald_warp_bypass{}; // 65_: 1 = no warp solve (colour floor diagnostic, 4096 path)\n'
                '    uint32_t goald_fovea_steps{8}, goald_periphery_steps{8}; // 65_: warp search steps 2..8 (8 = today)\n'
-               '    uint32_t goald_vrs_rate{}; // 65_: periphery VRS 0 Off, 1 1x2, 2 2x1, 3 2x2, 4 2x4, 5 4x2, 6 4x4\n',
+               '    uint32_t goald_vrs_rate{}; // 65_: periphery VRS 0 Off, 1 1x2, 2 2x1, 3 2x2, 4 2x4, 5 4x2, 6 4x4\n'
+               '    float goald_hybrid_detail{.70f}, goald_hybrid_gate{.11f}, goald_hybrid_outline{.50f}, goald_hybrid_shift{1.f}; // Study 93 Fill=4 tuning\n'
+               '    uint32_t goald_hybrid_tap_mode{0u}; // 0 Best-Match #6, 1 Vertical-First #5, 2 Horizontal-Only #4, 3 Smooth Blur C\n',
                'goal D settings field')
     src = once(src, '    out.m4_fovea_grid=requested.m4_fovea_grid;\n',
                '    out.m4_fovea_grid=requested.m4_fovea_grid;\n'
@@ -1114,7 +1322,12 @@ def config(src):
                '    out.goald_vrs_rate=(std::min)(requested.goald_vrs_rate,6u);\n'
                '    out.goald_jitter_negative=requested.goald_jitter_negative ? 1u : 0u;\n'
                '    out.goald_one_sided=0u; // switch 3 removed after #373 (ramp NO-GO); code kept, unreachable\n'
-               '    out.goald_fill=(std::min)(requested.goald_fill,3u);\n',
+               '    out.goald_fill=(std::min)(requested.goald_fill,4u);\n'
+               '    out.goald_hybrid_detail=std::isfinite(requested.goald_hybrid_detail) ? (std::clamp)(requested.goald_hybrid_detail,0.f,1.f) : .70f;\n'
+               '    out.goald_hybrid_gate=std::isfinite(requested.goald_hybrid_gate) ? (std::clamp)(requested.goald_hybrid_gate,.04f,.30f) : .11f;\n'
+               '    out.goald_hybrid_outline=std::isfinite(requested.goald_hybrid_outline) ? (std::clamp)(requested.goald_hybrid_outline,.20f,.80f) : .50f;\n'
+               '    out.goald_hybrid_shift=std::isfinite(requested.goald_hybrid_shift) ? (std::clamp)(requested.goald_hybrid_shift,.50f,1.50f) : 1.f;\n'
+               '    out.goald_hybrid_tap_mode=(std::min)(requested.goald_hybrid_tap_mode,3u);\n',
                'goal D settings sanitize')
     if '#include <atomic>' not in src:
         src = once(src, '#include <optional>\n', '#include <optional>\n#include <atomic>\n', 'goal D atomic include')
@@ -1132,7 +1345,8 @@ def vr_hpp(src):
                '    static const inline std::vector<std::string> s_duo_goald_motion_src{ "Head pose (head still only)", "DLSS motion vectors", "DLSS motion vectors (flipped sign)" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_steps{ "8 (today)", "7", "6", "5", "4", "3", "2" };\n'
                '    static const inline std::vector<std::string> s_duo_goald_vrs{ "Off (baseline)", "1x2", "2x1", "2x2", "2x4", "4x2", "4x4" };\n'
-               '    static const inline std::vector<std::string> s_duo_goald_fill{ "Off (baseline)", "Mirror, full", "Mirror, half", "Halo at background depth" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_fill{ "Off (baseline)", "Mirror, full", "Mirror, half", "Halo at background depth", "Tight B+C hybrid (Study 93)" };\n'
+               '    static const inline std::vector<std::string> s_duo_goald_tap_mode{ "Best-Match Hybrid (#6, default)", "Vertical-First (#5)", "Horizontal-Only (#4)", "Smooth Blur Only (Cand C)" };\n'
                '    static const inline std::vector<std::string> s_duo_m3_jitter_modes{',
                'goal D grid names')
     src = once(src,
@@ -1151,9 +1365,14 @@ def vr_hpp(src):
                '    const ModCombo::Ptr m_duo_goald_periphery_steps{ModCombo::create(generate_name("DuoPeripherySearchSteps"),s_duo_goald_steps,0)};\n'
                '    const ModCombo::Ptr m_duo_goald_vrs{ModCombo::create(generate_name("DuoPeripheryVrsRate"),s_duo_goald_vrs,0)};\n'
                '    const ModCombo::Ptr m_duo_goald_motion_src{ModCombo::create(generate_name("DuoFoveaHistoryMotion"),s_duo_goald_motion_src,1)};\n'
-               '    const ModCombo::Ptr m_duo_goald_fill{ModCombo::create(generate_name("DuoFoveaBackgroundFill"),s_duo_goald_fill,0)};\n',
+               '    const ModCombo::Ptr m_duo_goald_fill{ModCombo::create(generate_name("DuoFoveaBackgroundFill"),s_duo_goald_fill,0)};\n'
+               '    const ModCombo::Ptr m_duo_goald_hyb_tap{ModCombo::create(generate_name("DuoHybridTapMode"),s_duo_goald_tap_mode,0)};\n'
+               '    const ModSlider::Ptr m_duo_goald_hyb_detail{ModSlider::create(generate_name("DuoHybridDetailStrength"),0.f,1.f,.70f)};\n'
+               '    const ModSlider::Ptr m_duo_goald_hyb_gate{ModSlider::create(generate_name("DuoHybridColorGate"),.04f,.30f,.11f)};\n'
+               '    const ModSlider::Ptr m_duo_goald_hyb_outline{ModSlider::create(generate_name("DuoHybridOutlineTight"),.20f,.80f,.50f)};\n'
+               '    const ModSlider::Ptr m_duo_goald_hyb_shift{ModSlider::create(generate_name("DuoHybridShiftScale"),.50f,1.50f,1.f)};\n',
                'goal D grid control')
-    src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, *m_duo_goald_history, *m_duo_goald_jitter, *m_duo_goald_fill, *m_duo_goald_motion, *m_duo_goald_confirm, *m_duo_goald_motion_src, *m_duo_goald_halo_near, *m_duo_goald_halo_fade, *m_duo_goald_fast_raster, *m_duo_goald_warp_bypass, *m_duo_goald_fovea_steps, *m_duo_goald_periphery_steps, *m_duo_goald_vrs, ', 'goal D grid persisted')
+    src = once(src, '*m_duo_m4_fovea_grid, ', '*m_duo_m4_fovea_grid, *m_duo_goald_grid, *m_duo_goald_history, *m_duo_goald_jitter, *m_duo_goald_fill, *m_duo_goald_motion, *m_duo_goald_confirm, *m_duo_goald_motion_src, *m_duo_goald_halo_near, *m_duo_goald_halo_fade, *m_duo_goald_fast_raster, *m_duo_goald_warp_bypass, *m_duo_goald_fovea_steps, *m_duo_goald_periphery_steps, *m_duo_goald_vrs, *m_duo_goald_hyb_tap, *m_duo_goald_hyb_detail, *m_duo_goald_hyb_gate, *m_duo_goald_hyb_outline, *m_duo_goald_hyb_shift, ', 'goal D grid persisted')
     return src
 
 
@@ -1193,9 +1412,20 @@ GOALD_MENU = r'''                    m_duo_m8_far_m->draw("Depth transition ends
                         else ImGui::TextWrapped("Fovea depth history: %s", uevr::duoview::duo_goald_history_reason_text((gh>>2)&15u));
                     }
                     m_duo_goald_jitter->draw("Fovea depth jitter direction");
-                    m_duo_goald_fill->draw("4. Background fill in the fovea (halo at background depth: EXPERIMENTAL)");
-                    m_duo_goald_halo_near->draw("4. Halo at background depth: full strength up to (metres)");
-                    m_duo_goald_halo_fade->draw("4. Halo at background depth: fades to normal halo by (metres)");
+                    m_duo_goald_fill->draw("4. Background fill in the fovea (Tight B+C hybrid = Study 93 #6)");
+                    m_duo_goald_halo_near->draw("4. Fill distance: full strength up to (metres; used by Halo & Tight B+C hybrid)");
+                    m_duo_goald_halo_fade->draw("4. Fill distance: fades to Off by (metres; used by Halo & Tight B+C hybrid)");
+                    m_duo_goald_hyb_tap->draw("4. Hybrid mode (Study 93: #6 Best-Match default / #5 Vertical-First / #4 Horizontal / Smooth C)");
+                    m_duo_goald_hyb_detail->draw("4. Hybrid smoothness <-> sharpness (0 = smooth blur, 0.70 = Study 93 #6 default, 1 = crisp copy)");
+                    m_duo_goald_hyb_gate->draw("4. Hybrid colour match gate (lower = smoother across colour edges, higher = sharper)");
+                    m_duo_goald_hyb_outline->draw("4. Hybrid outline tightness (0.50 = Study 93 zero-dilation default, lower = fuller, higher = tighter)");
+                    m_duo_goald_hyb_shift->draw("4. Hybrid tap reach scale (1.0 = default; tune if wide/narrow FOV)");
+                    {
+                        const uint32_t ghyb=uevr::duoview::duo_goald_hybrid().load(std::memory_order_relaxed);
+                        if ((ghyb>>31) && (ghyb&1u))
+                            ImGui::TextWrapped("Tight B+C hybrid: ACTIVE (push-pull pyramid %ux%u, %u mips).",
+                                (ghyb>>4)&0xfffu, (ghyb>>16)&0xfffu, (ghyb>>28)&7u);
+                    }
                     m_duo_goald_fast_raster->draw("5. Fast stereo raster (skips a depth read that is discarded inside the fovea; needs the 4096 grid; compare GPU stages raster ms)");
                     ImGui::TextWrapped("6. Raster cost test (compare GPU stages raster ms; edges on weapon / fences):");
                     m_duo_goald_warp_bypass->draw("6. DIAGNOSTIC warp bypass (no stereo warp: eyes are WRONG; shows the colour-only raster cost; needs the 4096 grid)");
@@ -1229,7 +1459,7 @@ def vr_cpp(src):
                '        .goald_history=uint32_t((std::clamp)(m_duo_goald_history->value(),0,1)),\n'
                '        .goald_jitter_negative=m_duo_goald_jitter->value()==1 ? 1u : 0u,\n'
                '        .goald_one_sided=0u,\n'
-               '        .goald_fill=uint32_t((std::clamp)(m_duo_goald_fill->value(),0,3)),\n'
+               '        .goald_fill=uint32_t((std::clamp)(m_duo_goald_fill->value(),0,4)),\n'
                '        .goald_motion_limit=m_duo_goald_motion->value(),\n'
                '        .goald_confirm_texels=uint32_t((std::clamp)(m_duo_goald_confirm->value(),0,6)<=4 ? (std::clamp)(m_duo_goald_confirm->value(),0,6) : (m_duo_goald_confirm->value()==5 ? 6 : 8)),\n'
                '        .goald_motion_source=uint32_t((std::clamp)(m_duo_goald_motion_src->value(),0,2)),\n'
@@ -1239,7 +1469,12 @@ def vr_cpp(src):
                '        .goald_warp_bypass=m_duo_goald_warp_bypass->value() ? 1u : 0u,\n'
                '        .goald_fovea_steps=8u-uint32_t((std::clamp)(m_duo_goald_fovea_steps->value(),0,6)),\n'
                '        .goald_periphery_steps=8u-uint32_t((std::clamp)(m_duo_goald_periphery_steps->value(),0,6)),\n'
-               '        .goald_vrs_rate=uint32_t((std::clamp)(m_duo_goald_vrs->value(),0,6))};',
+               '        .goald_vrs_rate=uint32_t((std::clamp)(m_duo_goald_vrs->value(),0,6)),\n'
+               '        .goald_hybrid_detail=m_duo_goald_hyb_detail->value(),\n'
+               '        .goald_hybrid_gate=m_duo_goald_hyb_gate->value(),\n'
+               '        .goald_hybrid_outline=m_duo_goald_hyb_outline->value(),\n'
+               '        .goald_hybrid_shift=m_duo_goald_hyb_shift->value(),\n'
+               '        .goald_hybrid_tap_mode=uint32_t((std::clamp)(m_duo_goald_hyb_tap->value(),0,3))};',
                'goal D grid settings')
     src = once(src, '        current.m2_right_sharpen==candidate.m2_right_sharpen) return;',
                '        current.m2_right_sharpen==candidate.m2_right_sharpen &&\n'
@@ -1257,7 +1492,12 @@ def vr_cpp(src):
                '        current.goald_warp_bypass==candidate.goald_warp_bypass &&\n'
                '        current.goald_fovea_steps==candidate.goald_fovea_steps &&\n'
                '        current.goald_periphery_steps==candidate.goald_periphery_steps &&\n'
-               '        current.goald_vrs_rate==candidate.goald_vrs_rate) return;',
+               '        current.goald_vrs_rate==candidate.goald_vrs_rate &&\n'
+               '        current.goald_hybrid_detail==candidate.goald_hybrid_detail &&\n'
+               '        current.goald_hybrid_gate==candidate.goald_hybrid_gate &&\n'
+               '        current.goald_hybrid_outline==candidate.goald_hybrid_outline &&\n'
+               '        current.goald_hybrid_shift==candidate.goald_hybrid_shift &&\n'
+               '        current.goald_hybrid_tap_mode==candidate.goald_hybrid_tap_mode) return;',
                'goal D grid change detection')
     return src
 
@@ -1322,6 +1562,12 @@ GOALD_LOG = r'''                                                    uevr::duovie
                                                         gf>>16, gf&0xffffu,
                                                         uevr::duoview::dx12::M1Resources::goald_hi_frames.exchange(0),
                                                         gpu_n ? double(gpu_ns)/double(gpu_n)/1.0e6 : -1.0, gpu_n);
+                                                    {
+                                                        const uint32_t ghyb=uevr::duoview::duo_goald_hybrid().load();
+                                                        if ((ghyb>>31) && (ghyb&1u))
+                                                            SPDLOG_INFO("[DuoView][GoalD] hybrid active=1 pp={}x{} mips={}",
+                                                                (ghyb>>4)&0xfffu, (ghyb>>16)&0xfffu, (ghyb>>28)&7u);
+                                                    }
                                                 }
 '''
 

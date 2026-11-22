@@ -15,6 +15,35 @@ float GDReadFineEye(float2 uv, uint eye, out float blend) {
     const float2 cell=clamp(local*float2(M4Grid.xy),float2(.5,.5),float2(M4Grid.xy)-.5);
     return M4FoveaSoft.SampleLevel(LinearClamp,float3(cell/float2(M4Grid.zw),float(eye)),0);
 }
+// Fill=4 (Study 93) single-row fine/raw reads: linear in X, exact texel center in Y (zero vertical shelf).
+float GDReadFineRow(float u, uint yRow, uint slice) {
+    const float localX=(u-M2Crop.x)/max(M2Crop.z-M2Crop.x,1.e-6);
+    const float cellX=clamp(localX*float(M4Grid.x),.5,float(M4Grid.x)-.5);
+    const float cellY=float(min(yRow,max(M4Grid.y,1u)-1u))+.5;
+    return M4FoveaSoft.SampleLevel(LinearClamp,float3(float2(cellX,cellY)/float2(M4Grid.zw),float(slice)),0);
+}
+// Pure-row one-sided root solve (used only on the ~2-3% slanted vertical-cliff silhouette pixels).
+float GDHybridRootRow(float2 base, uint yRow, uint eye) {
+    const float k=M1Eye[eye];
+    const float cap=M1Depth.w>0.0 ? 2.0*M1Depth.w : M1Filter.y;
+    const float delta=k*cap;
+    float lo=min(base.x,base.x+delta), hi=max(base.x,base.x+delta);
+    float rLo=0.0, rHi=0.0, lastMid=0.0, lastR=0.0, prevMid=0.0, prevR=0.0;
+    bool haveLo=false, haveHi=false;
+    [unroll] for(uint it=0u;it<8u;++it) {
+        const float mid=.5*(lo+hi);
+        const float r=base.x+k*GDReadFineRow(mid,yRow,eye)-mid;
+        prevMid=lastMid; prevR=lastR; lastMid=mid; lastR=r;
+        if(r>0.0) { lo=mid; rLo=r; haveLo=true; }
+        else      { hi=mid; rHi=r; haveHi=true; }
+    }
+    float root=.5*(lo+hi);
+    if(haveLo && haveHi && rLo-rHi>1.e-9)
+        root=lo+(hi-lo)*rLo/(rLo-rHi);
+    else if(abs(lastR-prevR)>1.e-9)
+        root=lastMid-lastR*(lastMid-prevMid)/(lastR-prevR);
+    return saturate(clamp(root,lo,hi));
+}
 // ---- GOALD_RASTER_BODY
         // ---- Goal D switch 3 "true depth" (Claude, 2026-11-18): inside the fovea
         // the 4096 field has NO ramp, so near objects keep their exact edge and the
@@ -64,7 +93,7 @@ float GDReadFineEye(float2 uv, uint eye, out float blend) {
         // at its own raw depth. Every failure keeps the soft root: fixed point not
         // converged (depth step, no background root), background not found inside
         // the fine crop, mirror lands on a near object.
-        [branch] if((M6PreviousRect.y&32u)!=0u && M4Flags.x>.5 &&
+        [branch] if((M6PreviousRect.y&32u)!=0u && (M6PreviousRect.y&0x200000u)==0u && M4Flags.x>.5 &&
                     uv.x>M2Crop.x && uv.x<M2Crop.z && base.y>M2Crop.y && base.y<M2Crop.w) {
             const float hbRoot=uv.x;
             float hbBlend;
